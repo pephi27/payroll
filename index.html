@@ -1,0 +1,2548 @@
+<!DOCTYPE html>
+<html>
+ <head>
+  <meta charset="utf-8"/>
+  <title>
+   Attendance &mdash; Schedules + Ranges (Merged) + Projects
+  </title>
+  <meta content="width=device-width,initial-scale=1" name="viewport"/>
+  <style>
+   body{font-family:Arial,Helvetica,sans-serif;margin:18px;max-width:1200px;color:#0b1220}
+  header{display:flex;gap:8px;align-items:center;margin-bottom:12px;flex-wrap:wrap}
+  .tabs{display:flex;gap:6px;flex-wrap:wrap}
+  .tab-btn{padding:8px 12px;cursor:pointer;border:1px solid #cbd5e1;background:#f8fafc;border-radius:6px}
+  .tab-btn.active{background:#0ea5a4;color:#fff}
+  section.panel{display:none}
+  section.panel.active{display:block;padding-top:8px}
+  .controls{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px}
+  input[type=file],input[type=date],input[type=time],input[type=number],button,select{padding:6px 8px}
+  table{border-collapse:collapse;width:100%;margin-top:12px}
+  th,td{border:1px solid #e2e8f0;padding:8px;text-align:center;font-size:13px}
+  th{background:#f1f5f9;position:sticky;top:0;z-index:1}
+  .missing{background:#ffdede;color:#7a0000;font-weight:700}
+  .note{color:#64748b;font-size:13px;margin-top:6px}
+  input.cell{width:100%;box-sizing:border-box}
+  .small{font-size:12px;color:#64748b}
+  .muted{color:#64748b;font-size:12px}
+  @media (max-width:800px){th,td{font-size:12px}}
+  .section-title{margin-top:12px;margin-bottom:4px;font-weight:700}
+  </style>
+  <style>
+
+  /* Hide individual deduction columns in Payroll table (show only Total Deductions) */
+  #payrollTab #payrollTable th:nth-child(9),
+  #payrollTab #payrollTable td:nth-child(9),
+  #payrollTab #payrollTable th:nth-child(10),
+  #payrollTab #payrollTable td:nth-child(10),
+  #payrollTab #payrollTable th:nth-child(11),
+  #payrollTab #payrollTable td:nth-child(11),
+  #payrollTab #payrollTable th:nth-child(12),
+  #payrollTab #payrollTable td:nth-child(12),
+  #payrollTab #payrollTable th:nth-child(13),
+  #payrollTab #payrollTable td:nth-child(13),
+  #payrollTab #payrollTable th:nth-child(14),
+  #payrollTab #payrollTable td:nth-child(14),
+  #payrollTab #payrollTable th:nth-child(15),
+  #payrollTab #payrollTable td:nth-child(15) { display: none; }
+
+  </style>
+
+  <style id="payrollScopedStyles">
+   #panelPayroll {#panelPayroll --border:#e2e8f0; --bg:#f8fafc; --bg2:#f1f5f9; --text:#0b1220;
+    --accent:#2563eb; --muted:#64748b;
+  }
+  * {#panelPayroll box-sizing:border-box}
+  body {#panelPayroll font-family:Arial, #panelPayroll Helvetica, #panelPayroll sans-serif;margin:18px;max-width:1200px;color:var(--text)}
+  header {#panelPayroll display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px;flex-wrap:wrap}
+  h2 {#panelPayroll margin:0}
+  .tabs {#panelPayroll display:flex;gap:6px;flex-wrap:wrap}
+  .tab-btn {#panelPayroll padding:8px 12px;border:1px solid var(--border);background:white;border-radius:8px;cursor:pointer}
+  .tab-btn.active {#panelPayroll background:var(--accent);color:white;border-color:var(--accent)}
+  .tab {#panelPayroll display:none}
+  .tab.active {#panelPayroll display:block}
+  .controls {#panelPayroll display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:10px 0}
+  label {#panelPayroll font-size:12px;color:var(--muted)}
+  input[type=date], #panelPayroll input[type=number], #panelPayroll input[type=text], #panelPayroll select, #panelPayroll button {#panelPayroll padding:6px 8px;border:1px solid var(--border);border-radius:6px}
+  button.primary {#panelPayroll background:var(--accent);color:white;border-color:var(--accent)}
+  table {#panelPayroll border-collapse:collapse;width:100%;margin-top:12px}
+  th, #panelPayroll td {#panelPayroll border:1px solid var(--border);padding:8px;text-align:center;font-size:13px}
+  th {#panelPayroll background:var(--bg2);position:sticky;top:0;z-index:1}
+  td.num {#panelPayroll text-align:right}
+  input.cell {#panelPayroll width:100%;padding:4px;border:1px solid var(--border);border-radius:4px;text-align:right}
+  .note {#panelPayroll font-size:12px;color:var(--muted)}
+  .section {#panelPayroll background:var(--bg);padding:10px;border:1px solid var(--border);border-radius:10px;margin-top:8px}
+  .danger {#panelPayroll color:#b91c1c}
+  .wrap {white-space:normal}
+  </style>
+  <style id="payroll-tabs-fix">
+   #panelPayroll .tab{display:none} #panelPayroll .tab.active{display:block}
+  </style>
+ </head>
+ <body>
+  <header>
+   <div class="tabs">
+    <button class="tab-btn active" id="tabMain">
+     DTR
+    </button>
+    <button class="tab-btn" id="tabSchedule">
+     Schedules
+    </button>
+    <button class="tab-btn" id="tabEmployees">
+     Employees
+    </button>
+    <button class="tab-btn" id="tabProjects">
+     Projects
+    </button>
+    <button class="tab-btn" id="tabPayroll">
+     Payroll
+    </button>
+    <button class="tab-btn" id="tabProjectTotals">Project Totals</button>
+   </div>
+   <div class="shared-dates" style="margin-left:auto; display:flex; gap:8px; align-items:center;">
+    <label>
+     Start:
+     <input id="weekStart" type="date"/>
+    </label>
+    <label>
+     End:
+     <input id="weekEnd" type="date"/>
+    </label>
+   </div>
+   <div class="small" style="margin-left:auto">
+    Data persisted in browser (localStorage). Use Clear to remove.
+   </div>
+  </header>
+  
+  <section class="panel active" id="panelMain">
+   <div class="controls">
+    <label>
+     Upload .DAT/.TXT (multiple)
+     <input accept=".dat,.txt" id="fileInput" multiple="" type="file"/>
+    </label>
+    <button id="manualDtrBtn">Enter Manual DTR</button>
+    </label>
+    <button id="clearData">
+     Clear All Data
+    </button>
+    <label>
+     Project:
+     <select id="filterProject" title="Filter by project">
+     </select>
+    </label>
+<button id="downloadCSV" style="display:none">
+     Download CSV
+    </button>
+    <label> Search Name: <input id="dtrSearchName" type="text" placeholder="Type a name" style="width:220px" /></label>
+   </div>
+   <div class="note">
+    Regular hours computed per schedule segments. Grace applies to AM/PM in. OT detected after PM out reference.
+   </div>
+   <table aria-live="polite" id="resultsTable">
+    <thead>
+     <tr>
+      <th>
+       ID
+      </th>
+      <th>
+       Name
+      </th>
+      <th>
+       Project
+      </th>
+      <th>
+       Schedule
+      </th>
+      <th>
+       Date
+      </th>
+      <th>
+       Clock In 1
+      </th>
+      <th>
+       Clock Out 1
+      </th>
+      <th>
+       Clock In 2
+      </th>
+      <th>
+       Clock Out 2
+      </th>
+      <th>
+       OT In
+      </th>
+      <th>
+       OT Out
+      </th>
+      <th>
+       Total Regular Hrs
+      </th>
+      <th>
+       OT Hrs
+      </th>
+     </tr>
+    </thead>
+    <tbody>
+    </tbody>
+   </table>
+  </section>
+  
+  <section class="panel" id="panelSchedule">
+   <h3>
+    Schedules
+   </h3>
+   <div class="controls">
+    <label>
+     Choose schedule:
+     <select id="scheduleSelect">
+     </select>
+    </label>
+    <button id="addScheduleBtn">
+     Add
+    </button>
+    <button id="deleteScheduleBtn">
+     Delete
+    </button>
+    <button id="setDefaultScheduleBtn">
+     Set Default
+    </button>
+   </div>
+   <div class="section-title">
+    Schedule segments
+   </div>
+   <table id="scheduleTable">
+    <thead>
+     <tr>
+      <th>
+       Segment
+      </th>
+      <th>
+       Start
+      </th>
+      <th>
+       End
+      </th>
+     </tr>
+    </thead>
+    <tbody>
+     <tr>
+      <td>
+       AM
+      </td>
+      <td>
+       <input class="cell" data-key="sch_am_start" type="time"/>
+      </td>
+      <td>
+       <input class="cell" data-key="sch_am_end" type="time"/>
+      </td>
+     </tr>
+     <tr>
+      <td>
+       PM
+      </td>
+      <td>
+       <input class="cell" data-key="sch_pm_start" type="time"/>
+      </td>
+      <td>
+       <input class="cell" data-key="sch_pm_end" type="time"/>
+      </td>
+     </tr>
+    </tbody>
+   </table>
+   <div class="controls" style="margin-top:8px;">
+    <label>
+     Grace Minutes:
+     <input class="cell" data-key="sch_grace" min="0" style="width:90px" type="number"/>
+    </label>
+    <label style="margin-left:8px">
+     Schedule name:
+     <input class="cell" id="scheduleName" style="width:200px"/>
+    </label>
+    <button id="saveScheduleBtn">
+     Save
+    </button>
+   </div>
+   <div class="section-title">
+    Ranges (detection per schedule)
+   </div>
+   <table id="rangesTable">
+    <thead>
+     <tr>
+      <th>
+       Slot
+      </th>
+      <th>
+       Start
+      </th>
+      <th>
+       End
+      </th>
+     </tr>
+    </thead>
+    <tbody>
+     <tr>
+      <td>
+       Clock In 1
+      </td>
+      <td>
+       <input class="cell" data-key="rng_am_in_start" type="time"/>
+      </td>
+      <td>
+       <input class="cell" data-key="rng_am_in_end" type="time"/>
+      </td>
+     </tr>
+     <tr>
+      <td>
+       Clock Out 1
+      </td>
+      <td>
+       <input class="cell" data-key="rng_am_out_start" type="time"/>
+      </td>
+      <td>
+       <input class="cell" data-key="rng_am_out_end" type="time"/>
+      </td>
+     </tr>
+     <tr>
+      <td>
+       Clock In 2
+      </td>
+      <td>
+       <input class="cell" data-key="rng_pm_in_start" type="time"/>
+      </td>
+      <td>
+       <input class="cell" data-key="rng_pm_in_end" type="time"/>
+      </td>
+     </tr>
+     <tr>
+      <td>
+       Clock Out 2
+      </td>
+      <td>
+       <input class="cell" data-key="rng_pm_out_start" type="time"/>
+      </td>
+      <td>
+       <input class="cell" data-key="rng_pm_out_end" type="time"/>
+      </td>
+     </tr>
+     <tr>
+      <td>
+       OT In
+      </td>
+      <td>
+       <input class="cell" data-key="rng_ot_in_start" type="time"/>
+      </td>
+      <td>
+       <input class="cell" data-key="rng_ot_in_end" type="time"/>
+      </td>
+     </tr>
+     <tr>
+      <td>
+       OT Out
+      </td>
+      <td>
+       <input class="cell" data-key="rng_ot_out_start" type="time"/>
+      </td>
+      <td>
+       <input class="cell" data-key="rng_ot_out_end" type="time"/>
+      </td>
+     </tr>
+    </tbody>
+   </table>
+   <div class="controls" style="margin-top:8px;">
+    <button id="saveRangesBtn">
+     Save Ranges
+    </button>
+    <button id="resetRangesBtn">
+     Reset Ranges
+    </button>
+   </div>
+  </section>
+  
+  <section class="panel" id="panelEmployees">
+   <h3>
+    Employees
+   </h3>
+   <div class="controls">
+    <input class="cell" id="empIdInput" placeholder="ID" style="width:120px"/>
+    <input class="cell" id="empNameInput" placeholder="Name" style="width:220px"/>
+    <input class="cell" id="empRateInput" min="0" placeholder="Hourly Rate" step="0.01" style="width:140px" type="number"/>
+    <input class="cell" id="empBankInput" placeholder="Bank Account" style="width:220px"/>
+    <label>
+     Schedule:
+     <select id="empScheduleSelect">
+     </select>
+    </label>
+    <label>
+     Project:
+     <select id="empProjectSelect">
+     </select>
+    </label>
+    <button id="addEmployeeBtn">
+     Add
+    </button>
+    <button id="clearEmployeesBtn">
+     Clear All Employees
+    </button>
+   </div>
+   <div class="controls" style="margin-top:6px;align-items:center;">
+    <label style="font-weight:600">
+     Upload employee list (no header):
+    </label>
+    <input accept=".xlsx,.xls,.csv" id="empFileInput" type="file"/>
+    <button id="downloadEmployeesCSV">
+     Download Employees CSV
+    </button>
+    <div class="muted">
+     Cols: A = ID, B = Name, C = Hourly Rate (optional), D = Schedule Name (optional), E = Project Name (optional), F = Bank Account (optional). Imported employees get default schedule and no project unless set.
+    </div>
+   </div>
+   <table id="employeesTable">
+    <thead>
+     <tr>
+      <th>
+       ID
+      </th>
+      <th>
+       Name
+      </th>
+      <th>
+       Hourly Rate
+      </th>
+      <th>
+       Schedule
+      </th>
+      <th>
+       Project
+      </th>
+      <th>Bank Account</th><th>Action</th>
+     </tr>
+    </thead>
+    <tbody>
+    </tbody>
+   </table>
+  </section>
+  
+  <section class="panel" id="panelProjects">
+   <h3>
+    Projects
+   </h3>
+   <div class="controls">
+    <input class="cell" id="projectNameInput" placeholder="Project Name" style="width:220px"/>
+    <button id="addProjectBtn">
+     Add
+    </button>
+    <button id="clearProjectsBtn">
+     Clear All Projects
+    </button>
+   </div>
+   <table id="projectsTable">
+    <thead>
+     <tr>
+      <th>
+       Project Name
+      </th>
+      <th>
+       Action
+      </th>
+     </tr>
+    </thead>
+    <tbody>
+    </tbody>
+   </table>
+  </section>
+  <section class="panel" id="panelPayroll">
+   <div id="payrollWrapper">
+    <header>
+     <h2>
+      Payroll
+     </h2>
+     <div class="tabs">
+      <button class="tab-btn active" data-tab="payrollTab">
+       Payroll
+      </button>
+      <button class="tab-btn" data-tab="sssTab">
+       SSS Table
+      </button>
+      <button class="tab-btn" data-tab="deductionsTab">
+       Deductions
+      </button>
+     </div>
+    </header>
+    <div class="tab active" id="payrollTab">
+     <div class="controls">
+      <label>
+       OT Multiplier
+       <br/>
+       <input id="otMultiplier" step="0.01" style="width:100px" type="number" value="1.50"/>
+      </label>
+      <label>
+       Divide Deductions By
+       <br/>
+       <select id="deductionDivisor">
+        <option value="1">
+         1
+        </option>
+        <option value="2">
+         2
+        </option>
+        <option value="3">
+         3
+        </option>
+        <option value="4">
+         4
+        </option>
+        <option value="5">
+         5
+        </option>
+       </select>
+      </label>
+      <div style="flex:1 1 auto">
+      </div>
+      <button class="primary" id="downloadPayrollCSV">
+       Download Payroll CSV
+      </button>
+     </div>
+     <div class="section note">
+      Pag-IBIG = Regular Pay &times; 2% &divide; Divisor, PhilHealth = Regular Pay &times; 2.5% &divide; Divisor,
+    SSS = (Employee Share by Monthly Income) &divide; Divisor. Loans &amp; Vales are manual (not divided).
+     </div>
+     <table id="payrollTable">
+      <thead>
+       <tr>
+        <th>
+         ID
+        </th>
+        <th>
+         Name
+        </th>
+        <th>
+         Regular Hours
+        </th>
+        <th>
+         OT Hours
+        </th>
+        <th>
+         Hourly Rate
+        </th>
+        <th>
+         Regular Pay
+        </th>
+        <th>
+         OT Pay
+        </th>
+        <th>
+         Gross Pay
+        </th>
+        <th>
+         Pag-IBIG
+        </th>
+        <th>
+         PhilHealth
+        </th>
+        <th>
+         SSS
+        </th>
+        <th>
+         SSS Loan
+        </th>
+        <th>
+         Pag-IBIG Loan
+        </th>
+        <th>
+         Vale
+        </th>
+        <th>
+         Wed Vale
+        </th>
+        <th>
+         Total Deductions
+        </th>
+        <th>
+         Net Pay
+        </th>
+       </tr>
+      </thead>
+      <tbody>
+      </tbody>
+     </table>
+     <div class="section note">
+      Reads employees from localStorage key
+      <code>
+       att_employees_v2
+      </code>
+      (id&rarr;{name}). If none found, shows a sample row.
+     </div>
+    </div>
+    <div class="tab" id="sssTab">
+     <div class="controls">
+      <button id="addSssRow">
+       Add Row
+      </button>
+      <button class="primary" id="resetSss">
+       Reset to 2025 Defaults
+      </button>
+      <button class="danger" id="clearSss">
+       Clear SSS Table
+      </button>
+      <button id="exportSss">
+       Export CSV
+      </button>
+      <label>
+       Import CSV (min,max,employeeShare)
+       <br/>
+       <input accept=".csv,text/csv" id="importSss" type="file"/>
+      </label>
+     </div>
+     <table id="sssTable">
+      <thead>
+       <tr>
+        <th>
+         Range From (₱)
+        </th>
+        <th>
+         Range To (₱)
+        </th>
+        <th>
+         Employee Share (₱)
+        </th>
+        <th>
+         Actions
+        </th>
+       </tr>
+      </thead>
+      <tbody>
+      </tbody>
+     </table>
+     <div class="section note">
+      Monthly Income = Hourly Rate &times; 8 &times; 24. We pick the row where
+      <i>
+       min &le; income &le; max
+      </i>
+      and use the Employee Share.
+     </div>
+    </div>
+    <div class="tab" id="deductionsTab">
+     <div class="controls">
+      <label>
+       Upload Excel/CSV (ID, Pag-IBIG Loan, SSS Loan, Vale, Wed Vale):
+       <br/>
+       <input accept=".xlsx,.xls,.csv" id="deductionsFileInput" type="file"/>
+      </label>
+      <button id="exportDeductionsCSV">Export CSV</button>
+     </div>
+     <div class="section note">
+      <strong>File Format:</strong> Use the exported CSV from this table, then edit only these columns:
+      <br/>• <strong>Column 6:</strong> SSS Loan (edit this value)
+      <br/>• <strong>Column 7:</strong> Pag-IBIG Loan (edit this value)  
+      <br/>• <strong>Column 8:</strong> Vale (edit this value)
+      <br/>• <strong>Column 9:</strong> Wed Vale (edit this value)
+      <br/><strong>Important:</strong> Don't change columns 1-5 or 10 (they're calculated automatically)
+      <br/><strong>Note:</strong> If employee names are split into 2 columns, the system automatically adjusts
+     </div>
+     <table id="deductionsTable">
+      <thead>
+       <tr>
+        <th>ID</th>
+        <th>Name</th>
+        <th>Pag-IBIG</th>
+        <th>PhilHealth</th>
+        <th>SSS</th>
+        <th>SSS Loan</th>
+        <th>Pag-IBIG Loan</th>
+        <th>Vale</th>
+        <th>Wed Vale</th>
+        <th>Total Deductions</th>
+       </tr>
+      </thead>
+      <tbody></tbody>
+     </table>
+    </div>
+
+    <script>
+const LS_RATES='payroll_rates', LS_REG_HRS='payroll_reg_hours', LS_OT_HRS='payroll_ot_hours';
+const LS_OTMULT='payroll_ot_multiplier', LS_WEEKSTART='payroll_week_start', LS_WEEKEND='payroll_week_end';
+const LS_DIVISOR='payroll_deduction_divisor', LS_SSS_TABLE='payroll_sss_table';
+const LS_LOAN_SSS='payroll_loan_sss', LS_LOAN_PI='payroll_loan_pagibig';
+const LS_VALE='payroll_vale', LS_VALE_WED='payroll_vale_wed';
+const SSS_SEED_2025 = [
+  [0, 4250, 180.0],
+  [4250.01, 4749.99, 202.5],
+  [4750.0, 5249.99, 225.0],
+  [5250.0, 5749.99, 247.5],
+  [5750.0, 6249.99, 270.0],
+  [6250.0, 6749.99, 292.5],
+  [6750.0, 7249.99, 315.0],
+  [7250.0, 7749.99, 337.5],
+  [7750.0, 8249.99, 360.0],
+  [8250.0, 8749.99, 382.5],
+  [8750.0, 9249.99, 405.0],
+  [9250.0, 9749.99, 427.5],
+  [9750.0, 10249.99, 450.0],
+  [10250.0, 10749.99, 472.5],
+  [10750.0, 11249.99, 495.0],
+  [11250.0, 11749.99, 517.5],
+  [11750.0, 12249.99, 540.0],
+  [12250.0, 12749.99, 562.5],
+  [12750.0, 13249.99, 585.0],
+  [13250.0, 13749.99, 607.5],
+  [13750.0, 14249.99, 630.0],
+  [14250.0, 14749.99, 652.5],
+  [14750.0, 15249.99, 675.0],
+  [15250.0, 15749.99, 697.5],
+  [15750.0, 16249.99, 720.0],
+  [16250.0, 16749.99, 742.5],
+  [16750.0, 17249.99, 765.0],
+  [17250.0, 17749.99, 787.5],
+  [17750.0, 18249.99, 810.0],
+  [18250.0, 18749.99, 832.5],
+  [18750.0, 19249.99, 855.0],
+  [19250.0, 19749.99, 877.5],
+  [19750.0, 20249.99, 900.0],
+  [20250.0, 20749.99, 922.5],
+  [20750.0, 21249.99, 945.0],
+  [21250.0, 21749.99, 967.5],
+  [21750.0, 22249.99, 990.0],
+  [22250.0, 22749.99, 1012.5],
+  [22750.0, 23249.99, 1035.0],
+  [23250.0, 23749.99, 1057.5],
+  [23750.0, 24249.99, 1080.0],
+  [24250.0, 24749.99, 1102.5],
+  [24750.0, 25249.99, 1125.0],
+  [25250.0, 25749.99, 1147.5],
+  [25750.0, 26249.99, 1170.0],
+  [26250.0, 26749.99, 1192.5],
+  [26750.0, 27249.99, 1215.0],
+  [27250.0, 27749.99, 1237.5],
+  [27750.0, 28249.99, 1260.0],
+  [28250.0, 28749.99, 1282.5],
+  [28750.0, 99999999.0, 1305.0]
+];
+
+function ensureSeededSSS() {
+  try {
+    const cur = JSON.parse(localStorage.getItem(LS_SSS_TABLE) || '[]');
+    if (!Array.isArray(cur) || cur.length === 0) {
+      const mapped = SSS_SEED_2025.map(r=>({min:r[0], max:r[1], employee:r[2]}));
+      localStorage.setItem(LS_SSS_TABLE, JSON.stringify(mapped));
+    }
+  } catch (e) {
+    const mapped = SSS_SEED_2025.map(r=>({min:r[0], max:r[1], employee:r[2]}));
+    localStorage.setItem(LS_SSS_TABLE, JSON.stringify(mapped));
+  }
+}
+ensureSeededSSS();
+let payrollRates = JSON.parse(localStorage.getItem(LS_RATES) || '{}');
+let regHours = JSON.parse(localStorage.getItem(LS_REG_HRS) || '{}');
+let otHours = JSON.parse(localStorage.getItem(LS_OT_HRS) || '{}');
+let loanSSS = JSON.parse(localStorage.getItem(LS_LOAN_SSS) || '{}');
+let loanPI = JSON.parse(localStorage.getItem(LS_LOAN_PI) || '{}');
+let vale = JSON.parse(localStorage.getItem(LS_VALE) || '{}');
+let valeWed = JSON.parse(localStorage.getItem(LS_VALE_WED) || '{}');
+
+let otMultiplier = parseFloat(localStorage.getItem(LS_OTMULT)) || 1.50;
+let weekStartSaved = localStorage.getItem(LS_WEEKSTART) || '';
+let weekEndSaved = localStorage.getItem(LS_WEEKEND) || '';
+let divisor = parseInt(localStorage.getItem(LS_DIVISOR) || '1', 10);
+const weekStartEl = document.getElementById('weekStart');
+const weekEndEl = document.getElementById('weekEnd');
+const otMultiplierEl = document.getElementById('otMultiplier');
+const divisorEl = document.getElementById('deductionDivisor');
+const tbody = document.querySelector('#payrollTable tbody');
+document.querySelectorAll('.tab-btn').forEach(btn=>{
+  btn.addEventListener('click', ()=>{
+    document.querySelectorAll('#panelPayroll .tabs .tab-btn').forEach(b=>b.classList.remove('active'));
+    document.querySelectorAll('#panelPayroll .tab').forEach(t=>t.classList.remove('active'));
+    btn.classList.add('active');
+    const panel = document.querySelector('#panelPayroll #' + btn.dataset.tab);
+    if (panel) panel.classList.add('active');
+  });
+});
+otMultiplierEl.value = otMultiplier;
+weekStartEl.value = weekStartSaved;
+weekEndEl.value = weekEndSaved;
+divisorEl.value = divisor;
+
+otMultiplierEl.addEventListener('input', ()=>{ otMultiplier = parseFloat(otMultiplierEl.value)||0; localStorage.setItem(LS_OTMULT, otMultiplier); calculateAll(); });
+weekStartEl.addEventListener('input', ()=> localStorage.setItem(LS_WEEKSTART, weekStartEl.value));
+weekEndEl.addEventListener('input', ()=> localStorage.setItem(LS_WEEKEND, weekEndEl.value));
+divisorEl.addEventListener('change', ()=>{ divisor = parseInt(divisorEl.value,10)||1; localStorage.setItem(LS_DIVISOR, String(divisor)); calculateAll(); });
+function loadEmployees() {
+  const stored = JSON.parse(localStorage.getItem('att_employees_v2') || '{}');
+  let list = Object.keys(stored).map(id=>({id, name: stored[id]?.name || ''}));
+  if (list.length === 0) list = [{id:'001', name:'Sample Employee'}];
+  list.sort((a,b)=> (a.name||'').localeCompare(b.name||''));
+  return list;
+}
+const employeeList = loadEmployees();
+function getSssTable(){
+  let arr = [];
+  try { arr = JSON.parse(localStorage.getItem(LS_SSS_TABLE) || '[]'); }
+  catch(e){ arr = []; }
+  if (!Array.isArray(arr)) arr = [];
+  arr = arr.map(r=>({min:Number(r.min)||0, max:Number(r.max)||0, employee:Number(r.employee)||0}))
+           .sort((a,b)=> a.min - b.min);
+  return arr;
+}
+function setSssTable(rows){
+  localStorage.setItem(LS_SSS_TABLE, JSON.stringify(rows));
+}
+
+function renderDeductionsTable(){
+  const dtbody = document.querySelector('#deductionsTable tbody');
+  if (!dtbody) return;
+  dtbody.innerHTML = '';
+  employeeList.forEach(emp => {
+    const rH = Number(regHours[emp.id] ?? 0);
+    const rate = Number(payrollRates[emp.id] ?? 0);
+    const lSSS = Number(loanSSS[emp.id] ?? 0);
+    const lPI = Number(loanPI[emp.id] ?? 0);
+    const v = Number(vale[emp.id] ?? 0);
+    const vW = Number(valeWed[emp.id] ?? 0);
+    const regPay = +(rH * rate).toFixed(2);
+    const pagibig = +(regPay * 0.02).toFixed(2);
+    const philhealth = +(regPay * 0.025).toFixed(2);
+    const monthly = rate * 8 * 24;
+    const sssFull = sssShareByMonthly(monthly);
+    const sss = +(sssFull / (Number(divisor)||1)).toFixed(2);
+    const sssLoan = +(lSSS / (Number(divisor)||1)).toFixed(2);
+    const piLoan = +(lPI / (Number(divisor)||1)).toFixed(2);
+    const total = +(pagibig + philhealth + sss + sssLoan + piLoan + v + vW).toFixed(2);
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td>${emp.id}</td><td class="wrap">${emp.name}</td>
+      <td class="num">${pagibig.toFixed(2)}</td>
+      <td class="num">${philhealth.toFixed(2)}</td>
+      <td class="num">${sss.toFixed(2)}</td>
+      <td class="num">${sssLoan.toFixed(2)}</td>
+      <td class="num">${piLoan.toFixed(2)}</td>
+      <td class="num">${v.toFixed(2)}</td>
+      <td class="num">${vW.toFixed(2)}</td>
+      <td class="num">${total.toFixed(2)}</td>`;
+    dtbody.appendChild(tr);
+  });
+}
+document.addEventListener('click', (e)=>{
+  if(e.target && e.target.id === 'exportDeductionsCSV'){
+    const header = ['ID','Name','Pag-IBIG','PhilHealth','SSS','SSS Loan','Pag-IBIG Loan','Vale','Wed Vale','Total Deductions'];
+    const rows=[header];
+    document.querySelectorAll('#deductionsTable tbody tr').forEach(tr=>{
+      const cells = Array.from(tr.children).map(td=>td.textContent.trim());
+      rows.push(cells);
+    });
+    const csv = rows.map(r=>r.map(s=>{
+      s = String(s ?? '');
+      return /[",\n]/.test(s) ? '"' + s.replace(/"/g,'""') + '"' : s;
+    }).join(',')).join('\n');
+    const blob = new Blob([csv], {type:'text/csv'});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a'); a.href=url; a.download='deductions.csv'; document.body.appendChild(a); a.click(); a.remove();
+  }
+});
+
+// Handle deductions file upload
+document.addEventListener('change', (e)=>{
+  if(e.target && e.target.id === 'deductionsFileInput'){
+    const file = e.target.files && e.target.files[0]; 
+    if (!file) return;
+    
+    const reader = new FileReader();
+    reader.onload = function(e) {
+      try {
+        let rows = [];
+        
+        // Check if employeeList is available
+        if (!employeeList || employeeList.length === 0) {
+          alert('No employees found. Please add employees first in the Employees tab.');
+          return;
+        }
+        
+        console.log('Available employees:', employeeList.map(e => e.id));
+        
+        if (file.name.toLowerCase().endsWith('.csv')) {
+          // Handle CSV files
+          
+          const text = String(e.target.result || '');
+          // Robust CSV parsing with quoted field support
+          rows = text.split(/\r?\n/).filter(line => line.trim().length>0).map(line => {
+            const out = []; let cur = ''; let inQ = false;
+            for (let i=0;i<line.length;i++){
+              const ch = line[i]; const nx = line[i+1];
+              if (ch === '"'){
+                if (inQ && nx === '"'){ cur += '"'; i++; } 
+                else { inQ = !inQ; }
+              } else if (ch === ',' && !inQ){
+                out.push(cur); cur = '';
+              } else {
+                cur += ch;
+              }
+            }
+            out.push(cur);
+            return out.map(cell => cell.trim());
+          });
+    } else {
+          // Handle Excel files
+          const data = new Uint8Array(e.target.result);
+          const workbook = XLSX.read(data, { type: 'array' });
+          const sheet = workbook.Sheets[workbook.SheetNames[0]];
+          rows = XLSX.utils.sheet_to_json(sheet, { header: 1 });
+        }
+        
+        if (rows.length < 2) {
+          alert('File must have at least a header row and one data row.');
+          return;
+        }
+        
+        // Process the data
+        let updated = 0;
+        let errors = [];
+        
+        console.log('Processing file with rows:', rows.length);
+        console.log('First row (headers):', rows[0]);
+        console.log('Second row (sample data):', rows[1]);
+        
+        
+        // Map column indexes by header names to tolerate column reordering
+        const header = rows[0].map(h => String(h).trim().toLowerCase());
+        const IDX = {
+          id: header.indexOf('id'),
+          name: header.indexOf('name'),
+          sssloan: header.indexOf('sss loan'),
+          pagibigloan: header.indexOf('pag-ibig loan'),
+          vale: header.indexOf('vale'),
+          wedvale: header.indexOf('wed vale')
+        };
+        const req = ['id','sssloan','pagibigloan','vale','wedvale'];
+        for (const k of req){ if (IDX[k] < 0){ alert('Upload missing column: ' + k); return; } }
+for (let i = 1; i < rows.length; i++) {
+          const row = rows[i];
+          if (row.length < 10) {
+            console.log(`Row ${i} too short (${row.length} columns):`, row);
+            continue;
+          }
+          
+          const empId = String(row[0] || '').trim();
+          
+          // Only read the specific columns we need for loans and vales
+          // Skip the calculated fields (Pag-IBIG, PhilHealth, SSS, Total Deductions)
+          // Note: If name is split into 2 columns, adjust accordingly
+          const sssLoan = parseFloat(row[IDX.sssloan]) || 0; const pagibigLoan = parseFloat(row[IDX.pagibigloan]) || 0; const valeVal = parseFloat(row[IDX.vale]) || 0; const wedValeVal = parseFloat(row[IDX.wedvale]) || 0;       // Column 9: Wed Vale (was 8)
+          
+          console.log(`Row ${i}: ID=${empId}, SSS Loan=${sssLoan}, Pag-IBIG Loan=${pagibigLoan}, Vale=${valeVal}, Wed Vale=${wedValeVal}`);
+          
+          if (!empId) continue;
+          
+          // Check if employee exists in employeeList
+          const employeeExists = employeeList.some(emp => emp.id === empId);
+          if (employeeExists) {
+            // Update the loan and vale amounts
+            loanPI[empId] = pagibigLoan;
+            loanSSS[empId] = sssLoan;
+            vale[empId] = valeVal;
+            valeWed[empId] = wedValeVal;
+            updated++;
+            console.log(`Updated employee ${empId}:`, { pagibigLoan, sssLoan, vale: valeVal, wedVale: wedValeVal });
+          } else {
+            errors.push(`Employee ID ${empId} not found`);
+            console.log(`Employee ${empId} not found in:`, employeeList.map(e => e.id));
+          }
+        }
+        
+        // Save to localStorage
+        localStorage.setItem(LS_LOAN_PI, JSON.stringify(loanPI));
+        localStorage.setItem(LS_LOAN_SSS, JSON.stringify(loanSSS));
+        localStorage.setItem(LS_VALE, JSON.stringify(vale));
+        localStorage.setItem(LS_VALE_WED, JSON.stringify(valeWed));
+        
+        // Refresh displays
+        if (typeof renderDeductionsTable === 'function') renderDeductionsTable();
+        if (typeof renderTable === 'function') renderTable();
+        
+        // Show results
+        let message = `Updated ${updated} employees.`;
+        if (errors.length > 0) {
+          message += `\n\nErrors:\n${errors.slice(0, 5).join('\n')}`;
+          if (errors.length > 5) message += `\n...and ${errors.length - 5} more.`;
+        }
+        alert(message);
+        
+      } catch (err) { 
+        console.error(err); 
+        alert('Error reading file. Please check the file format.'); 
+      } finally { 
+        e.target.value = ''; 
+      }
+    };
+    
+    if (file.name.toLowerCase().endsWith('.csv')) {
+      reader.readAsText(file);
+    } else {
+      reader.readAsArrayBuffer(file);
+    }
+  }
+});
+function renderTable(){
+  tbody.innerHTML = '';
+  employeeList.forEach(emp=>{
+    const tr = document.createElement('tr');
+    const rH = Number(regHours[emp.id] ?? 0);
+    const oH = Number(otHours[emp.id] ?? 0);
+    const rate = Number(payrollRates[emp.id] ?? 0);
+    const lSSS = Number(loanSSS[emp.id] ?? 0);
+    const lPI = Number(loanPI[emp.id] ?? 0);
+    const v = Number(vale[emp.id] ?? 0);
+    const vW = Number(valeWed[emp.id] ?? 0);
+    tr.innerHTML = `
+      <td>${emp.id}</td>
+      <td class="wrap">${emp.name}</td>
+      <td><input class="cell regHrs" type="number" step="0.01" value="${rH}"></td>
+      <td><input class="cell otHrs" type="number" step="0.01" value="${oH}"></td>
+      <td><input class="cell rate" type="number" step="0.01" value="${rate}"></td>
+      <td class="regPay num">0.00</td>
+      <td class="otPay num">0.00</td>
+      <td class="grossPay num">0.00</td>
+      <td class="pagibig num">0.00</td>
+      <td class="philhealth num">0.00</td>
+      <td class="sss num">0.00</td>
+      <td><input class="cell loanSSS" type="number" step="0.01" value="${lSSS}"></td>
+      <td><input class="cell loanPI" type="number" step="0.01" value="${lPI}"></td>
+      <td><input class="cell vale" type="number" step="0.01" value="${v}"></td>
+      <td><input class="cell valeWed" type="number" step="0.01" value="${vW}"></td>
+      <td class="totalDed num">0.00</td>
+      <td class="netPay num">0.00</td>`;
+    tbody.appendChild(tr);
+  });
+  attachRowEvents();
+  calculateAll();
+}
+
+function attachRowEvents(){
+  tbody.querySelectorAll('tr').forEach(row=>{
+    const id = row.cells[0].textContent.trim();
+    const regI = row.querySelector('.regHrs');
+    const otI = row.querySelector('.otHrs');
+    const rateI = row.querySelector('.rate');
+    const lSSSI = row.querySelector('.loanSSS');
+    const lPII = row.querySelector('.loanPI');
+    const vI = row.querySelector('.vale');
+    const vWI = row.querySelector('.valeWed');
+    [regI, otI, rateI, lSSSI, lPII, vI, vWI].forEach(inp=>{
+      inp.addEventListener('input', ()=>{
+        regHours[id] = +(Number(regI.value)||0).toFixed(2);
+        otHours[id] = +(Number(otI.value)||0).toFixed(2);
+        payrollRates[id] = +(Number(rateI.value)||0).toFixed(2);
+        loanSSS[id] = +(Number(lSSSI.value)||0).toFixed(2);
+        loanPI[id] = +(Number(lPII.value)||0).toFixed(2);
+        vale[id] = +(Number(vI.value)||0).toFixed(2);
+        valeWed[id] = +(Number(vWI.value)||0).toFixed(2);
+        localStorage.setItem(LS_REG_HRS, JSON.stringify(regHours));
+        localStorage.setItem(LS_OT_HRS, JSON.stringify(otHours));
+        localStorage.setItem(LS_RATES, JSON.stringify(payrollRates));
+        localStorage.setItem(LS_LOAN_SSS, JSON.stringify(loanSSS));
+        localStorage.setItem(LS_LOAN_PI, JSON.stringify(loanPI));
+        localStorage.setItem(LS_VALE, JSON.stringify(vale));
+        localStorage.setItem(LS_VALE_WED, JSON.stringify(valeWed));
+        calculateRow(row);
+      });
+    });
+  });
+}
+function renderSssTable(){
+  const tbodyS = document.querySelector('#sssTable tbody');
+  tbodyS.innerHTML='';
+  const rows = getSssTable();
+  rows.forEach((r, i)=>{
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td><input type="number" step="0.01" class="cell sssMin" value="${r.min}"></td>
+      <td><input type="number" step="0.01" class="cell sssMax" value="${r.max}"></td>
+      <td><input type="number" step="0.01" class="cell sssEmp" value="${r.employee}"></td>
+      <td><button class="delRow">Delete</button></td>`;
+    tbodyS.appendChild(tr);
+    const minI = tr.querySelector('.sssMin');
+    const maxI = tr.querySelector('.sssMax');
+    const empI = tr.querySelector('.sssEmp');
+    minI.addEventListener('input', ()=>{ updateRow(i, minI, maxI, empI); });
+    maxI.addEventListener('input', ()=>{ updateRow(i, minI, maxI, empI); });
+    empI.addEventListener('input', ()=>{ updateRow(i, minI, maxI, empI); });
+    tr.querySelector('.delRow').addEventListener('click', ()=>{
+      const cur = getSssTable();
+      cur.splice(i,1);
+      setSssTable(cur);
+      renderSssTable();
+      calculateAll();
+    });
+  });
+}
+function updateRow(i, minI, maxI, empI){
+  const cur = getSssTable();
+  cur[i] = {min:Number(minI.value)||0, max:Number(maxI.value)||0, employee:Number(empI.value)||0};
+  setSssTable(cur);
+  calculateAll();
+}
+
+document.getElementById('addSssRow').addEventListener('click', ()=>{
+  const cur = getSssTable(); cur.push({min:0,max:0,employee:0}); setSssTable(cur); renderSssTable();
+});
+document.getElementById('resetSss').addEventListener('click', ()=>{
+  if(confirm('Reset SSS table to 2025 defaults?')){
+    const mapped = SSS_SEED_2025.map(r=>({min:r[0], max:r[1], employee:r[2]}));
+    setSssTable(mapped);
+    renderSssTable();
+    calculateAll();
+  }
+});
+document.getElementById('clearSss').addEventListener('click', ()=>{
+  if(confirm('Clear all SSS ranges?')){ setSssTable([]); renderSssTable(); calculateAll(); }
+});
+document.getElementById('exportSss').addEventListener('click', ()=>{
+  const rows = getSssTable();
+  const csv = ['min,max,employeeShare'].concat(rows.map(r=>[r.min,r.max,r.employee].join(','))).join('\n');
+  const blob = new Blob([csv], {type:'text/csv'}); const url = URL.createObjectURL(blob);
+  const a = document.createElement('a'); a.href=url; a.download='sss_table.csv'; document.body.appendChild(a); a.click(); a.remove();
+});
+document.getElementById('importSss').addEventListener('change', ev=>{
+  const f = ev.target.files[0]; if(!f) return;
+  const reader = new FileReader();
+  reader.onload = e=>{
+    const text = e.target.result;
+    const lines = text.split(/\r?\n/).filter(Boolean);
+    const out=[];
+    for(let i=0;i<lines.length;i++){ const line = lines[i].trim();
+      if(i===0 && /min/i.test(line) && /max/i.test(line)) continue;
+      const p = line.split(',');
+      if(p.length>=3) out.push({min:Number(p[0])||0,max:Number(p[1])||0,employee:Number(p[2])||0});
+    }
+    setSssTable(out); renderSssTable(); calculateAll();
+  };
+  reader.readAsText(f);
+});
+function sssShareByMonthly(monthly){
+  const rows = getSssTable();
+  if(rows.length===0) return 0;
+  rows.sort((a,b)=>a.min-b.min);
+  if(monthly <= rows[0].min) return Number(rows[0].employee)||0;
+  for(const r of rows){ if(monthly >= r.min && monthly <= r.max) return Number(r.employee)||0; }
+  return Number(rows[rows.length-1].employee)||0;
+}
+
+function calculateRow(tr){
+  const id = tr.cells[0].textContent.trim();
+  const reg = Number(tr.querySelector('.regHrs').value)||0;
+  const ot = Number(tr.querySelector('.otHrs').value)||0;
+  const rate = Number(tr.querySelector('.rate').value)||0;
+  const lSSS = Number(tr.querySelector('.loanSSS').value)||0;
+  const lPI = Number(tr.querySelector('.loanPI').value)||0;
+  const v = Number(tr.querySelector('.vale').value)||0;
+  const vW = Number(tr.querySelector('.valeWed').value)||0;
+
+  const regPay = +(reg * rate).toFixed(2);
+  const otPay = +(ot * rate * (Number(otMultiplier)||0)).toFixed(2);
+  const gross = +(regPay + otPay).toFixed(2);
+  const pagibig = +(regPay * 0.02).toFixed(2);
+  const philhealth = +(regPay * 0.025).toFixed(2);
+  const monthly = rate * 8 * 24;
+  const sssFull = sssShareByMonthly(monthly);
+  const sss = sssFull / (Number(divisor)||1);
+  const sssLoan = lSSS / (Number(divisor)||1);
+  const piLoan = lPI / (Number(divisor)||1);
+  const valeAmt = v;
+  const wedValeAmt = vW;
+
+  const total = pagibig + philhealth + sss + sssLoan + piLoan + valeAmt + wedValeAmt;
+  const net = gross - total;
+
+  tr.querySelector('.regPay').textContent = regPay.toFixed(2);
+  tr.querySelector('.otPay').textContent = otPay.toFixed(2);
+  tr.querySelector('.grossPay').textContent = gross.toFixed(2);
+  tr.querySelector('.pagibig').textContent = pagibig.toFixed(2);
+  tr.querySelector('.philhealth').textContent = philhealth.toFixed(2);
+  tr.querySelector('.sss').textContent = sss.toFixed(2);
+  tr.querySelector('.totalDed').textContent = total.toFixed(2);
+  tr.querySelector('.netPay').textContent = net.toFixed(2);
+}
+
+function calculateAll(){
+  document.querySelectorAll('#payrollTable tbody tr').forEach(tr=> calculateRow(tr));
+  renderDeductionsTable();
+}
+document.getElementById('downloadPayrollCSV').addEventListener('click', ()=>{
+  const header = ['Week Start','Week End','OT Multiplier','Divisor','ID','Name','Regular Hours','OT Hours','Hourly Rate','Regular Pay','OT Pay','Gross Pay','Pag-IBIG','PhilHealth','SSS','SSS Loan','Pag-IBIG Loan','Vale','Wed Vale','Total Deductions','Net Pay'];
+  const rows=[header];
+  const ws = weekStartEl.value||''; const we = weekEndEl.value||''; const otm = String(otMultiplierEl.value||''); const div = String(divisorEl.value||'1');
+  document.querySelectorAll('#payrollTable tbody tr').forEach(tr=>{
+    const tds = tr.querySelectorAll('td');
+    const id = tds[0].textContent.trim(); const name = tds[1].textContent.trim();
+    const regI = tr.querySelector('.regHrs'); const otI = tr.querySelector('.otHrs'); const rateI = tr.querySelector('.rate');
+    const regPay = tr.querySelector('.regPay').textContent.trim();
+    const otPay = tr.querySelector('.otPay').textContent.trim();
+    const grossPay = tr.querySelector('.grossPay').textContent.trim();
+    const pagibig = tr.querySelector('.pagibig').textContent.trim();
+    const philhealth = tr.querySelector('.philhealth').textContent.trim();
+    const sss = tr.querySelector('.sss').textContent.trim();
+    const lSSS = tr.querySelector('.loanSSS').value; const lPI = tr.querySelector('.loanPI').value;
+    const v = tr.querySelector('.vale').value; const vW = tr.querySelector('.valeWed').value;
+    const total = tr.querySelector('.totalDed').textContent.trim(); const net = tr.querySelector('.netPay').textContent.trim();
+    rows.push([ws,we,otm,div,id,name,regI.value,otI.value,rateI.value,regPay,otPay,grossPay,pagibig,philhealth,sss,lSSS,lPI,v,vW,total,net]);
+  });
+  const csv = rows.map(r=>r.map(s=>{
+    s = String(s ?? '');
+    return /[",\n]/.test(s) ? '"' + s.replace(/"/g,'""') + '"' : s;
+  }).join(',')).join('\n');
+  const blob = new Blob([csv], {type:'text/csv'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a'); a.href=url; a.download='payroll.csv'; document.body.appendChild(a); a.click(); a.remove();
+});
+renderTable();
+renderSssTable();
+    
+  // Wire Project Totals CSV download button (global)
+  if (document.getElementById('downloadProjectTotalsCSV')) {
+    document.getElementById('downloadProjectTotalsCSV').addEventListener('click', exportProjectTotalsCSV);
+  }
+</script>
+   </div>
+  </section>
+  <section class="panel" id="panelProjectTotals">
+    <h3>Project Totals</h3>
+    <div class="controls" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+      <div class="muted">Uses the global Start/End dates in the header and includes per-day project/schedule overrides.</div>
+      <div style="flex:1 1 auto"></div>
+      <button id="downloadProjectTotalsCSV">Download CSV</button>
+    </div>
+    <table id="projectTotalsTable">
+      <thead>
+        <tr>
+          <th>Project</th>
+          <th>Regular Hours</th>
+          <th>OT Hours</th>
+          <th>Total Hours</th>
+          <th>Gross Amount</th>
+          <th>Employees (count)</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </section>
+
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js">
+   function safeSetLS(key, obj){ try{ localStorage.setItem(key, JSON.stringify(obj)); } catch(e){ console.error('localStorage quota error for', key, e); alert('Storage is full. Please backup and clear some data.'); } }
+
+  const csv = rows.map(r => r.map(v => {
+    const s = String(v ?? '');
+    return (s.includes(',') || s.includes('"') || s.includes('\\n')) ? '"' + s.replace(/"/g,'""') + '"' : s;
+  }).join(',')).join('\\n');
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'employees_backup.csv';
+  a.click();
+});
+  </script>
+  <script>
+   
+const LS_RECORDS = 'att_records_v2';
+const LS_SCHEDULES = 'att_schedules_v2';
+const LS_SCHEDULES_DEFAULT = 'att_schedules_default';
+const LS_EMPLOYEES = 'att_employees_v2';
+const LS_PROJECTS = 'att_projects_v1';
+const LS_FILTER_PROJECT = 'att_filter_project_v1';
+const LS_OVERRIDES_SCHEDULES = 'att_overrides_schedules';
+const LS_OVERRIDES_PROJECTS = 'att_overrides_projects';
+let overridesSchedules = JSON.parse(localStorage.getItem(LS_OVERRIDES_SCHEDULES) || '{}');
+let overridesProjects = JSON.parse(localStorage.getItem(LS_OVERRIDES_PROJECTS) || '{}');
+function saveOverrides(){
+  localStorage.setItem(LS_OVERRIDES_SCHEDULES, JSON.stringify(overridesSchedules));
+  localStorage.setItem(LS_OVERRIDES_PROJECTS, JSON.stringify(overridesProjects));
+}
+
+const DEFAULT_RANGES = {
+  rng_am_in_start:"05:00", rng_am_in_end:"09:00",
+  rng_am_out_start:"11:30", rng_am_out_end:"12:30",
+  rng_pm_in_start:"12:30", rng_pm_in_end:"14:30",
+  rng_pm_out_start:"15:00", rng_pm_out_end:"20:00",
+  rng_ot_in_start:"19:00", rng_ot_in_end:"22:00",
+  rng_ot_out_start:"19:00", rng_ot_out_end:"23:59"
+};
+const DEFAULT_SCHEDULE = {
+  name: "Default",
+  sch_am_start:"08:00", sch_am_end:"12:00",
+  sch_pm_start:"13:00", sch_pm_end:"17:00",
+  sch_grace:15,
+  ...DEFAULT_RANGES
+};
+
+let storedRecords = JSON.parse(localStorage.getItem(LS_RECORDS) || '[]');
+let storedEmployees = JSON.parse(localStorage.getItem(LS_EMPLOYEES) || '{}');
+let storedSchedules = JSON.parse(localStorage.getItem(LS_SCHEDULES) || 'null');
+let defaultScheduleId = localStorage.getItem(LS_SCHEDULES_DEFAULT) || null;
+let storedProjects = JSON.parse(localStorage.getItem(LS_PROJECTS) || '{}');
+document.getElementById('downloadEmployeesCSV').addEventListener('click', () => {
+  const rows = [['ID','Name','Hourly Rate','Schedule','Project','Bank Account']];
+  Object.keys(storedEmployees).forEach(id => {
+    const emp = storedEmployees[id] || {};
+    const schedName = storedSchedules[emp.scheduleId]?.name || '';
+    const projName = storedProjects[emp.projectId]?.name || '';
+    const bank = emp.bankAccount || ''; rows.push([id, emp.name || '', emp.hourlyRate || '', schedName, projName, bank]);
+  });
+  const csv = rows.map(r => r.map(v => {
+    const s = String(v ?? '');
+    return (s.includes(',') || s.includes('"') || s.includes('\n')) ? '"' + s.replace(/"/g,'""') + '"' : s;
+  }).join(',')).join('\n');
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'employees_backup.csv';
+  a.click();
+});
+
+let currentProjectFilter = localStorage.getItem(LS_FILTER_PROJECT) || 'all';
+
+function ensureSchedules(){
+  if(!storedSchedules || typeof storedSchedules !== 'object'){
+    const id = 'sched_' + Date.now();
+    storedSchedules = {};
+    storedSchedules[id] = Object.assign({}, DEFAULT_SCHEDULE);
+    storedSchedules[id].name = DEFAULT_SCHEDULE.name;
+    defaultScheduleId = id;
+    saveSchedulesToLS();
+  } else {
+    Object.keys(storedSchedules).forEach(id=>{
+      storedSchedules[id] = { ...DEFAULT_RANGES, ...storedSchedules[id] };
+      storedSchedules[id].sch_am_start = storedSchedules[id].sch_am_start || DEFAULT_SCHEDULE.sch_am_start;
+      storedSchedules[id].sch_am_end   = storedSchedules[id].sch_am_end   || DEFAULT_SCHEDULE.sch_am_end;
+      storedSchedules[id].sch_pm_start = storedSchedules[id].sch_pm_start || DEFAULT_SCHEDULE.sch_pm_start;
+      storedSchedules[id].sch_pm_end   = storedSchedules[id].sch_pm_end   || DEFAULT_SCHEDULE.sch_pm_end;
+      if(typeof storedSchedules[id].sch_grace !== 'number') storedSchedules[id].sch_grace = DEFAULT_SCHEDULE.sch_grace;
+      storedSchedules[id].name = storedSchedules[id].name || 'Schedule';
+    });
+    if(!defaultScheduleId || !storedSchedules[defaultScheduleId]){
+      const keys = Object.keys(storedSchedules);
+      if(keys.length) defaultScheduleId = keys[0];
+      saveSchedulesToLS();
+    }
+  }
+}
+function saveSchedulesToLS(){
+  localStorage.setItem(LS_SCHEDULES, JSON.stringify(storedSchedules));
+  localStorage.setItem(LS_SCHEDULES_DEFAULT, defaultScheduleId);
+}
+
+const tabs = {
+  tabMain: document.getElementById('tabMain'),
+  tabSchedule: document.getElementById('tabSchedule'),
+  tabEmployees: document.getElementById('tabEmployees'),
+  tabProjects: document.getElementById('tabProjects'),
+  panelMain: document.getElementById('panelMain'),
+  panelSchedule: document.getElementById('panelSchedule'),
+  panelEmployees: document.getElementById('panelEmployees'),
+  panelProjects: document.getElementById('panelProjects'),
+  tabPayroll: document.getElementById('tabPayroll'),
+  panelPayroll: document.getElementById('panelPayroll')
+};
+function showTab(name){
+  Object.values(tabs).forEach(el => el && el.classList && el.classList.remove('active'));
+  if(name==='main'){ tabs.tabMain.classList.add('active'); tabs.panelMain.classList.add('active'); }
+  if(name==='schedule'){ tabs.tabSchedule.classList.add('active'); tabs.panelSchedule.classList.add('active'); renderScheduleEditor(); }
+  if(name==='employees'){ tabs.tabEmployees.classList.add('active'); tabs.panelEmployees.classList.add('active'); renderEmployees(); }
+  if(name==='projects'){ tabs.tabProjects.classList.add('active'); tabs.panelProjects.classList.add('active'); renderProjects(); }
+
+  if(name==='payroll'){ tabs.tabPayroll && tabs.tabPayroll.classList.add('active'); tabs.panelPayroll && tabs.panelPayroll.classList.add('active'); }
+}
+tabs.tabMain.addEventListener('click', ()=>{ showTab('main'); try{ renderResults(); }catch(e){} });
+tabs.tabSchedule.addEventListener('click', ()=>showTab('schedule'));
+tabs.tabEmployees.addEventListener('click', ()=>showTab('employees'));
+tabs.tabProjects.addEventListener('click', ()=>showTab('projects'));
+
+tabs.tabPayroll.addEventListener('click', ()=>{
+  try {
+    const defaultBtn = document.querySelector('#panelPayroll .tabs .tab-btn[data-tab="payrollTab"]');
+    if (defaultBtn) defaultBtn.click();
+  } catch (e) {}
+
+  showTab('payroll');
+  try { if (typeof calculatePayrollFromRecords==='function') calculatePayrollFromRecords(); } catch(e){}
+  try { if (typeof calculatePayrollFromRecords==='function') calculatePayrollFromRecords(); } catch(e){}
+});
+
+const scheduleSelect = document.getElementById('scheduleSelect');
+const scheduleNameInput = document.getElementById('scheduleName');
+
+function renderScheduleSelector(){
+  scheduleSelect.innerHTML = '';
+  Object.keys(storedSchedules).forEach(id=>{
+    const opt = document.createElement('option');
+    opt.value = id;
+    opt.textContent = (storedSchedules[id].name || id) + (id === defaultScheduleId ? " (Default)" : "");
+    scheduleSelect.appendChild(opt);
+  });
+  if(defaultScheduleId && storedSchedules[defaultScheduleId]) scheduleSelect.value = defaultScheduleId;
+  else if(scheduleSelect.options.length) scheduleSelect.selectedIndex = 0;
+  renderEmpScheduleDropdowns();
+  renderEmpScheduleDropdownsInTable();
+}
+
+function renderScheduleEditor(){
+  const sel = scheduleSelect.value;
+  if(!sel || !storedSchedules[sel]) return;
+  const s = storedSchedules[sel];
+  document.querySelector('[data-key="sch_am_start"]').value = s.sch_am_start || DEFAULT_SCHEDULE.sch_am_start;
+  document.querySelector('[data-key="sch_am_end"]').value = s.sch_am_end || DEFAULT_SCHEDULE.sch_am_end;
+  document.querySelector('[data-key="sch_pm_start"]').value = s.sch_pm_start || DEFAULT_SCHEDULE.sch_pm_start;
+  document.querySelector('[data-key="sch_pm_end"]').value = s.sch_pm_end || DEFAULT_SCHEDULE.sch_pm_end;
+  document.querySelector('[data-key="sch_grace"]').value = (s.sch_grace !== undefined ? s.sch_grace : DEFAULT_SCHEDULE.sch_grace);
+  scheduleNameInput.value = s.name || ("Schedule " + sel);
+  document.querySelectorAll('#rangesTable input[data-key]').forEach(inp=>{
+    const key = inp.dataset.key;
+    inp.value = s[key] || (DEFAULT_RANGES && DEFAULT_RANGES[key]) || "";
+  });
+}
+
+function gatherScheduleFromEditor(){
+  return {
+    name: scheduleNameInput.value.trim() || ("Schedule " + Date.now()),
+    sch_am_start: document.querySelector('[data-key="sch_am_start"]').value || DEFAULT_SCHEDULE.sch_am_start,
+    sch_am_end: document.querySelector('[data-key="sch_am_end"]').value || DEFAULT_SCHEDULE.sch_am_end,
+    sch_pm_start: document.querySelector('[data-key="sch_pm_start"]').value || DEFAULT_SCHEDULE.sch_pm_start,
+    sch_pm_end: document.querySelector('[data-key="sch_pm_end"]').value || DEFAULT_SCHEDULE.sch_pm_end,
+    sch_grace: Number(document.querySelector('[data-key="sch_grace"]').value || DEFAULT_SCHEDULE.sch_grace),
+    ...Object.fromEntries([...document.querySelectorAll('#rangesTable input[data-key]')].map(i=>[i.dataset.key, i.value || DEFAULT_RANGES[i.dataset.key] || ""]))
+  };
+}
+
+document.getElementById('addScheduleBtn').addEventListener('click', ()=>{
+  const id = 'sched_' + Date.now();
+  storedSchedules[id] = Object.assign({}, DEFAULT_SCHEDULE); storedSchedules[id].name = 'New schedule';
+  saveSchedulesToLS(); renderScheduleSelector(); scheduleSelect.value = id; renderScheduleEditor();
+});
+document.getElementById('deleteScheduleBtn').addEventListener('click', ()=>{
+  const sel = scheduleSelect.value; if(!sel) return;
+  if(Object.keys(storedSchedules).length === 1){ alert('Cannot delete the only schedule.'); return; }
+  if(!confirm('Delete schedule "' + storedSchedules[sel].name + '"?')) return;
+  delete storedSchedules[sel];
+  if(!storedSchedules[defaultScheduleId]) defaultScheduleId = Object.keys(storedSchedules)[0];
+  Object.keys(storedEmployees).forEach(eid=>{
+    if(storedEmployees[eid].scheduleId === sel) storedEmployees[eid].scheduleId = defaultScheduleId;
+  });
+  saveSchedulesToLS(); saveEmployeesToLS(); renderScheduleSelector(); renderEmployees(); renderResults();
+});
+document.getElementById('setDefaultScheduleBtn').addEventListener('click', ()=>{
+  const sel = scheduleSelect.value; if(!sel) return; defaultScheduleId = sel; saveSchedulesToLS(); renderScheduleSelector();
+});
+document.getElementById('saveScheduleBtn').addEventListener('click', ()=>{
+  const sel = scheduleSelect.value; if(!sel) return;
+  const oldRanges = {};
+  Object.keys(DEFAULT_RANGES).forEach(k=> oldRanges[k] = (storedSchedules[sel] && storedSchedules[sel][k]) || DEFAULT_RANGES[k]);
+  storedSchedules[sel] = { ...gatherScheduleFromEditor(), ...oldRanges, name: document.getElementById('scheduleName').value.trim() || storedSchedules[sel].name || 'Schedule' };
+  document.querySelectorAll('#rangesTable input[data-key]').forEach(i=>{
+    storedSchedules[sel][i.dataset.key] = i.value || DEFAULT_RANGES[i.dataset.key] || "";
+  });
+  saveSchedulesToLS(); renderScheduleSelector(); renderEmpScheduleDropdowns(); renderResults();
+});
+scheduleSelect.addEventListener('change', ()=>{ renderScheduleEditor(); });
+
+function saveRangesFromUI(){
+  const sel = scheduleSelect && scheduleSelect.value;
+  if(!sel || !storedSchedules[sel]) return;
+  document.querySelectorAll('#rangesTable input[data-key]').forEach(i=>{
+    storedSchedules[sel][i.dataset.key] = i.value || "";
+  });
+  saveSchedulesToLS();
+  renderResults();
+}
+function resetRanges(){
+  const sel = scheduleSelect && scheduleSelect.value;
+  if(!sel || !storedSchedules[sel]) return;
+  Object.keys(DEFAULT_RANGES).forEach(k=>{
+    storedSchedules[sel][k] = DEFAULT_RANGES[k];
+  });
+  saveSchedulesToLS();
+  renderScheduleEditor();
+  renderResults();
+}
+document.getElementById('saveRangesBtn').addEventListener('click', saveRangesFromUI);
+document.getElementById('resetRangesBtn').addEventListener('click', resetRanges);
+
+function saveEmployeesToLS(){ localStorage.setItem(LS_EMPLOYEES, JSON.stringify(storedEmployees)); }
+function renderEmpScheduleDropdowns(){
+  const sel = document.getElementById('empScheduleSelect'); if(!sel) return;
+  sel.innerHTML = '';
+  Object.keys(storedSchedules).forEach(id=>{
+    const o=document.createElement('option'); o.value=id;
+    o.textContent=storedSchedules[id].name + (id===defaultScheduleId?' (Default)':'');
+    sel.appendChild(o);
+  });
+  if(defaultScheduleId && storedSchedules[defaultScheduleId]) sel.value = defaultScheduleId;
+}
+function renderEmpScheduleDropdownsInTable(){
+  document.querySelectorAll('.emp-sel-schedule').forEach(sel=>{
+    const id = sel.dataset.id;
+    sel.innerHTML = '';
+    Object.keys(storedSchedules).forEach(sid=>{
+      const label = storedSchedules[sid].name + (sid===defaultScheduleId ? ' (Default)' : '');
+      const o = document.createElement('option'); o.value = sid; o.textContent = label;
+      if(storedEmployees[id] && storedEmployees[id].scheduleId === sid) o.selected = true;
+      sel.appendChild(o);
+    });
+  });
+}
+
+function saveProjectsToLS(){ localStorage.setItem(LS_PROJECTS, JSON.stringify(storedProjects)); renderProjects(); renderProjectDropdowns(); renderProjectFilterOptions(); renderResults(); }
+function renderProjects(){
+  const tbody = document.querySelector('#projectsTable tbody'); tbody.innerHTML = '';
+  Object.keys(storedProjects).forEach(pid=>{
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td><input class="cell proj-name-input" data-id="${pid}" value="${storedProjects[pid].name}"></td>
+      <td><button class="del-proj" data-id="${pid}">Delete</button></td>`;
+    tbody.appendChild(tr);
+  });
+  document.querySelectorAll('.del-proj').forEach(btn=>{
+    btn.addEventListener('click', e=>{
+      const id = e.target.dataset.id;
+      if(confirm('Delete project "' + storedProjects[id].name + '"?')){
+        delete storedProjects[id];
+        Object.keys(storedEmployees).forEach(eid=>{ if(storedEmployees[eid].projectId === id) storedEmployees[eid].projectId = null; });
+        saveProjectsToLS(); saveEmployeesToLS(); renderEmployees(); renderResults();
+      }
+    });
+  });
+  document.querySelectorAll('.proj-name-input').forEach(inp => {
+    inp.addEventListener('change', e => {
+      const id = e.target.dataset.id;
+      storedProjects[id].name = e.target.value;
+      saveProjectsToLS();
+    });
+  });
+
+}
+function renderProjectDropdowns(){
+  const sel = document.getElementById('empProjectSelect');
+  if(!sel) return;
+  sel.innerHTML = '';
+  const noneOpt = document.createElement('option'); noneOpt.value = ''; noneOpt.textContent = '(None)'; sel.appendChild(noneOpt);
+  Object.keys(storedProjects).forEach(pid=>{
+    const o=document.createElement('option'); o.value=pid; o.textContent=storedProjects[pid].name; sel.appendChild(o);
+  });
+}
+function renderEmpProjectDropdownsInTable(){
+  document.querySelectorAll('.emp-sel-project').forEach(sel=>{
+    const id = sel.dataset.id;
+    const prev = sel.value;
+    sel.innerHTML = '';
+    const noneOpt = document.createElement('option'); noneOpt.value = ''; noneOpt.textContent = '(None)'; sel.appendChild(noneOpt);
+    Object.keys(storedProjects).forEach(pid=>{
+      const o = document.createElement('option'); o.value = pid; o.textContent = storedProjects[pid].name;
+      if(storedEmployees[id] && storedEmployees[id].projectId === pid) o.selected = true;
+      sel.appendChild(o);
+    });
+    if(prev) sel.value = prev;
+  });
+}
+
+const filterProjectSel = document.getElementById('filterProject');
+function renderProjectFilterOptions(){
+  if(!filterProjectSel) return;
+  const prev = currentProjectFilter || 'all';
+  filterProjectSel.innerHTML = '';
+  const make = (value, label)=>{ const o=document.createElement('option'); o.value=value; o.textContent=label; return o; };
+  filterProjectSel.appendChild(make('all','All Projects'));
+  filterProjectSel.appendChild(make('none','(No project)'));
+  Object.keys(storedProjects).forEach(pid=>{
+    filterProjectSel.appendChild(make(pid, storedProjects[pid].name));
+  });
+  if([...filterProjectSel.options].some(o=>o.value===prev)) filterProjectSel.value = prev;
+  else filterProjectSel.value = 'all';
+  currentProjectFilter = filterProjectSel.value;
+}
+filterProjectSel && filterProjectSel.addEventListener('change', ()=>{
+  currentProjectFilter = filterProjectSel.value || 'all';
+  localStorage.setItem(LS_FILTER_PROJECT, currentProjectFilter);
+  renderResults();
+});
+
+function renderEmployees(){
+  renderEmpScheduleDropdowns();
+  renderProjectDropdowns();
+  const tbody = document.querySelector('#employeesTable tbody'); tbody.innerHTML = '';
+  const ids = Object.keys(storedEmployees).sort((a,b)=> a.localeCompare(b));
+  ids.forEach(id => {
+    const emp = storedEmployees[id];
+    let scheduleOptionsHtml = '';
+    Object.keys(storedSchedules).forEach(sid=>{
+      const label = storedSchedules[sid].name + (sid===defaultScheduleId ? ' (Default)' : '');
+      scheduleOptionsHtml += `<option value="${sid}" ${emp.scheduleId===sid ? 'selected' : ''}>${label}</option>`;
+    });
+    let projectOptionsHtml = `<option value="">(None)</option>`;
+    Object.keys(storedProjects).forEach(pid=>{
+      projectOptionsHtml += `<option value="${pid}" ${emp.projectId===pid ? 'selected' : ''}>${storedProjects[pid].name}</option>`;
+    });
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td>${id}</td>
+      <td><input class="cell emp-name-input" data-id="${id}" value="${emp.name}"></td>
+      <td><input class="cell emp-rate-input" type="number" step="0.01" min="0" data-id="${id}" value="${emp.hourlyRate != null ? emp.hourlyRate : ''}"></td>
+      <td><select class="emp-sel-schedule" data-id="${id}">${scheduleOptionsHtml}</select></td>
+      <td><select class="emp-sel-project" data-id="${id}">${projectOptionsHtml}</select></td>
+      <td><input class="cell emp-bank-input" data-id="${id}" value="${emp.bankAccount != null ? emp.bankAccount : ''}"></td>
+      <td><button class="del-emp" data-id="${id}">Delete</button></td>`;
+    tbody.appendChild(tr);
+  });
+
+  document.querySelectorAll('.emp-name-input').forEach(inp=> inp.addEventListener('change', (e)=>{
+    storedEmployees[e.target.dataset.id].name = e.target.value; saveEmployeesToLS(); renderResults();
+  }));
+  document.querySelectorAll('.emp-rate-input').forEach(inp=> inp.addEventListener('change', (e)=>{
+    storedEmployees[e.target.dataset.id].hourlyRate = parseFloat(e.target.value) || 0; saveEmployeesToLS(); renderResults();
+  }));
+  document.querySelectorAll('.emp-sel-schedule').forEach(sel=> sel.addEventListener('change', (e)=>{
+    storedEmployees[e.target.dataset.id].scheduleId = e.target.value; saveEmployeesToLS(); renderResults();
+  }));
+  document.querySelectorAll('.emp-sel-project').forEach(sel=> sel.addEventListener('change', (e)=>{
+    storedEmployees[e.target.dataset.id].projectId = e.target.value || null; saveEmployeesToLS(); renderResults();
+  }));
+  document.querySelectorAll('.del-emp').forEach(btn=> btn.addEventListener('click', (e)=>{
+    const id=e.target.dataset.id;
+    if(confirm(`Delete employee ${id} — ${storedEmployees[id].name}?`)){
+      delete storedEmployees[id]; saveEmployeesToLS(); renderEmployees(); renderResults();
+    }
+  }));
+}
+
+document.getElementById('addEmployeeBtn').addEventListener('click', ()=>{
+  const id = document.getElementById('empIdInput').value.trim();
+  const name = document.getElementById('empNameInput').value.trim();
+  const rate = parseFloat(document.getElementById('empRateInput').value) || 0;
+  const scheduleId = document.getElementById('empScheduleSelect').value || defaultScheduleId;
+  const projectId = document.getElementById('empProjectSelect').value || null;
+  const bank = document.getElementById('empBankInput').value.trim();
+  if(!id){ alert('Enter ID'); return; } if(!name){ alert('Enter Name'); return; }
+  storedEmployees[id] = { name: name, hourlyRate: rate, bankAccount: bank, scheduleId: scheduleId, projectId: projectId };
+  saveEmployeesToLS();
+  document.getElementById('empIdInput').value=''; document.getElementById('empNameInput').value=''; document.getElementById('empRateInput').value=''; document.getElementById('empBankInput').value='';
+  renderEmployees(); renderResults();
+});
+document.getElementById('clearEmployeesBtn').addEventListener('click', ()=>{
+  if(!confirm('Clear all employees?')) return;
+  storedEmployees = {}; saveEmployeesToLS(); renderEmployees(); renderResults();
+});
+
+document.getElementById('empFileInput').addEventListener('change', (evt) => {
+  const file = evt.target.files && evt.target.files[0]; if (!file) return;
+  const reader = new FileReader();
+  reader.onload = function(e) {
+    try {
+      const data = new Uint8Array(e.target.result);
+      const workbook = XLSX.read(data, { type: 'array' });
+      const sheet = workbook.Sheets[workbook.SheetNames[0]];
+      
+const rows = XLSX.utils.sheet_to_json(sheet, { header: 1 });
+let added = 0, updated = 0;
+rows.slice(1).forEach(row => {
+  if (row && row.length >= 2) {
+    const id = String(row[0] ?? '').trim();
+    const name = String(row[1] ?? '').trim();
+    const rate = row.length >= 3 ? parseFloat(row[2]) || 0 : 0;
+    const schedName = row.length >= 4 ? String(row[3] ?? '').trim().toLowerCase() : '';
+    const projName = row.length >= 5 ? String(row[4] ?? '').trim().toLowerCase() : '';
+
+    const bank = row.length >= 6 ? String(row[5] ?? '').trim() : '';
+    if (id && name) {
+      if (!storedEmployees[id]) { added++; } else { updated++; }
+      let scheduleId = Object.keys(storedSchedules).find(k => storedSchedules[k].name.toLowerCase() === schedName) || defaultScheduleId;
+      let projectId = Object.keys(storedProjects).find(k => storedProjects[k].name.toLowerCase() === projName) || null;
+
+      storedEmployees[id] = { name: name, hourlyRate: rate, bankAccount: bank, scheduleId: scheduleId, projectId: projectId };
+    }
+  }
+});
+saveEmployeesToLS();
+renderEmployees();
+renderResults();
+if (added || updated) alert(`Imported: ${added}, Updated: ${updated}`);
+ renderResults();
+      if(added || updated) alert('Imported: ' + added + ' added, ' + updated + ' updated.');
+    } catch (err) { console.error(err); alert('Error reading file.'); }
+    finally { evt.target.value = ''; }
+  };
+  reader.readAsArrayBuffer(file);
+});
+
+function parseLine(line){
+  if(!line || !line.trim()) return null;
+  const parts = line.trim().split(/\t+/);
+  if(parts.length >= 2){
+    const id = parts[0].trim(); const dt = parts[1].trim();
+    const m = dt.match(/^(\d{4}-\d{2}-\d{2})\s+(\d{2}:\d{2})(:\d{2})?$/);
+    if(m) return { empId: id, date: m[1], time: m[2] };
+  }
+  const m2 = line.match(/(\d{4}-\d{2}-\d{2})\s+(\d{2}:\d{2}:\d{2})/);
+  if(m2){
+    const before = line.slice(0, m2.index); const idm = before.match(/(\d+)/);
+    if(!idm) return null; return { empId: idm[1], date: m2[1], time: m2[2].slice(0,5) };
+  }
+  return null;
+}
+
+
+
+document.getElementById('fileInput').addEventListener('change', (ev)=>{
+  const inputEl = ev.target;
+  const files = inputEl.files;
+  if (!files || !files.length) return;
+
+  let processed = 0, totalAdded = 0, errors = 0;
+  const total = files.length;
+  inputEl.disabled = true;
+
+  Array.from(files).forEach(file=>{
+    const r = new FileReader();
+    r.onload = (e)=>{
+      try {
+        const content = String(e.target.result || '');
+        const lines = content.split(/\r?\n/);
+        let added = 0;
+        for(const ln of lines){
+          const p = (typeof parseLine === 'function') ? parseLine(ln) : null;
+          if(p && p.empId && p.date && p.time){
+            storedRecords.push({ empId: String(p.empId), date: p.date, time: padHM(p.time) });
+            added++;
+          }
+        }
+        try { localStorage.setItem(LS_RECORDS, JSON.stringify(storedRecords)); } catch(e){}
+        if (typeof renderResults === 'function') renderResults();
+        totalAdded += added;
+      } catch(err){
+        console.error('Error reading', file.name, err);
+        errors++;
+      } finally {
+        processed++;
+        if (processed === total){
+          inputEl.disabled = false; inputEl.value = '';
+          if (errors > 0){
+            alert(`Upload finished with errors: imported ${totalAdded} record${totalAdded!==1?'s':''} from ${total} file${total>1?'s':''}. (${errors} file${errors>1?'s':''} failed)`);
+          } else {
+            alert(`Upload successful: imported ${totalAdded} record${totalAdded!==1?'s':''} from ${total} file${total>1?'s':''}.`);
+          }
+        }
+      }
+    };
+    r.onerror = ()=>{
+      errors++; processed++;
+      if (processed === total){
+        inputEl.disabled = false; inputEl.value = '';
+        alert(`Upload finished with errors: imported ${totalAdded} record${totalAdded!==1?'s':''} from ${total} file${total>1?'s':''}. (${errors} file${errors>1?'s':''} failed)`);
+      }
+    };
+    r.readAsText(file);
+  });
+});
+
+
+document.getElementById('clearData').addEventListener('click', ()=>{
+  if(!confirm('Clear all saved attendance data?')) return;
+  storedRecords = []; localStorage.removeItem(LS_RECORDS); renderResults();
+});
+document.getElementById('downloadCSV').addEventListener('click', ()=>{
+  const rows = [['ID','Name','Project','Schedule','Date','AM In','AM Out','PM In','PM Out','OT In','OT Out','Total Regular Hrs','OT Hrs']];
+  document.querySelectorAll('#resultsTable tbody tr').forEach(tr=>{
+  const cells = Array.from(tr.querySelectorAll('td')).filter(td=>!td.classList.contains('actions-cell'));
+  const rowVals = cells.map(td => {
+    const sel = td.querySelector && td.querySelector('select');
+    if (sel && sel.options && sel.selectedIndex >= 0) {
+      const opt = sel.options[sel.selectedIndex];
+      return (opt && opt.textContent) ? opt.textContent.trim() : '';
+    }
+    return td.textContent.trim();
+  });
+  rows.push(rowVals);
+});
+const csv = rows.map(r=>r.map(c=> (c.includes('"')||c.includes(',')||c.includes('\n')) ? '"' + c.replace(/"/g,'""') + '"' : c ).join(',')).join('\n');
+  const blob = new Blob([csv], { type:'text/csv' }); const url = URL.createObjectURL(blob);
+  const a = document.createElement('a'); a.href = url; a.download = 'attendance_with_ot.csv'; document.body.appendChild(a); a.click(); a.remove();
+});
+function padHM(hm){ if(!hm) return ''; const [h,m]=hm.split(':').map(x=>String(Number(x)).padStart(2,'0')); return h.padStart(2,'0')+':'+m.padStart(2,'0'); }
+function toMins(hm){ if(!hm) return null; const [h,m]=hm.split(':').map(Number); return h*60+m; }
+function minsToDecimal(mins){ return (mins/60).toFixed(2); }
+
+function buildScheduleDropdown(empId, date, currentScheduleId){
+  const sel = document.createElement('select');
+  Object.keys(storedSchedules).forEach(sid => {
+    const o = document.createElement('option');
+    o.value = sid;
+    o.textContent = storedSchedules[sid].name + (sid === defaultScheduleId ? ' (Default)' : '');
+    if(sid === currentScheduleId) o.selected = true;
+    sel.appendChild(o);
+  });
+  sel.addEventListener('change', ()=>{
+    overridesSchedules[empId + '___' + date] = sel.value;
+    saveOverrides();
+    renderResults();
+  });
+  return sel;
+}
+function buildProjectDropdown(empId, date, currentProjectId){
+  const sel = document.createElement('select');
+  const noneOpt = document.createElement('option');
+  noneOpt.value = '';
+  noneOpt.textContent = '(None)';
+  sel.appendChild(noneOpt);
+  Object.keys(storedProjects).forEach(pid => {
+    const o = document.createElement('option');
+    o.value = pid;
+    o.textContent = storedProjects[pid].name;
+    if(pid === currentProjectId) o.selected = true;
+    sel.appendChild(o);
+  });
+  sel.addEventListener('change', ()=>{
+    overridesProjects[empId + '___' + date] = sel.value;
+    saveOverrides();
+    renderResults();
+  });
+  return sel;
+}
+
+function renderResults(){
+  renderScheduleSelector();
+  renderProjectFilterOptions();
+
+  const startDate = document.getElementById('weekStart').value || null;
+  const endDate = document.getElementById('weekEnd').value || null;
+  currentProjectFilter = document.getElementById('filterProject') ? document.getElementById('filterProject').value : 'all';
+  localStorage.setItem(LS_FILTER_PROJECT, currentProjectFilter);
+
+  
+  const nameQuery = (document.getElementById('dtrSearchName') ? document.getElementById('dtrSearchName').value.trim().toLowerCase() : '');
+const groups = {};
+  for(const r of storedRecords){
+    if(startDate && r.date < startDate) continue;
+    if(endDate && r.date > endDate) continue;
+    const key = r.date + '___' + r.empId;
+    if(!groups[key]) groups[key]=[];
+    groups[key].push(r.time);
+  }
+
+  const keys = Object.keys(groups).sort((a,b)=>{
+    const [da,ea]=a.split('___'), [db,eb]=b.split('___');
+    const nameA=(storedEmployees[ea] ? storedEmployees[ea].name : '').toLowerCase();
+    const nameB=(storedEmployees[eb] ? storedEmployees[eb].name : '').toLowerCase();
+    if(nameA && nameB){ if(nameA!==nameB) return nameA.localeCompare(nameB); if(da!==db) return da.localeCompare(db); return String(ea).localeCompare(String(eb)); }
+    if(nameA && !nameB) return -1; if(!nameA && nameB) return 1; if(da!==db) return da.localeCompare(db); return String(ea).localeCompare(String(eb));
+  });
+
+  const tbody = document.querySelector('#resultsTable tbody'); tbody.innerHTML='';
+
+  const __nameQuery = (document.getElementById('dtrSearchName') ? document.getElementById('dtrSearchName').value.trim().toLowerCase() : '');
+  for(const key of keys){
+    const [date, empId] = key.split('___');
+    const emp = storedEmployees[empId] || null;
+      if (__nameQuery) { const _nm = (emp && emp.name ? String(emp.name).toLowerCase() : ''); if (_nm.indexOf(__nameQuery) === -1) continue; }
+let empProjId = emp ? (emp.projectId || '') : '';
+    const overrideKeyProj = empId + '___' + date;
+    if(overridesProjects[overrideKeyProj] !== undefined) empProjId = overridesProjects[overrideKeyProj];
+    const passesProject =
+      currentProjectFilter === 'all' ||
+      (currentProjectFilter === 'none' && !empProjId) ||
+      currentProjectFilter === empProjId;
+    if(!passesProject) continue;
+
+    const times = Array.from(new Set(groups[key])).sort();
+
+    const pickEarliest = (win) => times.find(t => t >= win.start && t <= win.end) || null;
+    const pickLatest = (win) => { const arr = times.filter(t => t >= win.start && t <= win.end); return arr.length ? arr[arr.length-1] : null; };
+
+    let scheduleIdForEmp = emp && emp.scheduleId ? emp.scheduleId : defaultScheduleId;
+    const overrideKey = empId + '___' + date;
+    if(overridesSchedules[overrideKey]) scheduleIdForEmp = overridesSchedules[overrideKey];
+    const schedule = storedSchedules[scheduleIdForEmp] || Object.assign({}, DEFAULT_SCHEDULE);
+    const rangesForEmp = {
+      amIn: { start: schedule.rng_am_in_start || DEFAULT_RANGES.rng_am_in_start, end: schedule.rng_am_in_end || DEFAULT_RANGES.rng_am_in_end },
+      amOut:{ start: schedule.rng_am_out_start || DEFAULT_RANGES.rng_am_out_start, end: schedule.rng_am_out_end || DEFAULT_RANGES.rng_am_out_end },
+      pmIn: { start: schedule.rng_pm_in_start || DEFAULT_RANGES.rng_pm_in_start, end: schedule.rng_pm_in_end || DEFAULT_RANGES.rng_pm_in_end },
+      pmOut:{ start: schedule.rng_pm_out_start || DEFAULT_RANGES.rng_pm_out_start, end: schedule.rng_pm_out_end || DEFAULT_RANGES.rng_pm_out_end },
+      otIn: { start: schedule.rng_ot_in_start || DEFAULT_RANGES.rng_ot_in_start, end: schedule.rng_ot_in_end || DEFAULT_RANGES.rng_ot_in_end },
+      otOut:{ start: schedule.rng_ot_out_start || DEFAULT_RANGES.rng_ot_out_start, end: schedule.rng_ot_out_end || DEFAULT_RANGES.rng_ot_out_end }
+    };
+
+    const amInActual = pickEarliest(rangesForEmp.amIn), amOutActual = pickLatest(rangesForEmp.amOut);
+    const pmInActual = pickEarliest(rangesForEmp.pmIn), pmOutActual = pickLatest(rangesForEmp.pmOut);
+
+    let pmOutRefMins = pmOutActual ? toMins(pmOutActual) : toMins(schedule.sch_pm_end);
+
+    const otCandidates = times.filter(t => {
+      const mins = toMins(t);
+      return mins > pmOutRefMins && mins >= toMins(rangesForEmp.otIn.start) && mins <= toMins(rangesForEmp.otIn.end);
+    });
+    // --- Patched OT In/Out picking (DTR) ---
+const otInCandidates = times.filter(t => {
+  const m = toMins(t);
+  return m > pmOutRefMins &&
+         m >= toMins(rangesForEmp.otIn.start) &&
+         m <= toMins(rangesForEmp.otIn.end);
+});
+const otInActual = otInCandidates.length ? otInCandidates[0] : null;
+
+const otOutCandidates = times
+  .filter(t => {
+    const m = toMins(t);
+    return m > pmOutRefMins &&
+           m >= toMins(rangesForEmp.otOut.start) &&
+           m <= toMins(rangesForEmp.otOut.end);
+  })
+  .filter(t => !otInActual || toMins(t) >= toMins(otInActual));
+const otOutActual = otOutCandidates.length ? otOutCandidates[otOutCandidates.length - 1] : null;
+// --- end patch ---
+
+    let totalMins = 0; const grace = Number(schedule.sch_grace) || 0;
+
+    if(amInActual && pmOutActual && !amOutActual && !pmInActual){
+      const schedAmStart = toMins(schedule.sch_am_start), schedAmEnd = toMins(schedule.sch_am_end);
+      const schedPmStart = toMins(schedule.sch_pm_start), schedPmEnd = toMins(schedule.sch_pm_end);
+      const amInM = toMins(amInActual), pmOutM = toMins(pmOutActual);
+      const lateMinutes = Math.max(0, amInM - schedAmStart);
+      const undertimeMinutes = Math.max(0, schedPmEnd - pmOutM);
+      const fullDayMins = Math.max(0,(schedAmEnd - schedAmStart)) + Math.max(0,(schedPmEnd - schedPmStart));
+      totalMins = lateMinutes <= grace ? Math.max(0, fullDayMins - undertimeMinutes) : Math.max(0, fullDayMins - lateMinutes - undertimeMinutes);
+    } else {
+      if(amInActual && amOutActual){
+        let inM = toMins(amInActual); const schedStart = toMins(schedule.sch_am_start), schedEnd = toMins(schedule.sch_am_end);
+        if(inM <= schedStart + grace) inM = schedStart; const endM = Math.min(toMins(amOutActual), schedEnd); if(endM>inM) totalMins += (endM-inM);
+      }
+      if(pmInActual && pmOutActual){
+        let inM = toMins(pmInActual); const schedStart = toMins(schedule.sch_pm_start), schedEnd = toMins(schedule.sch_pm_end);
+        if(inM <= schedStart + grace) inM = schedStart; const endM = Math.min(toMins(pmOutActual), schedEnd); if(endM>inM) totalMins += (endM-inM);
+      }
+    }
+
+    const totalRegularDecimal = minsToDecimal(totalMins);
+    let otMins = 0;
+    if(otInActual && otOutActual){
+      const otStartClamp = Math.max(toMins(otInActual), toMins(rangesForEmp.otIn.start));
+      const otEndClamp = Math.min(toMins(otOutActual), toMins(rangesForEmp.otOut.end || rangesForEmp.otIn.end));
+      if(otEndClamp > otStartClamp) otMins = otEndClamp - otStartClamp;
+    }
+    const otDecimal = minsToDecimal(otMins);
+
+    const name = emp ? emp.name : '';
+    const scheduleName = storedSchedules[scheduleIdForEmp] ? storedSchedules[scheduleIdForEmp].name + (scheduleIdForEmp===defaultScheduleId ? ' (Default)' : '') : '';
+    const projectName = (empProjId && storedProjects[empProjId]) ? storedProjects[empProjId].name : (emp && !emp.projectId ? '' : '');
+
+    const cell = (v) => v ? '<td>'+v+'</td>' : '<td class="missing">—</td>';
+    const tr = document.createElement('tr');
+    tr.innerHTML =
+      '<td>'+empId+'</td><td>'+name+'</td><td>'+projectName+'</td><td>'+scheduleName+'</td><td>'+date+'</td>' +
+      cell(amInActual) + cell(amOutActual) + cell(pmInActual) + cell(pmOutActual) +
+      (otInActual ? '<td>'+otInActual+'</td>' : '<td class="missing">—</td>') +
+      (otOutActual ? '<td>'+otOutActual+'</td>' : '<td class="missing">—</td>') +
+      '<td>'+totalRegularDecimal+'</td><td>'+otDecimal+'</td>';
+    if(overridesSchedules[overrideKey] || overridesProjects[overrideKeyProj] !== undefined){
+      tr.style.backgroundColor = '#fff3cd';
+    }
+    const projCell = tr.cells[2];
+    if(projCell){ projCell.innerHTML = ''; projCell.appendChild(buildProjectDropdown(empId, date, empProjId)); }
+    const schedCell = tr.cells[3];
+    if(schedCell){ schedCell.innerHTML = ''; schedCell.appendChild(buildScheduleDropdown(empId, date, scheduleIdForEmp)); }
+    tbody.appendChild(tr);
+  }
+
+  document.getElementById('downloadCSV').style.display = document.querySelectorAll('#resultsTable tbody tr').length ? 'inline-block' : 'none';
+}
+
+document.getElementById('addProjectBtn').addEventListener('click', ()=>{
+  const name = document.getElementById('projectNameInput').value.trim();
+  if(!name) return alert('Enter project name');
+  const id = 'proj_' + Date.now();
+  storedProjects[id] = { name };
+  document.getElementById('projectNameInput').value='';
+  saveProjectsToLS();
+});
+document.getElementById('clearProjectsBtn').addEventListener('click', ()=>{
+  if(!confirm('Clear all projects?')) return;
+  storedProjects = {}; saveProjectsToLS();
+});
+
+ensureSchedules();
+renderScheduleSelector();
+renderScheduleEditor();
+renderEmployees();
+renderProjects();
+renderProjectFilterOptions();
+const savedFilter = localStorage.getItem(LS_FILTER_PROJECT);
+if(document.getElementById('filterProject') && savedFilter && [...document.getElementById('filterProject').options].some(o=>o.value===savedFilter)){
+  document.getElementById('filterProject').value = savedFilter;
+  currentProjectFilter = savedFilter;
+}
+renderResults();
+document.addEventListener('DOMContentLoaded', function () {
+  const dlBtn = document.getElementById('downloadEmployeesCSV');
+  if (dlBtn) {
+    dlBtn.addEventListener('click', () => {
+      const rows = [['ID','Name','Hourly Rate','Bank Account','Schedule','Project']];
+      Object.keys(storedEmployees).forEach(id => {
+        const emp = storedEmployees[id] || {};
+        const schedName = storedSchedules[emp.scheduleId]?.name || '';
+        const projName = storedProjects[emp.projectId]?.name || '';
+        const bank = emp.bankAccount || '';
+      rows.push([id, emp.name || '', emp.hourlyRate || '', bank, schedName, projName]);
+      });
+      const csv = rows.map(r => r.map(v => {
+        const s = String(v ?? '');
+        return (s.includes(',') || s.includes('"') || s.includes('\\n'))
+          ? '"' + s.replace(/"/g,'""') + '"'
+          : s;
+      }).join(',')).join('\\n');
+      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = 'employees_backup.csv';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+    });
+  }
+});
+  </script>
+  <script>
+function computeHoursForDateRange(startDate, endDate) {
+  const totalsReg = {};
+  const totalsOT = {};
+  Object.keys(storedEmployees).forEach(id => {
+    totalsReg[id] = 0;
+    totalsOT[id] = 0;
+  });
+
+  const keys = Object.keys(storedSchedules).length ? storedSchedules : {default: DEFAULT_SCHEDULE};
+  const grouped = {};
+
+  for (const r of storedRecords) {
+    if (startDate && r.date < startDate) continue;
+    if (endDate && r.date > endDate) continue;
+    const emp = storedEmployees[r.empId];
+    if (!emp) continue;
+    const dayKey = r.date + '___' + r.empId;
+    if (!grouped[dayKey]) grouped[dayKey] = [];
+    grouped[dayKey].push(r.time);
+  }
+
+  const toMins = hm => { const [h,m] = hm.split(':').map(Number); return h*60+m; };
+  const minsToDec = mins => mins / 60;
+
+  for (const key in grouped) {
+    const [date, empId] = key.split('___');
+    const emp = storedEmployees[empId];
+    if (!emp) continue;
+
+    let scheduleIdForEmp = emp && emp.scheduleId ? emp.scheduleId : defaultScheduleId;
+    const overrideKey = empId + '___' + date;
+    if (overridesSchedules[overrideKey]) scheduleIdForEmp = overridesSchedules[overrideKey];
+    const schedule = keys[scheduleIdForEmp] || Object.assign({}, DEFAULT_SCHEDULE);
+
+    const times = [...new Set(grouped[key])].sort();
+
+    const pickEarliest = (win) => times.find(t => t >= win.start && t <= win.end) || null;
+    const pickLatest = (win) => { const arr = times.filter(t => t >= win.start && t <= win.end); return arr.length ? arr[arr.length-1] : null; };
+
+    const amInActual = pickEarliest({start: schedule.rng_am_in_start, end: schedule.rng_am_in_end});
+    const amOutActual = pickLatest({start: schedule.rng_am_out_start, end: schedule.rng_am_out_end});
+    const pmInActual = pickEarliest({start: schedule.rng_pm_in_start, end: schedule.rng_pm_in_end});
+    const pmOutActual = pickLatest({start: schedule.rng_pm_out_start, end: schedule.rng_pm_out_end});
+
+    let pmOutRefMins = pmOutActual ? toMins(pmOutActual) : toMins(schedule.sch_pm_end);
+
+    const otInActual = pickEarliest({start: schedule.rng_ot_in_start, end: schedule.rng_ot_in_end});
+    const otOutActual = pickLatest({start: schedule.rng_ot_out_start, end: schedule.rng_ot_out_end});
+
+    let regMins = 0;
+    if (amInActual && amOutActual) regMins += toMins(amOutActual) - toMins(amInActual);
+    if (pmInActual && pmOutActual) regMins += toMins(pmOutActual) - toMins(pmInActual);
+    totalsReg[empId] += minsToDec(regMins);
+
+    if (otInActual && otOutActual && toMins(otInActual) > pmOutRefMins) {
+      totalsOT[empId] += minsToDec(toMins(otOutActual) - toMins(otInActual));
+    }
+  }
+  return { totalsReg, totalsOT };
+}
+const dtrStartEl = document.getElementById('filterStart');
+const dtrEndEl = document.getElementById('filterEnd');
+
+function calculatePayrollFromRecords(){
+  try { if (typeof renderResults === 'function') renderResults(); } catch(e){ console.warn('renderResults failed', e); }
+
+  regHours = {};
+  otHours = {};
+
+  const tbody = document.querySelector('#resultsTable tbody');
+  if (tbody) {
+    [...tbody.querySelectorAll('tr')].forEach(tr => {
+      const cells = tr.cells || [];
+      const empId = (cells[0]?.textContent || '').trim();
+      const reg = parseFloat((cells[11]?.textContent || '0').replace(/[^0-9.\-]/g,'')) || 0;
+      const ot  = parseFloat((cells[12]?.textContent || '0').replace(/[^0-9.\-]/g,'')) || 0;
+      if (!empId) return;
+      regHours[empId] = (regHours[empId] || 0) + reg;
+      otHours[empId]  = (otHours[empId]  || 0) + ot;
+    });
+  }
+  try {
+    localStorage.setItem(LS_REG_HRS, JSON.stringify(regHours));
+    localStorage.setItem(LS_OT_HRS, JSON.stringify(otHours));
+  } catch(e){ console.warn('LS save failed', e); }
+  Object.keys(storedEmployees||{}).forEach(id => {
+    if (!payrollRates[id] || payrollRates[id] === 0) {
+      payrollRates[id] = storedEmployees[id]?.hourlyRate || 0;
+    }
+  });
+  try { localStorage.setItem(LS_RATES, JSON.stringify(payrollRates)); } catch(e){}
+  try { if (typeof renderTable==='function') renderTable(); } catch(e){ console.warn('renderTable failed', e); }
+}
+
+weekStartEl.addEventListener('change', () => {
+  if (dtrStartEl) dtrStartEl.value = weekStartEl.value;
+  calculatePayrollFromRecords();
+  try { renderResults(); } catch(e){}
+});
+weekEndEl.addEventListener('change', () => {
+  if (dtrEndEl) dtrEndEl.value = weekEndEl.value;
+  calculatePayrollFromRecords();
+  try { renderResults(); } catch(e){}
+});
+if (dtrStartEl) {
+  dtrStartEl.addEventListener('change', () => {
+    weekStartEl.value = dtrStartEl.value;
+    calculatePayrollFromRecords();
+  });
+}
+if (dtrEndEl) {
+  dtrEndEl.addEventListener('change', () => {
+    weekEndEl.value = dtrEndEl.value;
+    calculatePayrollFromRecords();
+  });
+}
+
+tabs.tabPayroll.addEventListener('click', () => {
+  if (dtrStartEl && !weekStartEl.value) weekStartEl.value = dtrStartEl.value;
+  if (dtrEndEl && !weekEndEl.value) weekEndEl.value = dtrEndEl.value;
+  calculatePayrollFromRecords();
+});
+function backupData() {
+  const data = {};
+  for (let i = 0; i < localStorage.length; i++) {
+    const key = localStorage.key(i);
+    data[key] = localStorage.getItem(key);
+  }
+  const blob = new Blob([JSON.stringify(data, null, 2)], {type: 'application/json'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'payroll_backup.json';
+  a.click();
+}
+
+function restoreData(file) {
+  const reader = new FileReader();
+  reader.onload = e => {
+    try {
+      const data = JSON.parse(e.target.result);
+      for (const key in data) {
+        localStorage.setItem(key, data[key]);
+      }
+      alert('Data restored! Reloading...');
+      location.reload();
+    } catch (err) {
+      alert('Invalid backup file.');
+    }
+  };
+  reader.readAsText(file);
+}
+document.addEventListener('DOMContentLoaded', () => {
+  const container = document.createElement('div');
+  container.style.marginTop = '20px';
+  container.innerHTML = `
+    <hr>
+    <h3>Data Backup & Restore</h3>
+    <button id="backupBtn">Backup Data</button>
+    <input type="file" id="restoreInput" style="display:none;" />
+    <button id="restoreBtn">Restore Data</button>
+  `;
+  document.body.appendChild(container);
+
+  document.getElementById('backupBtn').addEventListener('click', backupData);
+  document.getElementById('restoreBtn').addEventListener('click', () => {
+    document.getElementById('restoreInput').click();
+  });
+  document.getElementById('restoreInput').addEventListener('change', function(){
+    if (this.files.length) restoreData(this.files[0]);
+  });
+});
+  </script>
+ 
+<!-- Manual DTR Modal -->
+<div id="manualDtrModal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.5); z-index:1000; align-items:center; justify-content:center;">
+  <div style="background:white; padding:20px; border-radius:8px; width:320px; max-width:95vw;">
+    <h3 style="margin-top:0;">Enter Manual DTR</h3>
+    <label>Employee:<br/>
+      <select id="manualEmpSelect" style="width:100%;"></select>
+    </label><br/><br/>
+    <label>Date:<br/>
+      <input type="date" id="manualDate" style="width:100%;"/>
+    </label><br/><br/>
+    <label>Time:<br/>
+      <input type="time" id="manualTime" style="width:100%;"/>
+    </label><br/><br/>
+    <div style="text-align:right; display:flex; gap:8px; justify-content:flex-end;">
+      <button id="cancelManualDtr">Cancel</button>
+      <button id="saveManualDtr" class="primary">Save</button>
+    </div>
+  </div>
+</div>
+
+<script>
+(function(){
+  function openManualModal(){
+    const modal = document.getElementById('manualDtrModal');
+    const empSelect = document.getElementById('manualEmpSelect');
+    const manualDate = document.getElementById('manualDate');
+    const manualTime = document.getElementById('manualTime');
+    if(!modal || !empSelect) return;
+    empSelect.innerHTML = '';
+    try {
+      Object.keys(storedEmployees || {}).forEach(id => {
+        const opt = document.createElement('option');
+        opt.value = id;
+        const nm = (storedEmployees[id] && storedEmployees[id].name) ? storedEmployees[id].name : '';
+        opt.textContent = nm ? `${nm} (${id})` : id;
+        empSelect.appendChild(opt);
+      });
+    } catch(e) {}
+    manualDate.value = '';
+    manualTime.value = '';
+    modal.style.display = 'flex';
+  }
+  function closeManualModal(){
+    const modal = document.getElementById('manualDtrModal');
+    if(modal) modal.style.display = 'none';
+  }
+  function wireManualDTR(){
+    const btn = document.getElementById('manualDtrBtn');
+    const cancelBtn = document.getElementById('cancelManualDtr');
+    const saveBtn = document.getElementById('saveManualDtr');
+    if(btn) btn.addEventListener('click', openManualModal);
+    if(cancelBtn) cancelBtn.addEventListener('click', closeManualModal);
+    if(saveBtn) saveBtn.addEventListener('click', function(){
+      const empId = (document.getElementById('manualEmpSelect')||{}).value;
+      const dateVal = (document.getElementById('manualDate')||{}).value;
+      const timeVal = (document.getElementById('manualTime')||{}).value;
+      if(!empId || !dateVal || !timeVal){
+        alert('Please fill all fields.');
+        return;
+      }
+      try {
+        storedRecords.push({ empId: String(empId), date: dateVal, time: timeVal });
+        localStorage.setItem(LS_RECORDS, JSON.stringify(storedRecords));
+      } catch(e) { console.error('Saving manual DTR failed', e); }
+      closeManualModal();
+      if(typeof renderResults === 'function') renderResults();
+    });
+  }
+  function ensureActionsHeader(){
+    const table = document.getElementById('resultsTable');
+    if(!table) return;
+    const theadRow = table.querySelector('thead tr');
+    if(theadRow && !theadRow.querySelector('.actions-header')){
+      const th = document.createElement('th');
+      th.textContent = 'Actions';
+      th.classList.add('actions-header');
+      theadRow.appendChild(th);
+    }
+  }
+  function addDtrDeleteButtons(){
+    const table = document.getElementById('resultsTable');
+    if(!table) return;
+    ensureActionsHeader();
+    const rows = table.querySelectorAll('tbody tr');
+    rows.forEach(tr => {
+      if(tr.querySelector('.dtr-del-btn')) return;
+      const td = document.createElement('td');
+      td.className = 'actions-cell';
+      const btn = document.createElement('button');
+      btn.textContent = 'Delete';
+      btn.className = 'dtr-del-btn';
+      btn.addEventListener('click', () => {
+        // Get empId and date from row cells (empId at col 0, date at col 4)
+        const empIdCell = tr.cells[0] ? tr.cells[0].textContent.trim() : '';
+        const dateCell  = tr.cells[4] ? tr.cells[4].textContent.trim() : '';
+        if(!empIdCell || !dateCell) return;
+        if(!confirm(`Delete all DTR entries for ${empIdCell} on ${dateCell}?`)) return;
+        try {
+          for(let i = storedRecords.length - 1; i >= 0; i--){
+            const rec = storedRecords[i];
+            if(String(rec.empId) === String(empIdCell) && rec.date === dateCell){
+              storedRecords.splice(i, 1);
+            }
+          }
+          localStorage.setItem(LS_RECORDS, JSON.stringify(storedRecords));
+          renderResults();
+        } catch(e){ console.error('DTR delete failed', e); }
+      });
+      td.appendChild(btn);
+      tr.appendChild(td);
+    });
+  }
+  function patchRenderResults(){
+    if(typeof renderResults !== 'function') return false;
+    const original = renderResults;
+    window.renderResults = function(){
+      const res = original.apply(this, arguments);
+      try { addDtrDeleteButtons(); } catch(e){}
+      return res;
+    };
+    try { addDtrDeleteButtons(); } catch(e){}
+    return true;
+  }
+  function init(){
+    wireManualDTR();
+    if(!patchRenderResults()){
+      const iv = setInterval(() => {
+        if(patchRenderResults()) clearInterval(iv);
+      }, 200);
+      setTimeout(() => clearInterval(iv), 6000);
+    }
+  }
+  if(document.readyState === 'loading'){
+    document.addEventListener('DOMContentLoaded', init);
+  } else {
+    init();
+  }
+})();
+</script>
+
+
+<script>
+(function(){
+  function q(id){ return document.getElementById(id); }
+  function toMins(hm){ if(!hm) return null; var p=hm.split(':'), h=+p[0]||0, m=+p[1]||0; return h*60+m; }
+  function minsToDec(mins){ return Math.round((mins/60)*100)/100; }
+  function uniqSort(arr){ var seen={}, out=[]; for(var i=0;i<arr.length;i++){ var v=arr[i]; if(!seen[v]){ seen[v]=1; out.push(v);} } out.sort(); return out; }
+  function max0(x){ return x>0?x:0; }
+
+  // Extend tabs registry
+  if (typeof tabs !== 'undefined' && tabs){
+    tabs.tabProjectTotals   = document.getElementById('tabProjectTotals');
+    tabs.panelProjectTotals = document.getElementById('panelProjectTotals');
+  }
+
+  // Wrap showTab to support projectTotals
+  if (typeof showTab === 'function'){
+    var _showTab = showTab;
+    window.showTab = function(name){
+      _showTab(name);
+      if (name === 'projectTotals'){
+        if (tabs.tabProjectTotals) tabs.tabProjectTotals.classList.add('active');
+        if (tabs.panelProjectTotals) tabs.panelProjectTotals.classList.add('active');
+        renderProjectTotals();
+      }
+    };
+  }
+
+  // Click to open our tab
+  if (tabs && tabs.tabProjectTotals){
+    tabs.tabProjectTotals.addEventListener('click', function(){ showTab('projectTotals'); });
+  }
+
+  // Re-render when date range changes while active
+  ['weekStart','weekEnd'].forEach(function(id){
+    var el = q(id);
+    if (el) el.addEventListener('change', function(){
+      if (tabs && tabs.tabProjectTotals && tabs.tabProjectTotals.classList.contains('active')) renderProjectTotals();
+    });
+  });
+
+  
+  // DTR name search live filter
+  if (document.getElementById('dtrSearchName')) {
+    document.getElementById('dtrSearchName').addEventListener('input', ()=>{
+      renderResults();
+    });
+  }
+// CSV export
+  var dl = q('downloadProjectTotalsCSV');
+  if (dl) dl.addEventListener('click', exportProjectTotalsCSV);
+
+  // Core compute: honors date range + per-day project/schedule overrides + schedule windows, grace, OT windows
+  function computeProjectTotals(startDate, endDate){
+    var empMap = (typeof storedEmployees!=='undefined' && storedEmployees) || {};
+    var schedMap = (typeof storedSchedules!=='undefined' && storedSchedules) || {};
+    var defSchedId = (typeof defaultScheduleId!=='undefined' && defaultScheduleId) || null;
+    var records = (typeof storedRecords!=='undefined' && storedRecords) || [];
+    var projMap = (typeof storedProjects!=='undefined' && storedProjects) || {};
+    var ovSched = (typeof overridesSchedules!=='undefined' && overridesSchedules) || {};
+    var ovProj  = (typeof overridesProjects!=='undefined' && overridesProjects) || {};
+    var DEF     = (typeof DEFAULT_SCHEDULE!=='undefined' && DEFAULT_SCHEDULE) || {};
+
+    var dayGroups = {};
+    for (var i=0;i<records.length;i++){
+      var r = records[i];
+      if (startDate && r.date < startDate) continue;
+      if (endDate && r.date > endDate) continue;
+      if (!empMap[r.empId]) continue;
+      var key = r.date + '___' + r.empId;
+      if (!dayGroups[key]) dayGroups[key] = [];
+      dayGroups[key].push(r.time);
+    }
+
+    var totals = {}; // projectId => { name, reg, ot, total, employees:{} }
+    var keys = Object.keys(dayGroups);
+    for (var k=0;k<keys.length;k++){
+      var key = keys[k];
+      var parts = key.split('___');
+      var date = parts[0], empId = parts[1];
+      var emp = empMap[empId]; if (!emp) continue;
+
+      var ovKey = empId + '___' + date;
+      var projId = (ovProj.hasOwnProperty(ovKey) ? ovProj[ovKey] : (emp.projectId || '')) || '';
+      var projName = (projId && projMap[projId]) ? (projMap[projId].name || projId) : '(No project)';
+
+      var schedId = emp.scheduleId || defSchedId;
+      if (ovSched[ovKey]) schedId = ovSched[ovKey];
+      var S = (schedId && schedMap[schedId]) ? schedMap[schedId] : DEF;
+
+      var times = uniqSort(dayGroups[key]);
+
+      var win = {
+        amIn:  {start:S.rng_am_in_start||'05:00', end:S.rng_am_in_end||'09:00'},
+        amOut: {start:S.rng_am_out_start||'11:30', end:S.rng_am_out_end||'12:30'},
+        pmIn:  {start:S.rng_pm_in_start||'12:30', end:S.rng_pm_in_end||'14:30'},
+        pmOut: {start:S.rng_pm_out_start||'15:00', end:S.rng_pm_out_end||'20:00'},
+        otIn:  {start:S.rng_ot_in_start||'19:00', end:S.rng_ot_in_end||'22:00'},
+        otOut: {start:S.rng_ot_out_start||'19:00', end:S.rng_ot_out_end||'23:59'}
+      };
+      function pickEarliest(w){ for(var i2=0;i2<times.length;i2++){ var t=times[i2]; if(t>=w.start && t<=w.end) return t; } return null; }
+      function pickLatest(w){ var last=null; for(var j2=0;j2<times.length;j2++){ var t2=times[j2]; if(t2>=w.start && t2<=w.end) last=t2; } return last; }
+
+      var amIn  = pickEarliest(win.amIn);
+      var amOut = pickLatest(win.amOut);
+      var pmIn  = pickEarliest(win.pmIn);
+      var pmOut = pickLatest(win.pmOut);
+
+      var pmOutRefMins = pmOut ? toMins(pmOut) : toMins(S.sch_pm_end || '17:00');
+
+      var otIn = null, otOut = null;
+      for (var x=0;x<times.length;x++){
+        var tt = times[x]; var m = toMins(tt);
+        if (m>pmOutRefMins && m>=toMins(win.otIn.start) && m<=toMins(win.otIn.end)){ otIn = tt; break; }
+      }
+      for (var y=times.length-1;y>=0;y--){
+        var tt2 = times[y]; var m2 = toMins(tt2);
+        if (m2>pmOutRefMins && m2>=toMins(win.otOut.start) && m2<=toMins(win.otOut.end)){ otOut = tt2; if(!otIn || toMins(otOut)>=toMins(otIn)) break; }
+      }
+
+      var grace = Number(S.sch_grace)||0;
+      var regMins = 0;
+
+      if (amIn && pmOut && !amOut && !pmIn){
+        var saS = toMins(S.sch_am_start||'08:00'), saE = toMins(S.sch_am_end||'12:00');
+        var spS = toMins(S.sch_pm_start||'13:00'), spE = toMins(S.sch_pm_end||'17:00');
+        var amInM = toMins(amIn), pmOutM = toMins(pmOut);
+        var late = Math.max(0, amInM - saS);
+        var under = Math.max(0, spE - pmOutM);
+        var full = max0(saE-saS) + max0(spE-spS);
+        regMins = (late <= grace) ? max0(full - under) : max0(full - late - under);
+      } else {
+        if (amIn && amOut){
+          var inM = toMins(amIn), sS = toMins(S.sch_am_start||'08:00'), sE = toMins(S.sch_am_end||'12:00');
+          if (inM <= sS + grace) inM = sS;
+          var endM = Math.min(toMins(amOut), sE);
+          if (endM > inM) regMins += (endM - inM);
+        }
+        if (pmIn && pmOut){
+          var inM2 = toMins(pmIn), sS2 = toMins(S.sch_pm_start||'13:00'), sE2 = toMins(S.sch_pm_end||'17:00');
+          if (inM2 <= sS2 + grace) inM2 = sS2;
+          var endM2 = Math.min(toMins(pmOut), sE2);
+          if (endM2 > inM2) regMins += (endM2 - inM2);
+        }
+      }
+
+      var otMins = 0;
+      if (otIn && otOut){
+        var startClamp = Math.max(toMins(otIn), toMins(win.otIn.start));
+        var endClamp   = Math.min(toMins(otOut), toMins(win.otOut.end));
+        if (endClamp > startClamp) otMins = endClamp - startClamp;
+      }
+
+      var regDec = minsToDec(regMins);
+      var otDec  = minsToDec(otMins);
+
+      if (!totals[projId]) totals[projId] = { name: projName, reg: 0, ot: 0, total: 0, gross: 0, employees: {} };
+      totals[projId].reg   = Math.round((totals[projId].reg + regDec)*100)/100;
+      totals[projId].ot    = Math.round((totals[projId].ot  + otDec )*100)/100;
+      totals[projId].total = Math.round((totals[projId].total + regDec + otDec)*100)/100;
+      var rate = (emp && typeof emp.hourlyRate==='number') ? emp.hourlyRate : (+emp.hourlyRate||0);
+      var otp = (document.getElementById('otMultiplier')&&parseFloat(document.getElementById('otMultiplier').value)) || 1.5;
+      var grossInc = (regDec*rate) + (otDec*rate*otp);
+      totals[projId].gross = Math.round((totals[projId].gross + grossInc)*100)/100;
+      totals[projId].employees[empId] = true;
+    }
+
+    var rows = [];
+    var pids = Object.keys(totals).sort(function(a,b){ var A=totals[a].name||''; var B=totals[b].name||''; return A.localeCompare(B); });
+    for (var z=0; z<pids.length; z++){
+      var pid = pids[z];
+      rows.push({ projectId: pid, project: totals[pid].name, reg: totals[pid].reg, ot: totals[pid].ot, total: totals[pid].total, gross: totals[pid].gross, employees: Object.keys(totals[pid].employees).length });
+    }
+    if (rows.length){
+      var g = {reg:0, ot:0, total:0, gross:0, employees:0};
+      for (var r=0;r<rows.length;r++){ g.reg+=rows[r].reg; g.ot+=rows[r].ot; g.total+=rows[r].total; g.gross+=rows[r].gross; g.employees+=rows[r].employees; }
+      rows.push({ projectId: '__grand__', project: 'Grand Total', reg: Math.round(g.reg*100)/100, ot: Math.round(g.ot*100)/100, total: Math.round(g.total*100)/100, gross: Math.round(g.gross*100)/100, employees: g.employees });
+    }
+    return rows;
+  }
+
+  function renderProjectTotals(){
+    var ws = (q('weekStart') && q('weekStart').value) || '';
+    var we = (q('weekEnd') && q('weekEnd').value) || '';
+    var tbody = document.querySelector('#projectTotalsTable tbody'); if (!tbody) return;
+    var data = computeProjectTotals(ws, we);
+    tbody.innerHTML = '';
+    if (!data.length){
+      var tr = document.createElement('tr'); tr.innerHTML = '<td colspan="5" class="muted">No data for the selected date range.</td>'; tbody.appendChild(tr); return;
+    }
+    for (var i=0;i<data.length;i++){
+      var row = data[i]; var tr = document.createElement('tr'); if (row.projectId==='__grand__') tr.style.fontWeight = '700';
+      tr.innerHTML = '<td>'+row.project+'</td>'
+                   + '<td style="text-align:right">'+row.reg.toFixed(2)+'</td>'
+                   + '<td style="text-align:right">'+row.ot.toFixed(2)+'</td>'
+                   + '<td style="text-align:right">'+row.total.toFixed(2)+'</td>'
+                   + '<td style="text-align:right">'+(row.gross!=null?row.gross.toFixed(2):'0.00')+'</td>'
+                   + '<td style="text-align:right">'+row.employees+'</td>';
+      tbody.appendChild(tr);
+    }
+  }
+
+  function exportProjectTotalsCSV(){
+    var ws = (q('weekStart') && q('weekStart').value) || '';
+    var we = (q('weekEnd') && q('weekEnd').value) || '';
+    var data = computeProjectTotals(ws, we);
+    var rows = [['Week Start','Week End','Project','Regular Hours','OT Hours','Total Hours','Gross Amount','Employees']];
+    for (var i=0;i<data.length;i++){ var r = data[i]; rows.push([ws,we,r.project,r.reg.toFixed(2),r.ot.toFixed(2),r.total.toFixed(2),(r.gross!=null?r.gross.toFixed(2):'0.00'),r.employees]); }
+var csv = rows.map(function(r){
+      return r.map(function(s){
+        s = String(s==null?'':s);
+        var needs = (s.indexOf('"')>=0) || (s.indexOf(',')>=0) || (s.indexOf('\n')>=0);
+        if (needs) s = '"' + s.split('"').join('""') + '"';
+        return s;
+      }).join(',');
+    }).join('\n');
+    var blob = new Blob([csv], {type:'text/csv'}); var url = URL.createObjectURL(blob);
+    var a = document.createElement('a'); a.href=url; a.download='project_totals.csv'; document.body.appendChild(a); a.click(); a.remove();
+  }
+})();
+</script>
+
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+  let pass = prompt("Enter password:");
+  if (pass !== "admin") {
+    document.body.innerHTML = "<h2 style='color:red;text-align:center;margin-top:20%;'>Access Denied</h2>";
+  }
+});
+</script>
+
+</body>
+</html>
