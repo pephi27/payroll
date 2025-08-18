@@ -176,7 +176,22 @@
 #deductionsTab #deductionsTable tfoot td.num{ text-align:right; }
 </style>
 </head>
- <body>
+ \1
+
+<!-- Boot guard to avoid 'storedEmployees is not defined' -->
+<script>
+(function(){
+  try {
+    if (typeof window.storedEmployees === 'undefined') {
+      window.storedEmployees = JSON.parse(localStorage.getItem('att_employees_v2') || '[]');
+    }
+    if (typeof window.storedRecords === 'undefined') {
+      window.storedRecords = JSON.parse(localStorage.getItem('att_records_v2') || '[]');
+    }
+  } catch (e) { console.warn('Boot guard init failed', e); }
+})();
+</script>
+
   <header>
    <div class="tabs">
     <button class="tab-btn active" id="tabMain">
@@ -3121,7 +3136,7 @@ document.addEventListener('DOMContentLoaded', function(){
 
 <!-- === Cloud Sync (Supabase) === -->
 <link rel="preconnect" href="https://esm.sh">
-<script src="https://esm.sh/@supabase/supabase-js@2"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
 <script src="./config.js"></script>
 <style>
   .cloud-card {border:1px solid #e2e8f0;border-radius:10px;padding:12px;margin-top:12px;background:#fff;}
@@ -3151,7 +3166,7 @@ document.addEventListener('DOMContentLoaded', function(){
 </div>
 <script>
 (function(){
-  const supa = window.supabase.createClient(window.SUPABASE_URL, window.SUPABASE_ANON_KEY);
+  if (!window.supabase || !window.supabase.createClient) { console.error('Supabase script failed to load'); } else { var supa = window.supabase.createClient(window.SUPABASE_URL, window.SUPABASE_ANON_KEY); }
   const CLOUD_KEYS = ['att_records_v2','att_employees_v2','att_schedules_v2','att_schedules_default','att_projects_v1','att_filter_project_v1','att_overrides_schedules','att_overrides_projects','payroll_rates','payroll_reg_hours','payroll_ot_hours','payroll_ot_multiplier','payroll_week_start','payroll_week_end','payroll_deduction_divisor','payroll_sss_table','payroll_loan_sss','payroll_loan_pagibig','payroll_vale','payroll_vale_wed'];
   const sel=id=>document.getElementById(id);
   const emailEl=sel('sbEmail'); const passEl=sel('sbPassword'); const loginBtn=sel('sbLogin'); const signupBtn=sel('sbSignup'); const logoutBtn=sel('sbLogout'); const statusEl=sel('sbStatus');
