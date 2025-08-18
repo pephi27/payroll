@@ -45,7 +45,20 @@
   #payrollTab #payrollTable th:nth-child(15),
   #payrollTab #payrollTable td:nth-child(15) { display: none; }
 
-  </style>
+  
+/* ===== Print Styles for Project Totals ===== */
+@media print {
+  body * { visibility: hidden !important; }
+  #panelProjectTotals, #panelProjectTotals * { visibility: visible !important; }
+  #panelProjectTotals { position: absolute; left: 0; top: 0; width: 100%; }
+  header, .tabs, .controls, #panelProjectTotals .controls, #panelProjectTotals button { display: none !important; }
+  #projectTotalsTable { width: 100%; border-collapse: collapse; font-size: 12px; }
+  #projectTotalsTable th, #projectTotalsTable td { border: 1px solid #444; padding: 6px; text-align: right; }
+  #projectTotalsTable th:first-child, #projectTotalsTable td:first-child { text-align: left; }
+  .proj-emp-breakdown { page-break-inside: avoid; }
+  .page-break { page-break-after: always; }
+}
+</style>
 
   <style id="payrollScopedStyles">
    #panelPayroll {#panelPayroll --border:#e2e8f0; --bg:#f8fafc; --bg2:#f1f5f9; --text:#0b1220;
@@ -77,7 +90,92 @@
   <style id="payroll-tabs-fix">
    #panelPayroll .tab{display:none} #panelPayroll .tab.active{display:block}
   </style>
- </head>
+ 
+<style>
+/* --- Employees: Clean Add Employee UI --- */
+#panelEmployees .form-card{
+  background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:16px;
+  box-shadow:0 1px 2px rgba(0,0,0,0.04);margin-bottom:12px;
+}
+#panelEmployees form{
+  display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;align-items:start;
+}
+#panelEmployees label{display:block;font-size:12px;color:#334155;margin-bottom:6px;font-weight:600;}
+#panelEmployees input, #panelEmployees select, #panelEmployees textarea{
+  width:100%;padding:10px 12px;border:1px solid #cbd5e1;border-radius:10px;outline:none;
+}
+#panelEmployees input:focus, #panelEmployees select:focus, #panelEmployees textarea:focus{
+  border-color:#64748b;box-shadow:0 0 0 3px rgba(100,116,139,0.15);
+}
+#panelEmployees input:invalid, #panelEmployees select:invalid, #panelEmployees textarea:invalid{
+  border-color:#ef4444;
+}
+#panelEmployees .form-actions{grid-column:1 / -1;display:flex;gap:10px;justify-content:flex-end;margin-top:2px;}
+#panelEmployees button, #panelEmployees input[type="submit"], #panelEmployees input[type="button"]{
+  border:1px solid #cbd5e1;border-radius:10px;padding:10px 14px;font-weight:600;cursor:pointer;background:#f8fafc;
+}
+#panelEmployees button:hover, #panelEmployees input[type="submit"]:hover, #panelEmployees input[type="button"]:hover{
+  filter:brightness(0.98);
+}
+#panelEmployees .btn-primary{background:#0ea5e9;border-color:#0284c7;color:#fff;}
+#panelEmployees .btn-danger{background:#fee2e2;border-color:#fecaca;color:#b91c1c;}
+#panelEmployees small.hint{display:block;color:#64748b;margin-top:4px;font-size:11px;}
+@media (max-width:1100px){
+  #panelEmployees form{grid-template-columns:repeat(auto-fit,minmax(180px,1fr));}
+}
+</style>
+
+<style>
+
+/* ===== Strong Print Styles for Project Totals ===== */
+@media print {
+  body * { visibility: hidden !important; }
+  section.panel { display: none !important; }
+  #panelProjectTotals { 
+    position: absolute; left: 0; top: 0; width: 100%;
+    display: block !important; 
+    visibility: visible !important;
+  }
+  #panelProjectTotals * { visibility: visible !important; }
+  header, .tabs, .controls, #panelProjectTotals .controls, #panelProjectTotals button { display: none !important; }
+  #projectTotalsTable { width: 100%; border-collapse: collapse; font-size: 12px; }
+  #projectTotalsTable th, #projectTotalsTable td { border: 1px solid #444; padding: 6px; text-align: right; }
+  #projectTotalsTable th:first-child, #projectTotalsTable td:first-child { text-align: left; }
+  .proj-emp-breakdown { page-break-inside: avoid; }
+  .page-break { page-break-after: always; }
+}
+
+</style>
+
+<style>
+
+/* --- Per-project per page when printing --- */
+@media print {
+  /* If a project has a breakdown row, break after that row; otherwise break after the project header row */
+  #panelProjectTotals tr.proj-emp-breakdown { page-break-after: always; }
+  #panelProjectTotals tr.proj-row.no-breakdown { page-break-after: always; }
+}
+
+</style>
+
+<style>
+#payrollTab #payrollTable tfoot td,
+#deductionsTab #deductionsTable tfoot td{ font-weight:700; background:#fff7ed; border-top:2px solid #e2e8f0; }
+#payrollTab #payrollTable tfoot td.label-cell,
+#deductionsTab #deductionsTable tfoot td.label-cell{ text-align:left; }
+#payrollTab #payrollTable tfoot td.num,
+#deductionsTab #deductionsTable tfoot td.num{ text-align:right; }
+</style>
+
+<style>
+#payrollTab #payrollTable tfoot td,
+#deductionsTab #deductionsTable tfoot td{ font-weight:700; background:#fff7ed; border-top:2px solid #e2e8f0; }
+#payrollTab #payrollTable tfoot td.label-cell,
+#deductionsTab #deductionsTable tfoot td.label-cell{ text-align:left; }
+#payrollTab #payrollTable tfoot td.num,
+#deductionsTab #deductionsTable tfoot td.num{ text-align:right; }
+</style>
+</head>
  <body>
   <header>
    <div class="tabs">
@@ -563,6 +661,27 @@
       </thead>
       <tbody>
       </tbody>
+      <tfoot id="payrollTotalsFoot">
+        <tr>
+          <td colspan="2" class="label-cell">Grand Total</td>
+          <td class="num" data-col="regHrs">0.00</td>
+          <td class="num" data-col="otHrs">0.00</td>
+          <td class="num" data-col="rate">0.00</td>
+          <td class="num" data-col="regPay">0.00</td>
+          <td class="num" data-col="otPay">0.00</td>
+          <td class="num" data-col="grossPay">0.00</td>
+          <td class="num" data-col="pagibig">0.00</td>
+          <td class="num" data-col="philhealth">0.00</td>
+          <td class="num" data-col="sss">0.00</td>
+          <td class="num" data-col="loanSSS">0.00</td>
+          <td class="num" data-col="loanPI">0.00</td>
+          <td class="num" data-col="vale">0.00</td>
+          <td class="num" data-col="valeWed">0.00</td>
+          <td class="num" data-col="totalDed">0.00</td>
+          <td class="num" data-col="netPay">0.00</td>
+        </tr>
+      </tfoot>
+
      </table>
      <div class="section note">
       Reads employees from localStorage key
@@ -578,7 +697,7 @@
        Add Row
       </button>
       <button class="primary" id="resetSss">
-       Reset to 2025 Defaults
+       Reset to Defaults (Custom)
       </button>
       <button class="danger" id="clearSss">
        Clear SSS Table
@@ -654,6 +773,20 @@
        </tr>
       </thead>
       <tbody></tbody>
+      <tfoot id="deductionsTable_foot">
+        <tr>
+          <td class="label-cell" colspan="2">Grand Total</td>
+          <td class="num" data-col="pagibig">0.00</td>
+          <td class="num" data-col="philhealth">0.00</td>
+          <td class="num" data-col="sss">0.00</td>
+          <td class="num" data-col="loanSSS">0.00</td>
+          <td class="num" data-col="loanPI">0.00</td>
+          <td class="num" data-col="vale">0.00</td>
+          <td class="num" data-col="valeWed">0.00</td>
+          <td class="num" data-col="total">0.00</td>
+        </tr>
+      </tfoot>
+
      </table>
     </div>
 
@@ -664,57 +797,67 @@ const LS_DIVISOR='payroll_deduction_divisor', LS_SSS_TABLE='payroll_sss_table';
 const LS_LOAN_SSS='payroll_loan_sss', LS_LOAN_PI='payroll_loan_pagibig';
 const LS_VALE='payroll_vale', LS_VALE_WED='payroll_vale_wed';
 const SSS_SEED_2025 = [
-  [0, 4250, 180.0],
-  [4250.01, 4749.99, 202.5],
-  [4750.0, 5249.99, 225.0],
-  [5250.0, 5749.99, 247.5],
-  [5750.0, 6249.99, 270.0],
-  [6250.0, 6749.99, 292.5],
-  [6750.0, 7249.99, 315.0],
-  [7250.0, 7749.99, 337.5],
-  [7750.0, 8249.99, 360.0],
-  [8250.0, 8749.99, 382.5],
-  [8750.0, 9249.99, 405.0],
-  [9250.0, 9749.99, 427.5],
-  [9750.0, 10249.99, 450.0],
-  [10250.0, 10749.99, 472.5],
-  [10750.0, 11249.99, 495.0],
-  [11250.0, 11749.99, 517.5],
-  [11750.0, 12249.99, 540.0],
-  [12250.0, 12749.99, 562.5],
-  [12750.0, 13249.99, 585.0],
-  [13250.0, 13749.99, 607.5],
-  [13750.0, 14249.99, 630.0],
-  [14250.0, 14749.99, 652.5],
-  [14750.0, 15249.99, 675.0],
-  [15250.0, 15749.99, 697.5],
-  [15750.0, 16249.99, 720.0],
-  [16250.0, 16749.99, 742.5],
-  [16750.0, 17249.99, 765.0],
-  [17250.0, 17749.99, 787.5],
-  [17750.0, 18249.99, 810.0],
-  [18250.0, 18749.99, 832.5],
-  [18750.0, 19249.99, 855.0],
-  [19250.0, 19749.99, 877.5],
-  [19750.0, 20249.99, 900.0],
-  [20250.0, 20749.99, 922.5],
-  [20750.0, 21249.99, 945.0],
-  [21250.0, 21749.99, 967.5],
-  [21750.0, 22249.99, 990.0],
-  [22250.0, 22749.99, 1012.5],
-  [22750.0, 23249.99, 1035.0],
-  [23250.0, 23749.99, 1057.5],
-  [23750.0, 24249.99, 1080.0],
-  [24250.0, 24749.99, 1102.5],
-  [24750.0, 25249.99, 1125.0],
-  [25250.0, 25749.99, 1147.5],
-  [25750.0, 26249.99, 1170.0],
-  [26250.0, 26749.99, 1192.5],
-  [26750.0, 27249.99, 1215.0],
-  [27250.0, 27749.99, 1237.5],
-  [27750.0, 28249.99, 1260.0],
-  [28250.0, 28749.99, 1282.5],
-  [28750.0, 99999999.0, 1305.0]
+  [1, 5249.99, 250],
+  [5250, 5749.99, 275],
+  [5750, 6249.99, 300],
+  [6250, 6749.99, 325],
+  [6750, 7249.99, 350],
+  [7250, 7749.99, 375],
+  [7750, 8249.99, 400],
+  [8250, 8749.99, 425],
+  [8750, 9249.99, 450],
+  [9250, 9749.99, 475],
+  [9750, 10249.99, 500],
+  [10250, 10749.99, 525],
+  [10750, 11249.99, 550],
+  [11250, 11749.99, 575],
+  [11750, 12249.99, 600],
+  [12250, 12749.99, 625],
+  [12750, 13249.99, 650],
+  [13250, 13749.99, 675],
+  [13750, 14249.99, 700],
+  [14250, 14749.99, 725],
+  [14750, 15249.99, 750],
+  [15250, 15749.99, 775],
+  [15750, 16249.99, 800],
+  [16250, 16749.99, 825],
+  [16750, 17249.99, 850],
+  [17250, 17749.99, 875],
+  [17750, 18249.99, 900],
+  [18250, 18749.99, 925],
+  [18750, 19249.99, 950],
+  [19250, 19749.99, 975],
+  [19750, 20249.99, 1000],
+  [20250, 20749.99, 1025],
+  [20750, 21249.99, 1050],
+  [21250, 21749.99, 1075],
+  [21750, 22249.99, 1100],
+  [22250, 22749.99, 1125],
+  [22750, 23249.99, 1150],
+  [23250, 23749.99, 1175],
+  [23750, 24249.99, 1200],
+  [24250, 24749.99, 1225],
+  [24750, 25249.99, 1250],
+  [25250, 25749.99, 1275],
+  [25750, 26249.99, 1300],
+  [26250, 26749.99, 1325],
+  [26750, 27249.99, 1350],
+  [27250, 27749.99, 1375],
+  [27750, 28249.99, 1400],
+  [28250, 28749.99, 1425],
+  [28750, 29249.99, 1450],
+  [29250, 29749.99, 1475],
+  [29750, 30249.99, 1500],
+  [30250, 30749.99, 1525],
+  [30750, 31249.99, 1550],
+  [31250, 31749.99, 1575],
+  [31750, 32249.99, 1600],
+  [32250, 32749.99, 1625],
+  [32750, 33249.99, 1650],
+  [33250, 33749.99, 1675],
+  [33750, 34249.99, 1700],
+  [34250, 34749.99, 1725],
+  [34750, 100000000, 1750]
 ];
 
 function ensureSeededSSS() {
@@ -792,8 +935,9 @@ function renderDeductionsTable(){
   dtbody.innerHTML = '';
   employeeList.forEach(emp => {
     const rH = Number(regHours[emp.id] ?? 0);
-    const rate = Number(payrollRates[emp.id] ?? 0);
-    const lSSS = Number(loanSSS[emp.id] ?? 0);
+    const rate = Number((storedEmployees[emp.id]?.hourlyRate) ?? (payrollRates[emp.id] ?? 0));
+    payrollRates[emp.id] = isNaN(rate) ? 0 : rate;
+const lSSS = Number(loanSSS[emp.id] ?? 0);
     const lPI = Number(loanPI[emp.id] ?? 0);
     const v = Number(vale[emp.id] ?? 0);
     const vW = Number(valeWed[emp.id] ?? 0);
@@ -984,17 +1128,18 @@ function renderTable(){
     const tr = document.createElement('tr');
     const rH = Number(regHours[emp.id] ?? 0);
     const oH = Number(otHours[emp.id] ?? 0);
-    const rate = Number(payrollRates[emp.id] ?? 0);
-    const lSSS = Number(loanSSS[emp.id] ?? 0);
+    const rate = Number((storedEmployees[emp.id]?.hourlyRate) ?? (payrollRates[emp.id] ?? 0));
+    payrollRates[emp.id] = isNaN(rate) ? 0 : rate;
+const lSSS = Number(loanSSS[emp.id] ?? 0);
     const lPI = Number(loanPI[emp.id] ?? 0);
     const v = Number(vale[emp.id] ?? 0);
     const vW = Number(valeWed[emp.id] ?? 0);
     tr.innerHTML = `
       <td>${emp.id}</td>
       <td class="wrap">${emp.name}</td>
-      <td><input class="cell regHrs" type="number" step="0.01" value="${rH}"></td>
-      <td><input class="cell otHrs" type="number" step="0.01" value="${oH}"></td>
-      <td><input class="cell rate" type="number" step="0.01" value="${rate}"></td>
+      <td><input class="cell regHrs" title="Non-editable in Payroll" type="number" step="0.01" value="${rH}" readonly></td>
+      <td><input class="cell otHrs" title="Non-editable in Payroll" type="number" step="0.01" value="${oH}" readonly></td>
+      <td><input class="cell rate" title="Non-editable in Payroll" type="number" step="0.01" value="${rate}" readonly></td>
       <td class="regPay num">0.00</td>
       <td class="otPay num">0.00</td>
       <td class="grossPay num">0.00</td>
@@ -1206,6 +1351,7 @@ renderSssTable();
       <div class="muted">Uses the global Start/End dates in the header and includes per-day project/schedule overrides.</div>
       <div style="flex:1 1 auto"></div>
       <button id="downloadProjectTotalsCSV">Download CSV</button>
+      <button id="printProjectTotalsBtn">Print Project Totals</button>
     </div>
     <table id="projectTotalsTable">
       <thead>
@@ -1561,8 +1707,12 @@ function renderEmployees(){
   renderEmpScheduleDropdowns();
   renderProjectDropdowns();
   const tbody = document.querySelector('#employeesTable tbody'); tbody.innerHTML = '';
-  const ids = Object.keys(storedEmployees).sort((a,b)=> a.localeCompare(b));
-  ids.forEach(id => {
+  const ids = Object.keys(storedEmployees).sort((a,b)=>{
+    const na = /^\d+$/.test(a), nb = /^\d+$/.test(b);
+    if (na && nb) return Number(a) - Number(b);
+    return String(a).localeCompare(String(b));
+  });
+ids.forEach(id => {
     const emp = storedEmployees[id];
     let scheduleOptionsHtml = '';
     Object.keys(storedSchedules).forEach(sid=>{
@@ -1588,9 +1738,13 @@ function renderEmployees(){
     storedEmployees[e.target.dataset.id].name = e.target.value; saveEmployeesToLS(); renderResults();
   }));
   document.querySelectorAll('.emp-rate-input').forEach(inp=> inp.addEventListener('change', (e)=>{
-    storedEmployees[e.target.dataset.id].hourlyRate = parseFloat(e.target.value) || 0; saveEmployeesToLS(); renderResults();
+    const id = e.target.dataset.id;
+    const val = parseFloat(e.target.value) || 0;
+    storedEmployees[id].hourlyRate = val; saveEmployeesToLS();
+    try { payrollRates[id] = val; localStorage.setItem(LS_RATES, JSON.stringify(payrollRates)); } catch(err) {}
+    renderResults();
   }));
-  document.querySelectorAll('.emp-sel-schedule').forEach(sel=> sel.addEventListener('change', (e)=>{
+document.querySelectorAll('.emp-sel-schedule').forEach(sel=> sel.addEventListener('change', (e)=>{
     storedEmployees[e.target.dataset.id].scheduleId = e.target.value; saveEmployeesToLS(); renderResults();
   }));
   document.querySelectorAll('.emp-sel-project').forEach(sel=> sel.addEventListener('change', (e)=>{
@@ -2476,14 +2630,23 @@ document.addEventListener('DOMContentLoaded', () => {
       var otp = (document.getElementById('otMultiplier')&&parseFloat(document.getElementById('otMultiplier').value)) || 1.5;
       var grossInc = (regDec*rate) + (otDec*rate*otp);
       totals[projId].gross = Math.round((totals[projId].gross + grossInc)*100)/100;
-      totals[projId].employees[empId] = true;
+      if (!totals[projId].employees[empId]) totals[projId].employees[empId] = { id: empId, name: (emp && emp.name) || '', reg: 0, ot: 0, total: 0, gross: 0, perDay: {} };
+totals[projId].employees[empId].reg = Math.round((totals[projId].employees[empId].reg + regDec)*100)/100;
+totals[projId].employees[empId].ot  = Math.round((totals[projId].employees[empId].ot  + otDec )*100)/100;
+totals[projId].employees[empId].total = Math.round((totals[projId].employees[empId].total + regDec + otDec)*100)/100;
+totals[projId].employees[empId].gross = Math.round((totals[projId].employees[empId].gross + grossInc)*100)/100;
+// NEW: record per-day total hours (reg + OT) for this date
+var _dTot = Math.round(((regDec + otDec))*100)/100;
+if (!totals[projId].employees[empId].perDay) totals[projId].employees[empId].perDay = {};
+totals[projId].employees[empId].perDay[date] = Math.round(((totals[projId].employees[empId].perDay[date]||0) + _dTot)*100)/100;
     }
 
     var rows = [];
     var pids = Object.keys(totals).sort(function(a,b){ var A=totals[a].name||''; var B=totals[b].name||''; return A.localeCompare(B); });
     for (var z=0; z<pids.length; z++){
       var pid = pids[z];
-      rows.push({ projectId: pid, project: totals[pid].name, reg: totals[pid].reg, ot: totals[pid].ot, total: totals[pid].total, gross: totals[pid].gross, employees: Object.keys(totals[pid].employees).length });
+      var _emps = Object.values(totals[pid].employees || {}).sort(function(a,b){return (a.name||'').localeCompare(b.name||'') || String(a.id).localeCompare(String(b.id));});
+rows.push({ projectId: pid, project: totals[pid].name, reg: totals[pid].reg, ot: totals[pid].ot, total: totals[pid].total, gross: totals[pid].gross, employees: Object.keys(totals[pid].employees).length , breakdown: _emps });
     }
     if (rows.length){
       var g = {reg:0, ot:0, total:0, gross:0, employees:0};
@@ -2503,7 +2666,9 @@ document.addEventListener('DOMContentLoaded', () => {
       var tr = document.createElement('tr'); tr.innerHTML = '<td colspan="5" class="muted">No data for the selected date range.</td>'; tbody.appendChild(tr); return;
     }
     for (var i=0;i<data.length;i++){
-      var row = data[i]; var tr = document.createElement('tr'); if (row.projectId==='__grand__') tr.style.fontWeight = '700';
+      var row = data[i]; var tr = document.createElement('tr');
+      tr.className = 'proj-row';
+      if (row.projectId==='__grand__') tr.style.fontWeight = '700';
       tr.innerHTML = '<td>'+row.project+'</td>'
                    + '<td style="text-align:right">'+row.reg.toFixed(2)+'</td>'
                    + '<td style="text-align:right">'+row.ot.toFixed(2)+'</td>'
@@ -2511,6 +2676,61 @@ document.addEventListener('DOMContentLoaded', () => {
                    + '<td style="text-align:right">'+(row.gross!=null?row.gross.toFixed(2):'0.00')+'</td>'
                    + '<td style="text-align:right">'+row.employees+'</td>';
       tbody.appendChild(tr);
+      if (row.projectId !== '__grand__' && Array.isArray(row.breakdown) && row.breakdown.length){
+        tr.classList.add('has-breakdown');
+        var dtr = document.createElement('tr');
+        dtr.className = 'proj-emp-breakdown';
+        var inner = '<td colspan="6" style="background:#f9fafb">'
+  + '<div style="padding:8px 6px">'
+  + '<strong>Employees (per-day hours):</strong>';
+
+function dateRangeList(s, e){
+  var out = []; if(!s || !e) return out;
+  var d = new Date(s); var end = new Date(e);
+  while (d <= end){ out.push(new Date(d)); d.setDate(d.getDate()+1); }
+  return out;
+}
+var days = dateRangeList(ws, we);
+
+inner += '<table style="width:100%;margin-top:6px;border-collapse:collapse">'
+      + '<thead><tr>'
+      + '<th style="text-align:left">ID</th>'
+      + '<th style="text-align:left">Name</th>';
+for (var di=0; di<days.length; di++){
+  var dt = days[di];
+  var label = (dt.getMonth()+1)+'/'+dt.getDate();
+  inner += '<th style="text-align:right">'+label+'</th>';
+}
+inner += '<th style="text-align:right">Total Hrs</th>';
+inner += '<th style="text-align:right">Total Amount</th>';
+inner += '</tr></thead><tbody>';
+
+for (var k=0;k<row.breakdown.length;k++){
+  var e = row.breakdown[k];
+  var totalRow = Number(e.total||0);
+  var grossRow = Number(e.gross||0);
+  inner += '<tr>'
+        + '<td>'+(e.id ?? '')+'</td>'
+        + '<td>'+(e.name ?? '')+'</td>';
+  var perDay = (e.perDay||{});
+  for (var di=0; di<days.length; di++){
+    var dkey = days[di].toISOString().slice(0,10);
+    var val = Number(perDay[dkey]||0).toFixed(2);
+    inner += '<td style="text-align:right">'+val+'</td>';
+  }
+  inner += '<td style="text-align:right">'+ totalRow.toFixed(2) +'</td>';
+  inner += '<td style="text-align:right">'+ grossRow.toFixed(2) +'</td>';
+  inner += '</tr>';
+}
+inner += '</tbody></table></div></td>';
+        dtr.innerHTML = inner;
+        dtr.style.display = 'none';
+        tbody.appendChild(dtr);
+        // toggle
+        tr.style.cursor = 'pointer';
+        tr.addEventListener('click', function(dt){ return function(){ dt.style.display = (dt.style.display==='none'?'table-row':'none'); }; }(dtr));
+      }
+
     }
   }
 
@@ -2542,6 +2762,521 @@ document.addEventListener('DOMContentLoaded', function() {
     document.body.innerHTML = "<h2 style='color:red;text-align:center;margin-top:20%;'>Access Denied</h2>";
   }
 });
+</script>
+
+
+<script>
+// --- Employees: small UX helpers ---
+document.addEventListener('DOMContentLoaded', () => {
+  const panel = document.querySelector('#panelEmployees');
+  if (!panel) return;
+  const form = panel.querySelector('form');
+  if (!form) return;
+
+  // Wrap form in a card if not already
+  if (!form.closest('.form-card')) {
+    const card = document.createElement('div');
+    card.className = 'form-card';
+    form.parentNode.insertBefore(card, form);
+    card.appendChild(form);
+  }
+
+  // Enter-to-submit (except textarea)
+  form.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && e.target.tagName !== 'TEXTAREA') {
+      e.preventDefault();
+      const submit = form.querySelector('button[type="submit"], input[type="submit"]');
+      if (submit) submit.click();
+    }
+  });
+
+  // Auto-mark dangerous buttons
+  form.querySelectorAll('button, input[type="button"]').forEach(el => {
+    const text = (el.textContent || el.value || '').toLowerCase();
+    if (/(clear|reset|delete|remove)/.test(text)) el.classList.add('btn-danger');
+    if (/(save|add|submit|create)/.test(text)) el.classList.add('btn-primary');
+  });
+
+  // Group actions into a row if not already
+  const actions = Array.from(form.querySelectorAll('button, input[type="submit"], input[type="button"]'));
+  if (actions.length) {
+    let bar = form.querySelector('.form-actions');
+    if (!bar) {
+      bar = document.createElement('div');
+      bar.className = 'form-actions';
+      // move trailing buttons into actions
+      actions.forEach(btn => {
+        if (!btn.closest('.form-actions')) bar.appendChild(btn);
+      });
+      form.appendChild(bar);
+    }
+  }
+});
+</script>
+
+<script>
+document.addEventListener('DOMContentLoaded', function(){
+  var btn = document.getElementById('printProjectTotalsBtn');
+  if (btn) btn.addEventListener('click', function(){ window.print(); });
+});
+</script>
+
+
+
+<script>
+(function(){
+  function _parse(n){ var x=parseFloat(String(n||'').replace(/[^0-9.\-]/g,'')); return isNaN(x)?0:x; }
+  function _fmt(n){
+    var v = Math.round((n||0)*100)/100;
+    try { return v.toLocaleString(undefined,{minimumFractionDigits:2, maximumFractionDigits:2}); }
+    catch(e){ return v.toFixed(2); }
+  }
+
+  // === Payroll ===
+  function updatePayrollGrandTotals(){
+    var tb = document.querySelector('#payrollTable tbody');
+    var foot = document.querySelector('#payrollTotalsFoot');
+    if (!tb || !foot) return;
+    var t = {regHrs:0, otHrs:0, rate:0, regPay:0, otPay:0, grossPay:0, pagibig:0, philhealth:0, sss:0, loanSSS:0, loanPI:0, vale:0, valeWed:0, totalDed:0, netPay:0};
+    tb.querySelectorAll('tr').forEach(function(tr){
+      t.regHrs   += _parse(tr.querySelector('.regHrs')?.value);
+      t.otHrs    += _parse(tr.querySelector('.otHrs')?.value);
+      t.rate     += _parse(tr.querySelector('.rate')?.value);
+      t.regPay   += _parse(tr.querySelector('.regPay')?.textContent);
+      t.otPay    += _parse(tr.querySelector('.otPay')?.textContent);
+      t.grossPay += _parse(tr.querySelector('.grossPay')?.textContent);
+      t.pagibig  += _parse(tr.querySelector('.pagibig')?.textContent);
+      t.philhealth += _parse(tr.querySelector('.philhealth')?.textContent);
+      t.sss      += _parse(tr.querySelector('.sss')?.textContent);
+      t.loanSSS  += _parse(tr.querySelector('.loanSSS')?.value);
+      t.loanPI   += _parse(tr.querySelector('.loanPI')?.value);
+      t.vale     += _parse(tr.querySelector('.vale')?.value);
+      t.valeWed  += _parse(tr.querySelector('.valeWed')?.value);
+      t.totalDed += _parse(tr.querySelector('.totalDed')?.textContent);
+      t.netPay   += _parse(tr.querySelector('.netPay')?.textContent);
+    });
+    Object.keys(t).forEach(function(k){
+      var cell = foot.querySelector('[data-col="'+k+'"]');
+      if (cell) cell.textContent = _fmt(t[k]);
+    });
+  }
+  window.updatePayrollGrandTotals = updatePayrollGrandTotals;
+
+  // === Deductions ===
+  function _dedHeadMap(){
+    var ths = Array.from(document.querySelectorAll('#deductionsTable thead th')).map(function(th){return (th.textContent||'').trim().toLowerCase();});
+    function findIdx(keys){
+      for (var i=0;i<ths.length;i++){
+        for (var j=0;j<keys.length;j++){
+          if (ths[i] === keys[j]) return i;
+        }
+        // loose contains for variants like "vale wed" vs "wed vale"
+        for (var j=0;j<keys.length;j++){
+          if (ths[i].indexOf(keys[j]) !== -1) return i;
+        }
+      }
+      return -1;
+    }
+    return {
+      id: findIdx(['id','emp id','employee id']),
+      name: findIdx(['name','employee name']),
+      pagibig: findIdx(['pag-ibig','pag ibig','pagibig']),
+      philhealth: findIdx(['philhealth','phil health']),
+      sss: findIdx(['sss']),
+      loanSSS: findIdx(['sss loan','loan sss']),
+      loanPI: findIdx(['pag-ibig loan','pag ibig loan','loan pi','pi loan']),
+      vale: findIdx(['vale']),
+      valeWed: findIdx(['vale wed','wed vale']),
+      total: findIdx(['total','total deductions','total ded'])
+    };
+  }
+
+  function updateDeductionsGrandTotals(){
+    var tb = document.querySelector('#deductionsTable tbody');
+    var foot = document.querySelector('#deductionsTable_foot');
+    if (!tb || !foot) return;
+    var map = _dedHeadMap();
+    var t = {pagibig:0, philhealth:0, sss:0, loanSSS:0, loanPI:0, vale:0, valeWed:0, total:0};
+    tb.querySelectorAll('tr').forEach(function(tr){
+      var c = tr.cells||[];
+      function cell(idx){ return (idx>=0 && idx<c.length) ? c[idx].textContent : ''; }
+      t.pagibig   += _parse(cell(map.pagibig));
+      t.philhealth+= _parse(cell(map.philhealth));
+      t.sss       += _parse(cell(map.sss));
+      t.loanSSS   += _parse(cell(map.loanSSS));
+      t.loanPI    += _parse(cell(map.loanPI));
+      t.vale      += _parse(cell(map.vale));
+      t.valeWed   += _parse(cell(map.valeWed));
+      t.total     += _parse(cell(map.total));
+    });
+    Object.keys(t).forEach(function(k){
+      var cell = foot.querySelector('[data-col="'+k+'"]');
+      if (cell) cell.textContent = _fmt(t[k]);
+    });
+  }
+  window.updateDeductionsGrandTotals = updateDeductionsGrandTotals;
+
+  // Run on load
+  function _initTotals(){
+    try{ updatePayrollGrandTotals(); }catch(e){}
+    try{ updateDeductionsGrandTotals(); }catch(e){}
+  }
+  if (document.readyState === 'loading'){
+    document.addEventListener('DOMContentLoaded', _initTotals);
+  } else { _initTotals(); }
+
+  // Observe table changes to keep totals fresh
+  try {
+    var mo = new MutationObserver(function(){ try{updatePayrollGrandTotals();}catch(e){}; try{updateDeductionsGrandTotals();}catch(e){}; });
+    var ptb = document.querySelector('#payrollTable tbody');
+    var dtb = document.querySelector('#deductionsTable tbody');
+    if (ptb) mo.observe(ptb, {childList:true, subtree:true, characterData:true});
+    if (dtb) mo.observe(dtb, {childList:true, subtree:true, characterData:true});
+  } catch(e){}
+
+  // Also recalc on payroll inputs
+  document.addEventListener('input', function(ev){
+    if ((ev.target && ev.target.closest('#payrollTable'))) {
+      try{ updatePayrollGrandTotals(); }catch(e){}
+    }
+  });
+
+  // Patch into existing functions if present
+  try {
+    var _calcAll = window.calculateAll;
+    if (typeof _calcAll === 'function'){
+      window.calculateAll = function(){ var r = _calcAll.apply(this, arguments); try{updatePayrollGrandTotals();}catch(e){}; try{updateDeductionsGrandTotals();}catch(e){}; return r; };
+    }
+  } catch(e){}
+  try {
+    var _renderDed = window.renderDeductionsTable;
+    if (typeof _renderDed === 'function'){
+      window.renderDeductionsTable = function(){ var r = _renderDed.apply(this, arguments); try{updateDeductionsGrandTotals();}catch(e){}; return r; };
+    }
+  } catch(e){}
+
+})();</script>
+
+<script>
+// Custom Payroll CSV export: Last name, First Name, Middle Name, Employee Account Number, Amount (Net Pay)
+(function(){
+  function splitName(full){
+    full = String(full||'').trim();
+    if (!full) return {last:'', first:'', middle:''};
+    // If "Last, First Middle"
+    if (full.indexOf(',') >= 0){
+      var parts = full.split(',');
+      var last = parts[0].trim();
+      var rhs = (parts.slice(1).join(',')).trim();
+      var toks = rhs.split(/\s+/).filter(Boolean);
+      var first = toks.shift() || '';
+      var middle = toks.join(' ') || '';
+      return {last, first, middle};
+    }
+    // Else assume "First Middle Last"
+    var toks = full.split(/\s+/).filter(Boolean);
+    if (toks.length === 1) return {last: toks[0], first:'', middle:''};
+    if (toks.length === 2) return {first: toks[0], last: toks[1], middle:''};
+    var first = toks[0];
+    var last = toks[toks.length-1];
+    var middle = toks.slice(1, -1).join(' ');
+    return {last, first, middle};
+  }
+  function parseNum(s){
+    var n = parseFloat(String(s||'').replace(/[^0-9.\-]/g,''));
+    return isNaN(n) ? 0 : n;
+  }
+  function csvEscape(val){
+    var s = String(val==null?'':val);
+    var needs = /[",\n]/.test(s);
+    if (needs) s = '"' + s.replace(/"/g,'""') + '"';
+    return s;
+  }
+  function buildPayrollCSV(){
+    var rows = [['Last name','First Name','Middle Name','Employee Account Number','Amount']];
+    var tb = document.querySelector('#payrollTable tbody');
+    if (!tb) return rows.map(r=>r.join(',')).join('\n');
+    var empMap = (typeof storedEmployees !== 'undefined' && storedEmployees) ? storedEmployees : {};
+    tb.querySelectorAll('tr').forEach(function(tr){
+      var id = (tr.cells[0] && tr.cells[0].textContent.trim()) || '';
+      var name = (tr.cells[1] && tr.cells[1].textContent.trim()) || (empMap[id]?.name || '');
+      var bank = (empMap[id]?.bankAccount) || '';
+      var netTxt = (tr.querySelector('.netPay') || {}).textContent;
+      var amount = (Math.round(parseNum(netTxt)*100)/100).toFixed(2);
+      var nm = splitName(name);
+      rows.push([nm.last, nm.first, nm.middle, bank, amount]);
+    });
+    // Serialize
+    return rows.map(function(r){ return r.map(csvEscape).join(','); }).join('\n');
+  }
+  function attachPayrollCsv(){
+    var btn = document.getElementById('downloadPayrollCSV');
+    if (!btn) return;
+    btn.addEventListener('click', function(){
+      try{
+        var csv = buildPayrollCSV();
+        var blob = new Blob([csv], {type:'text/csv'});
+        var url = URL.createObjectURL(blob);
+        var a = document.createElement('a');
+        a.href = url;
+        a.download = 'Payroll_NetPay.csv';
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(function(){ URL.revokeObjectURL(url); }, 1000);
+      }catch(e){
+        console.error('Payroll CSV export failed', e);
+        alert('Failed to build Payroll CSV.');
+      }
+    });
+  }
+  if (document.readyState === 'loading'){
+    document.addEventListener('DOMContentLoaded', attachPayrollCsv);
+  } else {
+    attachPayrollCsv();
+  }
+})();
+</script>
+
+<script>
+// === Override Payroll CSV to: Last name, First Name, Middle Name, Employee Account Number, Amount (Net Pay) ===
+(function(){
+  function splitName(full){
+    full = String(full||'').trim();
+    if (!full) return {last:'', first:'', middle:''};
+    // Handle "Last, First Middle"
+    if (full.indexOf(',') >= 0){
+      var parts = full.split(',');
+      var last = (parts.shift()||'').trim();
+      var rhs = (parts.join(',')||'').trim();
+      var toks = rhs.split(/\s+/).filter(Boolean);
+      var first = toks.shift() || '';
+      var middle = toks.join(' ') || '';
+      return {last, first, middle};
+    }
+    // Default "First Middle Last"
+    var toks = full.split(/\s+/).filter(Boolean);
+    if (toks.length === 1) return {last: toks[0], first:'', middle:''};
+    if (toks.length === 2) return {first: toks[0], last: toks[1], middle:''};
+    var first = toks[0];
+    var last = toks[toks.length-1];
+    var middle = toks.slice(1, -1).join(' ');
+    return {last, first, middle};
+  }
+  function parseNum(s){ var n = parseFloat(String(s||'').replace(/[^0-9.\-]/g,'')); return isNaN(n)?0:n; }
+  function csvEscape(val){ var s=String(val==null?'':val); return /[",\n]/.test(s) ? ('"'+s.replace(/"/g,'""')+'"') : s; }
+
+  function buildPayrollCSV(){
+    var rows = [['Last name','First Name','Middle Name','Employee Account Number','Amount']];
+    var tb = document.querySelector('#payrollTable tbody');
+    if (!tb) return rows.map(r=>r.join(',')).join('\n');
+    var empMap = (typeof storedEmployees !== 'undefined' && storedEmployees) ? storedEmployees : {};
+
+    tb.querySelectorAll('tr').forEach(function(tr){
+      var id = (tr.cells[0] && tr.cells[0].textContent.trim()) || '';
+      var name = (tr.cells[1] && tr.cells[1].textContent.trim()) || (empMap[id]?.name || '');
+      var bank = (empMap[id]?.bankAccount) || ''; // Employee Account Number
+      var netTxt = (tr.querySelector('.netPay') || {}).textContent;
+      var amount = (Math.round(parseNum(netTxt)*100)/100).toFixed(2);
+      var nm = splitName(name);
+      rows.push([nm.last, nm.first, nm.middle, bank, amount]);
+    });
+
+    return rows.map(r => r.map(csvEscape).join(',')).join('\n');
+  }
+
+  function overridePayrollCsv(){
+    var btn = document.getElementById('downloadPayrollCSV');
+    if (!btn) return;
+    // Remove all existing listeners by cloning
+    var clone = btn.cloneNode(true);
+    btn.parentNode.replaceChild(clone, btn);
+    clone.addEventListener('click', function(e){
+      e.preventDefault(); e.stopPropagation();
+      try{
+        var csv = buildPayrollCSV();
+        var blob = new Blob([csv], {type:'text/csv'});
+        var url = URL.createObjectURL(blob);
+        var a = document.createElement('a');
+        a.href = url;
+        a.download = 'Payroll_NetPay.csv';
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(function(){ URL.revokeObjectURL(url); }, 1000);
+      }catch(err){
+        console.error('Payroll CSV export failed', err);
+        alert('Failed to build Payroll CSV.');
+      }
+    });
+  }
+
+  if (document.readyState === 'loading'){
+    document.addEventListener('DOMContentLoaded', overridePayrollCsv);
+  } else {
+    overridePayrollCsv();
+  }
+})();
+</script>
+
+<!-- === Cloud Sync (Supabase) === -->
+<link rel="preconnect" href="https://esm.sh">
+<script src="https://esm.sh/@supabase/supabase-js@2"></script>
+<!-- Your config file: create config.js from config.sample.js and host alongside this HTML -->
+<script src="./config.js"></script>
+
+<style>
+  .cloud-card {border:1px solid #e2e8f0;border-radius:10px;padding:12px;margin-top:12px;background:#fff;}
+  .cloud-row {display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:6px}
+  .cloud-card input {padding:8px;border:1px solid #cbd5e1;border-radius:8px}
+  .cloud-card button {padding:8px 12px;border:1px solid #cbd5e1;border-radius:8px;cursor:pointer;background:#f8fafc}
+  .cloud-card button.primary {background:#0ea5a4;color:#fff;border-color:#0ea5a4}
+  .cloud-note {font-size:12px;color:#64748b}
+</style>
+
+<div class="cloud-card" id="cloudSyncCard">
+  <h3 style="margin:0 0 6px 0;">Cloud Sync (Supabase)</h3>
+  <div class="cloud-note">
+    Sign in with your email/password (Supabase Auth). Data is scoped to your account. After login, use Sync buttons to move data between this browser and the cloud.
+  </div>
+  <div id="cloudAuth" class="cloud-row">
+    <input type="email" id="sbEmail" placeholder="Email">
+    <input type="password" id="sbPassword" placeholder="Password">
+    <button id="sbLogin" class="primary">Login</button>
+    <button id="sbSignup">Sign up</button>
+    <button id="sbLogout" style="display:none;">Logout</button>
+    <span id="sbStatus" class="cloud-note"></span>
+  </div>
+  <div class="cloud-row">
+    <button id="btnSyncFrom">Sync FROM Cloud → Local</button>
+    <button id="btnSyncTo">Sync TO Cloud → Cloud</button>
+    <button id="btnAutoSync">Toggle Auto Sync</button>
+    <span id="autoSyncStatus" class="cloud-note"></span>
+  </div>
+</div>
+
+<script>
+(function(){
+  // Expect these globals from config.js
+  const SUPABASE_URL  = window.SUPABASE_URL;
+  const SUPABASE_ANON = window.SUPABASE_ANON_KEY;
+
+  if(!SUPABASE_URL || !SUPABASE_ANON){
+    console.error('Missing Supabase config. Create config.js from config.sample.js');
+  }
+
+  const supa = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON);
+
+  const CLOUD_KEYS = [
+    'att_records_v2','att_employees_v2','att_schedules_v2','att_schedules_default',
+    'att_projects_v1','att_filter_project_v1','att_overrides_schedules','att_overrides_projects',
+    'payroll_rates','payroll_reg_hours','payroll_ot_hours','payroll_ot_multiplier',
+    'payroll_week_start','payroll_week_end','payroll_deduction_divisor','payroll_sss_table',
+    'payroll_loan_sss','payroll_loan_pagibig','payroll_vale','payroll_vale_wed'
+  ];
+
+  const sel = id => document.getElementById(id);
+  const emailEl = sel('sbEmail');
+  const passEl  = sel('sbPassword');
+  const loginBtn = sel('sbLogin');
+  const signupBtn = sel('sbSignup');
+  const logoutBtn = sel('sbLogout');
+  const statusEl = sel('sbStatus');
+  const syncFromBtn = sel('btnSyncFrom');
+  const syncToBtn   = sel('btnSyncTo');
+  const autoBtn     = sel('btnAutoSync');
+  const autoStatus  = sel('autoSyncStatus');
+
+  let autoTimer = null;
+
+  function setStatus(msg){ statusEl.textContent = msg || ''; }
+  function setAutoStatus(on){ autoStatus.textContent = on ? 'Auto-sync: ON (every 2 minutes)' : 'Auto-sync: OFF'; }
+
+  async function requireUser(){
+    const { data: { session } } = await supa.auth.getSession();
+    if(!session){ throw new Error('Not signed in'); }
+    return session.user;
+  }
+
+  async function cloudLoad(bucket){
+    const user = await requireUser();
+    const { data, error } = await supa
+      .from('payroll_data')
+      .select('payload, updated_at')
+      .eq('user_id', user.id)
+      .eq('bucket', bucket)
+      .maybeSingle();
+    if(error){ console.warn('cloudLoad error', bucket, error); return null; }
+    return data?.payload ?? null;
+  }
+  async function cloudSave(bucket, payload){
+    const user = await requireUser();
+    const row = { user_id: user.id, bucket, payload };
+    const { error } = await supa.from('payroll_data').upsert(row);
+    if(error){ console.error('cloudSave error', bucket, error); }
+  }
+
+  async function syncFrom(){
+    try {
+      for(const k of CLOUD_KEYS){
+        const payload = await cloudLoad(k);
+        if(payload !== null){
+          localStorage.setItem(k, JSON.stringify(payload));
+        }
+      }
+      alert('Synced FROM Cloud ✔ — reloading'); location.reload();
+    } catch(err){ alert('Sync FROM failed: ' + err.message); }
+  }
+  async function syncTo(){
+    try {
+      for(const k of CLOUD_KEYS){
+        const raw = localStorage.getItem(k);
+        const json = raw ? JSON.parse(raw) : null;
+        await cloudSave(k, json);
+      }
+      alert('Synced TO Cloud ✔');
+    } catch(err){ alert('Sync TO failed: ' + err.message); }
+  }
+
+  loginBtn?.addEventListener('click', async ()=>{
+    try {
+      setStatus('Signing in...');
+      const { error } = await supa.auth.signInWithPassword({ email: emailEl.value, password: passEl.value });
+      if(error) throw error;
+      setStatus('Signed in ✔'); loginBtn.style.display='none'; signupBtn.style.display='none'; logoutBtn.style.display='inline-block';
+    } catch(err){ setStatus('Login error: ' + err.message); }
+  });
+  signupBtn?.addEventListener('click', async ()=>{
+    try {
+      setStatus('Creating account...');
+      const { error } = await supa.auth.signUp({ email: emailEl.value, password: passEl.value });
+      if(error) throw error;
+      setStatus('Check your email to confirm, then login.');
+    } catch(err){ setStatus('Signup error: ' + err.message); }
+  });
+  logoutBtn?.addEventListener('click', async ()=>{
+    await supa.auth.signOut();
+    setStatus('Logged out'); loginBtn.style.display='inline-block'; signupBtn.style.display='inline-block'; logoutBtn.style.display='none';
+  });
+
+  syncFromBtn?.addEventListener('click', syncFrom);
+  syncToBtn?.addEventListener('click', syncTo);
+
+  autoBtn?.addEventListener('click', ()=>{
+    if(autoTimer){
+      clearInterval(autoTimer); autoTimer = null; setAutoStatus(false);
+    } else {
+      autoTimer = setInterval(syncTo, 2*60*1000); setAutoStatus(true);
+    }
+  });
+
+  // Initialize button vis based on session
+  (async ()=>{
+    const { data: { session } } = await supa.auth.getSession();
+    if(session){ loginBtn.style.display='none'; signupBtn.style.display='none'; logoutBtn.style.display='inline-block'; setStatus('Signed in ✔'); }
+    else { setStatus('Not signed in'); setAutoStatus(false); }
+  })();
+})();
 </script>
 
 </body>
