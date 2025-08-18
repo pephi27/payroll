@@ -195,7 +195,6 @@
   <header>
 
 <script src="./config.js"></script>
-
 <style>
   .cloud-card {border:1px solid #e2e8f0;border-radius:10px;padding:12px;margin:12px 0;background:#fff}
   .cloud-row {display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:6px}
@@ -3306,11 +3305,7 @@ document.addEventListener('DOMContentLoaded', function(){
 
 
 
-<!-- === Cloud Sync (Supabase) — Single, Robust === -->
-<link rel="preconnect" href="https://cdn.jsdelivr.net"/>
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
 <script src="./config.js"></script>
-
 <style>
   .cloud-card{border:1px solid #e2e8f0;border-radius:10px;padding:12px;margin:12px 0;background:#fff}
   .cloud-row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:6px}
@@ -3322,21 +3317,11 @@ document.addEventListener('DOMContentLoaded', function(){
   #cloudDebug b{color:#93c5fd}
 </style>
 
-<div class="cloud-card" id="cloudSyncCard">
-  <h3 style="margin:0 0 6px 0;">Cloud Sync (Supabase)</h3>
-  <div class="cloud-note">Sign in with email/password, then use Sync.</div>
+
   <div class="cloud-row">
-    <input type="email" id="sbEmail" placeholder="Email">
-    <input type="password" id="sbPassword" placeholder="Password">
-    <button id="sbLogin" class="primary">Login</button>
-    <button id="sbSignup">Sign up</button>
-    <button id="sbLogout" style="display:none;">Logout</button>
-    <span id="sbStatus" class="cloud-note"></span>
-  </div>
-  <div class="cloud-row">
-    <button id="btnSyncFrom">Sync FROM Cloud → Local</button>
-    <button id="btnSyncTo">Sync TO Cloud → Cloud</button>
-    <button id="btnAutoSync">Toggle Auto Sync</button>
+    
+    
+    
     <span id="autoSyncStatus" class="cloud-note"></span>
   </div>
 </div>
@@ -3455,5 +3440,174 @@ document.addEventListener('DOMContentLoaded', function(){
 })();
 </script>
 
+
+<!-- === Cloud Sync (Supabase) — Single Panel === -->
+<link rel="preconnect" href="https://cdn.jsdelivr.net"/>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+<script src="./config.js"></script>
+<style>
+  .cloud-card{border:1px solid #e2e8f0;border-radius:10px;padding:12px;margin:12px 0;background:#fff}
+  .cloud-row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:6px}
+  .cloud-card input{padding:8px;border:1px solid #cbd5e1;border-radius:8px}
+  .cloud-card button{padding:8px 12px;border:1px solid #cbd5e1;border-radius:8px;cursor:pointer;background:#f8fafc}
+  .cloud-card button.primary{background:#0ea5a4;color:#fff;border-color:#0ea5a4}
+  .cloud-note{font-size:12px;color:#64748b}
+</style>
+
+
+  <div class="cloud-row">
+    
+    
+    
+    <span id="autoSyncStatus" class="cloud-note"></span>
+  </div>
+</div>
+
+<script>
+(function(){
+  function ready(fn){ if(document.readyState!=='loading') fn(); else document.addEventListener('DOMContentLoaded', fn); }
+  ready(function(){
+    const el = id => document.getElementById(id);
+    const emailEl = el('sbEmail'), passEl = el('sbPassword');
+    const loginBtn = el('sbLogin'), signupBtn = el('sbSignup'), logoutBtn = el('sbLogout');
+    const statusEl = el('sbStatus'), fromBtn = el('btnSyncFrom'), toBtn = el('btnSyncTo');
+    const autoBtn = el('btnAutoSync'), autoStatus = el('autoSyncStatus');
+
+    const SUPABASE_URL  = window.SUPABASE_URL;
+    const SUPABASE_ANON = window.SUPABASE_ANON_KEY;
+    if(!window.supabase){ console.error('Supabase UMD not found'); return; }
+    if(!SUPABASE_URL || !SUPABASE_ANON){ console.error('Missing config.js values'); return; }
+    const supa = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON);
+
+    const CLOUD_KEYS = [
+      'att_records_v2','att_employees_v2','att_schedules_v2','att_schedules_default',
+      'att_projects_v1','att_filter_project_v1','att_overrides_schedules','att_overrides_projects',
+      'payroll_rates','payroll_reg_hours','payroll_ot_hours','payroll_ot_multiplier',
+      'payroll_week_start','payroll_week_end','payroll_deduction_divisor','payroll_sss_table',
+      'payroll_loan_sss','payroll_loan_pagibig','payroll_vale','payroll_vale_wed'
+    ];
+
+    function setStatus(m){ if(statusEl) statusEl.textContent = m || ''; }
+    function setAutoStatus(on){ if(autoStatus) autoStatus.textContent = on ? 'Auto-sync: ON (2m)' : 'Auto-sync: OFF'; }
+
+    async function requireUser(){
+      const { data:{ session }, error } = await supa.auth.getSession();
+      if(error) throw error;
+      if(!session) throw new Error('Not signed in');
+      return session.user;
+    }
+    function safeJSON(raw){ if(raw==null||raw==='') return null; try{ return JSON.parse(raw);}catch(_){ return raw; } }
+
+    async function cloudSave(bucket, payload){
+      const user = await requireUser();
+      const { error } = await supa.from('payroll_data').upsert({ user_id: user.id, bucket, payload });
+      if(error) throw error;
+    }
+    async function cloudLoad(bucket){
+      const user = await requireUser();
+      const { data, error } = await supa.from('payroll_data').select('payload').eq('user_id', user.id).eq('bucket', bucket).maybeSingle();
+      if(error) throw error;
+      return data ? data.payload : null;
+    }
+
+    async function syncTo(){
+      try{
+        await requireUser();
+        for(const bucket of CLOUD_KEYS){
+          if(!Object.prototype.hasOwnProperty.call(localStorage, bucket)) continue;
+          const payload = safeJSON(localStorage.getItem(bucket));
+          await cloudSave(bucket, payload);
+        }
+        alert('Synced TO Cloud ✔');
+      }catch(e){ alert('Sync TO failed: ' + (e.message||e)); }
+    }
+    async function syncFrom(){
+      try{
+        await requireUser();
+        for(const bucket of CLOUD_KEYS){
+          const payload = await cloudLoad(bucket);
+          if(payload !== null) localStorage.setItem(bucket, JSON.stringify(payload));
+        }
+        alert('Synced FROM Cloud ✔ — reloading'); location.reload();
+      }catch(e){ alert('Sync FROM failed: ' + (e.message||e)); }
+    }
+
+    loginBtn && loginBtn.addEventListener('click', async ()=>{
+      try{
+        setStatus('Signing in...');
+        const { error } = await supa.auth.signInWithPassword({ email: emailEl.value, password: passEl.value });
+        if(error) throw error;
+        setStatus('Signed in ✔'); loginBtn.style.display='none'; signupBtn.style.display='none'; logoutBtn.style.display='inline-block';
+      }catch(e){ setStatus('Login error: ' + (e.message||e)); }
+    });
+    signupBtn && signupBtn.addEventListener('click', async ()=>{
+      try{
+        setStatus('Creating account...');
+        const { error } = await supa.auth.signUp({ email: emailEl.value, password: passEl.value });
+        if(error) throw error;
+        setStatus('Check your email to confirm, then login.');
+      }catch(e){ setStatus('Signup error: ' + (e.message||e)); }
+    });
+    logoutBtn && logoutBtn.addEventListener('click', async ()=>{
+      await supa.auth.signOut();
+      setStatus('Logged out'); loginBtn.style.display='inline-block'; signupBtn.style.display='inline-block'; logoutBtn.style.display='none';
+    });
+
+    fromBtn && fromBtn.addEventListener('click', syncFrom);
+    toBtn && toBtn.addEventListener('click', syncTo);
+
+    supa.auth.getSession().then(({data:{session}})=>{
+      if(session){ setStatus('Signed in ✔'); loginBtn.style.display='none'; signupBtn.style.display='none'; logoutBtn.style.display='inline-block'; }
+      else { setStatus('Not signed in'); setAutoStatus(false); }
+    });
+  });
+})();
+</script>
+
+
+<script>
+document.addEventListener('DOMContentLoaded', function(){
+  var nodes = document.querySelectorAll('#cloudSyncCard');
+  for (var i=1;i<nodes.length;i++){ nodes[i].remove(); }
+});
+</script>
+
+
+<script>
+document.addEventListener('DOMContentLoaded', function(){
+  const cards = Array.from(document.querySelectorAll('.cloud-card'));
+  const titleMatch = (el) => {
+    const h = el.querySelector('h3');
+    return h && /Cloud\s*Sync\s*\(Supabase\)/i.test(h.textContent || '');
+  };
+  const matches = cards.filter(titleMatch);
+  for (let i = 1; i < matches.length; i++) {
+    matches[i].remove();
+  }
+});
+</script>
+
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+  // Identify Supabase sync panels (email + sync buttons)
+  function isPanel(n){
+    return n.querySelector && n.querySelector('#sbEmail') && n.querySelector('#btnSyncTo');
+  }
+  function panelRoot(el){
+    return el.closest('.cloud-card')
+        || el.closest('#cloudSyncCard')
+        || el.closest('section')
+        || el.closest('div');
+  }
+  const panels = [];
+  document.querySelectorAll('#sbEmail').forEach(input => {
+    const root = panelRoot(input);
+    if (root && isPanel(root)) panels.push(root);
+  });
+  for (let i = 1; i < panels.length; i++) {
+    panels[i].remove();
+  }
+});
+</script>
 </body>
 </html>
