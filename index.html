@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <html>
- \1
+ 
 
 <!-- === Supabase KV Sync Adapter (no-login, auto-sync) === -->
 <script type="module">
@@ -964,6 +964,16 @@ function safeStringify(v){
      Cols: A = ID, B = Name, C = Hourly Rate (optional), D = Schedule Name (optional), E = Project Name (optional), F = Bank Account (optional). Imported employees get default schedule and no project unless set.
     </div>
    </div>
+
+<div class="controls" style="margin-top:6px;align-items:center;">
+  <button id="backupAllBtn">Backup All Data</button>
+  <label style="display:flex;gap:8px;align-items:center;">
+    Restore All Data:
+    <input type="file" id="restoreAllFile" accept="application/json"/>
+  </label>
+  <small class="hint">Backs up everything stored in localStorage (employees, logs, schedules, projects, payroll, etc.). Restoring will overwrite current data.</small>
+</div>
+
    <table id="employeesTable">
     <thead>
      <tr>
@@ -2624,6 +2634,85 @@ document.getElementById('downloadEmployeesCSV').addEventListener('click', () => 
     const projName = storedProjects[emp.projectId]?.name || '';
     const bank = emp.bankAccount || ''; rows.push([id, emp.name || '', emp.hourlyRate || '', schedName, projName, bank]);
   });
+// === Backup/Restore All Data ===
+(function(){
+  function safeParse(str){
+    try { return JSON.parse(str) } catch { return str }
+  }
+  function safeString(v){
+    try {
+      if (typeof v === "string") return v
+      return JSON.stringify(v)
+    } catch { return String(v) }
+  }
+  function downloadFile(name, dataStr){
+    const blob = new Blob([dataStr], {type:"application/json"})
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = name
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    URL.revokeObjectURL(url)
+  }
+  function currentStamp(){
+    const d = new Date()
+    const pad = n => String(n).padStart(2,'0')
+    return d.getFullYear() + pad(d.getMonth()+1) + pad(d.getDate()) + "_" + pad(d.getHours()) + pad(d.getMinutes()) + pad(d.getSeconds())
+  }
+  function collectAll(){
+    const out = {}
+    for (let i=0;i<localStorage.length;i++){
+      const k = localStorage.key(i)
+      out[k] = safeParse(localStorage.getItem(k))
+    }
+    return out
+  }
+  function hydrateAll(obj){
+    const KEYS = Object.keys(obj || {})
+    KEYS.forEach(k => {
+      const v = obj[k]
+      try { localStorage.setItem(k, safeString(v)) } catch {}
+    })
+  }
+  const backupBtn = document.getElementById('backupAllBtn')
+  const restoreInput = document.getElementById('restoreAllFile')
+  if (backupBtn) {
+    backupBtn.addEventListener('click', () => {
+      const payload = {
+        meta: { exportedAt: new Date().toISOString(), origin: location.origin },
+        data: collectAll()
+      }
+      downloadFile('payroll_backup_' + currentStamp() + '.json', JSON.stringify(payload, null, 2))
+    })
+  }
+  if (restoreInput) {
+    restoreInput.addEventListener('change', (e) => {
+      const f = e.target.files && e.target.files[0]
+      if (!f) return
+      const reader = new FileReader()
+      reader.onload = (ev) => {
+        try {
+          const text = String(ev.target.result || '')
+          const parsed = JSON.parse(text)
+          const data = parsed && parsed.data ? parsed.data : parsed
+          hydrateAll(data)
+          alert('Restore complete. The page will reload to apply data.')
+          location.reload()
+        } catch (err) {
+          console.error(err)
+          alert('Invalid backup file.')
+        } finally {
+          e.target.value = ''
+        }
+      }
+      reader.readAsText(f)
+    })
+  }
+})();
+// === / Backup/Restore All Data ===
+
   const csv = rows.map(r => r.map(v => {
     const s = String(v ?? '');
     return (s.includes(',') || s.includes('"') || s.includes('\n')) ? '"' + s.replace(/"/g,'""') + '"' : s;
