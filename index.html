@@ -7,7 +7,16 @@
   </title>
   <meta content="width=device-width,initial-scale=1" name="viewport"/>
   <style>
-   body{font-family:Arial,Helvetica,sans-serif;margin:18px;max-width:1200px;color:#0b1220}
+  /*
+   * Allow the application to consume the full viewport width so wide tables (like
+   * the DTR grid) are not artificially constrained. The original max-width of
+   * 1200px caused wide tables to be clipped on larger screens and hid
+   * additional columns. Removing the fixed max-width lets the container grow
+   * with the window size, and combined with overflow handling on the panel
+   * ensures that all columns remain accessible via horizontal scrolling when
+   * necessary.
+   */
+  body{font-family:Arial,Helvetica,sans-serif;margin:18px;max-width:100%;color:#0b1220}
   header{display:flex;gap:8px;align-items:center;margin-bottom:12px;flex-wrap:wrap}
   .tabs{display:flex;gap:6px;flex-wrap:wrap}
   .tab-btn{padding:8px 12px;cursor:pointer;border:1px solid #cbd5e1;background:#f8fafc;border-radius:6px}
@@ -26,6 +35,36 @@
   .muted{color:#64748b;font-size:12px}
   @media (max-width:800px){th,td{font-size:12px}}
   .section-title{margin-top:12px;margin-bottom:4px;font-weight:700}
+  /* Ensure DTR table columns stay visible and don't collapse in Chrome. Allow
+     horizontal scrolling if needed by preventing cells from shrinking and
+     wrapping. */
+  #panelMain {
+    overflow-x: auto;
+  }
+  #panelMain #resultsTable {
+    /*
+     * Use max-content so the table grows to accommodate all of its columns.
+     * This prevents Chrome from collapsing column widths to fit a parent with
+     * limited width and ensures that long headers (e.g. "Clock Out 4",
+     * "Night Differential") do not disappear. When combined with the
+     * overflow-x:auto on #panelMain, a horizontal scrollbar will appear
+     * whenever the total table width exceeds the viewport, allowing users to
+     * scroll horizontally to view hidden columns.
+     */
+    table-layout: auto;
+    width: max-content;
+  }
+  #panelMain #resultsTable th,
+  #panelMain #resultsTable td {
+    white-space: nowrap;
+  }
+
+  /* Make the wrapper around the DTR results scrollable on the x-axis. Without
+     this wrapper, wide tables can be clipped by parent containers with
+     overflow hidden. */
+  .results-wrapper {
+    overflow-x: auto;
+  }
   </style>
   <style>
 
@@ -61,31 +100,37 @@
 </style>
 
   <style id="payrollScopedStyles">
-   #panelPayroll {#panelPayroll --border:#e2e8f0; --bg:#f8fafc; --bg2:#f1f5f9; --text:#0b1220;
+  #panelPayroll {
+    --border:#e2e8f0; --bg:#f8fafc; --bg2:#f1f5f9; --text:#0b1220;
     --accent:#2563eb; --muted:#64748b;
   }
-  * {#panelPayroll box-sizing:border-box}
-  body {#panelPayroll font-family:Arial, #panelPayroll Helvetica, #panelPayroll sans-serif;margin:18px;max-width:1200px;color:var(--text)}
-  header {#panelPayroll display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px;flex-wrap:wrap}
-  h2 {#panelPayroll margin:0}
-  .tabs {#panelPayroll display:flex;gap:6px;flex-wrap:wrap}
-  .tab-btn {#panelPayroll padding:8px 12px;border:1px solid var(--border);background:white;border-radius:8px;cursor:pointer}
-  .tab-btn.active {#panelPayroll background:var(--accent);color:white;border-color:var(--accent)}
-  .tab {#panelPayroll display:none}
-  .tab.active {#panelPayroll display:block}
-  .controls {#panelPayroll display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:10px 0}
-  label {#panelPayroll font-size:12px;color:var(--muted)}
-  input[type=date], #panelPayroll input[type=number], #panelPayroll input[type=text], #panelPayroll select, #panelPayroll button {#panelPayroll padding:6px 8px;border:1px solid var(--border);border-radius:6px}
-  button.primary {#panelPayroll background:var(--accent);color:white;border-color:var(--accent)}
-  table {#panelPayroll border-collapse:collapse;width:100%;margin-top:12px}
-  th, #panelPayroll td {#panelPayroll border:1px solid var(--border);padding:8px;text-align:center;font-size:13px}
-  th {#panelPayroll background:var(--bg2);position:sticky;top:0;z-index:1}
-  td.num {#panelPayroll text-align:right}
-  input.cell {#panelPayroll width:100%;padding:4px;border:1px solid var(--border);border-radius:4px;text-align:right}
-  .note {#panelPayroll font-size:12px;color:var(--muted)}
-  .section {#panelPayroll background:var(--bg);padding:10px;border:1px solid var(--border);border-radius:10px;margin-top:8px}
-  .danger {#panelPayroll color:#b91c1c}
-  .wrap {white-space:normal}
+  #panelPayroll *, #panelPayroll *::before, #panelPayroll *::after { box-sizing:border-box }
+  #panelPayroll { color:var(--text) }
+  #panelPayroll header { display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px;flex-wrap:wrap }
+  #panelPayroll h2 { margin:0 }
+  #panelPayroll .tabs { display:flex;gap:6px;flex-wrap:wrap }
+  #panelPayroll .tab-btn { padding:8px 12px;border:1px solid var(--border);background:white;border-radius:8px;cursor:pointer }
+  #panelPayroll .tab-btn.active { background:var(--accent);color:white;border-color:var(--accent) }
+  #panelPayroll .tab { display:none }
+  #panelPayroll .tab.active { display:block }
+  #panelPayroll .controls { display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:10px 0 }
+  #panelPayroll label { font-size:12px;color:var(--muted) }
+  #panelPayroll input[type=date], 
+  #panelPayroll input[type=number], 
+  #panelPayroll input[type=text], 
+  #panelPayroll select, 
+  #panelPayroll button { padding:6px 8px;border:1px solid var(--border);border-radius:6px }
+  #panelPayroll button.primary { background:var(--accent);color:white;border-color:var(--accent) }
+  #panelPayroll table { border-collapse:collapse;width:100%;margin-top:12px }
+  #panelPayroll th, #panelPayroll td { border:1px solid var(--border);padding:8px;text-align:center;font-size:13px }
+  #panelPayroll th { background:var(--bg2);position:sticky;top:0;z-index:1 }
+  #panelPayroll td.num { text-align:right }
+  #panelPayroll input.cell { width:100%;padding:4px;border:1px solid var(--border);border-radius:4px;text-align:right }
+  #panelPayroll .note { font-size:12px;color:var(--muted) }
+  #panelPayroll .section { background:var(--bg);padding:10px;border:1px solid var(--border);border-radius:10px;margin-top:8px }
+  #panelPayroll .danger { color:#b91c1c }
+  #panelPayroll .wrap { white-space:normal }
+
   </style>
   <style id="payroll-tabs-fix">
    #panelPayroll .tab{display:none} #panelPayroll .tab.active{display:block}
@@ -166,24 +211,305 @@
 #payrollTab #payrollTable tfoot td.num,
 #deductionsTab #deductionsTable tfoot td.num{ text-align:right; }
 </style>
-
-<style>
-#payrollTab #payrollTable tfoot td,
-#deductionsTab #deductionsTable tfoot td{ font-weight:700; background:#fff7ed; border-top:2px solid #e2e8f0; }
-#payrollTab #payrollTable tfoot td.label-cell,
-#deductionsTab #deductionsTable tfoot td.label-cell{ text-align:left; }
-#payrollTab #payrollTable tfoot td.num,
-#deductionsTab #deductionsTable tfoot td.num{ text-align:right; }
-</style>
+    <!-- Added payroll dashboard theme -->
+    <style>
+        /* Override default margins and background */
+        body {
+            margin: 0;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            color: #333;
+        }
+        .app-container {
+            display: flex;
+            min-height: 100vh;
+        }
+        .sidebar {
+            width: 280px;
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(15px);
+            padding: 30px 0;
+            box-shadow: 4px 0 20px rgba(0, 0, 0, 0.1);
+            position: fixed;
+            height: 100vh;
+            overflow-y: auto;
+        }
+        .sidebar-header {
+            padding: 0 30px 30px;
+            border-bottom: 1px solid #e5e7eb;
+            margin-bottom: 20px;
+        }
+        .logo {
+            font-size: 24px;
+            font-weight: 800;
+            background: linear-gradient(135deg, #667eea, #764ba2);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .nav-menu {
+            list-style: none;
+            padding: 0 15px;
+        }
+        .nav-item {
+            margin-bottom: 8px;
+        }
+        .nav-link {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+            padding: 15px 20px;
+            text-decoration: none;
+            color: #6b7280;
+            border-radius: 12px;
+            transition: all 0.3s ease;
+            font-weight: 600;
+            font-size: 14px;
+            background: none;
+            border: none;
+            width: 100%;
+            text-align: left;
+            cursor: pointer;
+        }
+        .nav-link:hover {
+            background: #f3f4f6;
+            color: #374151;
+            transform: translateX(5px);
+        }
+        .nav-link.active {
+            background: linear-gradient(135deg, #667eea, #764ba2);
+            color: white;
+            box-shadow: 0 4px 15px rgba(102, 126, 234, 0.3);
+        }
+        .nav-icon {
+            width: 20px;
+            height: 20px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 16px;
+        }
+        .main-content {
+            flex: 1;
+            margin-left: 280px;
+            padding: 30px;
+            /*
+             * Permit horizontal scrolling within the main content area. The
+             * original style hid any overflow on the x-axis, which meant
+             * wide tables (such as the DTR results grid) could not be
+             * scrolled into view and appeared to be missing columns. By
+             * changing overflow-x to auto, the browser will show a
+             * horizontal scrollbar when necessary, ensuring all columns
+             * remain accessible.
+             */
+            overflow-x: auto;
+        }
+        .content-header {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            border-radius: 20px;
+            padding: 25px 30px;
+            margin-bottom: 30px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+        }
+        .page-title {
+            font-size: 28px;
+            font-weight: 700;
+            color: #1f2937;
+            margin-bottom: 10px;
+            display: flex;
+            align-items: center;
+            gap: 15px;
+        }
+        .page-subtitle {
+            color: #6b7280;
+            font-size: 14px;
+        }
+        .date-range {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+            flex-wrap: wrap;
+            margin-top: 20px;
+        }
+        .date-input {
+            padding: 12px 16px;
+            border: 2px solid #e5e7eb;
+            border-radius: 12px;
+            font-size: 14px;
+            transition: all 0.3s ease;
+            background: white;
+        }
+        .date-input:focus {
+            outline: none;
+            border-color: #667eea;
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+        }
+        .warning-note {
+            background: linear-gradient(135deg, #fef3c7, #fde68a);
+            color: #92400e;
+            padding: 12px 20px;
+            border-radius: 10px;
+            font-size: 13px;
+            margin-top: 15px;
+            border-left: 4px solid #f59e0b;
+        }
+        .mobile-menu-btn {
+            display: none;
+            position: fixed;
+            top: 20px;
+            left: 20px;
+            z-index: 1000;
+            background: rgba(255, 255, 255, 0.9);
+            border: none;
+            border-radius: 12px;
+            padding: 12px;
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
+            cursor: pointer;
+        }
+        @media (max-width: 768px) {
+            .mobile-menu-btn {
+                display: block;
+            }
+            .sidebar {
+                transform: translateX(-100%);
+                transition: transform 0.3s ease;
+                z-index: 999;
+            }
+            .sidebar.active {
+                transform: translateX(0);
+            }
+            .main-content {
+                margin-left: 0;
+                padding: 80px 20px 20px;
+            }
+            .date-range {
+                justify-content: center;
+            }
+        }
+        /* Hide original top-level navigation tabs but keep payroll sub-tabs visible */
+        .tabs { display: none !important; }
+        /* Explicitly show the sub-tabs inside the Payroll panel. */
+        #panelPayroll .tabs {
+            display: flex !important;
+        }
+    </style>
 </head>
- \1
 
+
+<!-- Supabase Cloud Persistence (no-login, auto-sync) -->
+<script type="module">
+  import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
+
+  // TODO: replace with your actual project URL and anon public key
+  const SUPABASE_URL = window.SUPABASE_URL || "https://qzkzugzfpegozpiqutdv.supabase.co";
+  const SUPABASE_ANON_KEY = window.SUPABASE_ANON_KEY || "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InF6a3p1Z3pmcGVnb3pwaXF1dGR2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTU4MTc5MDMsImV4cCI6MjA3MTM5MzkwM30.mdFYuFjbRfsILWPkQQmVUCDR7dGqEo-mdPZ6iwolvGk";
+
+  const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+  // All keys used by this app that we want to persist centrally
+  const KEYS_TO_SYNC = [
+    // Attendance / DTR
+    'att_records_v2','att_employees_v2','att_schedules_v2','att_schedules_default',
+    'att_projects_v1','att_filter_project_v1','att_overrides_schedules','att_overrides_projects','att_splits_v1',
+    // Payroll
+    'payroll_rates','payroll_reg_hours','payroll_ot_hours','payroll_ot_multiplier','payroll_week_start',
+    'payroll_week_end','payroll_deduction_divisor','payroll_sss_table','payroll_loan_sss','payroll_loan_pagibig',
+    'payroll_vale','payroll_vale_wed','payroll_hist'
+  ];
+
+  // Create table 'kv' with columns: key (text, PK), value (text), updated_at (timestamptz default now())
+  // RLS policies (no-auth, risky if public):
+  //   READ:  using (true)
+  //   INSERT: using (true) with check (true)
+  //   UPDATE: using (true) with check (true)
+  //   DELETE: using (true)   <-- optional; safer to omit
+
+  const table = 'kv';
+  let hydrating = true;
+  let changedAny = false;
+
+  // Pull all server values and hydrate localStorage before the rest of the app runs
+  async function hydrateFromCloud() {
+    try {
+      const { data, error } = await supabase.from(table).select('key,value').in('key', KEYS_TO_SYNC);
+      if (error) { console.warn('Supabase select error:', error); return; }
+      const server = new Map((data || []).map(r => [r.key, r.value ?? '']));
+
+      for (const k of KEYS_TO_SYNC) {
+        const serverVal = server.has(k) ? String(server.get(k) || '') : null;
+        if (serverVal !== null) {
+          const cur = localStorage.getItem(k);
+          if (cur !== serverVal) {
+            localStorage.setItem(k, serverVal);
+            changedAny = true;
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('Hydration error', e);
+    } finally {
+      hydrating = false;
+      // If we populated new data and this is the first hydration in this session, reload once
+      if (changedAny && !sessionStorage.getItem('supabase_hydrated_once')) {
+        sessionStorage.setItem('supabase_hydrated_once', '1');
+        location.reload();
+      }
+    }
+  }
+
+  // Upsert helper
+  async function upsertKV(key, value) {
+    try {
+      // store as raw string; your app already stringifies JSON
+      const payload = { key, value: String(value ?? '') };
+      const { error } = await supabase.from(table).upsert(payload, { onConflict: 'key' });
+      if (error) console.warn('Supabase upsert error:', error);
+    } catch (e) { console.warn('Supabase upsert failed:', e); }
+  }
+  async function deleteKV(key) {
+    try {
+      const { error } = await supabase.from(table).delete().eq('key', key);
+      if (error) console.warn('Supabase delete error:', error);
+    } catch (e) { console.warn('Supabase delete failed:', e); }
+  }
+
+  // Monkey‑patch localStorage so every write also persists to Supabase.
+  // This keeps your existing code unchanged (no login, no manual sync).
+  (function patchLocalStorage(){
+    const _set = localStorage.setItem.bind(localStorage);
+    const _remove = localStorage.removeItem.bind(localStorage);
+    localStorage.setItem = function(key, val){
+      _set(key, val);
+      if (!hydrating && KEYS_TO_SYNC.includes(String(key))) { upsertKV(String(key), val); }
+    };
+    localStorage.removeItem = function(key){
+      _remove(key);
+      if (!hydrating && KEYS_TO_SYNC.includes(String(key))) { deleteKV(String(key)); }
+    };
+  })();
+
+  // Kick off hydration ASAP
+  hydrateFromCloud();
+
+  // Update UI banner if present
+  document.addEventListener('DOMContentLoaded', () => {
+    const note = document.querySelector('.warning-note');
+    if (note) {
+      note.textContent = '☁️ Data is stored in Supabase (cloud) and cached locally. No login or manual sync needed.';
+    }
+  });
+</script>
 <!-- Boot guard to avoid 'storedEmployees is not defined' -->
 <script>document.addEventListener('DOMContentLoaded', function(){
 (function(){
   try {
     if (typeof window.storedEmployees === 'undefined') {
-      window.storedEmployees = JSON.parse(localStorage.getItem('att_employees_v2') || '[]');
+      window.storedEmployees = JSON.parse(localStorage.getItem('att_employees_v2') || '{}');
     }
     if (typeof window.storedRecords === 'undefined') {
       window.storedRecords = JSON.parse(localStorage.getItem('att_records_v2') || '[]');
@@ -192,207 +518,146 @@
 })();
 });</script>
 
-  <header>
+  <!-- Mobile menu button for smaller screens -->
+  <button class="mobile-menu-btn" onclick="toggleSidebar()">
+    <span style="font-size: 20px;">☰</span>
+  </button>
+  <!-- Begin App Container with Sidebar and Main Content -->
+  <div class="app-container">
+    <aside class="sidebar" id="sidebar">
+      <div class="sidebar-header">
+        <div class="logo">
+          💼 PayrollHub
+        </div>
+      </div>
+      <nav>
+        <ul class="nav-menu">
+          <li class="nav-item">
+            <button class="nav-link tab-btn active" id="tabDashboard" data-page="dashboard">
+              <span class="nav-icon">📊</span>
+              Dashboard
+            </button>
+          </li>
+          <li class="nav-item">
+            <button class="nav-link tab-btn" id="tabMain" data-page="dtr">
+              <span class="nav-icon">🕐</span>
+              DTR
+            </button>
+          </li>
+          <li class="nav-item">
+            <button class="nav-link tab-btn" id="tabSchedule" data-page="schedules">
+              <span class="nav-icon">📅</span>
+              Schedules
+            </button>
+          </li>
+          <li class="nav-item">
+            <button class="nav-link tab-btn" id="tabEmployees" data-page="employees">
+              <span class="nav-icon">👥</span>
+              Employees
+            </button>
+          </li>
+          <li class="nav-item">
+            <button class="nav-link tab-btn" id="tabProjects" data-page="projects">
+              <span class="nav-icon">🚀</span>
+              Projects
+            </button>
+          </li>
+          <li class="nav-item">
+            <button class="nav-link tab-btn" id="tabPayroll" data-page="payroll">
+              <span class="nav-icon">💰</span>
+              Payroll
+            </button>
+          </li>
+          <li class="nav-item">
+            <button class="nav-link tab-btn" id="tabProjectTotals" data-page="totals">
+              <span class="nav-icon">📈</span>
+              Reports
+            </button>
+          </li>
+        </ul>
+      </nav>
+    </aside>
+    <main class="main-content">
+      <div class="content-header">
+        <h1 class="page-title">
+          <span style="font-size: 32px;">📊</span>
+          Dashboard
+        </h1>
+        <p class="page-subtitle">Manage your payroll system efficiently</p>
+        <!-- Hide the legacy date range controls but keep them in the DOM for backwards compatibility -->
+        <div class="date-range" id="dateRangeLegacy" style="display:none">
+          <span style="font-weight: 600; color: #374151;">Start:</span>
+          <input id="weekStart" type="date" class="date-input">
+          <span style="font-weight: 600; color: #374151;">End:</span>
+          <input id="weekEnd" type="date" class="date-input">
+          <button id="dashGenerate" style="margin-left: 8px;">Generate</button>
+        </div>
+        <!-- New Active Payroll picker -->
+        <div class="date-range" id="activePayrollPicker" style="display:flex;align-items:center;gap:15px;flex-wrap:wrap;">
+          <span style="font-weight:600;color:#374151;">Payroll period:</span>
+          <select id="activePayrollSelect" class="date-input activeWeekSelect" style="min-width:260px;"></select>
+          <button id="newPayrollPeriod" type="button" class="date-input">New period</button>
+        </div>
+        <div class="warning-note">
+          ☁️ Data is stored in Supabase (cloud) and cached locally. No login or manual sync needed.
+        </div>
+      </div>
 
-<script src="./config.js"></script>
-<style>
-  .cloud-card {border:1px solid #e2e8f0;border-radius:10px;padding:12px;margin:12px 0;background:#fff}
-  .cloud-row {display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:6px}
-  .cloud-card input {padding:8px;border:1px solid #cbd5e1;border-radius:8px}
-  .cloud-card button {padding:8px 12px;border:1px solid #cbd5e1;border-radius:8px;cursor:pointer;background:#f8fafc}
-  .cloud-card button.primary {background:#0ea5a4;color:#fff;border-color:#0ea5a4}
-  .cloud-note {font-size:12px;color:#64748b}
-</style>
+      <!-- Begin original content -->
 
-<div class="cloud-card" id="cloudSyncCard">
-  <h3 style="margin:0 0 6px 0;">Cloud Sync (Supabase)</h3>
-  <div class="cloud-note">Sign in with your email/password, then use Sync.</div>
-  <div class="cloud-row">
-    <input type="email" id="sbEmail" placeholder="Email">
-    <input type="password" id="sbPassword" placeholder="Password">
-    <button id="sbLogin" class="primary">Login</button>
-    <button id="sbSignup">Sign up</button>
-    <button id="sbLogout" style="display:none;">Logout</button>
-    <span id="sbStatus" class="cloud-note"></span>
-  </div>
-  <div class="cloud-row">
-    <button id="btnSyncFrom">Sync FROM Cloud → Local</button>
-    <button id="btnSyncTo">Sync TO Cloud → Cloud</button>
-    <button id="btnAutoSync">Toggle Auto Sync</button>
-    <span id="autoSyncStatus" class="cloud-note"></span>
-  </div>
-</div>
+<!-- Original tab buttons and header removed in favour of sidebar navigation -->
+  <!-- Dashboard panel to host high-level metrics and payroll history -->
+  <section class="panel active" id="panelDashboard">
+   <h3>Dashboard</h3>
+   <!-- Date range picker and action buttons -->
+   <!-- The Generate button has been moved into the date-range picker; retain the controls container for future actions if needed. -->
+   <div class="controls"></div>
+   <!-- Container for viewing a snapshot or diff results -->
+   <div id="snapshotView" style="margin-top:12px;"></div>
 
-<script>
-(function(){
-  const SUPABASE_URL  = window.SUPABASE_URL;
-  const SUPABASE_ANON = window.SUPABASE_ANON_KEY;
-  if (!window.supabase) { console.error('Supabase UMD not loaded.'); }
-
-  const supa = window.supabase && window.supabase.createClient ? window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON) : null;
-
-  const CLOUD_KEYS = [
-    'att_records_v2','att_employees_v2','att_schedules_v2','att_schedules_default',
-    'att_projects_v1','att_filter_project_v1','att_overrides_schedules','att_overrides_projects',
-    'payroll_rates','payroll_reg_hours','payroll_ot_hours','payroll_ot_multiplier',
-    'payroll_week_start','payroll_week_end','payroll_deduction_divisor','payroll_sss_table',
-    'payroll_loan_sss','payroll_loan_pagibig','payroll_vale','payroll_vale_wed'
-  ];
-  const ALLOWED = new Set(CLOUD_KEYS);
-
-  function safeJSON(raw){
-    if (raw == null || raw === '') return null;
-    try { return JSON.parse(raw); } catch { return raw; }
-  }
-  async function requireUser(){
-    if (!supa) throw new Error('Supabase client not initialized');
-    const { data:{session} } = await supa.auth.getSession();
-    if (!session) throw new Error('Not signed in');
-    return session.user;
-  }
-  async function cloudSave(bucket, payload){
-    const user = await requireUser();
-    const { error } = await supa.from('payroll_data').upsert({ user_id: user.id, bucket, payload });
-    if (error) throw error;
-  }
-  async function cloudLoad(bucket){
-    const user = await requireUser();
-    const { data, error } = await supa.from('payroll_data').select('payload').eq('user_id', user.id).eq('bucket', bucket).maybeSingle();
-    if (error) throw error;
-    return data ? data.payload : null;
-  }
-
-  async function syncTo(){
-    try {
-      await requireUser();
-      const LS_KEYS = [
-        'att_records_v2','att_employees_v2','att_schedules_v2','att_schedules_default',
-        'att_projects_v1','att_filter_project_v1','att_overrides_schedules','att_overrides_projects',
-        'payroll_rates','payroll_reg_hours','payroll_ot_hours','payroll_ot_multiplier',
-        'payroll_week_start','payroll_week_end','payroll_deduction_divisor','payroll_sss_table',
-        'payroll_loan_sss','payroll_loan_pagibig','payroll_vale','payroll_vale_wed'
-      ];
-      function safeJSON(raw){ try { return raw ? JSON.parse(raw) : null; } catch { return raw; } }
-      for (const bucket of LS_KEYS){
-        if (!localStorage.hasOwnProperty(bucket)) continue;
-        const raw = localStorage.getItem(bucket);
-        const payload = safeJSON(raw);
-        await cloudSave(bucket, payload);
-      }
-      alert('Synced TO Cloud ✔');
-    } catch(e){ console.error(e); alert('Sync TO failed: ' + (e.message || e)); }
-  }
-      alert('Synced TO Cloud ✔');
-    } catch(e){ console.error(e); alert('Sync TO failed: ' + (e.message || e)); }
-  }
-  async function syncFrom(){
-    try {
-      await requireUser();
-      for (const bucket of CLOUD_KEYS){
-        const payload = await cloudLoad(bucket);
-        if (payload !== null){
-          localStorage.setItem(bucket, JSON.stringify(payload));
-        }
-      }
-      alert('Synced FROM Cloud ✔ — reloading'); location.reload();
-    } catch(e){ console.error(e); alert('Sync FROM failed: ' + (e.message || e)); }
-  }
-
-  // Auth buttons
-  const emailEl = document.getElementById('sbEmail');
-  const passEl  = document.getElementById('sbPassword');
-  const loginBtn = document.getElementById('sbLogin');
-  const signupBtn = document.getElementById('sbSignup');
-  const logoutBtn = document.getElementById('sbLogout');
-  const statusEl = document.getElementById('sbStatus');
-  const syncFromBtn = document.getElementById('btnSyncFrom');
-  const syncToBtn   = document.getElementById('btnSyncTo');
-  const autoBtn     = document.getElementById('btnAutoSync');
-  const autoStatus  = document.getElementById('autoSyncStatus');
-  let autoTimer = null;
-
-  function setStatus(m){ if(statusEl) statusEl.textContent = m || ''; }
-  function setAutoStatus(on){ if(autoStatus) autoStatus.textContent = on ? 'Auto-sync: ON (every 2 minutes)' : 'Auto-sync: OFF'; }
-
-  loginBtn && loginBtn.addEventListener('click', async ()=>{
-    try {
-      setStatus('Signing in...');
-      const { error } = await supa.auth.signInWithPassword({ email: emailEl.value, password: passEl.value });
-      if (error) throw error;
-      setStatus('Signed in ✔'); loginBtn.style.display='none'; signupBtn.style.display='none'; logoutBtn.style.display='inline-block';
-    } catch(e){ setStatus('Login error: ' + e.message); }
-  });
-  signupBtn && signupBtn.addEventListener('click', async ()=>{
-    try {
-      setStatus('Creating account...');
-      const { error } = await supa.auth.signUp({ email: emailEl.value, password: passEl.value });
-      if (error) throw error;
-      setStatus('Check your email to confirm, then login.');
-    } catch(e){ setStatus('Signup error: ' + e.message); }
-  });
-  logoutBtn && logoutBtn.addEventListener('click', async ()=>{
-    await supa.auth.signOut();
-    setStatus('Logged out'); loginBtn.style.display='inline-block'; signupBtn.style.display='inline-block'; logoutBtn.style.display='none';
-  });
-
-  syncFromBtn && syncFromBtn.addEventListener('click', syncFrom);
-  syncToBtn && syncToBtn.addEventListener('click', syncTo);
-  autoBtn && autoBtn.addEventListener('click', ()=>{
-    if (autoTimer){ clearInterval(autoTimer); autoTimer = null; setAutoStatus(false); }
-    else { autoTimer = setInterval(syncTo, 120000); setAutoStatus(true); }
-  });
-
-  // init session state
-  (async ()=>{
-    if (!supa) return;
-    const { data:{session} } = await supa.auth.getSession();
-    if (session){ setStatus('Signed in ✔'); loginBtn.style.display='none'; signupBtn.style.display='none'; logoutBtn.style.display='inline-block'; }
-    else { setStatus('Not signed in'); setAutoStatus(false); }
-  })();
-})();
-</script>
-
-   <div class="tabs">
-    <button class="tab-btn active" id="tabMain">
-     DTR
-    </button>
-    <button class="tab-btn" id="tabSchedule">
-     Schedules
-    </button>
-    <button class="tab-btn" id="tabEmployees">
-     Employees
-    </button>
-    <button class="tab-btn" id="tabProjects">
-     Projects
-    </button>
-    <button class="tab-btn" id="tabPayroll">
-     Payroll
-    </button>
-    <button class="tab-btn" id="tabProjectTotals">Project Totals</button>
+   <!-- Active Payrolls table showing all un-locked snapshots -->
+   <h4>Active Payrolls</h4>
+   <table id="activePayrollTable">
+     <thead>
+       <tr>
+         <th>Start</th>
+         <th>End</th>
+         <th>Actions</th>
+       </tr>
+     </thead>
+     <tbody></tbody>
+   </table>
+   <!-- Payroll History table showing all generated/locked snapshots -->
+   <h4>Payroll History</h4>
+   <table id="historyTable">
+     <thead>
+       <tr>
+         <th>Select</th>
+         <th>Start</th>
+         <th>End</th>
+         <th>Locked At</th>
+         <th>Hash</th>
+         <th>Actions</th>
+       </tr>
+     </thead>
+     <tbody></tbody>
+   </table>
+   <div class="controls" style="margin-top:8px;">
+     <button id="diffBtn">Diff Selected</button>
    </div>
-   <div class="shared-dates" style="margin-left:auto; display:flex; gap:8px; align-items:center;">
-    <label>
-     Start:
-     <input id="weekStart" type="date"/>
-    </label>
-    <label>
-     End:
-     <input id="weekEnd" type="date"/>
-    </label>
-   </div>
-   <div class="small" style="margin-left:auto">
-    Data persisted in browser (localStorage). Use Clear to remove.
-   </div>
-  </header>
-  
-  <section class="panel active" id="panelMain">
+  </section>
+
+  <!-- Original Main panel (DTR) no longer active by default -->
+  <section class="panel" id="panelMain">
+<!-- Removed DTR-specific Active Payroll selector -->
+
    <div class="controls">
     <label>
      Upload .DAT/.TXT (multiple)
      <input accept=".dat,.txt" id="fileInput" multiple="" type="file"/>
     </label>
     <button id="manualDtrBtn">Enter Manual DTR</button>
-    </label>
+    <button id="printDtrBtn">Print DTR</button>
     <button id="clearData">
      Clear All Data
     </button>
@@ -409,7 +674,25 @@
    <div class="note">
     Regular hours computed per schedule segments. Grace applies to AM/PM in. OT detected after PM out reference.
    </div>
-   <table aria-live="polite" id="resultsTable">
+   <!-- Wrap the results table in a scrollable container so horizontal overflow
+        is always visible. Without this wrapper some layouts (especially when
+        embedding this page in an iframe or within a limited-width container)
+        can hide the horizontal scroll bar and make it appear as if columns
+        are missing. -->
+   <div class="results-wrapper">
+   <!-- DTR Date Finder Controls -->
+<div id="dtrDateControls" style="display:flex;gap:.75rem;align-items:center;flex-wrap:wrap;margin:8px 0;">
+  <label style="display:flex;align-items:center;gap:.35rem;">
+    <span>Date:</span>
+    <input id="dtrDateFrom" type="date" />
+  </label>
+  <span>—</span>
+  <label>
+    <input id="dtrDateTo" type="date" />
+  </label>
+  <button id="dtrDateClear" type="button">Clear</button>
+</div>
+<table aria-live="polite" id="resultsTable">
     <thead>
      <tr>
       <th>
@@ -451,11 +734,19 @@
       <th>
        OT Hrs
       </th>
+      <th>
+       Split
+      </th>
+      <!-- Added explicit Actions column to ensure consistent header structure -->
+      <th class="actions-header">
+       Actions
+      </th>
      </tr>
     </thead>
     <tbody>
     </tbody>
    </table>
+   </div>
   </section>
   
   <section class="panel" id="panelSchedule">
@@ -517,6 +808,11 @@
       <td>
        <input class="cell" data-key="sch_pm_end" type="time"/>
       </td>
+     </tr>
+     <tr>
+      <td>Saturday</td>
+      <td><input class="cell" data-key="sch_sat_start" type="time"/></td>
+      <td><input class="cell" data-key="sch_sat_end" type="time"/></td>
      </tr>
     </tbody>
    </table>
@@ -616,6 +912,11 @@
       <td>
        <input class="cell" data-key="rng_ot_out_end" type="time"/>
       </td>
+     </tr>
+     <tr>
+      <td>Saturday OT In</td>
+      <td><input class="cell" data-key="rng_sat_ot_start" type="time"/></td>
+      <td><input class="cell" data-key="rng_sat_ot_end" type="time"/></td>
      </tr>
     </tbody>
    </table>
@@ -722,6 +1023,14 @@
    </table>
   </section>
   <section class="panel" id="panelPayroll">
+<!-- Active Payroll selector (non-dashboard) -->
+<div class="active-week-bar" style="display:flex;gap:8px;align-items:center;margin:10px 0;">
+  <label><strong>Payroll:</strong>
+    <select class="activeWeekSelect"></select>
+  </label>
+  <button type="button" class="refreshActiveWeek">Apply</button>
+</div>
+
    <div id="payrollWrapper">
     <header>
      <h2>
@@ -771,6 +1080,9 @@
       </div>
       <button class="primary" id="downloadPayrollCSV">
        Download Payroll CSV
+      </button>
+      <button id="printPayrollBtn" type="button">
+       Print Report
       </button>
      </div>
      <div class="section note">
@@ -831,6 +1143,9 @@
         <th>
          Net Pay
         </th>
+        <th>
+         Payslip
+        </th>
        </tr>
       </thead>
       <tbody>
@@ -853,6 +1168,7 @@
           <td class="num" data-col="valeWed">0.00</td>
           <td class="num" data-col="totalDed">0.00</td>
           <td class="num" data-col="netPay">0.00</td>
+          <td></td>
         </tr>
       </tfoot>
 
@@ -1064,7 +1380,7 @@ const weekEndEl = document.getElementById('weekEnd');
 const otMultiplierEl = document.getElementById('otMultiplier');
 const divisorEl = document.getElementById('deductionDivisor');
 const tbody = document.querySelector('#payrollTable tbody');
-document.querySelectorAll('.tab-btn').forEach(btn=>{
+document.querySelectorAll('#panelPayroll .tabs .tab-btn').forEach(btn=>{
   btn.addEventListener('click', ()=>{
     document.querySelectorAll('#panelPayroll .tabs .tab-btn').forEach(b=>b.classList.remove('active'));
     document.querySelectorAll('#panelPayroll .tab').forEach(t=>t.classList.remove('active'));
@@ -1325,7 +1641,8 @@ const lSSS = Number(loanSSS[emp.id] ?? 0);
       <td><input class="cell vale" type="number" step="0.01" value="${v}"></td>
       <td><input class="cell valeWed" type="number" step="0.01" value="${vW}"></td>
       <td class="totalDed num">0.00</td>
-      <td class="netPay num">0.00</td>`;
+      <td class="netPay num">0.00</td>
+      <td><button type="button" class="payslipBtn">Payslip</button></td>`;
     tbody.appendChild(tr);
   });
   attachRowEvents();
@@ -1517,15 +1834,677 @@ renderSssTable();
     document.getElementById('downloadProjectTotalsCSV').addEventListener('click', exportProjectTotalsCSV);
   }
 </script>
+
+<!-- Modal report functionality for project totals -->
+<script>
+// Display a modal dialog with a detailed breakdown of a single project's totals.
+// Takes a row object (result of computeProjectTotals) and builds a table of
+// per-day hours per employee along with grand totals for regular hours, OT,
+// total hours and gross pay. Uses the global weekStart/weekEnd inputs to
+// construct the day labels. The modal is hidden by default and can be
+// dismissed by clicking on the close button or outside the modal.
+function showProjectReport(row) {
+  if (!row || !row.breakdown || !row.breakdown.length) return;
+  const modal = document.getElementById('projectReportModal');
+  const content = document.getElementById('projectReportContent');
+  if (!modal || !content) return;
+  const wsEl = document.getElementById('weekStart');
+  const weEl = document.getElementById('weekEnd');
+  const startDate = wsEl && wsEl.value ? wsEl.value : '';
+  const endDate = weEl && weEl.value ? weEl.value : '';
+  // Helper to build a list of dates between start and end inclusive
+  function dateRangeList(s, e) {
+    const out = [];
+    if (!s || !e) return out;
+    const sd = new Date(s);
+    const ed = new Date(e);
+    for (let d = new Date(sd); d <= ed; d.setDate(d.getDate() + 1)) {
+      out.push(new Date(d));
+    }
+    return out;
+  }
+  const days = dateRangeList(startDate, endDate);
+  let html = '';
+  html += '<h3 style="margin-top:0;">' + (row.project || 'Project') + ' (' + (startDate || '') + ' to ' + (endDate || '') + ')</h3>';
+  html += '<div style="overflow-x:auto;">';
+  html += '<table style="width:100%;border-collapse:collapse;margin-bottom:12px;">';
+  html += '<thead><tr>';
+  html += '<th style="text-align:left;border:1px solid #e2e8f0;padding:4px;">ID</th>';
+  html += '<th style="text-align:left;border:1px solid #e2e8f0;padding:4px;">Name</th>';
+  days.forEach(function(dt) {
+    const label = (dt.getMonth() + 1) + '/' + dt.getDate();
+    html += '<th style="text-align:right;border:1px solid #e2e8f0;padding:4px;">' + label + '</th>';
+  });
+  html += '<th style="text-align:right;border:1px solid #e2e8f0;padding:4px;">Total Hrs</th>';
+  html += '<th style="text-align:right;border:1px solid #e2e8f0;padding:4px;">Total Amount</th>';
+  html += '</tr></thead><tbody>';
+  row.breakdown.forEach(function(emp) {
+    html += '<tr>';
+    html += '<td style="text-align:left;border:1px solid #e2e8f0;padding:4px;">' + (emp.id || '') + '</td>';
+    html += '<td style="text-align:left;border:1px solid #e2e8f0;padding:4px;">' + (emp.name || '') + '</td>';
+    days.forEach(function(dt) {
+      const key = dt.toISOString().slice(0, 10);
+      const val = parseFloat((emp.perDay && emp.perDay[key]) || 0).toFixed(2);
+      html += '<td style="text-align:right;border:1px solid #e2e8f0;padding:4px;">' + val + '</td>';
+    });
+    html += '<td style="text-align:right;border:1px solid #e2e8f0;padding:4px;">' + (Number(emp.total || 0).toFixed(2)) + '</td>';
+    html += '<td style="text-align:right;border:1px solid #e2e8f0;padding:4px;">' + (Number(emp.gross || 0).toFixed(2)) + '</td>';
+    html += '</tr>';
+  });
+  html += '</tbody></table>';
+  html += '</div>';
+  // Grand totals section
+  html += '<div style="font-weight:600;">Grand Totals:</div>';
+  html += '<table style="border-collapse:collapse;margin-top:4px;">';
+  html += '<tr><td style="padding:4px;">Regular Hours:</td><td style="padding:4px;text-align:right;">' + (Number(row.reg || 0).toFixed(2)) + '</td></tr>';
+  html += '<tr><td style="padding:4px;">OT Hours:</td><td style="padding:4px;text-align:right;">' + (Number(row.ot || 0).toFixed(2)) + '</td></tr>';
+  html += '<tr><td style="padding:4px;">Total Hours:</td><td style="padding:4px;text-align:right;">' + (Number(row.total || 0).toFixed(2)) + '</td></tr>';
+  html += '<tr><td style="padding:4px;">Gross Amount:</td><td style="padding:4px;text-align:right;">' + ((row.gross != null) ? Number(row.gross).toFixed(2) : '0.00') + '</td></tr>';
+  html += '</table>';
+  content.innerHTML = html;
+  modal.style.display = 'flex';
+}
+// Attach close handlers once DOM is ready
+document.addEventListener('DOMContentLoaded', function() {
+  const modal = document.getElementById('projectReportModal');
+  const closeBtn = document.getElementById('closeProjectReport');
+  if (closeBtn) closeBtn.addEventListener('click', function() { if (modal) modal.style.display = 'none'; });
+  if (modal) modal.addEventListener('click', function(e) { if (e.target === modal) modal.style.display = 'none'; });
+});
+</script>
+
+<!--
+  Dashboard functionality
+  This script defines utilities for managing payroll history snapshots. It is intentionally
+  separated from the existing payroll logic to avoid altering core calculations.
+  The dashboard allows users to select a date range, generate a snapshot of the current payroll table,
+  lock it to prevent further edits, view past snapshots, download CSV versions, and compare (diff) two snapshots.
+-->
+<script>
+// Print Payroll Report: generate a print-friendly view of the payroll table and open
+// a new window for printing. Inputs are converted to plain text and the final
+// payslip column is removed to preserve confidentiality.
+document.addEventListener('DOMContentLoaded', function(){
+  const btn = document.getElementById('printPayrollBtn');
+  if (btn) btn.addEventListener('click', function(){
+    const srcTable = document.getElementById('payrollTable');
+    if (!srcTable) {
+      alert('Payroll table is missing or empty.');
+      return;
+    }
+    // Clone table so we can modify it without affecting the live DOM
+    const clone = srcTable.cloneNode(true);
+    // Remove the last column (Payslip) from thead, tbody and tfoot
+    const removeLastCell = row => { if (row && row.lastElementChild) row.removeChild(row.lastElementChild); };
+    clone.querySelectorAll('thead tr').forEach(removeLastCell);
+    clone.querySelectorAll('tbody tr').forEach(removeLastCell);
+    clone.querySelectorAll('tfoot tr').forEach(removeLastCell);
+    // Convert input fields to plain text within the cloned table
+    clone.querySelectorAll('input').forEach(inp => {
+      const td = inp.parentElement;
+      const val = (inp.value || inp.textContent || '').toString();
+      td.textContent = val;
+    });
+    // Build a new window for printing
+    const w = window.open('', '', 'width=900,height=700');
+    if (!w) return;
+    w.document.write('<html><head><meta charset="utf-8"><title>Payroll Report</title>');
+    // Basic styles: borders and alignment
+    w.document.write('<style>body{font-family:Arial,Helvetica,sans-serif;margin:20px;} table{border-collapse:collapse;width:100%;} th,td{border:1px solid #ddd;padding:6px;} th{background:#f1f5f9;} td.num{text-align:right;} th:nth-child(1),td:nth-child(1),th:nth-child(2),td:nth-child(2){text-align:left;} tfoot td{font-weight:700;background:#fff7ed;border-top:2px solid #e2e8f0;} </style>');
+    w.document.write('</head><body>');
+    // Header with date range if available
+    const ws = document.getElementById('weekStart');
+    const we = document.getElementById('weekEnd');
+    const startDate = ws && ws.value ? ws.value : '';
+    const endDate = we && we.value ? we.value : '';
+    if (startDate && endDate) {
+      w.document.write('<h2>Payroll Report (' + startDate + ' to ' + endDate + ')</h2>');
+    } else {
+      w.document.write('<h2>Payroll Report</h2>');
+    }
+    w.document.write(clone.outerHTML);
+    w.document.write('</body></html>');
+    w.document.close();
+    w.focus();
+    w.print();
+    // Optionally close after printing (comment out if you don't want auto-close)
+    // w.close();
+  });
+});
+document.addEventListener('DOMContentLoaded', () => {
+  // Key used to persist payroll history snapshots in localStorage
+  const PAYROLL_HIST_KEY = 'payroll_hist';
+  // Load existing history from localStorage or default to an empty array
+  let payrollHistory;
+  try {
+    payrollHistory = JSON.parse(localStorage.getItem(PAYROLL_HIST_KEY)) || [];
+    if (!Array.isArray(payrollHistory)) payrollHistory = [];
+  } catch (err) {
+    payrollHistory = [];
+  }
+  // Expose payrollHistory on the window so other scripts (like the Active Payroll dropdown) can
+  // append to it directly. Without this, new snapshots added via custom UI would only update
+  // localStorage and would not appear in the current session until a full page reload.
+  window.payrollHistory = payrollHistory;
+  // Grab references to dashboard elements
+  // Use the global weekStart/weekEnd inputs instead of the removed dashStartDate/dashEndDate fields.
+  const dashStart = document.getElementById('weekStart');
+  const dashEnd = document.getElementById('weekEnd');
+  const dashGenerateBtn = document.getElementById('dashGenerate');
+  // The global lock button has been removed; per-row lock buttons are provided in the Active Payrolls table.
+  const dashLockBtn = document.getElementById('dashLock');
+  const historyTableBody = document.querySelector('#historyTable tbody');
+  const snapshotView = document.getElementById('snapshotView');
+  const diffBtn = document.getElementById('diffBtn');
+
+  // Reference to the Active Payrolls table body
+  const activeTableBody = document.querySelector('#activePayrollTable tbody');
+
+  /**
+   * Render the active payrolls table.
+   * Lists snapshots that are not yet locked with Edit and Lock actions.
+   */
+  window.renderActivePayrolls = function renderActivePayrolls() {
+    if (!activeTableBody) return;
+    activeTableBody.innerHTML = '';
+    payrollHistory.forEach((snap, index) => {
+      if (snap.locked) return;
+      const tr = document.createElement('tr');
+      // Build the Active Payroll row. Include Edit, Lock and Delete actions. Deleting
+      // prompts confirmation and removes the snapshot from payrollHistory.
+      tr.innerHTML = `
+        <td>${snap.startDate || ''}</td>
+        <td>${snap.endDate || ''}</td>
+        <td>
+          <button type="button" class="editActive" data-index="${index}">Edit</button>
+          <button type="button" class="lockActive" data-index="${index}">Lock</button>
+          <button type="button" class="deleteActive" data-index="${index}">Delete</button>
+        </td>
+      `;
+      activeTableBody.appendChild(tr);
+    });
+  };
+
+  // Delegate edit/lock actions on the Active Payrolls table
+  activeTableBody && activeTableBody.addEventListener('click', async (e) => {
+    const target = e.target;
+    if (!target) return;
+    const idxStr = target.dataset.index;
+    if (typeof idxStr === 'undefined') return;
+    const idx = parseInt(idxStr, 10);
+    const snap = payrollHistory[idx];
+    if (!snap) return;
+    if (target.classList.contains('editActive')) {
+      // Set the global date range to the snapshot dates and switch to Payroll tab
+      const wsEl = document.getElementById('weekStart');
+      const weEl = document.getElementById('weekEnd');
+      if (wsEl) wsEl.value = snap.startDate || '';
+      if (weEl) weEl.value = snap.endDate || '';
+      try { if (typeof calculatePayrollFromRecords === 'function') calculatePayrollFromRecords(); } catch (err) {}
+      // Show the payroll panel
+      try { showTab('payroll'); } catch (err) {}
+    } else if (target.classList.contains('lockActive')) {
+      // Lock this active payroll: update its snapshot and mark locked
+      const startDate = snap.startDate;
+      const endDate = snap.endDate;
+      if (!startDate || !endDate) {
+        alert('Invalid snapshot dates.');
+        return;
+      }
+      const newSnap = await buildSnapshot(startDate, endDate);
+      if (!newSnap) {
+        alert('Payroll table is missing or empty.');
+        return;
+      }
+      const json = JSON.stringify(newSnap);
+      const hashBuffer = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(json));
+      const hashArray = Array.from(new Uint8Array(hashBuffer));
+      const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+      const now = new Date().toISOString();
+      snap.rows = newSnap.rows;
+      snap.totals = newSnap.totals;
+      snap.hash = hashHex;
+      snap.lockedAt = now;
+      snap.locked = true;
+      saveHistory();
+      renderHistory();
+      renderActivePayrolls();
+      // Disable payroll inputs and dashboard controls until date range changes
+      document.querySelectorAll('#panelPayroll input').forEach(inp => { inp.disabled = true; });
+      const wsEl2 = document.getElementById('weekStart');
+      const weEl2 = document.getElementById('weekEnd');
+      const genBtn = document.getElementById('dashGenerate');
+      if (wsEl2) {
+        wsEl2.disabled = true;
+        wsEl2.dataset.forced = 'true';
+      }
+      if (weEl2) {
+        weEl2.disabled = true;
+        weEl2.dataset.forced = 'true';
+      }
+      if (genBtn) genBtn.disabled = true;
+      function enableOnChange() {
+        if (wsEl2) wsEl2.removeEventListener('change', enableOnChange);
+        if (weEl2) weEl2.removeEventListener('change', enableOnChange);
+        document.querySelectorAll('#panelPayroll input').forEach(inp => { inp.disabled = false; });
+        // Remove forced flags and re-enable date range and generate button
+        if (wsEl2) {
+          delete wsEl2.dataset.forced;
+          wsEl2.disabled = false;
+        }
+        if (weEl2) {
+          delete weEl2.dataset.forced;
+          weEl2.disabled = false;
+        }
+        if (genBtn) genBtn.disabled = false;
+      }
+      if (wsEl2) wsEl2.addEventListener('change', enableOnChange);
+      if (weEl2) weEl2.addEventListener('change', enableOnChange);
+    } else if (target.classList.contains('deleteActive')) {
+      // Delete active (unlocked) snapshot after confirmation
+      if (!snap) return;
+      const ok = confirm('Are you sure you want to delete this payroll snapshot? This action cannot be undone.');
+      if (!ok) return;
+      payrollHistory.splice(idx, 1);
+      saveHistory();
+      renderHistory();
+      renderActivePayrolls();
+    }
+  });
+
+  /**
+   * Render the payroll history table.
+   * Each snapshot row contains a checkbox for diffing, start/end dates, lock timestamp,
+   * truncated hash, and action buttons for opening and downloading the snapshot.
+   */
+  window.renderHistory = function renderHistory() {
+    if (!historyTableBody) return;
+    historyTableBody.innerHTML = '';
+    payrollHistory.forEach((snap, index) => {
+      const tr = document.createElement('tr');
+      // Build row HTML; note small hash display for brevity
+      // Build the actions column depending on lock status. Only locked snapshots show Open/Unlock buttons.
+      const actions = [];
+      if (snap.locked) {
+        actions.push(`<button type="button" class="openSnapshot" data-index="${index}">Open</button>`);
+        actions.push(`<button type="button" class="unlockSnapshot" data-index="${index}">Unlock</button>`);
+        // For locked snapshots, show a disabled delete button to indicate it cannot be removed
+        actions.push(`<button type="button" class="deleteSnapshot" data-index="${index}" disabled>Delete</button>`);
+      } else {
+        // For unlocked snapshots, allow deletion
+        actions.push(`<button type="button" class="deleteSnapshot" data-index="${index}">Delete</button>`);
+      }
+      // Always provide a download button
+      actions.push(`<button type="button" class="downloadSnapshot" data-index="${index}">Download CSV</button>`);
+      tr.innerHTML = `
+        <td><input type="checkbox" class="diff-select" data-index="${index}"></td>
+        <td>${snap.startDate || ''}</td>
+        <td>${snap.endDate || ''}</td>
+        <td>${snap.lockedAt ? new Date(snap.lockedAt).toLocaleString() : ''}</td>
+        <td><span style="font-size:10px;">${snap.hash ? snap.hash.slice(0, 12) + '...' : ''}</span></td>
+        <td>${actions.join(' ')}</td>
+      `;
+      historyTableBody.appendChild(tr);
+    });
+  };
+
+  /**
+   * Build a snapshot from the current payroll table. This captures all row values
+   * and totals in a structured JSON object for persistence.
+   */
+  async function buildSnapshot(startDate, endDate) {
+    const table = document.getElementById('payrollTable');
+    if (!table) return null;
+    const rows = [];
+    table.querySelectorAll('tbody tr').forEach(row => {
+      const data = {};
+      data.id = (row.cells[0]?.textContent || '').trim();
+      data.name = (row.cells[1]?.textContent || '').trim();
+      // Helper to read numeric input or fallback text
+      function readNum(sel, cellIndex) {
+        const input = row.querySelector(sel);
+        if (input) return parseFloat(input.value) || 0;
+        const cellVal = row.cells[cellIndex] && row.cells[cellIndex].textContent;
+        return parseFloat(cellVal) || 0;
+      }
+      data.regHrs = readNum('.regHrs', 2);
+      data.otHrs = readNum('.otHrs', 3);
+      data.rate = readNum('.rate', 4);
+      data.regPay = readNum('.regPay', 5);
+      data.otPay = readNum('.otPay', 6);
+      data.grossPay = readNum('.grossPay', 7);
+      data.pagibig = readNum('.pagibig', 8);
+      data.philhealth = readNum('.philhealth', 9);
+      data.sss = readNum('.sss', 10);
+      data.loanSSS = readNum('.loanSSS', 11);
+      data.loanPI = readNum('.loanPI', 12);
+      data.vale = readNum('.vale', 13);
+      data.valeWed = readNum('.valeWed', 14);
+      data.totalDed = readNum('.totalDed', 15);
+      data.netPay = readNum('.netPay', 16);
+      rows.push(data);
+    });
+    // Read totals from footer
+    const totals = {};
+    const footRow = document.querySelector('#payrollTable tfoot tr');
+    if (footRow) {
+      footRow.querySelectorAll('[data-col]').forEach(td => {
+        const key = td.dataset.col;
+        totals[key] = parseFloat(td.textContent.trim()) || 0;
+      });
+    }
+    return { startDate, endDate, rows, totals };
+  }
+  // Expose buildSnapshot globally so it can be called from other scripts
+  window.buildSnapshot = buildSnapshot;
+
+  /**
+   * Convert a snapshot into a CSV string. Header names correspond to payroll columns.
+   */
+  function snapshotToCSV(snap) {
+    const header = [
+      'ID','Name','Regular Hours','OT Hours','Rate','Regular Pay','OT Pay','Gross Pay',
+      'Pag-IBIG','PhilHealth','SSS','SSS Loan','Pag-IBIG Loan','Vale','Wed Vale','Total Deductions','Net Pay'
+    ];
+    const lines = [header.join(',')];
+    snap.rows.forEach(row => {
+      const values = [
+        row.id, row.name,
+        row.regHrs, row.otHrs, row.rate,
+        row.regPay, row.otPay, row.grossPay,
+        row.pagibig, row.philhealth, row.sss,
+        row.loanSSS, row.loanPI, row.vale, row.valeWed,
+        row.totalDed, row.netPay
+      ];
+      lines.push(values.map(v => {
+        const s = String(v ?? '');
+        return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+      }).join(','));
+    });
+    return lines.join('\n');
+  }
+
+  // Persist payrollHistory to localStorage
+  function saveHistory() {
+    localStorage.setItem(PAYROLL_HIST_KEY, JSON.stringify(payrollHistory));
+  }
+  // Expose saveHistory globally so it can be called from other scripts
+  window.saveHistory = saveHistory;
+
+  // Handler for Generate button: build and save a snapshot without locking
+  dashGenerateBtn && dashGenerateBtn.addEventListener('click', async () => {
+    const start = dashStart && dashStart.value;
+    const end = dashEnd && dashEnd.value;
+    if (!start || !end) {
+      alert('Please select both start and end dates.');
+      return;
+    }
+    // Prevent duplicate snapshots for the same date range. If any snapshot (locked or active)
+    // already exists with this start/end, alert the user and skip creation. This avoids
+    // double‑entry payroll for the same period.
+    const exists = Array.isArray(payrollHistory) && payrollHistory.some(snap =>
+      snap && snap.startDate === start && snap.endDate === end);
+    if (exists) {
+      alert('A payroll snapshot for this date range already exists. Please choose a different range or delete the existing entry.');
+      return;
+    }
+    const snap = await buildSnapshot(start, end);
+    if (!snap) {
+      alert('Payroll table is missing or empty.');
+      return;
+    }
+    const json = JSON.stringify(snap);
+    const hashBuffer = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(json));
+    const hashArray = Array.from(new Uint8Array(hashBuffer));
+    const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+    const now = new Date().toISOString();
+    payrollHistory.push({ startDate: start, endDate: end, rows: snap.rows, totals: snap.totals, hash: hashHex, lockedAt: now, locked: false });
+    saveHistory();
+    // Update both history and active payroll tables after creating a new snapshot
+    renderHistory();
+    if (typeof renderActivePayrolls === 'function') renderActivePayrolls();
+  });
+
+  // Handler for Lock button: build snapshot, mark locked and disable payroll editing
+  dashLockBtn && dashLockBtn.addEventListener('click', async () => {
+    const start = dashStart && dashStart.value;
+    const end = dashEnd && dashEnd.value;
+    if (!start || !end) {
+      alert('Please select both start and end dates.');
+      return;
+    }
+    const snap = await buildSnapshot(start, end);
+    if (!snap) {
+      alert('Payroll table is missing or empty.');
+      return;
+    }
+    const json = JSON.stringify(snap);
+    const hashBuffer = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(json));
+    const hashArray = Array.from(new Uint8Array(hashBuffer));
+    const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+    const now = new Date().toISOString();
+    payrollHistory.push({ startDate: start, endDate: end, rows: snap.rows, totals: snap.totals, hash: hashHex, lockedAt: now, locked: true });
+    saveHistory();
+    renderHistory();
+    // Disable payroll inputs and dashboard controls until date range changes
+    document.querySelectorAll('#panelPayroll input').forEach(inp => { inp.disabled = true; });
+    if (dashStart) dashStart.disabled = true;
+    if (dashEnd) dashEnd.disabled = true;
+    if (dashGenerateBtn) dashGenerateBtn.disabled = true;
+    if (dashLockBtn) dashLockBtn.disabled = true;
+    // Listener to re-enable controls on date change
+    function enableOnChange() {
+      if (dashStart) dashStart.removeEventListener('change', enableOnChange);
+      if (dashEnd) dashEnd.removeEventListener('change', enableOnChange);
+      document.querySelectorAll('#panelPayroll input').forEach(inp => { inp.disabled = false; });
+      if (dashStart) dashStart.disabled = false;
+      if (dashEnd) dashEnd.disabled = false;
+      if (dashGenerateBtn) dashGenerateBtn.disabled = false;
+      if (dashLockBtn) dashLockBtn.disabled = false;
+    }
+    if (dashStart) dashStart.addEventListener('change', enableOnChange);
+    if (dashEnd) dashEnd.addEventListener('change', enableOnChange);
+  });
+
+  // Delegate open/download actions on history table
+  historyTableBody && historyTableBody.addEventListener('click', (e) => {
+    const target = e.target;
+    if (!target) return;
+    const idxStr = target.dataset.index;
+    if (typeof idxStr === 'undefined') return;
+    const idx = parseInt(idxStr, 10);
+    const snap = payrollHistory[idx];
+    if (!snap) return;
+    if (target.classList.contains('openSnapshot')) {
+      // Only allow opening locked snapshots
+      if (!snap.locked) return;
+      // Clear existing view then render snapshot as a read-only table
+      if (snapshotView) snapshotView.innerHTML = '';
+      const table = document.createElement('table');
+      table.style.borderCollapse = 'collapse';
+      table.style.width = '100%';
+      const thead = document.createElement('thead');
+      const headerRow = document.createElement('tr');
+      const hdrs = ['ID','Name','Regular Hrs','OT Hrs','Rate','Reg Pay','OT Pay','Gross','Pag-IBIG','PhilHealth','SSS','SSS Loan','Pag-IBIG Loan','Vale','Wed Vale','Total Ded','Net Pay'];
+      hdrs.forEach(h => {
+        const th = document.createElement('th');
+        th.textContent = h;
+        th.style.border = '1px solid #e2e8f0';
+        th.style.background = '#f1f5f9';
+        th.style.padding = '4px';
+        headerRow.appendChild(th);
+      });
+      thead.appendChild(headerRow);
+      table.appendChild(thead);
+      const tbodyEl = document.createElement('tbody');
+      snap.rows.forEach(r => {
+        const tr = document.createElement('tr');
+        const vals = [r.id,r.name,r.regHrs,r.otHrs,r.rate,r.regPay,r.otPay,r.grossPay,r.pagibig,r.philhealth,r.sss,r.loanSSS,r.loanPI,r.vale,r.valeWed,r.totalDed,r.netPay];
+        vals.forEach(v => {
+          const td = document.createElement('td');
+          td.textContent = v;
+          td.style.border = '1px solid #e2e8f0';
+          td.style.padding = '4px';
+          td.style.textAlign = (typeof v === 'number') ? 'right' : 'left';
+          tr.appendChild(td);
+        });
+        tbodyEl.appendChild(tr);
+      });
+      table.appendChild(tbodyEl);
+      if (snapshotView) snapshotView.appendChild(table);
+      // Disable editing across DTR, payroll, and project totals until date range changes
+      const disableSelectors = [
+        '#panelPayroll input', '#panelPayroll button', '#panelPayroll select',
+        '#panelMain input', '#panelMain button', '#panelMain select',
+        '#panelProjects input', '#panelProjects button', '#panelProjects select',
+        '#panelProjectTotals input', '#panelProjectTotals button', '#panelProjectTotals select'
+      ];
+      disableSelectors.forEach(sel => {
+        document.querySelectorAll(sel).forEach(el => { el.disabled = true; });
+      });
+      // Disable date range inputs and Generate button, and mark them as forced
+      const ws = document.getElementById('weekStart');
+      const we = document.getElementById('weekEnd');
+      const gen = document.getElementById('dashGenerate');
+      if (ws) {
+        ws.disabled = true;
+        ws.dataset.forced = 'true';
+      }
+      if (we) {
+        we.disabled = true;
+        we.dataset.forced = 'true';
+      }
+      if (gen) gen.disabled = true;
+      function enableOnDateChange() {
+        // Remove listeners
+        if (ws) ws.removeEventListener('change', enableOnDateChange);
+        if (we) we.removeEventListener('change', enableOnDateChange);
+        // Re-enable all disabled inputs/buttons/selects
+        disableSelectors.forEach(sel => {
+          document.querySelectorAll(sel).forEach(el => { el.disabled = false; });
+        });
+        // Clear forced flags and re-enable date range inputs and Generate button
+        if (ws) {
+          delete ws.dataset.forced;
+          ws.disabled = false;
+        }
+        if (we) {
+          delete we.dataset.forced;
+          we.disabled = false;
+        }
+        if (gen) gen.disabled = false;
+      }
+      if (ws) ws.addEventListener('change', enableOnDateChange);
+      if (we) we.addEventListener('change', enableOnDateChange);
+    }
+    if (target.classList.contains('deleteSnapshot')) {
+      // Delete a snapshot from history if it is not locked
+      if (snap.locked) return; // Skip deletion for locked snapshots
+      const confirmDel = confirm('Are you sure you want to delete this payroll record? This cannot be undone.');
+      if (!confirmDel) return;
+      payrollHistory.splice(idx, 1);
+      saveHistory();
+      renderHistory();
+      renderActivePayrolls();
+      return;
+    }
+    if (target.classList.contains('unlockSnapshot')) {
+      // Unlock this locked snapshot: mark as unlocked and remove timestamp
+      if (!snap.locked) return;
+      snap.locked = false;
+      snap.lockedAt = '';
+      saveHistory();
+      renderHistory();
+      renderActivePayrolls();
+    }
+    if (target.classList.contains('downloadSnapshot')) {
+      const csv = snapshotToCSV(snap);
+      const blob = new Blob([csv], { type: 'text/csv' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `payroll_${snap.startDate}_${snap.endDate}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+    }
+  });
+
+  // Compare two snapshots and display net pay differences
+  diffBtn && diffBtn.addEventListener('click', () => {
+    const selected = Array.from(document.querySelectorAll('.diff-select')).filter(cb => cb.checked);
+    if (selected.length !== 2) {
+      alert('Please select exactly two snapshots to compare.');
+      return;
+    }
+    const idx1 = parseInt(selected[0].dataset.index, 10);
+    const idx2 = parseInt(selected[1].dataset.index, 10);
+    const s1 = payrollHistory[idx1];
+    const s2 = payrollHistory[idx2];
+    if (!s1 || !s2) return;
+    const map1 = {};
+    s1.rows.forEach(r => { map1[r.id] = r; });
+    const map2 = {};
+    s2.rows.forEach(r => { map2[r.id] = r; });
+    const allIds = new Set([...Object.keys(map1), ...Object.keys(map2)]);
+    if (snapshotView) snapshotView.innerHTML = '';
+    const table = document.createElement('table');
+    table.style.borderCollapse = 'collapse';
+    table.style.width = '100%';
+    const thead = document.createElement('thead');
+    const hr = document.createElement('tr');
+    ['ID','Name',`Net (${s1.startDate} - ${s1.endDate})`,`Net (${s2.startDate} - ${s2.endDate})`,'Difference'].forEach(h => {
+      const th = document.createElement('th');
+      th.textContent = h;
+      th.style.border = '1px solid #e2e8f0';
+      th.style.background = '#f1f5f9';
+      th.style.padding = '4px';
+      hr.appendChild(th);
+    });
+    thead.appendChild(hr);
+    table.appendChild(thead);
+    const tbody = document.createElement('tbody');
+    allIds.forEach(id => {
+      const r1 = map1[id] || {};
+      const r2 = map2[id] || {};
+      const name = r2.name || r1.name || '';
+      const net1 = parseFloat(r1.netPay) || 0;
+      const net2 = parseFloat(r2.netPay) || 0;
+      const diff = (net2 - net1).toFixed(2);
+      const tr = document.createElement('tr');
+      [id, name, net1.toFixed(2), net2.toFixed(2), diff].forEach((val, i) => {
+        const td = document.createElement('td');
+        td.textContent = val;
+        td.style.border = '1px solid #e2e8f0';
+        td.style.padding = '4px';
+        if (i >= 2) td.style.textAlign = 'right';
+        tr.appendChild(td);
+      });
+      // Highlight difference cell
+      const diffVal = parseFloat(diff);
+      const diffCell = tr.children[4];
+      if (diffVal > 0) diffCell.style.background = '#dcfce7';
+      else if (diffVal < 0) diffCell.style.background = '#fee2e2';
+      tbody.appendChild(tr);
+    });
+    table.appendChild(tbody);
+    if (snapshotView) snapshotView.appendChild(table);
+  });
+
+  // Initial render on page load
+  renderHistory();
+  if (typeof renderActivePayrolls === 'function') renderActivePayrolls();
+});
+</script>
    </div>
   </section>
   <section class="panel" id="panelProjectTotals">
-    <h3>Project Totals</h3>
+    <h3>Reports</h3>
     <div class="controls" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
       <div class="muted">Uses the global Start/End dates in the header and includes per-day project/schedule overrides.</div>
       <div style="flex:1 1 auto"></div>
       <button id="downloadProjectTotalsCSV">Download CSV</button>
-      <button id="printProjectTotalsBtn">Print Project Totals</button>
+      <button id="printProjectTotalsBtn">Print Reports</button>
     </div>
     <table id="projectTotalsTable">
       <thead>
@@ -1540,25 +2519,48 @@ renderSssTable();
       </thead>
       <tbody></tbody>
     </table>
+    <!-- Modal for detailed project report -->
+    <div id="projectReportModal" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.5);align-items:center;justify-content:center;z-index:10000;">
+      <div style="background:white;padding:20px;border-radius:10px;max-height:80vh;overflow:auto;width:90%;max-width:800px;position:relative;">
+        <button type="button" id="closeProjectReport" style="position:absolute;top:10px;right:10px;font-size:20px;border:none;background:transparent;cursor:pointer;">&times;</button>
+        <div id="projectReportContent"></div>
+      </div>
+    </div>
   </section>
-
-  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js">
-   function safeSetLS(key, obj){ try{ localStorage.setItem(key, JSON.stringify(obj)); } catch(e){ console.error('localStorage quota error for', key, e); alert('Storage is full. Please backup and clear some data.'); } }
-
-  const csv = rows.map(r => r.map(v => {
-    const s = String(v ?? '');
-    return (s.includes(',') || s.includes('"') || s.includes('\\n')) ? '"' + s.replace(/"/g,'""') + '"' : s;
-  }).join(',')).join('\\n');
-  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(blob);
-  a.download = 'employees_backup.csv';
-  a.click();
-});
-  </script>
+      </main>
+    </div>
+    <!-- Sidebar navigation behaviour -->
+    <script>
+    document.querySelectorAll('.nav-link').forEach(function(link){
+        link.addEventListener('click', function(e){
+            e.preventDefault();
+            document.querySelectorAll('.nav-link').forEach(function(l){ l.classList.remove('active'); });
+            this.classList.add('active');
+            var icon = this.querySelector('.nav-icon').textContent;
+            var text = this.textContent.trim();
+            var pageTitle = document.querySelector('.page-title');
+            if(pageTitle){
+                pageTitle.innerHTML = '<span style="font-size: 32px;">' + icon + '</span> ' + text;
+            }
+        });
+    });
+    function toggleSidebar(){
+        var sidebar = document.getElementById('sidebar');
+        if(sidebar) sidebar.classList.toggle('active');
+    }
+    document.addEventListener('click', function(e){
+        var sidebar = document.getElementById('sidebar');
+        var mobileBtn = document.querySelector('.mobile-menu-btn');
+        if(window.innerWidth <= 768 && sidebar && sidebar.classList.contains('active') && !sidebar.contains(e.target) && mobileBtn && !mobileBtn.contains(e.target)){
+            sidebar.classList.remove('active');
+        }
+    });
+    </script>
+    <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
   <script>
    
 const LS_RECORDS = 'att_records_v2';
+
 const LS_SCHEDULES = 'att_schedules_v2';
 const LS_SCHEDULES_DEFAULT = 'att_schedules_default';
 const LS_EMPLOYEES = 'att_employees_v2';
@@ -1566,12 +2568,32 @@ const LS_PROJECTS = 'att_projects_v1';
 const LS_FILTER_PROJECT = 'att_filter_project_v1';
 const LS_OVERRIDES_SCHEDULES = 'att_overrides_schedules';
 const LS_OVERRIDES_PROJECTS = 'att_overrides_projects';
+
 let overridesSchedules = JSON.parse(localStorage.getItem(LS_OVERRIDES_SCHEDULES) || '{}');
 let overridesProjects = JSON.parse(localStorage.getItem(LS_OVERRIDES_PROJECTS) || '{}');
+// Store per-date split flags for half-day display. When true for an empId+date,
+// the DTR entry is rendered as two separate rows (AM and PM) rather than a
+// single combined row. The split state is persisted in localStorage under
+// LS_SPLITS. Keys are formatted as empId + '___' + date.
+const LS_SPLITS = 'att_splits_v1';
+let splits = {};
+try {
+  splits = JSON.parse(localStorage.getItem(LS_SPLITS) || '{}');
+} catch (e) {
+  splits = {};
+}
+function saveSplits() {
+  try {
+    localStorage.setItem(LS_SPLITS, JSON.stringify(splits));
+  } catch (e) {
+    console.warn('Saving splits failed', e);
+  }
+}
 function saveOverrides(){
   localStorage.setItem(LS_OVERRIDES_SCHEDULES, JSON.stringify(overridesSchedules));
   localStorage.setItem(LS_OVERRIDES_PROJECTS, JSON.stringify(overridesProjects));
 }
+
 
 const DEFAULT_RANGES = {
   rng_am_in_start:"05:00", rng_am_in_end:"09:00",
@@ -1579,14 +2601,18 @@ const DEFAULT_RANGES = {
   rng_pm_in_start:"12:30", rng_pm_in_end:"14:30",
   rng_pm_out_start:"15:00", rng_pm_out_end:"20:00",
   rng_ot_in_start:"19:00", rng_ot_in_end:"22:00",
-  rng_ot_out_start:"19:00", rng_ot_out_end:"23:59"
+  rng_ot_out_start:"19:00", rng_ot_out_end:"23:59",
+  rng_sat_ot_start:"11:00", rng_sat_ot_end:"23:59"
 };
 const DEFAULT_SCHEDULE = {
   name: "Default",
   sch_am_start:"08:00", sch_am_end:"12:00",
   sch_pm_start:"13:00", sch_pm_end:"17:00",
+  
+  sch_sat_start:"", sch_sat_end:"",
   sch_grace:15,
   ...DEFAULT_RANGES
+
 };
 
 let storedRecords = JSON.parse(localStorage.getItem(LS_RECORDS) || '[]');
@@ -1647,10 +2673,14 @@ function saveSchedulesToLS(){
 
 const tabs = {
   tabMain: document.getElementById('tabMain'),
+  // Dashboard tab/button for high-level summary and payroll history
+  tabDashboard: document.getElementById('tabDashboard'),
   tabSchedule: document.getElementById('tabSchedule'),
   tabEmployees: document.getElementById('tabEmployees'),
   tabProjects: document.getElementById('tabProjects'),
   panelMain: document.getElementById('panelMain'),
+  // Corresponding Dashboard panel
+  panelDashboard: document.getElementById('panelDashboard'),
   panelSchedule: document.getElementById('panelSchedule'),
   panelEmployees: document.getElementById('panelEmployees'),
   panelProjects: document.getElementById('panelProjects'),
@@ -1659,7 +2689,24 @@ const tabs = {
 };
 function showTab(name){
   Object.values(tabs).forEach(el => el && el.classList && el.classList.remove('active'));
+
+  // Manage date range controls: disable on non-dashboard tabs, enable on dashboard unless forced
+  (() => {
+    const wsEl = document.getElementById('weekStart');
+    const weEl = document.getElementById('weekEnd');
+    if (wsEl && weEl) {
+      const isDash = (name === 'dashboard');
+      // Only toggle if the inputs are not forcibly disabled (e.g., due to lock/open)
+      const forced = wsEl.dataset.forced === 'true' || weEl.dataset.forced === 'true';
+      if (!forced) {
+        wsEl.disabled = !isDash;
+        weEl.disabled = !isDash;
+      }
+    }
+  })();
   if(name==='main'){ tabs.tabMain.classList.add('active'); tabs.panelMain.classList.add('active'); }
+  // When the dashboard is selected, activate its tab and panel
+  if(name==='dashboard'){ tabs.tabDashboard && tabs.tabDashboard.classList.add('active'); tabs.panelDashboard && tabs.panelDashboard.classList.add('active'); }
   if(name==='schedule'){ tabs.tabSchedule.classList.add('active'); tabs.panelSchedule.classList.add('active'); renderScheduleEditor(); }
   if(name==='employees'){ tabs.tabEmployees.classList.add('active'); tabs.panelEmployees.classList.add('active'); renderEmployees(); }
   if(name==='projects'){ tabs.tabProjects.classList.add('active'); tabs.panelProjects.classList.add('active'); renderProjects(); }
@@ -1681,6 +2728,16 @@ tabs.tabPayroll.addEventListener('click', ()=>{
   try { if (typeof calculatePayrollFromRecords==='function') calculatePayrollFromRecords(); } catch(e){}
   try { if (typeof calculatePayrollFromRecords==='function') calculatePayrollFromRecords(); } catch(e){}
 });
+
+// Switch to the dashboard tab when clicked. Render payroll history if available.
+if (tabs.tabDashboard) {
+  tabs.tabDashboard.addEventListener('click', () => {
+    showTab('dashboard');
+    try {
+      if (typeof renderHistory === 'function') renderHistory();
+    } catch (e) {}
+  });
+}
 
 const scheduleSelect = document.getElementById('scheduleSelect');
 const scheduleNameInput = document.getElementById('scheduleName');
@@ -1707,7 +2764,12 @@ function renderScheduleEditor(){
   document.querySelector('[data-key="sch_am_end"]').value = s.sch_am_end || DEFAULT_SCHEDULE.sch_am_end;
   document.querySelector('[data-key="sch_pm_start"]').value = s.sch_pm_start || DEFAULT_SCHEDULE.sch_pm_start;
   document.querySelector('[data-key="sch_pm_end"]').value = s.sch_pm_end || DEFAULT_SCHEDULE.sch_pm_end;
-  document.querySelector('[data-key="sch_grace"]').value = (s.sch_grace !== undefined ? s.sch_grace : DEFAULT_SCHEDULE.sch_grace);
+  
+  const satStartInp = document.querySelector('[data-key="sch_sat_start"]');
+  const satEndInp   = document.querySelector('[data-key="sch_sat_end"]');
+  if (satStartInp) satStartInp.value = (s.sch_sat_start || "");
+  if (satEndInp)   satEndInp.value   = (s.sch_sat_end   || "");
+document.querySelector('[data-key="sch_grace"]').value = (s.sch_grace !== undefined ? s.sch_grace : DEFAULT_SCHEDULE.sch_grace);
   scheduleNameInput.value = s.name || ("Schedule " + sel);
   document.querySelectorAll('#rangesTable input[data-key]').forEach(inp=>{
     const key = inp.dataset.key;
@@ -1722,7 +2784,10 @@ function gatherScheduleFromEditor(){
     sch_am_end: document.querySelector('[data-key="sch_am_end"]').value || DEFAULT_SCHEDULE.sch_am_end,
     sch_pm_start: document.querySelector('[data-key="sch_pm_start"]').value || DEFAULT_SCHEDULE.sch_pm_start,
     sch_pm_end: document.querySelector('[data-key="sch_pm_end"]').value || DEFAULT_SCHEDULE.sch_pm_end,
-    sch_grace: Number(document.querySelector('[data-key="sch_grace"]').value || DEFAULT_SCHEDULE.sch_grace),
+    
+    sch_sat_start: (document.querySelector('[data-key="sch_sat_start"]')?.value || ""),
+    sch_sat_end:   (document.querySelector('[data-key="sch_sat_end"]')?.value   || ""),
+sch_grace: Number(document.querySelector('[data-key="sch_grace"]').value || DEFAULT_SCHEDULE.sch_grace),
     ...Object.fromEntries([...document.querySelectorAll('#rangesTable input[data-key]')].map(i=>[i.dataset.key, i.value || DEFAULT_RANGES[i.dataset.key] || ""]))
   };
 }
@@ -2125,6 +3190,52 @@ function buildProjectDropdown(empId, date, currentProjectId){
   return sel;
 }
 
+// Build a project dropdown for half-day (AM/PM) rows. Uses a key that
+// appends the half identifier (e.g. '123___2023-08-19___AM') so that
+// overrides can be stored separately for morning and afternoon entries.
+function buildProjectDropdownHalf(empId, date, half, currentProjectId){
+  const sel = document.createElement('select');
+  // Include a none/default option
+  const noneOpt = document.createElement('option');
+  noneOpt.value = '';
+  noneOpt.textContent = '(None)';
+  sel.appendChild(noneOpt);
+  Object.keys(storedProjects).forEach(pid => {
+    const o = document.createElement('option');
+    o.value = pid;
+    o.textContent = storedProjects[pid].name;
+    if(pid === currentProjectId) o.selected = true;
+    sel.appendChild(o);
+  });
+  sel.addEventListener('change', () => {
+    // Persist override keyed by empId + date + half
+    overridesProjects[empId + '___' + date + '___' + half] = sel.value;
+    saveOverrides();
+    // Re-render to apply changes
+    renderResults();
+  });
+  return sel;
+}
+
+// Build a schedule dropdown for half-day (AM/PM) rows. Similar to
+// buildScheduleDropdown but stores overrides using a half-specific key.
+function buildScheduleDropdownHalf(empId, date, half, currentScheduleId){
+  const sel = document.createElement('select');
+  Object.keys(storedSchedules).forEach(sid => {
+    const o = document.createElement('option');
+    o.value = sid;
+    o.textContent = storedSchedules[sid].name + (sid === defaultScheduleId ? ' (Default)' : '');
+    if(sid === currentScheduleId) o.selected = true;
+    sel.appendChild(o);
+  });
+  sel.addEventListener('change', () => {
+    overridesSchedules[empId + '___' + date + '___' + half] = sel.value;
+    saveOverrides();
+    renderResults();
+  });
+  return sel;
+}
+
 function renderResults(){
   renderScheduleSelector();
   renderProjectFilterOptions();
@@ -2192,59 +3303,319 @@ let empProjId = emp ? (emp.projectId || '') : '';
 
     let pmOutRefMins = pmOutActual ? toMins(pmOutActual) : toMins(schedule.sch_pm_end);
 
-    const otCandidates = times.filter(t => {
+    
+    
+    // === Saturday rule (scoped) ===
+    // Use local flags/vars so other days are untouched.
+    let __isSaturday = false, __satStart = null, __satEnd = null;
+    try {
+      const __dow = (function(d){
+        const dt = new Date(d + 'T00:00');
+        return (isNaN(dt) ? new Date(d) : dt).getDay();
+      })(date);
+      if (__dow === 6) { // Saturday
+        __isSaturday = true;
+        const satStart = schedule.sch_sat_start || schedule.sch_am_start || "08:00";
+        const satEnd   = schedule.sch_sat_end   || schedule.sch_pm_end || schedule.sch_am_end || "11:00";
+        __satStart = satStart;
+        __satEnd   = satEnd;
+        // For OT picking, any time after scheduled end counts as OT
+        pmOutRefMins = toMins(satEnd);
+      }
+    } catch(e){ console.warn('Saturday OT local patch error', e); }
+const otCandidates = times.filter(t => {
       const mins = toMins(t);
       return mins > pmOutRefMins && mins >= toMins(rangesForEmp.otIn.start) && mins <= toMins(rangesForEmp.otIn.end);
     });
     // --- Patched OT In/Out picking (DTR) ---
 const otInCandidates = times.filter(t => {
   const m = toMins(t);
-  return m > pmOutRefMins &&
-         m >= toMins(rangesForEmp.otIn.start) &&
-         m <= toMins(rangesForEmp.otIn.end);
+  return m > pmOutRefMins && m >= toMins(__isSaturday ? __satEnd : rangesForEmp.otIn.start) && m <= toMins(__isSaturday ? '23:59' : rangesForEmp.otIn.end);
 });
 const otInActual = otInCandidates.length ? otInCandidates[0] : null;
 
 const otOutCandidates = times
   .filter(t => {
     const m = toMins(t);
-    return m > pmOutRefMins &&
-           m >= toMins(rangesForEmp.otOut.start) &&
-           m <= toMins(rangesForEmp.otOut.end);
+    return m > pmOutRefMins && m >= toMins(__isSaturday ? __satEnd : rangesForEmp.otOut.start) && m <= toMins(__isSaturday ? '23:59' : rangesForEmp.otOut.end);
   })
   .filter(t => !otInActual || toMins(t) >= toMins(otInActual));
 const otOutActual = otOutCandidates.length ? otOutCandidates[otOutCandidates.length - 1] : null;
 // --- end patch ---
 
+// Saturday fallback: if only a single OUT exists beyond the Saturday end, treat OT as (satEnd -> lastOut)
+let otInCalc = otInActual;
+let otOutCalc = otOutActual;
+try {
+  if (__isSaturday && __satEnd) {
+    const lastOut = pmOutActual || amOutActual || null;
+    const lastOutM = lastOut ? toMins(lastOut) : null;
+    const satEndM = toMins(__satEnd);
+    if (lastOutM !== null && lastOutM > satEndM) {
+      if (!otInCalc) otInCalc = __satEnd;
+      if (!otOutCalc) otOutCalc = lastOut;
+    }
+  }
+} catch(e){ console.warn('Saturday OT fallback failed', e); }
+
+
+    
+    
+    
+    // Recompute regular time deterministically (no dependency on raw 'times' array)
     let totalMins = 0; const grace = Number(schedule.sch_grace) || 0;
 
-    if(amInActual && pmOutActual && !amOutActual && !pmInActual){
-      const schedAmStart = toMins(schedule.sch_am_start), schedAmEnd = toMins(schedule.sch_am_end);
-      const schedPmStart = toMins(schedule.sch_pm_start), schedPmEnd = toMins(schedule.sch_pm_end);
-      const amInM = toMins(amInActual), pmOutM = toMins(pmOutActual);
-      const lateMinutes = Math.max(0, amInM - schedAmStart);
-      const undertimeMinutes = Math.max(0, schedPmEnd - pmOutM);
-      const fullDayMins = Math.max(0,(schedAmEnd - schedAmStart)) + Math.max(0,(schedPmEnd - schedPmStart));
-      totalMins = lateMinutes <= grace ? Math.max(0, fullDayMins - undertimeMinutes) : Math.max(0, fullDayMins - lateMinutes - undertimeMinutes);
-    } else {
-      if(amInActual && amOutActual){
-        let inM = toMins(amInActual); const schedStart = toMins(schedule.sch_am_start), schedEnd = toMins(schedule.sch_am_end);
-        if(inM <= schedStart + grace) inM = schedStart; const endM = Math.min(toMins(amOutActual), schedEnd); if(endM>inM) totalMins += (endM-inM);
+    const clampSeg = (inStr, outStr, segStartStr, segEndStr) => {
+      // Helper to add minutes
+      const addMin = (m, d) => /* no-op placeholder removed */ m; // placeholder
+    
+      if (!inStr || !outStr || !segStartStr || !segEndStr) return 0;
+      let inM = toMins(inStr);
+      const outM = toMins(outStr);
+      const segStart = toMins(segStartStr), segEndRaw = toMins(segEndStr);
+      let segEnd = segEndRaw;
+      // Auto-correct common input mistake: PM End typed as AM (e.g., 06:00 instead of 18:00)
+      if (segEnd <= segStart && segStart >= 12*60 && segEnd <= 12*60) {
+        segEnd += 12*60; // push to PM
       }
-      if(pmInActual && pmOutActual){
-        let inM = toMins(pmInActual); const schedStart = toMins(schedule.sch_pm_start), schedEnd = toMins(schedule.sch_pm_end);
-        if(inM <= schedStart + grace) inM = schedStart; const endM = Math.min(toMins(pmOutActual), schedEnd); if(endM>inM) totalMins += (endM-inM);
+      if (segEnd <= segStart) return 0;
+      if (inM <= segStart + grace) inM = segStart;
+      const endM = Math.min(outM, segEnd);
+      return Math.max(0, endM - inM);
+    };
+
+    if (__isSaturday && __satStart && __satEnd) {
+      // Use the earliest actual IN and latest actual OUT between AM/PM within the Saturday window
+      const firstIn  = amInActual || pmInActual || null;
+      const lastOut  = pmOutActual || amOutActual || null;
+      totalMins = clampSeg(firstIn, lastOut, __satStart, __satEnd);
+    } else {
+      // Weekdays: compute AM and PM independently; add them
+      const hasBridge = !!(amInActual && !amOutActual && !pmInActual && pmOutActual);
+      if (hasBridge) {
+        const synthAmOut = schedule.sch_am_end || "12:00";
+        const synthPmIn  = schedule.sch_pm_start || "13:00";
+        totalMins =
+          clampSeg(amInActual, synthAmOut, schedule.sch_am_start, schedule.sch_am_end) +
+          clampSeg(synthPmIn,  pmOutActual, schedule.sch_pm_start, schedule.sch_pm_end);
+      } else {
+        const amMins = clampSeg(amInActual, amOutActual, schedule.sch_am_start, schedule.sch_am_end);
+        const pmMins = clampSeg(pmInActual, pmOutActual, schedule.sch_pm_start, schedule.sch_pm_end);
+        totalMins = amMins + pmMins;
       }
     }
 
     const totalRegularDecimal = minsToDecimal(totalMins);
-    let otMins = 0;
-    if(otInActual && otOutActual){
-      const otStartClamp = Math.max(toMins(otInActual), toMins(rangesForEmp.otIn.start));
-      const otEndClamp = Math.min(toMins(otOutActual), toMins(rangesForEmp.otOut.end || rangesForEmp.otIn.end));
+let otMins = 0;
+    if(otInCalc && otOutCalc){
+      const otStartClamp = Math.max(toMins(otInCalc), toMins(__isSaturday ? (__satEnd || rangesForEmp.otIn.start) : rangesForEmp.otIn.start));
+      const otEndClamp   = Math.min(toMins(otOutCalc), toMins(__isSaturday ? '23:59' : (rangesForEmp.otOut.end || rangesForEmp.otIn.end)));
       if(otEndClamp > otStartClamp) otMins = otEndClamp - otStartClamp;
     }
+    
+    // Saturday definitive OT computation: last OUT beyond Saturday end is OT
+    try {
+      if (__isSaturday && __satEnd) {
+        const lastOut = (pmOutActual || amOutActual || null);
+        if (lastOut) {
+          const satEndM = toMins(__satEnd);
+          const satStartClamp = Math.max(satEndM, toMins(schedule.rng_sat_ot_start || __satEnd || DEFAULT_RANGES.rng_sat_ot_start));
+          const satEndClamp   = toMins(schedule.rng_sat_ot_end || DEFAULT_RANGES.rng_sat_ot_end);
+          const lastOutM = toMins(lastOut);
+          const startM = satStartClamp;
+          const endM   = Math.min(lastOutM, satEndClamp);
+          const diff = endM - startM;
+          if (diff > 0) otMins = diff;
+        }
+      }
+    } catch(e){ console.warn('Saturday OT direct compute failed', e); }
     const otDecimal = minsToDecimal(otMins);
+
+    // --- Begin AM/PM Split Logic ---
+    // If this record is flagged for split, render two separate rows (AM and PM)
+    // instead of one combined row. A split is recorded in the `splits` object
+    // keyed by the employee/date (empId + '___' + date). When a record is
+    // split we compute the regular hours and overtime separately for the
+    // morning and afternoon using the schedule assigned to that half (any
+    // overrides are honoured). Each half has its own project and schedule
+    // dropdowns. Grace periods are applied according to the selected schedule.
+    const splitKey = empId + '___' + date;
+    if (splits && splits[splitKey]) {
+      // The employee name used for both halves
+      const name = emp ? emp.name : '';
+      // Helper to compute minutes for a segment using a specific schedule and grace
+      const clampSegHalf = (inStr, outStr, segStartStr, segEndStr, sched) => {
+        if (!inStr || !outStr || !segStartStr || !segEndStr) return 0;
+        let inM = toMins(inStr);
+        const outM = toMins(outStr);
+        const segStart = toMins(segStartStr);
+        let segEnd = toMins(segEndStr);
+        // If a PM end is entered as an AM time (e.g., 06:00 instead of 18:00), fix it
+        if (segEnd <= segStart && segStart >= 12 * 60 && segEnd <= 12 * 60) segEnd += 12 * 60;
+        if (segEnd <= segStart) return 0;
+        const g = Number(sched && sched.sch_grace) || 0;
+        if (inM <= segStart + g) inM = segStart;
+        const endM = Math.min(outM, segEnd);
+        return Math.max(0, endM - inM);
+      };
+      // Computes OT minutes and the actual OT in/out times for the PM half
+      const computeOtHalf = (sched) => {
+        let otM = 0, otIn = null, otOut = null;
+        // Reference end of the PM shift for deciding when OT starts
+        let pmOutRef = pmOutActual ? toMins(pmOutActual) : toMins(sched.sch_pm_end || DEFAULT_SCHEDULE.sch_pm_end);
+        // Check if the date is Saturday and fetch Saturday start/end times
+        let isSat = false, satStart = null, satEnd = null;
+        try {
+          const dow = (function(d){
+            const dt = new Date(d + 'T00:00');
+            return (isNaN(dt) ? new Date(d) : dt).getDay();
+          })(date);
+          if (dow === 6) {
+            isSat = true;
+            satStart = sched.sch_sat_start || sched.sch_am_start || '08:00';
+            satEnd   = sched.sch_sat_end   || sched.sch_pm_end || sched.sch_am_end || '11:00';
+            pmOutRef = toMins(satEnd);
+          }
+        } catch(e) { /* ignore errors */ }
+        // Build OT range windows using schedule or defaults
+        const rng = {
+          otIn: {
+            start: sched.rng_ot_in_start || DEFAULT_RANGES.rng_ot_in_start,
+            end:   sched.rng_ot_in_end   || DEFAULT_RANGES.rng_ot_in_end
+          },
+          otOut: {
+            start: sched.rng_ot_out_start || DEFAULT_RANGES.rng_ot_out_start,
+            end:   sched.rng_ot_out_end   || DEFAULT_RANGES.rng_ot_out_end
+          }
+        };
+        // Identify candidate OT IN times (first punch beyond pmOutRef in window)
+        const otInCands = times.filter(t => {
+          const m = toMins(t);
+          return m > pmOutRef && m >= toMins(isSat ? satEnd : rng.otIn.start) && m <= toMins(isSat ? '23:59' : rng.otIn.end);
+        });
+        otIn = otInCands.length ? otInCands[0] : null;
+        // Identify candidate OT OUT times (last punch beyond pmOutRef in window and after OT IN)
+        const otOutCands = times.filter(t => {
+          const m = toMins(t);
+          return m > pmOutRef && m >= toMins(isSat ? satEnd : rng.otOut.start) && m <= toMins(isSat ? '23:59' : rng.otOut.end);
+        }).filter(t => !otIn || toMins(t) >= toMins(otIn));
+        otOut = otOutCands.length ? otOutCands[otOutCands.length - 1] : null;
+        // Saturday fallback: treat a single OUT beyond Saturday end as OT
+        if (isSat && satEnd) {
+          const lastOut = pmOutActual || amOutActual || null;
+          const lastOutM = lastOut ? toMins(lastOut) : null;
+          const satEndM = toMins(satEnd);
+          if (lastOutM !== null && lastOutM > satEndM) {
+            if (!otIn) otIn = satEnd;
+            if (!otOut) otOut = lastOut;
+          }
+        }
+        // Compute OT minutes within clamped OT window
+        if (otIn && otOut) {
+          const startClamp = Math.max(toMins(otIn), toMins(isSat ? (satEnd || rng.otIn.start) : rng.otIn.start));
+          const endClamp   = Math.min(toMins(otOut), toMins(isSat ? '23:59' : (rng.otOut.end || rng.otIn.end)));
+          if (endClamp > startClamp) otM = endClamp - startClamp;
+        }
+        // Extra Saturday computation: last out beyond Saturday end counts fully as OT
+        try {
+          if (isSat && satEnd) {
+            const lastOut = (pmOutActual || amOutActual || null);
+            if (lastOut) {
+              const satEndM = toMins(satEnd);
+              const satStartClamp = Math.max(satEndM, toMins(sched.rng_sat_ot_start || DEFAULT_RANGES.rng_sat_ot_start));
+              const satEndClamp   = toMins(sched.rng_sat_ot_end || DEFAULT_RANGES.rng_sat_ot_end);
+              const lastOutM = toMins(lastOut);
+              const startM = satStartClamp;
+              const endM   = Math.min(lastOutM, satEndClamp);
+              const diff = endM - startM;
+              if (diff > 0) otM = diff;
+            }
+          }
+        } catch(e) { /* ignore */ }
+        return { mins: otM, otIn: otIn, otOut: otOut };
+      };
+      // Build two rows for AM and PM
+      ['AM', 'PM'].forEach(function(half) {
+        // Build keys for schedule and project overrides for this half
+        const halfKey = empId + '___' + date + '___' + half;
+        const schedIdHalf = (overridesSchedules && overridesSchedules[halfKey]) ? overridesSchedules[halfKey] : scheduleIdForEmp;
+        const schedHalf = storedSchedules[schedIdHalf] || DEFAULT_SCHEDULE;
+        // Regular minutes with grace for this half
+        let regMinsHalf = 0;
+        if (half === 'AM') {
+          regMinsHalf = clampSegHalf(amInActual, amOutActual, schedHalf.sch_am_start || DEFAULT_SCHEDULE.sch_am_start, schedHalf.sch_am_end || DEFAULT_SCHEDULE.sch_am_end, schedHalf);
+        } else {
+          regMinsHalf = clampSegHalf(pmInActual, pmOutActual, schedHalf.sch_pm_start || DEFAULT_SCHEDULE.sch_pm_start, schedHalf.sch_pm_end || DEFAULT_SCHEDULE.sch_pm_end, schedHalf);
+        }
+        const regDecHalf = minsToDecimal(regMinsHalf);
+        // OT calculation only applies to PM half
+        let otDecHalf = '0.00';
+        let otInHalf = null, otOutHalf = null;
+        if (half === 'PM') {
+          const otRes = computeOtHalf(schedHalf);
+          otDecHalf = minsToDecimal(otRes.mins);
+          otInHalf = otRes.otIn;
+          otOutHalf = otRes.otOut;
+        }
+        // Determine project override for this half
+        let projIdHalf;
+        if (overridesProjects && Object.prototype.hasOwnProperty.call(overridesProjects, halfKey)) {
+          projIdHalf = overridesProjects[halfKey];
+        } else {
+          projIdHalf = empProjId;
+        }
+        const trHalf = document.createElement('tr');
+        let html = '';
+        html += '<td>' + empId + '</td>';
+        html += '<td>' + (name || '') + '</td>';
+        // Placeholder cells for project and schedule dropdowns
+        html += '<td></td><td></td>';
+        html += '<td>' + date + '</td>';
+        // Clock in/out for this half; blank for the other half
+        if (half === 'AM') {
+          html += (amInActual ? '<td>' + amInActual + '</td>' : '<td class="missing">—</td>');
+          html += (amOutActual ? '<td>' + amOutActual + '</td>' : '<td class="missing">—</td>');
+          html += '<td class="missing">—</td><td class="missing">—</td>';
+        } else {
+          html += '<td class="missing">—</td><td class="missing">—</td>';
+          html += (pmInActual ? '<td>' + pmInActual + '</td>' : '<td class="missing">—</td>');
+          html += (pmOutActual ? '<td>' + pmOutActual + '</td>' : '<td class="missing">—</td>');
+        }
+        // OT columns: only filled in for PM row
+        if (half === 'PM') {
+          html += (otInHalf ? '<td>' + otInHalf + '</td>' : '<td class="missing">—</td>');
+          html += (otOutHalf ? '<td>' + otOutHalf + '</td>' : '<td class="missing">—</td>');
+        } else {
+          html += '<td class="missing">—</td><td class="missing">—</td>';
+        }
+        // Regular hours and OT hours columns
+        html += '<td>' + regDecHalf + '</td><td>' + otDecHalf + '</td>';
+        // Split action (unsplit) button
+        html += '<td><button type="button" onclick="(function(){ splits[\'' + splitKey + '\'] = false; saveSplits(); renderResults(); })()">Unsplit</button></td>';
+        trHalf.innerHTML = html;
+        // Highlight if half-specific overrides are set
+        const hasOverride = (overridesSchedules && overridesSchedules[halfKey]) || (overridesProjects && Object.prototype.hasOwnProperty.call(overridesProjects, halfKey));
+        if (hasOverride) {
+          trHalf.style.backgroundColor = '#fff3cd';
+        }
+        // Replace project cell with dropdown
+        const pc = trHalf.cells[2];
+        if (pc) {
+          pc.innerHTML = '';
+          pc.appendChild(buildProjectDropdownHalf(empId, date, half, projIdHalf));
+        }
+        // Replace schedule cell with dropdown
+        const sc = trHalf.cells[3];
+        if (sc) {
+          sc.innerHTML = '';
+          sc.appendChild(buildScheduleDropdownHalf(empId, date, half, schedIdHalf));
+        }
+        tbody.appendChild(trHalf);
+      });
+      // Skip default combined row rendering
+      continue;
+    }
+    // --- End AM/PM Split Logic ---
 
     const name = emp ? emp.name : '';
     const scheduleName = storedSchedules[scheduleIdForEmp] ? storedSchedules[scheduleIdForEmp].name + (scheduleIdForEmp===defaultScheduleId ? ' (Default)' : '') : '';
@@ -2255,9 +3626,10 @@ const otOutActual = otOutCandidates.length ? otOutCandidates[otOutCandidates.len
     tr.innerHTML =
       '<td>'+empId+'</td><td>'+name+'</td><td>'+projectName+'</td><td>'+scheduleName+'</td><td>'+date+'</td>' +
       cell(amInActual) + cell(amOutActual) + cell(pmInActual) + cell(pmOutActual) +
-      (otInActual ? '<td>'+otInActual+'</td>' : '<td class="missing">—</td>') +
-      (otOutActual ? '<td>'+otOutActual+'</td>' : '<td class="missing">—</td>') +
-      '<td>'+totalRegularDecimal+'</td><td>'+otDecimal+'</td>';
+      (otInCalc ? '<td>'+otInCalc+'</td>' : '<td class=\"missing\">—</td>') +
+      (otOutCalc ? '<td>'+otOutCalc+'</td>' : '<td class=\"missing\">—</td>') +
+      '<td>'+totalRegularDecimal+'</td><td>'+otDecimal+'</td>' +
+      '<td><button type="button" onclick="(function(){ splits[\'' + empId + '___' + date + '\'] = true; saveSplits(); renderResults(); })()">Split</button></td>';
     if(overridesSchedules[overrideKey] || overridesProjects[overrideKeyProj] !== undefined){
       tr.style.backgroundColor = '#fff3cd';
     }
@@ -2372,12 +3744,54 @@ function computeHoursForDateRange(startDate, endDate) {
 
     let pmOutRefMins = pmOutActual ? toMins(pmOutActual) : toMins(schedule.sch_pm_end);
 
-    const otInActual = pickEarliest({start: schedule.rng_ot_in_start, end: schedule.rng_ot_in_end});
+    
+    
+    // === Saturday rule (scoped) ===
+    // Use local flags/vars so other days are untouched.
+    let __isSaturday = false, __satStart = null, __satEnd = null;
+    try {
+      const __dow = (function(d){
+        const dt = new Date(d + 'T00:00');
+        return (isNaN(dt) ? new Date(d) : dt).getDay();
+      })(date);
+      if (__dow === 6) { // Saturday
+        __isSaturday = true;
+        const satStart = schedule.sch_sat_start || schedule.sch_am_start || "08:00";
+        const satEnd   = schedule.sch_sat_end   || schedule.sch_pm_end || schedule.sch_am_end || "11:00";
+        __satStart = satStart;
+        __satEnd   = satEnd;
+        // For OT picking, any time after scheduled end counts as OT
+        pmOutRefMins = toMins(satEnd);
+      }
+    } catch(e){ console.warn('Saturday OT local patch error', e); }
+const otInActual = pickEarliest({start: schedule.rng_ot_in_start, end: schedule.rng_ot_in_end});
     const otOutActual = pickLatest({start: schedule.rng_ot_out_start, end: schedule.rng_ot_out_end});
 
     let regMins = 0;
-    if (amInActual && amOutActual) regMins += toMins(amOutActual) - toMins(amInActual);
-    if (pmInActual && pmOutActual) regMins += toMins(pmOutActual) - toMins(pmInActual);
+    const grace = Number(schedule.sch_grace) || 0;
+    const segMins = (inStr, outStr, segStartStr, segEndStr) => {
+      if (!inStr || !outStr || !segStartStr || !segEndStr) return 0;
+      let inM = toMins(inStr);
+      const outM = toMins(outStr);
+      const sS = toMins(segStartStr), sEraw = toMins(segEndStr);
+      let sE = sEraw;
+      if (sE <= sS && sS >= 12*60 && sE <= 12*60) sE += 12*60; // fix 06:00 vs 18:00 typo
+      if (sE <= sS) return 0;
+      if (inM <= sS + grace) inM = sS; // grace on start
+      const endM = Math.min(outM, sE);
+      return Math.max(0, endM - inM);
+    };
+    // Normal pairs
+    regMins += segMins(amInActual, amOutActual, schedule.sch_am_start, schedule.sch_am_end);
+    regMins += segMins(pmInActual, pmOutActual, schedule.sch_pm_start, schedule.sch_pm_end);
+    // Bridge case: AM IN + PM OUT only
+    if (regMins === 0 && amInActual && !amOutActual && !pmInActual && pmOutActual) {
+      const synthAmOut = schedule.sch_am_end || "12:00";
+      const synthPmIn  = schedule.sch_pm_start || "13:00";
+      regMins =
+        segMins(amInActual, synthAmOut, schedule.sch_am_start, schedule.sch_am_end) +
+        segMins(synthPmIn,  pmOutActual, schedule.sch_pm_start, schedule.sch_pm_end);
+    }
     totalsReg[empId] += minsToDec(regMins);
 
     if (otInActual && otOutActual && toMins(otInActual) > pmOutRefMins) {
@@ -2396,6 +3810,7 @@ function calculatePayrollFromRecords(){
   otHours = {};
 
   const tbody = document.querySelector('#resultsTable tbody');
+
   if (tbody) {
     [...tbody.querySelectorAll('tr')].forEach(tr => {
       const cells = tr.cells || [];
@@ -2416,6 +3831,7 @@ function calculatePayrollFromRecords(){
       payrollRates[id] = storedEmployees[id]?.hourlyRate || 0;
     }
   });
+
   try { localStorage.setItem(LS_RATES, JSON.stringify(payrollRates)); } catch(e){}
   try { if (typeof renderTable==='function') renderTable(); } catch(e){ console.warn('renderTable failed', e); }
 }
@@ -2900,9 +4316,19 @@ inner += '</tbody></table></div></td>';
         dtr.innerHTML = inner;
         dtr.style.display = 'none';
         tbody.appendChild(dtr);
-        // toggle
+        // toggle and show detailed modal when a project row is clicked. The modal
+        // provides a comprehensive breakdown and grand totals for the selected project.
         tr.style.cursor = 'pointer';
-        tr.addEventListener('click', function(dt){ return function(){ dt.style.display = (dt.style.display==='none'?'table-row':'none'); }; }(dtr));
+        tr.addEventListener('click', (function(detailRow, rowObj){
+          return function(){
+            // Show modal with project breakdown if available
+            if (typeof showProjectReport === 'function') showProjectReport(rowObj);
+            // Toggle the inline breakdown row visibility for quick reference
+            if (detailRow) {
+              detailRow.style.display = (detailRow.style.display === 'none' ? 'table-row' : 'none');
+            }
+          };
+        })(dtr, row));
       }
 
     }
@@ -2926,16 +4352,6 @@ var csv = rows.map(function(r){
     var a = document.createElement('a'); a.href=url; a.download='project_totals.csv'; document.body.appendChild(a); a.click(); a.remove();
   }
 })();
-</script>
-
-
-<script>
-document.addEventListener('DOMContentLoaded', function() {
-  let pass = prompt("Enter password:");
-  if (pass !== "admin") {
-    document.body.innerHTML = "<h2 style='color:red;text-align:center;margin-top:20%;'>Access Denied</h2>";
-  }
-});
 </script>
 
 
@@ -2993,6 +4409,106 @@ document.addEventListener('DOMContentLoaded', function(){
   var btn = document.getElementById('printProjectTotalsBtn');
   if (btn) btn.addEventListener('click', function(){ window.print(); });
 });
+</script>
+
+<!-- Enhanced DTR Print -->
+<script>
+// Enhanced DTR print: clones the results table, removes 'Split' or 'Actions' columns,
+// replaces dropdowns with selected text, and shows date range/project filter.
+(function(){
+  function printDTR(){
+    try{
+      var table = document.getElementById('resultsTable');
+      if(!table){ alert('No DTR records to print.'); return; }
+      // Capture selected texts from original selects
+      var selectedTexts = [];
+      var origSelects = table.querySelectorAll('select');
+      origSelects.forEach(function(osel){
+        var txt = '';
+        try{
+          var idx = osel.selectedIndex;
+          if(idx >= 0 && osel.options[idx]){
+            var opt = osel.options[idx];
+            txt = (opt.textContent || opt.innerText || opt.value || '');
+          }
+        }catch(e){}
+        selectedTexts.push(txt);
+      });
+      // Clone table
+      var clone = table.cloneNode(true);
+      // Remove columns labelled 'Split' or 'Actions'
+      var dropIdx = [];
+      clone.querySelectorAll('thead th').forEach(function(th, idx){
+        var t = (th.textContent || '').trim().toLowerCase();
+        if(t === 'split' || t === 'actions') dropIdx.push(idx);
+      });
+      if(dropIdx.length){
+        // Remove header cells
+        var headers = clone.querySelectorAll('thead th');
+        headers.forEach(function(th, idx){
+          if(dropIdx.indexOf(idx) !== -1){ th.remove(); }
+        });
+        // Remove columns from each row (in reverse order)
+        clone.querySelectorAll('tbody tr').forEach(function(tr){
+          var cells = tr.children;
+          var sorted = dropIdx.slice().sort(function(a,b){ return b - a; });
+          sorted.forEach(function(i){
+            if(cells[i]) cells[i].remove();
+          });
+        });
+      }
+      // Replace select dropdowns in the clone with the captured text values
+      var cloneSelects = clone.querySelectorAll('select');
+      cloneSelects.forEach(function(csel, i){
+        var td = csel.closest('td');
+        if(td){ td.textContent = selectedTexts[i] || ''; }
+      });
+      // Remove any buttons inside the cloned table (e.g., split buttons)
+      clone.querySelectorAll('button').forEach(function(btn){ btn.remove(); });
+      // Build header for print
+      var start = (document.getElementById('weekStart') || {}).value || '';
+      var end = (document.getElementById('weekEnd') || {}).value || '';
+      var hdr = 'Daily Time Records';
+      if(start || end){
+        hdr += ' — ' + (start || '') + (end ? (' to ' + end) : '');
+      }
+      // Determine project filter text
+      var filterSel = document.getElementById('filterProject');
+      var filterTxt = '';
+      if(filterSel){
+        try{
+          if(!filterSel.value || filterSel.value === 'all'){
+            filterTxt = 'All Projects';
+          } else {
+            var o = filterSel.options[filterSel.selectedIndex];
+            filterTxt = (o && (o.textContent || o.innerText || '')) || '';
+          }
+        }catch(e){}
+      }
+      var w = window.open('', '_blank', 'width=900,height=700');
+      w.document.write('<!DOCTYPE html><html><head><meta charset="utf-8"><title>DTR Records</title>');
+      w.document.write('<style>body{font-family:Arial,Helvetica,sans-serif;margin:16px} h2{margin:0 0 6px} .muted{color:#555;margin:0 0 12px;font-size:12px} table{width:100%;border-collapse:collapse} th,td{border:1px solid #000;padding:6px;text-align:center;font-size:12px} th{background:#eee}</style>');
+      w.document.write('</head><body>');
+      w.document.write('<h2>' + hdr.replace(/</g, '&lt;') + '</h2>');
+      if(filterTxt){
+        w.document.write('<div class="muted">Project filter: ' + filterTxt.replace(/</g, '&lt;') + '</div>');
+      }
+      w.document.write(clone.outerHTML);
+      w.document.write('</body></html>');
+      w.document.close();
+      w.focus();
+      w.print();
+    }catch(err){
+      alert('Unable to print DTR: ' + err);
+    }
+  }
+  window.printDTR = printDTR;
+  document.addEventListener('click', function(ev){
+    if(ev.target && ev.target.id === 'printDtrBtn'){
+      printDTR();
+    }
+  });
+})();
 </script>
 
 
@@ -3293,276 +4809,20 @@ document.addEventListener('DOMContentLoaded', function(){
 })();
 </script>
 
-<script src="./config.js"></script>
-<style>
-  .cloud-card {border:1px solid #e2e8f0;border-radius:10px;padding:12px;margin-top:12px;background:#fff;}
-  .cloud-row {display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:6px}
-  .cloud-card input {padding:8px;border:1px solid #cbd5e1;border-radius:8px}
-  .cloud-card button {padding:8px 12px;border:1px solid #cbd5e1;border-radius:8px;cursor:pointer;background:#f8fafc}
-  .cloud-card button.primary {background:#0ea5a4;color:#fff;border-color:#0ea5a4}
-  .cloud-note {font-size:12px;color:#64748b}
-</style>
 
-
-
-<script src="./config.js"></script>
-<style>
-  .cloud-card{border:1px solid #e2e8f0;border-radius:10px;padding:12px;margin:12px 0;background:#fff}
-  .cloud-row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:6px}
-  .cloud-card input{padding:8px;border:1px solid #cbd5e1;border-radius:8px}
-  .cloud-card button{padding:8px 12px;border:1px solid #cbd5e1;border-radius:8px;cursor:pointer;background:#f8fafc}
-  .cloud-card button.primary{background:#0ea5a4;color:#fff;border-color:#0ea5a4}
-  .cloud-note{font-size:12px;color:#64748b}
-  
-  #cloudDebug b{color:#93c5fd}
-</style>
-
-
-  <div class="cloud-row">
-    
-    
-    
-    <span id="autoSyncStatus" class="cloud-note"></span>
-  </div>
 </div>
 
 
 
-<script>
-(function attachAfterDOM(){
-  // Guarantee DOM is ready and scripts are loaded
-  function ready(fn){ if(document.readyState!=='loading') fn(); else document.addEventListener('DOMContentLoaded', fn); }
-  ready(function(){
-    const log = ()=>{};
-    const must = (id)=>{ const el=document.getElementById(id); if(!el){ log('Missing element:', id); } return el; };
-
-    // Elements
-    const emailEl = must('sbEmail'), passEl = must('sbPassword');
-    const loginBtn = must('sbLogin'), signupBtn = must('sbSignup'), logoutBtn = must('sbLogout');
-    const statusEl = must('sbStatus'), fromBtn = must('btnSyncFrom'), toBtn = must('btnSyncTo');
-    const autoBtn = must('btnAutoSync'), autoStatus = must('autoSyncStatus');
-
-    const SUPABASE_URL  = window.SUPABASE_URL;
-    const SUPABASE_ANON = window.SUPABASE_ANON_KEY;
-    if(!window.supabase){ log('Supabase UMD not present'); alert('Supabase library failed to load'); return; }
-    if(!SUPABASE_URL || !SUPABASE_ANON){ log('Missing config.js'); alert('Missing config.js or keys'); return; }
-
-    const supa = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON);
-    log('Client init OK');
-
-    const CLOUD_KEYS = [
-      'att_records_v2','att_employees_v2','att_schedules_v2','att_schedules_default',
-      'att_projects_v1','att_filter_project_v1','att_overrides_schedules','att_overrides_projects',
-      'payroll_rates','payroll_reg_hours','payroll_ot_hours','payroll_ot_multiplier',
-      'payroll_week_start','payroll_week_end','payroll_deduction_divisor','payroll_sss_table',
-      'payroll_loan_sss','payroll_loan_pagibig','payroll_vale','payroll_vale_wed'
-    ];
-
-    function setStatus(m){ if(statusEl) statusEl.textContent = m || ''; log('status:', m); }
-    function setAutoStatus(on){ if(autoStatus) autoStatus.textContent = on ? 'Auto-sync: ON (2m)' : 'Auto-sync: OFF'; }
-
-    async function requireUser(){
-      const { data:{ session }, error } = await supa.auth.getSession();
-      if(error) { log('getSession error', error.message||error); throw error; }
-      if(!session) throw new Error('Not signed in');
-      return session.user;
-    }
-    function safeJSON(raw){ if(raw==null||raw==='') return null; try{ return JSON.parse(raw);}catch{return raw;} }
-
-    async function cloudSave(bucket, payload){
-      const user = await requireUser();
-      const { error } = await supa.from('payroll_data').upsert({ user_id: user.id, bucket, payload });
-      if(error) throw error;
-    }
-    async function cloudLoad(bucket){
-      const user = await requireUser();
-      const { data, error } = await supa.from('payroll_data').select('payload').eq('user_id', user.id).eq('bucket', bucket).maybeSingle();
-      if(error) throw error;
-      return data ? data.payload : null;
-    }
-
-    async function syncTo(){
-      try{
-        await requireUser();
-        for(const bucket of CLOUD_KEYS){
-          if(!Object.prototype.hasOwnProperty.call(localStorage, bucket)) continue;
-          const payload = safeJSON(localStorage.getItem(bucket));
-          await cloudSave(bucket, payload);
-        }
-        alert('Synced TO Cloud ✔'); log('Sync TO done');
-      }catch(e){ alert('Sync TO failed: ' + (e.message||e)); log('Sync TO failed', e.message||e); }
-    }
-    async function syncFrom(){
-      try{
-        await requireUser();
-        for(const bucket of CLOUD_KEYS){
-          const payload = await cloudLoad(bucket);
-          if(payload !== null) localStorage.setItem(bucket, JSON.stringify(payload));
-        }
-        alert('Synced FROM Cloud ✔ — reloading'); log('Sync FROM done'); location.reload();
-      }catch(e){ alert('Sync FROM failed: ' + (e.message||e)); log('Sync FROM failed', e.message||e); }
-    }
-
-    // Wire events
-    let autoTimer=null;
-    loginBtn && loginBtn.addEventListener('click', async ()=>{
-      try{ setStatus('Signing in...');
-           const { error } = await supa.auth.signInWithPassword({ email: emailEl.value, password: passEl.value });
-           if(error) throw error;
-           setStatus('Signed in ✔'); loginBtn.style.display='none'; signupBtn.style.display='none'; logoutBtn.style.display='inline-block';
-      }catch(e){ setStatus('Login error: ' + (e.message||e)); }
-    });
-    signupBtn && signupBtn.addEventListener('click', async ()=>{
-      try{ setStatus('Creating account...');
-           const { error } = await supa.auth.signUp({ email: emailEl.value, password: passEl.value });
-           if(error) throw error;
-           setStatus('Check your email to confirm, then login.');
-      }catch(e){ setStatus('Signup error: ' + (e.message||e)); }
-    });
-    logoutBtn && logoutBtn.addEventListener('click', async ()=>{
-      await supa.auth.signOut();
-      setStatus('Logged out'); loginBtn.style.display='inline-block'; signupBtn.style.display='inline-block'; logoutBtn.style.display='none';
-    });
-
-    fromBtn && fromBtn.addEventListener('click', syncFrom);
-    toBtn && toBtn.addEventListener('click', syncTo);
-    autoBtn && autoBtn.addEventListener('click', ()=>{
-      if(autoTimer){ clearInterval(autoTimer); autoTimer=null; setAutoStatus(false); log('Auto OFF'); }
-      else { autoTimer=setInterval(syncTo, 120000); setAutoStatus(true); log('Auto ON'); }
-    });
-
-    // Initial session
-    supa.auth.getSession().then(({data:{session}})=>{
-      if(session){ setStatus('Signed in ✔'); loginBtn.style.display='none'; signupBtn.style.display='none'; logoutBtn.style.display='inline-block'; }
-      else { setStatus('Not signed in'); setAutoStatus(false); }
-    });
-  });
-})();
-</script>
 
 
-<!-- === Cloud Sync (Supabase) — Single Panel === -->
+
 <link rel="preconnect" href="https://cdn.jsdelivr.net"/>
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
-<script src="./config.js"></script>
-<style>
-  .cloud-card{border:1px solid #e2e8f0;border-radius:10px;padding:12px;margin:12px 0;background:#fff}
-  .cloud-row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:6px}
-  .cloud-card input{padding:8px;border:1px solid #cbd5e1;border-radius:8px}
-  .cloud-card button{padding:8px 12px;border:1px solid #cbd5e1;border-radius:8px;cursor:pointer;background:#f8fafc}
-  .cloud-card button.primary{background:#0ea5a4;color:#fff;border-color:#0ea5a4}
-  .cloud-note{font-size:12px;color:#64748b}
-</style>
 
 
-  <div class="cloud-row">
-    
-    
-    
-    <span id="autoSyncStatus" class="cloud-note"></span>
-  </div>
 </div>
 
-<script>
-(function(){
-  function ready(fn){ if(document.readyState!=='loading') fn(); else document.addEventListener('DOMContentLoaded', fn); }
-  ready(function(){
-    const el = id => document.getElementById(id);
-    const emailEl = el('sbEmail'), passEl = el('sbPassword');
-    const loginBtn = el('sbLogin'), signupBtn = el('sbSignup'), logoutBtn = el('sbLogout');
-    const statusEl = el('sbStatus'), fromBtn = el('btnSyncFrom'), toBtn = el('btnSyncTo');
-    const autoBtn = el('btnAutoSync'), autoStatus = el('autoSyncStatus');
 
-    const SUPABASE_URL  = window.SUPABASE_URL;
-    const SUPABASE_ANON = window.SUPABASE_ANON_KEY;
-    if(!window.supabase){ console.error('Supabase UMD not found'); return; }
-    if(!SUPABASE_URL || !SUPABASE_ANON){ console.error('Missing config.js values'); return; }
-    const supa = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON);
-
-    const CLOUD_KEYS = [
-      'att_records_v2','att_employees_v2','att_schedules_v2','att_schedules_default',
-      'att_projects_v1','att_filter_project_v1','att_overrides_schedules','att_overrides_projects',
-      'payroll_rates','payroll_reg_hours','payroll_ot_hours','payroll_ot_multiplier',
-      'payroll_week_start','payroll_week_end','payroll_deduction_divisor','payroll_sss_table',
-      'payroll_loan_sss','payroll_loan_pagibig','payroll_vale','payroll_vale_wed'
-    ];
-
-    function setStatus(m){ if(statusEl) statusEl.textContent = m || ''; }
-    function setAutoStatus(on){ if(autoStatus) autoStatus.textContent = on ? 'Auto-sync: ON (2m)' : 'Auto-sync: OFF'; }
-
-    async function requireUser(){
-      const { data:{ session }, error } = await supa.auth.getSession();
-      if(error) throw error;
-      if(!session) throw new Error('Not signed in');
-      return session.user;
-    }
-    function safeJSON(raw){ if(raw==null||raw==='') return null; try{ return JSON.parse(raw);}catch(_){ return raw; } }
-
-    async function cloudSave(bucket, payload){
-      const user = await requireUser();
-      const { error } = await supa.from('payroll_data').upsert({ user_id: user.id, bucket, payload });
-      if(error) throw error;
-    }
-    async function cloudLoad(bucket){
-      const user = await requireUser();
-      const { data, error } = await supa.from('payroll_data').select('payload').eq('user_id', user.id).eq('bucket', bucket).maybeSingle();
-      if(error) throw error;
-      return data ? data.payload : null;
-    }
-
-    async function syncTo(){
-      try{
-        await requireUser();
-        for(const bucket of CLOUD_KEYS){
-          if(!Object.prototype.hasOwnProperty.call(localStorage, bucket)) continue;
-          const payload = safeJSON(localStorage.getItem(bucket));
-          await cloudSave(bucket, payload);
-        }
-        alert('Synced TO Cloud ✔');
-      }catch(e){ alert('Sync TO failed: ' + (e.message||e)); }
-    }
-    async function syncFrom(){
-      try{
-        await requireUser();
-        for(const bucket of CLOUD_KEYS){
-          const payload = await cloudLoad(bucket);
-          if(payload !== null) localStorage.setItem(bucket, JSON.stringify(payload));
-        }
-        alert('Synced FROM Cloud ✔ — reloading'); location.reload();
-      }catch(e){ alert('Sync FROM failed: ' + (e.message||e)); }
-    }
-
-    loginBtn && loginBtn.addEventListener('click', async ()=>{
-      try{
-        setStatus('Signing in...');
-        const { error } = await supa.auth.signInWithPassword({ email: emailEl.value, password: passEl.value });
-        if(error) throw error;
-        setStatus('Signed in ✔'); loginBtn.style.display='none'; signupBtn.style.display='none'; logoutBtn.style.display='inline-block';
-      }catch(e){ setStatus('Login error: ' + (e.message||e)); }
-    });
-    signupBtn && signupBtn.addEventListener('click', async ()=>{
-      try{
-        setStatus('Creating account...');
-        const { error } = await supa.auth.signUp({ email: emailEl.value, password: passEl.value });
-        if(error) throw error;
-        setStatus('Check your email to confirm, then login.');
-      }catch(e){ setStatus('Signup error: ' + (e.message||e)); }
-    });
-    logoutBtn && logoutBtn.addEventListener('click', async ()=>{
-      await supa.auth.signOut();
-      setStatus('Logged out'); loginBtn.style.display='inline-block'; signupBtn.style.display='inline-block'; logoutBtn.style.display='none';
-    });
-
-    fromBtn && fromBtn.addEventListener('click', syncFrom);
-    toBtn && toBtn.addEventListener('click', syncTo);
-
-    supa.auth.getSession().then(({data:{session}})=>{
-      if(session){ setStatus('Signed in ✔'); loginBtn.style.display='none'; signupBtn.style.display='none'; logoutBtn.style.display='inline-block'; }
-      else { setStatus('Not signed in'); setAutoStatus(false); }
-    });
-  });
-})();
-</script>
 
 
 <script>
@@ -3572,42 +4832,670 @@ document.addEventListener('DOMContentLoaded', function(){
 });
 </script>
 
-
+<!-- Payslip Button functionality -->
 <script>
-document.addEventListener('DOMContentLoaded', function(){
-  const cards = Array.from(document.querySelectorAll('.cloud-card'));
-  const titleMatch = (el) => {
-    const h = el.querySelector('h3');
-    return h && /Cloud\s*Sync\s*\(Supabase\)/i.test(h.textContent || '');
-  };
-  const matches = cards.filter(titleMatch);
-  for (let i = 1; i < matches.length; i++) {
-    matches[i].remove();
+// Add click listener for payslip buttons on payroll table
+document.addEventListener('click', function(e) {
+  var target = e.target;
+  if (target && target.classList && target.classList.contains('payslipBtn')) {
+    // Find the row for this button
+    var row = target.closest('tr');
+    if (!row) return;
+    // Extract basic employee info
+    var id = (row.cells[0]?.textContent || '').trim();
+    var name = (row.cells[1]?.textContent || '').trim();
+    // Helper to get value from input or text content
+    function getVal(sel, prop) {
+      var el = row.querySelector(sel);
+      if (!el) return '';
+      if (prop === 'value') return el.value || '';
+      return el.textContent || '';
+    }
+    var reg = getVal('.regHrs', 'value');
+    var ot = getVal('.otHrs', 'value');
+    var rate = getVal('.rate', 'value');
+    var regPay = getVal('.regPay', 'textContent');
+    var otPay = getVal('.otPay', 'textContent');
+    var gross = getVal('.grossPay', 'textContent');
+    var pagibig = getVal('.pagibig', 'textContent');
+    var philhealth = getVal('.philhealth', 'textContent');
+    var sss = getVal('.sss', 'textContent');
+    var sssLoan = getVal('.loanSSS', 'value');
+    var piLoan = getVal('.loanPI', 'value');
+    var valeAmt = getVal('.vale', 'value');
+    var wedValeAmt = getVal('.valeWed', 'value');
+    var total = getVal('.totalDed', 'textContent');
+    var net = getVal('.netPay', 'textContent');
+    // Period from week start/end inputs if available
+    var ws = (typeof weekStartEl !== 'undefined' && weekStartEl) ? (weekStartEl.value || '') : '';
+    var we = (typeof weekEndEl !== 'undefined' && weekEndEl) ? (weekEndEl.value || '') : '';
+    // Build payslip HTML
+    var html = '<!DOCTYPE html><html><head><meta charset="utf-8"><title>Payslip - ' + name + '</title>' +
+      '<style>body{font-family:Arial,Helvetica,sans-serif;padding:20px;line-height:1.4;} h2{text-align:center;}' +
+      'table{border-collapse:collapse;width:100%;margin-top:12px;} th,td{border:1px solid #e2e8f0;padding:8px;text-align:left;font-size:14px;}' +
+      'th{background:#f1f5f9;}</style></head><body>' +
+      '<h2>Payslip</h2>' +
+      '<p><strong>Employee ID:</strong> ' + id + '</p>' +
+      '<p><strong>Name:</strong> ' + name + '</p>' +
+      '<p><strong>Period:</strong> ' + ws + (we ? (' to ' + we) : '') + '</p>' +
+      '<table>' +
+      '<tr><th>Description</th><th>Value</th></tr>' +
+      '<tr><td>Regular Hours</td><td>' + reg + '</td></tr>' +
+      '<tr><td>OT Hours</td><td>' + ot + '</td></tr>' +
+      '<tr><td>Hourly Rate</td><td>' + rate + '</td></tr>' +
+      '<tr><td>Regular Pay</td><td>' + regPay + '</td></tr>' +
+      '<tr><td>OT Pay</td><td>' + otPay + '</td></tr>' +
+      '<tr><td>Gross Pay</td><td>' + gross + '</td></tr>' +
+      '<tr><td>Pag-IBIG</td><td>' + pagibig + '</td></tr>' +
+      '<tr><td>PhilHealth</td><td>' + philhealth + '</td></tr>' +
+      '<tr><td>SSS</td><td>' + sss + '</td></tr>' +
+      '<tr><td>SSS Loan</td><td>' + sssLoan + '</td></tr>' +
+      '<tr><td>Pag-IBIG Loan</td><td>' + piLoan + '</td></tr>' +
+      '<tr><td>Vale</td><td>' + valeAmt + '</td></tr>' +
+      '<tr><td>Wed Vale</td><td>' + wedValeAmt + '</td></tr>' +
+      '<tr><td>Total Deductions</td><td>' + total + '</td></tr>' +
+      '<tr><th>Net Pay</th><th>' + net + '</th></tr>' +
+      '</table>' +
+      '</body></html>';
+    // Open new window and write payslip content
+    var w = window.open('', '', 'width=600,height=800');
+    if (!w) return; // popup blocked
+    w.document.open();
+    w.document.write(html);
+    w.document.close();
+    w.focus();
+    // Uncomment the line below to automatically trigger print dialog
+    // setTimeout(function(){ w.print(); }, 0);
   }
 });
 </script>
 
+
+
+
+
+
+
 <script>
-document.addEventListener('DOMContentLoaded', function () {
-  // Identify Supabase sync panels (email + sync buttons)
-  function isPanel(n){
-    return n.querySelector && n.querySelector('#sbEmail') && n.querySelector('#btnSyncTo');
+(function(){
+  const LS_FROM = 'dtr_filter_from';
+  const LS_TO   = 'dtr_filter_to';
+
+  function getEl(id){ return document.getElementById(id); }
+  function loadSaved(){
+    const from = localStorage.getItem(LS_FROM) || '';
+    const to   = localStorage.getItem(LS_TO) || '';
+    const f = getEl('dtrDateFrom'), t = getEl('dtrDateTo');
+    if (f) f.value = from;
+    if (t) t.value = to;
   }
-  function panelRoot(el){
-    return el.closest('.cloud-card')
-        || el.closest('#cloudSyncCard')
-        || el.closest('section')
-        || el.closest('div');
+
+  function withinRange(dateStr, from, to){
+    if (!dateStr) return false;
+    const s = dateStr.trim();
+    if (!s) return false;
+    if (from && s < from) return false;
+    if (to   && s > to)   return false;
+    return true;
   }
-  const panels = [];
-  document.querySelectorAll('#sbEmail').forEach(input => {
-    const root = panelRoot(input);
-    if (root && isPanel(root)) panels.push(root);
+
+  function applyDtrDateFilter(){
+    const f = getEl('dtrDateFrom')?.value || '';
+    const t = getEl('dtrDateTo')?.value || '';
+    try { localStorage.setItem(LS_FROM, f); } catch(e){}
+    try { localStorage.setItem(LS_TO, t); } catch(e){}
+
+    const tbody = document.querySelector('#resultsTable tbody');
+    if (!tbody) return;
+    const hasRange = !!(f || t);
+
+    Array.from(tbody.rows).forEach(tr=>{
+      // Adjust the index below if your Date column index is different.
+      // Assuming the "Date" column is 4 (0-based), change as necessary.
+      const dateStr = (tr.cells[4]?.textContent || '').trim();
+      const show = !hasRange || withinRange(dateStr, f, t);
+      tr.style.display = show ? '' : 'none';
+    });
+  }
+
+  function hookUI(){
+    const f = getEl('dtrDateFrom');
+    const t = getEl('dtrDateTo');
+    const c = getEl('dtrDateClear');
+    if (f) f.addEventListener('change', applyDtrDateFilter);
+    if (t) t.addEventListener('change', applyDtrDateFilter);
+    if (c) c.addEventListener('click', ()=>{
+      if (f) f.value = '';
+      if (t) t.value = '';
+      try { localStorage.removeItem(LS_FROM); } catch(e){}
+      try { localStorage.removeItem(LS_TO); } catch(e){}
+      applyDtrDateFilter();
+    });
+  }
+
+  function monkeyPatchRender(){
+    const orig = window.renderResults;
+    if (typeof orig === 'function') {
+      window.renderResults = function(){
+        orig.apply(this, arguments);
+        applyDtrDateFilter();
+      };
+    }
+  }
+
+  document.addEventListener('DOMContentLoaded', ()=>{
+    // Inject controls right before #resultsTable if not already in DOM.
+    if (!document.getElementById('dtrDateControls')){
+      const table = document.getElementById('resultsTable');
+      if (table && table.parentNode){
+        const wrapper = document.createElement('div');
+        wrapper.innerHTML = '<!-- DTR Date Finder Controls -->\n<div id="dtrDateControls" style="display:flex;gap:.75rem;align-items:center;flex-wrap:wrap;margin:8px 0;">\n  <label style="display:flex;align-items:center;gap:.35rem;">\n    <span>Date:</span>\n    <input id="dtrDateFrom" type="date" />\n  </label>\n  <span>—</span>\n  <label>\n    <input id="dtrDateTo" type="date" />\n  </label>\n  <button id="dtrDateClear" type="button">Clear</button>\n</div>';
+        table.parentNode.insertBefore(wrapper.firstElementChild, table);
+      }
+    }
+    loadSaved();
+    hookUI();
+    monkeyPatchRender();
+    applyDtrDateFilter();
   });
-  for (let i = 1; i < panels.length; i++) {
-    panels[i].remove();
-  }
-});
+})();
 </script>
+
+
+<script>
+// === Thousands Separator Formatting for Amounts (Payroll & Deductions) ===
+(function(){
+  // Format helper: 1,234.56
+  function fmt(n){
+    var num = Number(n);
+    if (!isFinite(num)) return String(n || '');
+    return num.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  }
+
+  function formatAllNumbers(){
+    var sels = '#payrollTable td.num, #payrollTable tfoot td.num, #deductionsTable td.num';
+    document.querySelectorAll(sels).forEach(function(td){
+      var raw = (td.textContent || '').replace(/,/g, '').trim();
+      var num = parseFloat(raw);
+      if (isFinite(num)) td.textContent = fmt(num);
+    });
+  }
+
+  // Patch calculateAll to apply formatting after calculations
+  function patchCalculateAll(){
+    try{
+      var orig = window.calculateAll;
+      if (typeof orig === 'function'){
+        window.calculateAll = function(){
+          var out = orig.apply(this, arguments);
+          try { formatAllNumbers(); } catch(e){}
+          return out;
+        };
+      } else {
+        // If not defined yet, retry after load
+        document.addEventListener('DOMContentLoaded', function(){
+          if (typeof window.calculateAll === 'function'){
+            patchCalculateAll(); 
+            try { formatAllNumbers(); } catch(e){}
+          }
+        });
+      }
+    }catch(e){}
+  }
+
+  // Also patch renderDeductionsTable so that a manual refresh there also formats
+  function patchRenderDeductions(){
+    try{
+      var orig = window.renderDeductionsTable;
+      if (typeof orig === 'function'){
+        window.renderDeductionsTable = function(){
+          var out = orig.apply(this, arguments);
+          try { formatAllNumbers(); } catch(e){}
+          return out;
+        };
+      }
+    }catch(e){}
+  }
+
+  // Initial hooks
+  patchCalculateAll();
+  patchRenderDeductions();
+  document.addEventListener('DOMContentLoaded', function(){
+    try { formatAllNumbers(); } catch(e){}
+  });
+})();
+</script>
+
+<script>
+(function(){
+  function fmt(n){
+    var num = Number(n);
+    if (!isFinite(num)) return String(n || '');
+    return num.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
+  }
+  function formatAllNumbers(){
+    var sels = '#payrollTable td.num,#payrollTable tfoot td.num,#deductionsTable td.num,#reportTable td.num,#reportTable tfoot td.num';
+    document.querySelectorAll(sels).forEach(td=>{
+      var raw=(td.textContent||'').replace(/,/g,'').trim();
+      var num=parseFloat(raw);
+      if(isFinite(num)) td.textContent=fmt(num);
+    });
+  }
+  function patch(fnName){
+    var orig=window[fnName];
+    if(typeof orig==='function'){
+      window[fnName]=function(){
+        var out=orig.apply(this,arguments);
+        try{formatAllNumbers();}catch(e){}
+        return out;
+      }
+    }
+  }
+  patch('calculateAll');
+  patch('renderDeductionsTable');
+  patch('renderReportTable');
+  document.addEventListener('DOMContentLoaded',formatAllNumbers);
+})();
+</script>
+
+<script>
+(function(){
+  function fmt(n){
+    var num = Number(n);
+    if (!isFinite(num)) return String(n || '');
+    return num.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
+  }
+  function formatCells(cells){
+    cells.forEach(function(td){
+      var raw = (td.textContent || '').replace(/,/g,'').trim();
+      if (raw === '') return;
+      var num = parseFloat(raw);
+      if (isFinite(num)) td.textContent = fmt(num);
+    });
+  }
+  function formatProjectTotals(){
+    var tbl = document.getElementById('projectTotalsTable');
+    if(!tbl) return;
+    var tds = tbl.querySelectorAll('tbody td, tfoot td');
+    formatCells(Array.from(tds));
+  }
+  function formatProjectModal(){
+    var box = document.getElementById('projectReportContent');
+    if (!box) return;
+    var tds = box.querySelectorAll('td');
+    formatCells(Array.from(tds));
+  }
+  // Patch showProjectReport to format modal numbers
+  (function(){
+    var orig = window.showProjectReport;
+    if (typeof orig === 'function'){
+      window.showProjectReport = function(){
+        var out = orig.apply(this, arguments);
+        try { formatProjectModal(); } catch(e){}
+        return out;
+      };
+    }
+  })();
+  // Observe changes on the project totals table and auto-format
+  document.addEventListener('DOMContentLoaded', function(){
+    formatProjectTotals();
+    var tbl = document.getElementById('projectTotalsTable');
+    if (tbl && window.MutationObserver){
+      var timer = null;
+      var mo = new MutationObserver(function(){
+        clearTimeout(timer);
+        timer = setTimeout(formatProjectTotals, 50);
+      });
+      mo.observe(tbl.tBodies[0] || tbl, { childList: true, subtree: true });
+    }
+  });
+})();
+</script>
+
+
+<script>
+(function(){
+  const ACTIVE_KEY = 'payroll_active';            // object map: key=start_end, value={startDate,endDate,rows,totals}
+  const CURRENT_KEY = 'current_active_week';      // string: "YYYY-MM-DD__YYYY-MM-DD"
+  const HIST_KEY = 'payroll_hist';                // existing history (may contain locked snapshots)
+
+  function loadJSON(k, d){ try{ return JSON.parse(localStorage.getItem(k)||''); }catch(_){ return d; } }
+  function saveJSON(k, v){ try{ localStorage.setItem(k, JSON.stringify(v)); }catch(_){} }
+
+  function toKey(s,e){ return (s||'') + '__' + (e||''); }
+  function fromKey(k){ const [s,e] = String(k||'').split('__'); return {start:s,end:e}; }
+
+  // Build active store from locked history (one-time, if active is empty)
+  function maybeSeedActiveFromHistory(){
+    let active = loadJSON(ACTIVE_KEY, null);
+    if (active && typeof active === 'object' && Object.keys(active).length) return;
+    const hist = loadJSON(HIST_KEY, []);
+    active = {};
+    (hist||[]).forEach(s=>{
+      if (s && s.startDate && s.endDate /* && s.locked */){
+        const key = toKey(s.startDate, s.endDate);
+        active[key] = { startDate:s.startDate, endDate:s.endDate, rows:s.rows||[], totals:s.totals||{} };
+      }
+    });
+    saveJSON(ACTIVE_KEY, active);
+  }
+
+  function upsertActiveWeek(snap){
+    if(!snap || !snap.startDate || !snap.endDate) return;
+    const key = toKey(snap.startDate, snap.endDate);
+    const active = loadJSON(ACTIVE_KEY, {}) || {};
+    active[key] = { startDate:snap.startDate, endDate:snap.endDate, rows:snap.rows||[], totals:snap.totals||{} };
+    saveJSON(ACTIVE_KEY, active);
+    localStorage.setItem(CURRENT_KEY, key);
+  }
+
+  function listActiveWeeks(){
+    const active = loadJSON(ACTIVE_KEY, {}) || {};
+    return Object.keys(active).sort().map(k=>({ key:k, ...fromKey(k) }));
+  }
+
+  function fillActiveWeekSelects(){
+    const weeks = listActiveWeeks();
+    const current = localStorage.getItem(CURRENT_KEY) || (weeks[weeks.length-1]?.key || '');
+    if (current) localStorage.setItem(CURRENT_KEY, current);
+    document.querySelectorAll('.activeWeekSelect').forEach(sel=>{
+      const prev = sel.value;
+      sel.innerHTML='';
+      weeks.forEach(w=>{
+        const opt = document.createElement('option');
+        opt.value = w.key;
+        opt.textContent = `${w.start} → ${w.end}`;
+        sel.appendChild(opt);
+      });
+      if (weeks.length){
+        sel.value = current && weeks.some(w=>w.key===current) ? current : weeks[weeks.length-1].key;
+      }
+    });
+  }
+
+  function applyActiveWeekToGlobals(){
+    const key = localStorage.getItem(CURRENT_KEY) || '';
+    const {start,end} = fromKey(key);
+    const ws = document.getElementById('weekStart');
+    const we = document.getElementById('weekEnd');
+    if (ws) ws.value = start || ws.value;
+    if (we) we.value = end || we.value;
+  }
+
+  function reRenderAll(){
+    try{ applyActiveWeekToGlobals(); }catch(_){}
+    try{ window.renderResults && renderResults(); }catch(_){}
+    try{ window.calculateAll && calculateAll(); }catch(_){}
+    try{ window.renderReportTable && renderReportTable(); }catch(_){}
+    // If you have totals/project tables:
+    try{ window.formatAllNumbers && formatAllNumbers(); }catch(_){}
+  }
+
+  // Wire the dropdown "Apply" buttons
+  function hookActiveWeekUI(){
+    document.querySelectorAll('.refreshActiveWeek').forEach(btn=>{
+      if (btn._wired) return;
+      btn._wired = true;
+      btn.addEventListener('click', ()=>{
+        const sel = btn.parentElement && btn.parentElement.querySelector('.activeWeekSelect');
+        if (!sel) return;
+        localStorage.setItem(CURRENT_KEY, sel.value || '');
+        applyActiveWeekToGlobals();
+        reRenderAll();
+      });
+    });
+    document.querySelectorAll('.activeWeekSelect').forEach(sel=>{
+      if (sel._wired) return;
+      sel._wired = true;
+      sel.addEventListener('change', ()=>{
+        localStorage.setItem(CURRENT_KEY, sel.value || '');
+      });
+    });
+  }
+
+  // Patch Generate to upsert into ACTIVE store (while keeping existing behavior)
+  function patchGenerateToActive(){
+    const btn = document.getElementById('dashGenerate');
+    if (!btn || btn._activeWired) return;
+    btn._activeWired = true;
+    btn.addEventListener('click', async ()=>{
+      // Wait a moment for existing listeners to compute tables, then capture
+      setTimeout(()=>{
+        try{
+          const ws = document.getElementById('weekStart')?.value;
+          const we = document.getElementById('weekEnd')?.value;
+          if (!ws || !we) return;
+          // Try to collect current payroll rows/totals from existing functions
+          if (typeof window.buildSnapshot === 'function'){
+            (async ()=>{
+              const snap = await window.buildSnapshot(ws, we);
+              if (snap) upsertActiveWeek(snap);
+              fillActiveWeekSelects();
+            })();
+          } else {
+            // Fallback: minimal capture from payroll table if present
+            const rows = [];
+            document.querySelectorAll('#payrollTable tbody tr').forEach(tr=>{
+              rows.push(Array.from(tr.cells).map(td=>td.textContent.trim()));
+            });
+            upsertActiveWeek({ startDate: ws, endDate: we, rows, totals:{} });
+            fillActiveWeekSelects();
+          }
+        }catch(_){}
+      }, 300);
+    }, { capture: true });
+  }
+
+  // On load
+  document.addEventListener('DOMContentLoaded', ()=>{
+    maybeSeedActiveFromHistory();
+    fillActiveWeekSelects();
+    hookActiveWeekUI();
+    patchGenerateToActive();
+
+    // Optional: visually disable weekStart/weekEnd outside dashboard
+    try {
+      const onHashChange = () => {
+        const ws = document.getElementById('weekStart');
+        const we = document.getElementById('weekEnd');
+        // Simple heuristic: if dashboard panel isn't visible, keep inputs disabled
+        const dash = document.getElementById('panelDashboard');
+        const dashActive = dash && (dash.classList.contains('active') || dash.style.display !== 'none');
+        const disabled = !dashActive;
+        if (ws) ws.disabled = disabled;
+        if (we) we.disabled = disabled;
+      };
+      onHashChange();
+      window.addEventListener('hashchange', onHashChange);
+    } catch(_){}
+  });
+})();
+</script>
+
+<!-- Script to manage global Active Payroll dropdown and New Period functionality -->
+<script>
+(function(){
+  const PAYROLL_HIST_KEY = 'payroll_hist';
+  const LS_ACTIVE_INDEX = 'payroll_active_index';
+
+  function loadHistory() {
+    try {
+      const hist = JSON.parse(localStorage.getItem(PAYROLL_HIST_KEY)) || [];
+      return Array.isArray(hist) ? hist : [];
+    } catch (e) {
+      return [];
+    }
+  }
+
+  function saveActiveIndex(idx) {
+    localStorage.setItem(LS_ACTIVE_INDEX, String(idx));
+  }
+
+  function getActiveIndex() {
+    const v = localStorage.getItem(LS_ACTIVE_INDEX);
+    const n = v == null ? -1 : parseInt(v, 10);
+    return Number.isFinite(n) ? n : -1;
+  }
+
+  function updateWeekInputs(snap) {
+    const ws = document.getElementById('weekStart');
+    const we = document.getElementById('weekEnd');
+    if (ws) ws.value = (snap && snap.startDate) || '';
+    if (we) we.value = (snap && snap.endDate) || '';
+    try {
+      if (typeof calculatePayrollFromRecords === 'function') {
+        calculatePayrollFromRecords();
+      }
+    } catch (err) {}
+  }
+
+  function populateDropdowns() {
+    // Prefer the global payrollHistory array if available, else fall back to localStorage
+    const hist = Array.isArray(window.payrollHistory) ? window.payrollHistory : loadHistory();
+    const history = Array.isArray(hist) ? hist : [];
+    // Build list of items with their original indices; sort newest first by start date
+    const items = history.map((s, i) => Object.assign({ i: i }, s)).sort((a, b) => {
+      return (b.startDate || '').localeCompare(a.startDate || '');
+    });
+    const globalSelect = document.getElementById('activePayrollSelect');
+    const panelSelects = Array.from(document.querySelectorAll('.activeWeekSelect'));
+    function fill(selectEl) {
+      if (!selectEl) return;
+      // Rebuild the dropdown options
+      selectEl.innerHTML = '';
+      items.forEach(item => {
+        const opt = document.createElement('option');
+        opt.value = String(item.i);
+        opt.textContent = `${item.startDate || ''} — ${item.endDate || ''}${item.locked ? ' (locked)' : ''}`;
+        selectEl.appendChild(opt);
+      });
+      // Always set the selected value to the saved active index so all selectors stay in sync
+      const saved = String(getActiveIndex());
+      if ([...selectEl.options].some(o => o.value === saved)) {
+        selectEl.value = saved;
+      } else if (selectEl.options.length) {
+        selectEl.selectedIndex = 0;
+      }
+    }
+    fill(globalSelect);
+    panelSelects.forEach(sel => {
+      if (sel !== globalSelect) fill(sel);
+    });
+    // after filling, apply active
+    const idxVal = parseInt((globalSelect && globalSelect.value) || getActiveIndex(), 10);
+    const snap = Number.isFinite(idxVal) ? history[idxVal] : null;
+    if (snap) {
+      saveActiveIndex(idxVal);
+      updateWeekInputs(snap);
+    }
+  }
+
+  function onSelectChange(e) {
+    const idx = parseInt(e.target.value, 10);
+    if (!Number.isFinite(idx)) return;
+    const history = loadHistory();
+    if (!history[idx]) return;
+    saveActiveIndex(idx);
+    updateWeekInputs(history[idx]);
+    // Keep all selects in sync
+    populateDropdowns();
+  }
+
+  function onNewPeriod() {
+    const start = prompt('Enter start date (YYYY-MM-DD):');
+    const end = start ? prompt('Enter end date (YYYY-MM-DD):') : null;
+    if (!start || !end) return;
+    // Use global payrollHistory if available to check for existing ranges
+    const hist = Array.isArray(window.payrollHistory) ? window.payrollHistory : loadHistory();
+    const exists = hist.some(s => s && s.startDate === start && s.endDate === end);
+    if (exists) {
+      alert('A payroll snapshot for this date range already exists.');
+      return;
+    }
+    if (typeof buildSnapshot === 'function') {
+      (async () => {
+        const snap = await buildSnapshot(start, end);
+        if (!snap) {
+          alert('Payroll table is missing or empty.');
+          return;
+        }
+        const json = JSON.stringify(snap);
+        const hashBuffer = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(json));
+        const hashArray = Array.from(new Uint8Array(hashBuffer));
+        const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+        const now = new Date().toISOString();
+        const newSnap = { startDate: start, endDate: end, rows: snap.rows, totals: snap.totals, hash: hashHex, lockedAt: now, locked: false };
+        // Push into global payrollHistory if it exists; else push into local history
+        if (Array.isArray(window.payrollHistory)) {
+          window.payrollHistory.push(newSnap);
+          // Persist via existing saveHistory function if available
+          if (typeof saveHistory === 'function') saveHistory();
+        } else {
+          // Fallback: update localStorage directly
+          const localHist = loadHistory();
+          localHist.push(newSnap);
+          localStorage.setItem(PAYROLL_HIST_KEY, JSON.stringify(localHist));
+        }
+        // Refresh tables
+        if (typeof renderHistory === 'function') {
+          try { renderHistory(); } catch (err) {}
+        }
+        if (typeof renderActivePayrolls === 'function') {
+          try { renderActivePayrolls(); } catch (err) {}
+        }
+        // Compute index for active snapshot using global array or fallback local array
+        let idx;
+        if (Array.isArray(window.payrollHistory)) {
+          idx = window.payrollHistory.length - 1;
+        } else {
+          const localHist2 = loadHistory();
+          idx = localHist2.length - 1;
+        }
+        saveActiveIndex(idx);
+        populateDropdowns();
+      })();
+    } else {
+      alert('buildSnapshot function not available.');
+    }
+  }
+
+  function onPanelApply(e) {
+    const wrap = e.target.closest('.active-week-bar');
+    if (!wrap) return;
+    const sel = wrap.querySelector('.activeWeekSelect');
+    if (!sel) return;
+    onSelectChange({ target: sel });
+  }
+
+  document.addEventListener('DOMContentLoaded', () => {
+    const globalSelect = document.getElementById('activePayrollSelect');
+    if (globalSelect) {
+      globalSelect.addEventListener('change', onSelectChange);
+    }
+    const newBtn = document.getElementById('newPayrollPeriod');
+    if (newBtn) {
+      newBtn.addEventListener('click', onNewPeriod);
+    }
+    document.addEventListener('click', (e) => {
+      if (e.target && e.target.classList && e.target.classList.contains('refreshActiveWeek')) {
+        onPanelApply(e);
+      }
+    });
+    populateDropdowns();
+  });
+
+  (function() {
+    const tbody = document.querySelector('#historyTable tbody');
+    if (!tbody) return;
+    const observer = new MutationObserver(() => {
+      try {
+        populateDropdowns();
+      } catch (err) {}
+    });
+    observer.observe(tbody, { childList: true, subtree: false });
+  })();
+})();
+</script>
+
 </body>
 </html>
