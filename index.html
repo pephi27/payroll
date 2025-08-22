@@ -1,6 +1,106 @@
 <!DOCTYPE html>
 <html>
- <head>
+ \1
+
+<!-- === Supabase KV Sync Adapter (no-login, auto-sync) === -->
+<script type="module">
+// Minimal, no-login cloud persistence by mirroring localStorage to Supabase.
+// 1) Create a table in Supabase named: kv_store
+//    Columns:
+//      key text PRIMARY KEY
+//      value jsonb
+//      updated_at timestamptz DEFAULT now()
+// 2) Turn RLS ON and add permissive policies if you truly want no-login use:
+//    - SELECT: USING (true)
+//    - INSERT: WITH CHECK (true)
+//    - UPDATE: USING (true)  WITH CHECK (true)   // optional; you can omit to prevent edits
+//    - DELETE: USING (false)                      // optional; disallow deletes
+// 3) Paste your Supabase project URL and anon key below.
+
+import { createClient } from "https://esm.sh/@supabase/supabase-js"
+
+const SUPABASE_URL = window.SUPABASE_URL || "https://qzkzugzfpegozpiqutdv.supabase.co"
+const SUPABASE_KEY = window.SUPABASE_KEY || "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InF6a3p1Z3pmcGVnb3pwaXF1dGR2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTU4MTc5MDMsImV4cCI6MjA3MTM5MzkwM30.mdFYuFjbRfsILWPkQQmVUCDR7dGqEo-mdPZ6iwolvGk"
+const TABLE = "kv_store"
+const KNOWN_KEYS = [
+  "att_employees_v2","att_records_v2","att_schedules_v2","att_schedules_default",
+  "att_projects_v1","att_filter_project_v1","att_overrides_schedules","att_overrides_projects",
+  "att_splits_v1","payroll_rates","payroll_reg_hours","payroll_ot_hours","payroll_ot_multiplier",
+  "payroll_week_start","payroll_week_end","payroll_deduction_divisor","payroll_sss_table",
+  "payroll_loan_sss","payroll_loan_pagibig","payroll_vale","payroll_vale_wed","payroll_hist"
+]
+
+const supabase = createClient(SUPABASE_URL, SUPABASE_KEY)
+
+const __origSetItem = Storage.prototype.setItem
+const __origRemoveItem = Storage.prototype.removeItem
+
+async function cloudUpsert(key, value) {
+  try {
+    // Try upsert
+    const { error } = await supabase
+      .from(TABLE)
+      .upsert({ key, value: tryParse(value) }, { onConflict: "key" })
+    if (error) console.warn("Supabase upsert error:", error.message)
+  } catch (e) { console.warn("Supabase upsert failed", e) }
+}
+async function cloudDelete(key) {
+  try {
+    const { error } = await supabase.from(TABLE).delete().eq("key", key)
+    if (error) console.warn("Supabase delete error:", error.message)
+  } catch (e) { console.warn("Supabase delete failed", e) }
+}
+function tryParse(v) {
+  try { return JSON.parse(v) } catch { return v }
+}
+
+// Write-through on any localStorage change
+Storage.prototype.setItem = function(k, v) {
+  try { __origSetItem.call(this, k, v) } catch {}
+  // Only mirror known keys to reduce noise
+  if (KNOWN_KEYS.includes(k)) cloudUpsert(k, v)
+}
+Storage.prototype.removeItem = function(k) {
+  try { __origRemoveItem.call(this, k) } catch {}
+  if (KNOWN_KEYS.includes(k)) cloudDelete(k)
+}
+
+// On first load, pull from cloud and hydrate localStorage automatically.
+// If we detect changes vs. current localStorage, we populate and reload once
+// so the rest of the app sees the new data without manual "sync".
+;(async function initialHydrate(){
+  try {
+    const { data, error } = await supabase
+      .from(TABLE)
+      .select("key, value")
+      .in("key", KNOWN_KEYS)
+    if (error) { console.warn("Supabase fetch error:", error.message); return }
+    let changed = false
+    ;(data || []).forEach(row => {
+      const k = row.key
+      const cloudStr = safeStringify(row.value)
+      const cur = localStorage.getItem(k)
+      if (cloudStr != null && cloudStr !== cur) {
+        try { __origSetItem.call(localStorage, k, cloudStr) } catch {}
+        changed = true
+      }
+    })
+    if (changed) {
+      // One-time reload to let downstream scripts render with hydrated data
+      if (!sessionStorage.getItem("__kv_reloaded")) {
+        sessionStorage.setItem("__kv_reloaded","1")
+        location.reload()
+      }
+    }
+  } catch (e) { console.warn("Initial hydrate failed", e) }
+})()
+
+function safeStringify(v){
+  try { return typeof v === "string" ? v : JSON.stringify(v) } catch { return null }
+}
+</script>
+<!-- === / Supabase KV Sync Adapter === -->
+
   <meta charset="utf-8"/>
   <title>
    Attendance &mdash; Schedules + Ranges (Merged) + Projects
@@ -400,110 +500,6 @@
     </style>
 </head>
 
-
-<!-- Supabase Cloud Persistence (no-login, auto-sync) -->
-<script type="module">
-  import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
-
-  // TODO: replace with your actual project URL and anon public key
-  const SUPABASE_URL = window.SUPABASE_URL || "https://qzkzugzfpegozpiqutdv.supabase.co";
-  const SUPABASE_ANON_KEY = window.SUPABASE_ANON_KEY || "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InF6a3p1Z3pmcGVnb3pwaXF1dGR2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTU4MTc5MDMsImV4cCI6MjA3MTM5MzkwM30.mdFYuFjbRfsILWPkQQmVUCDR7dGqEo-mdPZ6iwolvGk";
-
-  const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
-
-  // All keys used by this app that we want to persist centrally
-  const KEYS_TO_SYNC = [
-    // Attendance / DTR
-    'att_records_v2','att_employees_v2','att_schedules_v2','att_schedules_default',
-    'att_projects_v1','att_filter_project_v1','att_overrides_schedules','att_overrides_projects','att_splits_v1',
-    // Payroll
-    'payroll_rates','payroll_reg_hours','payroll_ot_hours','payroll_ot_multiplier','payroll_week_start',
-    'payroll_week_end','payroll_deduction_divisor','payroll_sss_table','payroll_loan_sss','payroll_loan_pagibig',
-    'payroll_vale','payroll_vale_wed','payroll_hist'
-  ];
-
-  // Create table 'kv' with columns: key (text, PK), value (text), updated_at (timestamptz default now())
-  // RLS policies (no-auth, risky if public):
-  //   READ:  using (true)
-  //   INSERT: using (true) with check (true)
-  //   UPDATE: using (true) with check (true)
-  //   DELETE: using (true)   <-- optional; safer to omit
-
-  const table = 'kv';
-  let hydrating = true;
-  let changedAny = false;
-
-  // Pull all server values and hydrate localStorage before the rest of the app runs
-  async function hydrateFromCloud() {
-    try {
-      const { data, error } = await supabase.from(table).select('key,value').in('key', KEYS_TO_SYNC);
-      if (error) { console.warn('Supabase select error:', error); return; }
-      const server = new Map((data || []).map(r => [r.key, r.value ?? '']));
-
-      for (const k of KEYS_TO_SYNC) {
-        const serverVal = server.has(k) ? String(server.get(k) || '') : null;
-        if (serverVal !== null) {
-          const cur = localStorage.getItem(k);
-          if (cur !== serverVal) {
-            localStorage.setItem(k, serverVal);
-            changedAny = true;
-          }
-        }
-      }
-    } catch (e) {
-      console.warn('Hydration error', e);
-    } finally {
-      hydrating = false;
-      // If we populated new data and this is the first hydration in this session, reload once
-      if (changedAny && !sessionStorage.getItem('supabase_hydrated_once')) {
-        sessionStorage.setItem('supabase_hydrated_once', '1');
-        location.reload();
-      }
-    }
-  }
-
-  // Upsert helper
-  async function upsertKV(key, value) {
-    try {
-      // store as raw string; your app already stringifies JSON
-      const payload = { key, value: String(value ?? '') };
-      const { error } = await supabase.from(table).upsert(payload, { onConflict: 'key' });
-      if (error) console.warn('Supabase upsert error:', error);
-    } catch (e) { console.warn('Supabase upsert failed:', e); }
-  }
-  async function deleteKV(key) {
-    try {
-      const { error } = await supabase.from(table).delete().eq('key', key);
-      if (error) console.warn('Supabase delete error:', error);
-    } catch (e) { console.warn('Supabase delete failed:', e); }
-  }
-
-  // Monkey‑patch localStorage so every write also persists to Supabase.
-  // This keeps your existing code unchanged (no login, no manual sync).
-  (function patchLocalStorage(){
-    const _set = localStorage.setItem.bind(localStorage);
-    const _remove = localStorage.removeItem.bind(localStorage);
-    localStorage.setItem = function(key, val){
-      _set(key, val);
-      if (!hydrating && KEYS_TO_SYNC.includes(String(key))) { upsertKV(String(key), val); }
-    };
-    localStorage.removeItem = function(key){
-      _remove(key);
-      if (!hydrating && KEYS_TO_SYNC.includes(String(key))) { deleteKV(String(key)); }
-    };
-  })();
-
-  // Kick off hydration ASAP
-  hydrateFromCloud();
-
-  // Update UI banner if present
-  document.addEventListener('DOMContentLoaded', () => {
-    const note = document.querySelector('.warning-note');
-    if (note) {
-      note.textContent = '☁️ Data is stored in Supabase (cloud) and cached locally. No login or manual sync needed.';
-    }
-  });
-</script>
 <!-- Boot guard to avoid 'storedEmployees is not defined' -->
 <script>document.addEventListener('DOMContentLoaded', function(){
 (function(){
@@ -599,7 +595,7 @@
           <button id="newPayrollPeriod" type="button" class="date-input">New period</button>
         </div>
         <div class="warning-note">
-          ☁️ Data is stored in Supabase (cloud) and cached locally. No login or manual sync needed.
+          💾 Data persisted in browser (localStorage). Use Clear to remove.
         </div>
       </div>
 
