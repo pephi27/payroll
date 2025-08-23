@@ -1056,14 +1056,6 @@ function safeStringify(v){
     </div>
    </div>
 
-<div class="controls" style="margin-top:6px;align-items:center;">
-  <button id="backupAllBtn">Backup All Data</button>
-  <label style="display:flex;gap:8px;align-items:center;">
-    Restore All Data:
-    <input type="file" id="restoreAllFile" accept="application/json"/>
-  </label>
-  <small class="hint">Backs up everything stored in localStorage (employees, logs, schedules, projects, payroll, etc.). Restoring will overwrite current data.</small>
-</div>
 
    <table id="employeesTable">
     <thead>
@@ -2725,84 +2717,6 @@ document.getElementById('downloadEmployeesCSV').addEventListener('click', () => 
     const projName = storedProjects[emp.projectId]?.name || '';
     const bank = emp.bankAccount || ''; rows.push([id, emp.name || '', emp.hourlyRate || '', schedName, projName, bank]);
   });
-// === Backup/Restore All Data ===
-(function(){
-  function safeParse(str){
-    try { return JSON.parse(str) } catch { return str }
-  }
-  function safeString(v){
-    try {
-      if (typeof v === "string") return v
-      return JSON.stringify(v)
-    } catch { return String(v) }
-  }
-  function downloadFile(name, dataStr){
-    const blob = new Blob([dataStr], {type:"application/json"})
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = name
-    document.body.appendChild(a)
-    a.click()
-    a.remove()
-    URL.revokeObjectURL(url)
-  }
-  function currentStamp(){
-    const d = new Date()
-    const pad = n => String(n).padStart(2,'0')
-    return d.getFullYear() + pad(d.getMonth()+1) + pad(d.getDate()) + "_" + pad(d.getHours()) + pad(d.getMinutes()) + pad(d.getSeconds())
-  }
-  function collectAll(){
-    const out = {}
-    for (let i=0;i<localStorage.length;i++){
-      const k = localStorage.key(i)
-      out[k] = safeParse(localStorage.getItem(k))
-    }
-    return out
-  }
-  function hydrateAll(obj){
-    const KEYS = Object.keys(obj || {})
-    KEYS.forEach(k => {
-      const v = obj[k]
-      try { localStorage.setItem(k, safeString(v)) } catch {}
-    })
-  }
-  const backupBtn = document.getElementById('backupAllBtn')
-  const restoreInput = document.getElementById('restoreAllFile')
-  if (backupBtn) {
-    backupBtn.addEventListener('click', () => {
-      const payload = {
-        meta: { exportedAt: new Date().toISOString(), origin: location.origin },
-        data: collectAll()
-      }
-      downloadFile('payroll_backup_' + currentStamp() + '.json', JSON.stringify(payload, null, 2))
-    })
-  }
-  if (restoreInput) {
-    restoreInput.addEventListener('change', (e) => {
-      const f = e.target.files && e.target.files[0]
-      if (!f) return
-      const reader = new FileReader()
-      reader.onload = (ev) => {
-        try {
-          const text = String(ev.target.result || '')
-          const parsed = JSON.parse(text)
-          const data = parsed && parsed.data ? parsed.data : parsed
-          hydrateAll(data)
-          alert('Restore complete. The page will reload to apply data.')
-          location.reload()
-        } catch (err) {
-          console.error(err)
-          alert('Invalid backup file.')
-        } finally {
-          e.target.value = ''
-        }
-      }
-      reader.readAsText(f)
-    })
-  }
-})();
-// === / Backup/Restore All Data ===
 
   const csv = rows.map(r => r.map(v => {
     const s = String(v ?? '');
@@ -5513,17 +5427,48 @@ document.addEventListener('click', function(e) {
     return Number.isFinite(n) ? n : -1;
   }
 
-  function updateWeekInputs(snap) {
-    const ws = document.getElementById('weekStart');
-    const we = document.getElementById('weekEnd');
-    if (ws) ws.value = (snap && snap.startDate) || '';
-    if (we) we.value = (snap && snap.endDate) || '';
-    try {
-      if (typeof calculatePayrollFromRecords === 'function') {
-        calculatePayrollFromRecords();
-      }
-    } catch (err) {}
+  function toIsoDate(s){
+  if(!s) return '';
+  if(/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+  const m = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
+  if (m) {
+    const mm = String(parseInt(m[1],10)).padStart(2,'0');
+    const dd = String(parseInt(m[2],10)).padStart(2,'0');
+    return m[3] + '-' + mm + '-' + dd;
   }
+  const d = new Date(s);
+  if (!isNaN(d)) return d.toISOString().slice(0,10);
+  return '';
+}
+function updateWeekInputs(snap) {
+  const startISO = toIsoDate(snap && snap.startDate);
+  const endISO   = toIsoDate(snap && snap.endDate);
+
+  const ws = document.getElementById('weekStart');
+  const we = document.getElementById('weekEnd');
+  if (ws) ws.value = startISO || '';
+  if (we) we.value = endISO   || '';
+
+  // Notify listeners that the week range changed (so Reports can re-render)
+  try {
+    if (ws) ws.dispatchEvent(new Event('change', { bubbles: true }));
+    if (we) we.dispatchEvent(new Event('change', { bubbles: true }));
+  } catch (_) {}
+
+  // DTR date inputs (type=date) must receive ISO; then fire change events
+  try {
+    const df = document.getElementById('dtrDateFrom');
+    const dt = document.getElementById('dtrDateTo');
+    if (df) { df.value = startISO || ''; df.dispatchEvent(new Event('change', { bubbles: true })); }
+    if (dt) { dt.value = endISO   || ''; dt.dispatchEvent(new Event('change', { bubbles: true })); }
+  } catch (_) {}
+
+  // Refresh DTR list immediately
+  try { if (typeof renderResults === 'function') { renderResults(); } } catch (e) {}
+
+  // Recalculate payroll if available
+  try { if (typeof calculatePayrollFromRecords === 'function') { calculatePayrollFromRecords(); } } catch (e) {}
+}
 
   function populateDropdowns() {
     // Prefer the global payrollHistory array if available, else fall back to localStorage
