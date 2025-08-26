@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+/<!DOCTYPE html>
 <html>
  
 
@@ -601,19 +601,38 @@ function safeStringify(v){
     </style>
 </head>
 
-<!-- Boot guard to avoid 'storedEmployees is not defined' -->
-<script>document.addEventListener('DOMContentLoaded', function(){
+<!-- Boot guard to ensure global stored data is available early -->
+<script>
+/*
+  Immediately initialize global data stores used throughout the app.
+  Previously this logic ran on the DOMContentLoaded event, which meant
+  variables like `storedEmployees` could be undefined when other
+  scripts executed.  Running it immediately ensures these globals
+  exist before any dependent code runs.
+*/
 (function(){
   try {
+    // Employees store (att_employees_v2)
     if (typeof window.storedEmployees === 'undefined') {
       window.storedEmployees = JSON.parse(localStorage.getItem('att_employees_v2') || '{}');
     }
+    // Attendance records store (att_records_v2)
     if (typeof window.storedRecords === 'undefined') {
       window.storedRecords = JSON.parse(localStorage.getItem('att_records_v2') || '[]');
     }
-  } catch (e) { console.warn('Boot guard init failed', e); }
+    // Projects store (att_projects_v1)
+    if (typeof window.storedProjects === 'undefined') {
+      window.storedProjects = JSON.parse(localStorage.getItem('att_projects_v1') || '{}');
+    }
+    // Schedules store (att_schedules_v2) – ensures schedules are available early
+    if (typeof window.storedSchedules === 'undefined') {
+      window.storedSchedules = JSON.parse(localStorage.getItem('att_schedules_v2') || '{}');
+    }
+  } catch (e) {
+    console.warn('Boot guard init failed', e);
+  }
 })();
-});</script>
+</script>
 
   <!-- Mobile menu button for smaller screens -->
   <button class="mobile-menu-btn" onclick="toggleSidebar()">
