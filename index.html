@@ -22,12 +22,39 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js"
 const SUPABASE_URL = window.SUPABASE_URL || "https://qzkzugzfpegozpiqutdv.supabase.co"
 const SUPABASE_KEY = window.SUPABASE_KEY || "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InF6a3p1Z3pmcGVnb3pwaXF1dGR2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTU4MTc5MDMsImV4cCI6MjA3MTM5MzkwM30.mdFYuFjbRfsILWPkQQmVUCDR7dGqEo-mdPZ6iwolvGk"
 const TABLE = "kv_store"
+// List of localStorage keys that should be mirrored to Supabase.  If you add
+// new keys anywhere in the application that you want to persist across
+// devices, add them here as well.  Without inclusion in this list the
+// `Storage.prototype.setItem` hook will ignore them and they will remain
+// strictly device‑local.
 const KNOWN_KEYS = [
-  "att_employees_v2","att_records_v2","att_schedules_v2","att_schedules_default",
-  "att_projects_v1","att_filter_project_v1","att_overrides_schedules","att_overrides_projects",
-  "att_splits_v1","payroll_rates","payroll_reg_hours","payroll_ot_hours","payroll_ot_multiplier",
-  "payroll_week_start","payroll_week_end","payroll_deduction_divisor","payroll_sss_table",
-  "payroll_loan_sss","payroll_loan_pagibig","payroll_vale","payroll_vale_wed","payroll_hist"
+  "att_employees_v2",
+  "att_records_v2",
+  "att_schedules_v2",
+  "att_schedules_default",
+  "att_projects_v1",
+  "att_filter_project_v1",
+  "att_overrides_schedules",
+  "att_overrides_projects",
+  "att_splits_v1",
+  // payroll configuration keys
+  "payroll_rates",
+  "payroll_reg_hours",
+  "payroll_ot_hours",
+  "payroll_ot_multiplier",
+  "payroll_week_start",
+  "payroll_week_end",
+  "payroll_deduction_divisor",
+  "payroll_sss_table",
+  "payroll_loan_sss",
+  "payroll_loan_pagibig",
+  "payroll_vale",
+  "payroll_vale_wed",
+  "payroll_hist",
+  // additional filter & state keys not previously persisted
+  "dtr_filter_from",
+  "dtr_filter_to",
+  "payroll_active_index"
 ]
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY)
