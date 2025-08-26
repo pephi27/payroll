@@ -1,4 +1,4 @@
-/<!DOCTYPE html>
+<!DOCTYPE html>
 <html>
  
 
@@ -58,6 +58,18 @@ const KNOWN_KEYS = [
 ]
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY)
+
+// Expose the Supabase client on the global window so that other
+// non‑module scripts (e.g. the boot guard) can access it without
+// re‑importing the library.  Also expose the table name used for
+// key/value storage.  Without this, any attempt to read from
+// Supabase outside of this module would require a duplicate client
+// instantiation, and due to the asynchronous execution order of
+// module scripts it is not guaranteed that the client would be
+// available when the boot guard runs.  Assigning to `window`
+// provides a simple, predictable global reference.
+window.supabase = supabase;
+window.SUPABASE_TABLE = TABLE;
 
 const __origSetItem = Storage.prototype.setItem
 const __origRemoveItem = Storage.prototype.removeItem
@@ -605,32 +617,89 @@ function safeStringify(v){
 <script>
 /*
   Immediately initialize global data stores used throughout the app.
-  Previously this logic ran on the DOMContentLoaded event, which meant
-  variables like `storedEmployees` could be undefined when other
-  scripts executed.  Running it immediately ensures these globals
-  exist before any dependent code runs.
+  In addition to reading from localStorage, this version attempts to
+  fetch persisted values from Supabase.  Because the Supabase
+  client is exposed on `window.supabase` by the kv sync adapter,
+  we can asynchronously query the kv_store table for each known
+  key.  If a value exists in Supabase, it takes precedence over
+  localStorage; otherwise, the localStorage fallback is used.  This
+  ensures that data entered on one device is available on other
+  devices without relying on cached local storage.
 */
 (function(){
-  try {
-    // Employees store (att_employees_v2)
-    if (typeof window.storedEmployees === 'undefined') {
-      window.storedEmployees = JSON.parse(localStorage.getItem('att_employees_v2') || '{}');
-    }
-    // Attendance records store (att_records_v2)
-    if (typeof window.storedRecords === 'undefined') {
-      window.storedRecords = JSON.parse(localStorage.getItem('att_records_v2') || '[]');
-    }
-    // Projects store (att_projects_v1)
-    if (typeof window.storedProjects === 'undefined') {
-      window.storedProjects = JSON.parse(localStorage.getItem('att_projects_v1') || '{}');
-    }
-    // Schedules store (att_schedules_v2) – ensures schedules are available early
-    if (typeof window.storedSchedules === 'undefined') {
-      window.storedSchedules = JSON.parse(localStorage.getItem('att_schedules_v2') || '{}');
-    }
-  } catch (e) {
-    console.warn('Boot guard init failed', e);
+  // Helper to fetch a single key from Supabase.  Returns a Promise
+  // that resolves to the parsed JSON value or undefined on error.
+  function fetchFromSupabase(key){
+    return new Promise((resolve) => {
+      try {
+        const client = window.supabase;
+        const table = window.SUPABASE_TABLE;
+        if (!client || !table) return resolve(undefined);
+        client
+          .from(table)
+          .select('value')
+          .eq('key', key)
+          .single()
+          .then(({ data, error }) => {
+            if (error || !data) return resolve(undefined);
+            const v = data.value;
+            if (v == null) return resolve(undefined);
+            // If the stored value is a string, assume it is JSON and parse
+            if (typeof v === 'string') {
+              try { return resolve(JSON.parse(v)); } catch { return resolve(undefined); }
+            }
+            // Otherwise return the JSON value directly
+            return resolve(v);
+          })
+          .catch(() => resolve(undefined));
+      } catch (ex) {
+        resolve(undefined);
+      }
+    });
   }
+  (async function(){
+    try {
+      // Employees store (att_employees_v2)
+      if (typeof window.storedEmployees === 'undefined') {
+        const supaVal = await fetchFromSupabase('att_employees_v2');
+        if (supaVal !== undefined) {
+          window.storedEmployees = supaVal;
+        } else {
+          // fallback to localStorage
+          window.storedEmployees = JSON.parse(localStorage.getItem('att_employees_v2') || '{}');
+        }
+      }
+      // Attendance records store (att_records_v2)
+      if (typeof window.storedRecords === 'undefined') {
+        const supaVal = await fetchFromSupabase('att_records_v2');
+        if (supaVal !== undefined) {
+          window.storedRecords = supaVal;
+        } else {
+          window.storedRecords = JSON.parse(localStorage.getItem('att_records_v2') || '[]');
+        }
+      }
+      // Projects store (att_projects_v1)
+      if (typeof window.storedProjects === 'undefined') {
+        const supaVal = await fetchFromSupabase('att_projects_v1');
+        if (supaVal !== undefined) {
+          window.storedProjects = supaVal;
+        } else {
+          window.storedProjects = JSON.parse(localStorage.getItem('att_projects_v1') || '{}');
+        }
+      }
+      // Schedules store (att_schedules_v2) – ensures schedules are available early
+      if (typeof window.storedSchedules === 'undefined') {
+        const supaVal = await fetchFromSupabase('att_schedules_v2');
+        if (supaVal !== undefined) {
+          window.storedSchedules = supaVal;
+        } else {
+          window.storedSchedules = JSON.parse(localStorage.getItem('att_schedules_v2') || '{}');
+        }
+      }
+    } catch (e) {
+      console.warn('Boot guard init failed', e);
+    }
+  })();
 })();
 </script>
 
