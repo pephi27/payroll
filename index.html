@@ -3317,14 +3317,18 @@ document.getElementById('fileInput').addEventListener('change', (ev)=>{
           } else {
             alert(`Upload successful: imported ${totalAdded} record${totalAdded!==1?'s':''} from ${total} file${total>1?'s':''}.`);
           }
+          // Persist uploaded records to Supabase when all files have been processed
+          saveRecordsToSupabase();
         }
       }
     };
     r.onerror = ()=>{
       errors++; processed++;
-      if (processed === total){
+    if (processed === total){
         inputEl.disabled = false; inputEl.value = '';
         alert(`Upload finished with errors: imported ${totalAdded} record${totalAdded!==1?'s':''} from ${total} file${total>1?'s':''}. (${errors} file${errors>1?'s':''} failed)`);
+        // Even if some files failed, persist whatever records were added to Supabase
+        saveRecordsToSupabase();
       }
     };
     r.readAsText(file);
@@ -3334,7 +3338,11 @@ document.getElementById('fileInput').addEventListener('change', (ev)=>{
 
 document.getElementById('clearData').addEventListener('click', ()=>{
   if(!confirm('Clear all saved attendance data?')) return;
-  storedRecords = []; localStorage.removeItem(LS_RECORDS); renderResults();
+  storedRecords = [];
+  localStorage.removeItem(LS_RECORDS);
+  // Persist deletion of all records to Supabase as well
+  deleteRecordsFromSupabase();
+  renderResults();
 });
 document.getElementById('downloadCSV').addEventListener('click', ()=>{
   const rows = [['ID','Name','Project','Schedule','Date','AM In','AM Out','PM In','PM Out','OT In','OT Out','Total Regular Hrs','OT Hrs']];
@@ -4184,6 +4192,8 @@ document.addEventListener('DOMContentLoaded', () => {
       try {
         storedRecords.push({ empId: String(empId), date: dateVal, time: timeVal });
         localStorage.setItem(LS_RECORDS, JSON.stringify(storedRecords));
+        // Persist manual entry to Supabase
+        saveRecordsToSupabase();
       } catch(e) { console.error('Saving manual DTR failed', e); }
       closeManualModal();
       if(typeof renderResults === 'function') renderResults();
@@ -4226,6 +4236,8 @@ document.addEventListener('DOMContentLoaded', () => {
             }
           }
           localStorage.setItem(LS_RECORDS, JSON.stringify(storedRecords));
+          // Persist deletion to Supabase
+          saveRecordsToSupabase();
           renderResults();
         } catch(e){ console.error('DTR delete failed', e); }
       });
