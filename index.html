@@ -60,6 +60,10 @@ const KNOWN_KEYS = [
   ,"payroll_philhealth_rate"
   ,"payroll_pagibig_table"
   ,"payroll_philhealth_table"
+  // Cash advance keys for syncing the cash advance tracker across devices
+  ,"payroll_cashAdvanceOrig"
+  ,"payroll_cashAdvanceDed"
+  ,"payroll_cashAdvanceBal"
 ]
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY)
@@ -75,6 +79,12 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_KEY)
 // provides a simple, predictable global reference.
 window.supabase = supabase;
 window.SUPABASE_TABLE = TABLE;
+// Expose the array of known localStorage keys so other scripts (e.g. the
+// cash advance tracker) can extend it. Without this assignment the
+// KNOWN_KEYS constant is scoped to this module only, leaving no way
+// for external scripts to add their own keys for syncing.  See the
+// cash advance tracker script below for an example of extending this list.
+window.KNOWN_KEYS = KNOWN_KEYS;
 
 const __origSetItem = Storage.prototype.setItem
 const __origRemoveItem = Storage.prototype.removeItem
