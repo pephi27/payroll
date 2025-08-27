@@ -143,6 +143,17 @@ function safeStringify(v){
   try { return typeof v === "string" ? v : JSON.stringify(v) } catch { return null }
 }
 </script>
+
+<!-- Style to visually and functionally lock panels when payroll data is locked.
+     When #panelMain has the 'locked' class, pointer events are disabled on
+     all of its children and the panel appears dimmed. This prevents any
+     interaction with DTR fields while still allowing navigation to other tabs. -->
+<style>
+  #panelMain.locked {
+    pointer-events: none;
+    opacity: 0.6;
+  }
+</style>
 <!-- === / Supabase KV Sync Adapter === -->
 
 <!-- Multi payslip printing functionality -->
@@ -1590,6 +1601,18 @@ document.addEventListener('DOMContentLoaded', function() {
     </div>
     </div>
     <div class="tab" id="deductionsTab">
+     <!-- Sub-tab navigation for Deductions.  Users can switch between the main
+          deductions table and the cash advance tracker.  We reuse the
+          existing tab button styles by including the `tab-btn` class. -->
+     <div class="subtab-nav">
+      <button class="tab-btn subtab-btn active" data-subtab="dedMainSection">Deductions Table</button>
+      <button class="tab-btn subtab-btn" data-subtab="cashAdvanceSection">Cash Advance Tracker</button>
+     </div>
+     <!-- Main deductions content wrapper.  All of the existing controls,
+          informational notes and the deductions table reside inside this
+          wrapper so that it can be toggled independently from the cash
+          advance tracker. -->
+     <div id="dedMainSection" class="subtab-panel active">
      <div class="controls">
       <label>
        Upload Excel/CSV (ID, Pag-IBIG Loan, SSS Loan, Vale, Wed Vale):
@@ -1651,6 +1674,23 @@ document.addEventListener('DOMContentLoaded', function() {
       </tfoot>
 
      </table>
+     </div><!-- close dedMainSection -->
+     <!-- Cash Advance Tracker section.  Initially hidden; toggled via the subtab buttons. -->
+     <div id="cashAdvanceSection" class="subtab-panel" style="display:none;">
+      <table id="cashAdvanceTable">
+        <thead>
+         <tr>
+          <th>ID</th>
+          <th>Name</th>
+          <th>Original Amount</th>
+          <th>Deduction</th>
+          <th>Balance</th>
+          <th>Action</th>
+         </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+     </div>
     </div>
 
     <!-- Manual Adjustments Tab -->
@@ -1816,6 +1856,19 @@ let loanSSS = JSON.parse(localStorage.getItem(LS_LOAN_SSS) || '{}');
 let loanPI = JSON.parse(localStorage.getItem(LS_LOAN_PI) || '{}');
 let vale = JSON.parse(localStorage.getItem(LS_VALE) || '{}');
 let valeWed = JSON.parse(localStorage.getItem(LS_VALE_WED) || '{}');
+
+// Cash advance localStorage keys and in-memory objects.  These store per-employee
+// original cash advance amounts, per-payroll deductions and the current
+// outstanding balance.  Each key is persisted to localStorage (and
+// mirrored to Supabase via the auto-sync adapter) under its own
+// namespace.  The objects are keyed by employee ID.  See the cash
+// advance tracker script at the bottom of the document for usage.
+const LS_CASH_ORIG = 'payroll_cashAdvanceOrig',
+      LS_CASH_DED  = 'payroll_cashAdvanceDed',
+      LS_CASH_BAL  = 'payroll_cashAdvanceBal';
+let cashOrig = JSON.parse(localStorage.getItem(LS_CASH_ORIG) || '{}');
+let cashDed  = JSON.parse(localStorage.getItem(LS_CASH_DED)  || '{}');
+let cashBal  = JSON.parse(localStorage.getItem(LS_CASH_BAL)  || '{}');
 // Per-employee payroll adjustments (positive or negative amounts)
 let adjustments = JSON.parse(localStorage.getItem(LS_ADJ) || '{}');
 
@@ -2853,34 +2906,23 @@ document.addEventListener('DOMContentLoaded', () => {
       saveHistory();
       renderHistory();
       renderActivePayrolls();
-      // Disable payroll inputs and dashboard controls until date range changes
-      document.querySelectorAll('#panelPayroll input').forEach(inp => { inp.disabled = true; });
+      // Disable payroll and DTR editing via helper until date range changes
+      disablePayrollInputs();
       const wsEl2 = document.getElementById('weekStart');
       const weEl2 = document.getElementById('weekEnd');
-      const genBtn = document.getElementById('dashGenerate');
-      if (wsEl2) {
-        wsEl2.disabled = true;
-        wsEl2.dataset.forced = 'true';
-      }
-      if (weEl2) {
-        weEl2.disabled = true;
-        weEl2.dataset.forced = 'true';
-      }
-      if (genBtn) genBtn.disabled = true;
+      // Mark date inputs as forced to prevent showTab from re-enabling prematurely
+      if (wsEl2) wsEl2.dataset.forced = 'true';
+      if (weEl2) weEl2.dataset.forced = 'true';
       function enableOnChange() {
         if (wsEl2) wsEl2.removeEventListener('change', enableOnChange);
         if (weEl2) weEl2.removeEventListener('change', enableOnChange);
-        document.querySelectorAll('#panelPayroll input').forEach(inp => { inp.disabled = false; });
-        // Remove forced flags and re-enable date range and generate button
-        if (wsEl2) {
-          delete wsEl2.dataset.forced;
-          wsEl2.disabled = false;
+        // Determine if the newly selected period is locked. If locked, keep
+        // editing disabled; otherwise enable editing and clear forced flags.
+        if (typeof checkAndToggleEditState === 'function') {
+          checkAndToggleEditState();
+        } else {
+          enablePayrollInputs();
         }
-        if (weEl2) {
-          delete weEl2.dataset.forced;
-          weEl2.disabled = false;
-        }
-        if (genBtn) genBtn.disabled = false;
       }
       if (wsEl2) wsEl2.addEventListener('change', enableOnChange);
       if (weEl2) weEl2.addEventListener('change', enableOnChange);
@@ -2983,6 +3025,208 @@ document.addEventListener('DOMContentLoaded', () => {
   window.buildSnapshot = buildSnapshot;
 
   /**
+   * Disable payroll and DTR editing across the application. Once a payroll
+   * period is locked, users should not be able to adjust hours, rates, or
+   * manually enter or delete DTR entries for that period. This helper
+   * centralizes the logic so both global and per-row lock actions can reuse
+   * it. Date range controls and Generate/Lock buttons are also disabled.
+   */
+  function disablePayrollInputs() {
+    // Disable all editable fields in the payroll table
+    document.querySelectorAll('#payrollTable input').forEach(inp => {
+      inp.disabled = true;
+    });
+    // Disable DTR inputs, buttons and selects (manual DTR, delete buttons, filters, etc.)
+    document.querySelectorAll('#panelMain input, #panelMain button, #panelMain select').forEach(el => {
+      el.disabled = true;
+    });
+    // Additionally disable key DTR controls explicitly by ID. While the generic selector above
+    // should catch most elements, some dynamically inserted controls (or those outside
+    // #panelMain) may escape. Explicitly disabling them ensures search fields, date filters,
+    // project dropdowns and import/export buttons cannot be used once locked. These IDs
+    // correspond to the manual DTR workflow and DTR filtering controls.
+    ['dtrSearchName','dtrDateFrom','dtrDateTo','dtrDateClear','filterProject','downloadCSV','fileInput','manualDtrBtn','printDtrBtn','clearData','dtrDateRangeFrom','dtrDateRangeTo'].forEach(id => {
+      const el = document.getElementById(id);
+      if (el) el.disabled = true;
+    });
+    // Disable all select elements within the results table (project and schedule selectors)
+    document.querySelectorAll('#resultsTable select').forEach(sel => {
+      sel.disabled = true;
+    });
+    // Disable any DTR delete buttons that may have been added
+    document.querySelectorAll('.dtr-del-btn').forEach(btn => {
+      btn.disabled = true;
+    });
+
+    // Add a locked class to the DTR panel to disable pointer events. This is a
+    // visual and functional safeguard for cases where individual inputs might
+    // get re-enabled by other scripts. The CSS defined above ensures
+    // #panelMain.locked blocks all interaction with its contents.
+    const pm = document.getElementById('panelMain');
+    if (pm) pm.classList.add('locked');
+    // Also disable inputs and buttons within the manual DTR modal if it exists. The modal is not
+    // nested under #panelMain, so we need to explicitly target it. Without this, users could
+    // potentially enter a manual record even after locking by using the modal fields directly.
+    document.querySelectorAll('#manualDtrModal input, #manualDtrModal button, #manualDtrModal select').forEach(el => {
+      el.disabled = true;
+    });
+    // Disable dashboard date range inputs and action buttons
+    const ws = document.getElementById('weekStart');
+    const we = document.getElementById('weekEnd');
+    const genBtn = document.getElementById('dashGenerate');
+    const lockBtn = document.getElementById('dashLock');
+    if (ws) ws.disabled = true;
+    if (we) we.disabled = true;
+    if (genBtn) genBtn.disabled = true;
+    if (lockBtn) lockBtn.disabled = true;
+  }
+  // Expose helper globally so other scripts can disable editing
+  window.disablePayrollInputs = disablePayrollInputs;
+
+  /**
+   * Re-enable payroll and DTR editing across the application. This should be
+   * called when the user changes the date range after locking, or when a
+   * snapshot is unlocked. It resets disabled fields and action buttons.
+   */
+  function enablePayrollInputs() {
+    // Re-enable payroll table inputs
+    document.querySelectorAll('#payrollTable input').forEach(inp => {
+      inp.disabled = false;
+    });
+    // Re-enable DTR inputs, buttons and selects
+    document.querySelectorAll('#panelMain input, #panelMain button, #panelMain select').forEach(el => {
+      el.disabled = false;
+    });
+    // Re-enable specific DTR controls by ID that were explicitly disabled in
+    // disablePayrollInputs(). This ensures search, date filters, project filter,
+    // and import/export controls become usable again when the payroll is unlocked
+    // or the date range is changed.
+    ['dtrSearchName','dtrDateFrom','dtrDateTo','dtrDateClear','filterProject','downloadCSV','fileInput','manualDtrBtn','printDtrBtn','clearData','dtrDateRangeFrom','dtrDateRangeTo'].forEach(id => {
+      const el = document.getElementById(id);
+      if (el) el.disabled = false;
+    });
+    // Re-enable selects in the results table (project and schedule selectors)
+    document.querySelectorAll('#resultsTable select').forEach(sel => {
+      sel.disabled = false;
+    });
+    // Re-enable any DTR delete buttons
+    document.querySelectorAll('.dtr-del-btn').forEach(btn => {
+      btn.disabled = false;
+    });
+
+    // Remove the locked class from the DTR panel so pointer events and
+    // interaction are restored. When the user switches to an unlocked period or
+    // explicitly unlocks a snapshot, this class must be removed.
+    const pm = document.getElementById('panelMain');
+    if (pm) pm.classList.remove('locked');
+    // Re-enable manual DTR modal fields and buttons. When a payroll is unlocked or the date
+    // range changes, users should be able to enter manual DTR entries again. This undoes the
+    // disablement applied in disablePayrollInputs().
+    document.querySelectorAll('#manualDtrModal input, #manualDtrModal button, #manualDtrModal select').forEach(el => {
+      el.disabled = false;
+    });
+    // Re-enable dashboard date range and action buttons
+    const ws = document.getElementById('weekStart');
+    const we = document.getElementById('weekEnd');
+    const genBtn = document.getElementById('dashGenerate');
+    const lockBtn = document.getElementById('dashLock');
+    if (ws) ws.disabled = false;
+    if (we) we.disabled = false;
+    if (genBtn) genBtn.disabled = false;
+    if (lockBtn) lockBtn.disabled = false;
+  }
+  // Expose helper globally so other scripts can enable editing
+  window.enablePayrollInputs = enablePayrollInputs;
+
+  /**
+   * Determine whether the currently selected payroll period (weekStart/weekEnd values)
+   * corresponds to a locked snapshot. This reads from the global payrollHistory
+   * array if available, otherwise loads history from localStorage. It returns
+   * true if a matching snapshot exists and its `locked` property is truthy.
+   */
+  function isSelectedPeriodLocked() {
+    const wsEl = document.getElementById('weekStart');
+    const weEl = document.getElementById('weekEnd');
+    if (!wsEl || !weEl) return false;
+    const start = wsEl.value;
+    const end = weEl.value;
+    // Helper to parse either ISO (yyyy-mm-dd) or US (m/d/yyyy) date strings
+    function parseDateStr(str) {
+      if (!str) return null;
+      // If contains dash, assume ISO format yyyy-mm-dd or yyyy-m-d
+      if (str.includes('-')) {
+        const isoParts = str.split('-');
+        if (isoParts.length === 3) {
+          const y = parseInt(isoParts[0], 10);
+          const m = parseInt(isoParts[1], 10);
+          const d = parseInt(isoParts[2], 10);
+          if (!isNaN(y) && !isNaN(m) && !isNaN(d)) {
+            return new Date(y, m - 1, d);
+          }
+        }
+        // Fallback: let Date constructor try parsing
+        const dt = new Date(str);
+        return isNaN(dt.getTime()) ? null : dt;
+      }
+      // If contains slash, assume m/d/yyyy or mm/dd/yyyy
+      if (str.includes('/')) {
+        const parts = str.split('/');
+        if (parts.length === 3) {
+          const m = parseInt(parts[0], 10);
+          const d = parseInt(parts[1], 10);
+          const y = parseInt(parts[2], 10);
+          if (!isNaN(m) && !isNaN(d) && !isNaN(y)) {
+            return new Date(y, m - 1, d);
+          }
+        }
+      }
+      // Final attempt: parse using Date constructor
+      const dt2 = new Date(str);
+      return isNaN(dt2.getTime()) ? null : dt2;
+    }
+    const startDateObj = parseDateStr(start);
+    const endDateObj = parseDateStr(end);
+    if (!startDateObj || !endDateObj) return false;
+    // Use the in-memory payrollHistory if available; else load from storage
+    const hist = Array.isArray(window.payrollHistory) ? window.payrollHistory : (typeof loadHistory === 'function' ? loadHistory() : []);
+    if (!Array.isArray(hist)) return false;
+    return hist.some(s => {
+      if (!s || !s.startDate || !s.endDate) return false;
+      // Parse snapshot dates similarly; handle leading zero differences
+      const sStart = parseDateStr(s.startDate);
+      const sEnd = parseDateStr(s.endDate);
+      if (!sStart || !sEnd) return false;
+      return s.locked && sStart.getTime() === startDateObj.getTime() && sEnd.getTime() === endDateObj.getTime();
+    });
+  }
+  window.isSelectedPeriodLocked = isSelectedPeriodLocked;
+
+  /**
+   * Check the current payroll period and toggle editing state accordingly. If the
+   * selected period is locked, all payroll/DTR inputs are disabled and the
+   * date inputs are marked as forced. If the period is not locked, editing is
+   * enabled and the forced flags are removed. This helper centralizes the
+   * logic of determining lock status and applying the appropriate UI state.
+   */
+  function checkAndToggleEditState() {
+    const wsEl = document.getElementById('weekStart');
+    const weEl = document.getElementById('weekEnd');
+    if (!wsEl || !weEl) return;
+    const locked = isSelectedPeriodLocked();
+    if (locked) {
+      disablePayrollInputs();
+      // Mark inputs as forced so other logic (showTab) doesn't re-enable them
+      wsEl.dataset.forced = 'true';
+      weEl.dataset.forced = 'true';
+    } else {
+      enablePayrollInputs();
+      if (wsEl.dataset) delete wsEl.dataset.forced;
+      if (weEl.dataset) delete weEl.dataset.forced;
+    }
+  }
+  window.checkAndToggleEditState = checkAndToggleEditState;
+
+  /**
    * Convert a snapshot into a CSV string. Header names correspond to payroll columns.
    */
   function snapshotToCSV(snap) {
@@ -3070,21 +3314,24 @@ document.addEventListener('DOMContentLoaded', () => {
     payrollHistory.push({ startDate: start, endDate: end, rows: snap.rows, totals: snap.totals, hash: hashHex, lockedAt: now, locked: true });
     saveHistory();
     renderHistory();
-    // Disable payroll inputs and dashboard controls until date range changes
-    document.querySelectorAll('#panelPayroll input').forEach(inp => { inp.disabled = true; });
-    if (dashStart) dashStart.disabled = true;
-    if (dashEnd) dashEnd.disabled = true;
-    if (dashGenerateBtn) dashGenerateBtn.disabled = true;
-    if (dashLockBtn) dashLockBtn.disabled = true;
+    // Disable payroll and DTR editing via helper until date range changes
+    disablePayrollInputs();
+    // Mark date inputs as forced so showTab logic doesn't re-enable them prematurely
+    if (dashStart) dashStart.dataset.forced = 'true';
+    if (dashEnd) dashEnd.dataset.forced = 'true';
     // Listener to re-enable controls on date change
     function enableOnChange() {
       if (dashStart) dashStart.removeEventListener('change', enableOnChange);
       if (dashEnd) dashEnd.removeEventListener('change', enableOnChange);
-      document.querySelectorAll('#panelPayroll input').forEach(inp => { inp.disabled = false; });
-      if (dashStart) dashStart.disabled = false;
-      if (dashEnd) dashEnd.disabled = false;
-      if (dashGenerateBtn) dashGenerateBtn.disabled = false;
-      if (dashLockBtn) dashLockBtn.disabled = false;
+      // Check the new period and toggle edit state accordingly. If the new
+      // selection is locked, keep editing disabled; otherwise enable it.
+      if (typeof checkAndToggleEditState === 'function') {
+        checkAndToggleEditState();
+      } else {
+        enablePayrollInputs();
+        if (dashStart && dashStart.dataset) delete dashStart.dataset.forced;
+        if (dashEnd && dashEnd.dataset) delete dashEnd.dataset.forced;
+      }
     }
     if (dashStart) dashStart.addEventListener('change', enableOnChange);
     if (dashEnd) dashEnd.addEventListener('change', enableOnChange);
@@ -3163,7 +3410,7 @@ document.addEventListener('DOMContentLoaded', () => {
         // Remove listeners
         if (ws) ws.removeEventListener('change', enableOnDateChange);
         if (we) we.removeEventListener('change', enableOnDateChange);
-        // Re-enable all disabled inputs/buttons/selects
+        // Re-enable all disabled inputs/buttons/selects by default
         disableSelectors.forEach(sel => {
           document.querySelectorAll(sel).forEach(el => { el.disabled = false; });
         });
@@ -3177,6 +3424,14 @@ document.addEventListener('DOMContentLoaded', () => {
           we.disabled = false;
         }
         if (gen) gen.disabled = false;
+        // After re-enabling, toggle editing state based on whether the newly
+        // selected period is locked or not. This ensures that switching
+        // directly from one locked period to another keeps the UI disabled.
+        try {
+          if (typeof checkAndToggleEditState === 'function') {
+            checkAndToggleEditState();
+          }
+        } catch (_) {}
       }
       if (ws) ws.addEventListener('change', enableOnDateChange);
       if (we) we.addEventListener('change', enableOnDateChange);
@@ -3498,7 +3753,19 @@ function showTab(name){
 
   if(name==='payroll'){ tabs.tabPayroll && tabs.tabPayroll.classList.add('active'); tabs.panelPayroll && tabs.panelPayroll.classList.add('active'); }
 }
-tabs.tabMain.addEventListener('click', ()=>{ showTab('main'); try{ renderResults(); }catch(e){} });
+// When switching to the main (DTR) tab, render results and then toggle the edit
+// state based on whether the selected period is locked. Without this call,
+// the DTR UI may remain interactive even when a locked payroll period is
+// selected. Any errors are caught to avoid breaking tab switching.
+tabs.tabMain.addEventListener('click', () => {
+  showTab('main');
+  try { renderResults(); } catch (e) {}
+  try {
+    if (typeof checkAndToggleEditState === 'function') {
+      checkAndToggleEditState();
+    }
+  } catch (e) {}
+});
 tabs.tabSchedule.addEventListener('click', ()=>showTab('schedule'));
 tabs.tabEmployees.addEventListener('click', ()=>showTab('employees'));
 tabs.tabProjects.addEventListener('click', ()=>showTab('projects'));
@@ -4819,6 +5086,14 @@ document.addEventListener('DOMContentLoaded', () => {
     window.renderResults = function(){
       const res = original.apply(this, arguments);
       try { addDtrDeleteButtons(); } catch(e){}
+      // After rendering results, always check whether the selected payroll period is
+      // locked and toggle editing accordingly. This ensures that dynamic
+      // controls inserted by renderResults() respect the current lock state.
+      try {
+        if (typeof checkAndToggleEditState === 'function') {
+          checkAndToggleEditState();
+        }
+      } catch(e) {}
       return res;
     };
     try { addDtrDeleteButtons(); } catch(e){}
@@ -6166,6 +6441,15 @@ function updateWeekInputs(snap) {
 
   // Recalculate payroll if available
   try { if (typeof calculatePayrollFromRecords === 'function') { calculatePayrollFromRecords(); } } catch (e) {}
+
+  // After updating the week range, toggle editing state based on whether the
+  // selected period is locked. Without this, switching between periods would
+  // incorrectly leave the UI enabled for locked snapshots or vice versa.
+  try {
+    if (typeof checkAndToggleEditState === 'function') {
+      checkAndToggleEditState();
+    }
+  } catch (e) {}
 }
 
   function populateDropdowns() {
@@ -6313,6 +6597,177 @@ function updateWeekInputs(snap) {
     });
     observer.observe(tbody, { childList: true, subtree: false });
   })();
+})();
+</script>
+
+<script>
+/* Cash Advance Tracker implementation.  Handles sub-tab navigation within the
+ * Deductions tab and provides a per-employee cash advance table that stores
+ * original amounts, deductions and current balances.  The tracker updates
+ * the main Deductions table's Vale column via the `vale` object and calls
+ * `calculateAll()` whenever a deduction or payment changes. */
+
+(function(){
+  // Ensure new cash-advance keys are mirrored to Supabase by adding them to KNOWN_KEYS
+  try {
+    const extra = ['payroll_cashAdvanceOrig','payroll_cashAdvanceDed','payroll_cashAdvanceBal'];
+    if (window.KNOWN_KEYS) {
+      extra.forEach(k => { if (!KNOWN_KEYS.includes(k)) KNOWN_KEYS.push(k); });
+    }
+  } catch (err) {}
+
+  // Render the cash advance tracker table
+  function renderCashAdvanceTable() {
+    const tb = document.querySelector('#cashAdvanceTable tbody');
+    if (!tb) return;
+    tb.innerHTML = '';
+    (employeeList || []).forEach(emp => {
+      const id = emp.id;
+      const name = emp.name || '';
+      const origVal = Number(cashOrig[id] ?? 0);
+      const dedVal  = Number(cashDed[id] ?? 0);
+      // Determine the current balance.  If no explicit balance is stored for
+      // this employee yet, default to the original amount (not yet updated).
+      const hasBal = cashBal.hasOwnProperty(id);
+      const balVal = hasBal ? Number(cashBal[id] || 0) : origVal;
+      // Determine update state: if a balance has been stored and it differs
+      // from the original amount then an update has already been applied.
+      const updateApplied = hasBal && (balVal !== origVal);
+      // Decide if update button should be disabled and what label it should have
+      let btnLabel = 'Update';
+      let disabled = false;
+      if (!origVal || !dedVal) {
+        // Need both original amount and deduction to enable update
+        disabled = true;
+      } else if (balVal <= 0) {
+        // Fully paid
+        btnLabel = 'Paid';
+        disabled = true;
+      } else if (updateApplied) {
+        // Already updated once; disable further updates
+        btnLabel = 'Updated';
+        disabled = true;
+      }
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td>${id}</td>
+        <td class="wrap">${name}</td>
+        <td><input type="number" step="0.01" class="cashOrig" data-id="${id}" value="${origVal || ''}"></td>
+        <td><input type="number" step="0.01" class="cashDed" data-id="${id}" value="${dedVal || ''}"></td>
+        <td class="cashBal">${balVal ? balVal.toFixed(2) : '0.00'}</td>
+        <td><button class="cashUpdateBtn" data-id="${id}" ${disabled ? 'disabled' : ''}>${btnLabel}</button></td>
+      `;
+      tb.appendChild(tr);
+    });
+    attachCashAdvanceHandlers();
+  }
+
+  function attachCashAdvanceHandlers() {
+    // Handle original amount changes
+    document.querySelectorAll('.cashOrig').forEach(inp => {
+      // Update the in‑memory values on every keystroke but defer re‑rendering
+      inp.addEventListener('input', () => {
+        const id = inp.getAttribute('data-id');
+        const val = parseFloat(inp.value);
+        if (!isNaN(val) && val > 0) {
+          cashOrig[id] = +(val.toFixed(2));
+          // Reset balance to original whenever original amount changes
+          cashBal[id] = +(val.toFixed(2));
+        } else {
+          delete cashOrig[id];
+          delete cashBal[id];
+        }
+        localStorage.setItem(LS_CASH_ORIG, JSON.stringify(cashOrig));
+        localStorage.setItem(LS_CASH_BAL, JSON.stringify(cashBal));
+        // Do not call renderCashAdvanceTable() here; this would rebuild the table
+        // on every keystroke and cause the input to lose focus.  Re‑render on blur instead.
+      });
+      // When the user finishes editing (on blur/change), rebuild the table so buttons/labels refresh
+      inp.addEventListener('change', () => {
+        renderCashAdvanceTable();
+      });
+    });
+    // Handle deduction changes
+    document.querySelectorAll('.cashDed').forEach(inp => {
+      // Update the deduction and recalculate totals on each keystroke but do not re‑render
+      inp.addEventListener('input', () => {
+        const id = inp.getAttribute('data-id');
+        const val = parseFloat(inp.value);
+        if (!isNaN(val) && val > 0) {
+          cashDed[id] = +(val.toFixed(2));
+          // Persist the deduction for this employee
+          vale[id] = +(val.toFixed(2));
+        } else {
+          delete cashDed[id];
+          delete vale[id];
+        }
+        localStorage.setItem(LS_CASH_DED, JSON.stringify(cashDed));
+        localStorage.setItem(LS_VALE, JSON.stringify(vale));
+        calculateAll();
+        // Avoid calling renderCashAdvanceTable() here; it would reset focus on every key press.
+      });
+      // Rebuild the table when the user commits their change (on blur/change)
+      inp.addEventListener('change', () => {
+        renderCashAdvanceTable();
+      });
+    });
+    // Handle update (apply a single deduction)
+    document.querySelectorAll('.cashUpdateBtn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const id = btn.getAttribute('data-id');
+        const orig = Number(cashOrig[id] ?? 0);
+        const ded = Number(cashDed[id] ?? 0);
+        if (!orig || !ded) return;
+        // Compute new balance as original minus one deduction
+        let newBal = +(orig - ded);
+        if (newBal <= 0) {
+          // Fully paid off: set balance to zero and clear deduction and vale
+          newBal = 0;
+          delete cashDed[id];
+          delete vale[id];
+          localStorage.setItem(LS_CASH_DED, JSON.stringify(cashDed));
+          localStorage.setItem(LS_VALE, JSON.stringify(vale));
+        }
+        cashBal[id] = +(newBal.toFixed(2));
+        localStorage.setItem(LS_CASH_BAL, JSON.stringify(cashBal));
+        calculateAll();
+        renderCashAdvanceTable();
+      });
+    });
+  }
+
+  // Wire up the sub-tab navigation within the Deductions tab
+  document.addEventListener('DOMContentLoaded', () => {
+    const navBtns = document.querySelectorAll('#deductionsTab .subtab-nav .subtab-btn');
+    navBtns.forEach(btn => {
+      btn.addEventListener('click', () => {
+        navBtns.forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        const target = btn.getAttribute('data-subtab');
+        // Show the selected panel and hide others
+        document.querySelectorAll('#deductionsTab .subtab-panel').forEach(panel => {
+          panel.style.display = (panel.id === target) ? '' : 'none';
+        });
+      });
+    });
+    // Initialize panel visibility on page load
+    document.querySelectorAll('#deductionsTab .subtab-panel').forEach(panel => {
+      panel.style.display = (panel.id === 'dedMainSection') ? '' : 'none';
+    });
+    renderCashAdvanceTable();
+  });
+  // On page load, immediately check whether the currently selected payroll period
+  // is locked and toggle the UI accordingly. Without this, the DTR panel may
+  // remain interactive on initial load even if the chosen period has been
+  // previously locked. The check is wrapped in a try-catch to avoid
+  // exceptions during startup.
+  document.addEventListener('DOMContentLoaded', () => {
+    try {
+      if (typeof checkAndToggleEditState === 'function') {
+        checkAndToggleEditState();
+      }
+    } catch (e) {}
+  });
 })();
 </script>
 
