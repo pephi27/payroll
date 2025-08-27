@@ -1327,8 +1327,9 @@ document.addEventListener('DOMContentLoaded', function() {
       <button class="tab-btn active" data-tab="payrollTab">
        Payroll
       </button>
-      <button class="tab-btn" data-tab="sssTab">
-       SSS Table
+      <!-- Renamed SSS sub-tab to Contributions to include additional government contributions -->
+      <button class="tab-btn" data-tab="contributionsTab">
+       Contributions
       </button>
       <button class="tab-btn" data-tab="deductionsTab">
        Deductions
@@ -1477,7 +1478,8 @@ document.addEventListener('DOMContentLoaded', function() {
       (id&rarr;{name}). If none found, shows a sample row.
      </div>
     </div>
-    <div class="tab" id="sssTab">
+    <!-- Renamed SSS tab to Contributions for clarity -->
+    <div class="tab" id="contributionsTab">
      <div class="controls">
       <button id="addSssRow">
        Add Row
@@ -1524,6 +1526,42 @@ document.addEventListener('DOMContentLoaded', function() {
       </i>
       and use the Employee Share.
      </div>
+    <!-- New section summarising Pag‑IBIG and PhilHealth contributions.  These rates
+         are the employee share and can be adjusted if the government increases
+         the statutory rates in the future. -->
+    <div class="section note">
+      <h4>Pag‑IBIG &amp; PhilHealth Contribution Rates</h4>
+      <table>
+        <thead>
+          <tr>
+            <th>Contribution</th>
+            <th>Employee Rate</th>
+            <th>Employer Rate</th>
+            <th>Notes</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Pag‑IBIG</td>
+            <td>2% of regular pay</td>
+            <td>2% (matched)</td>
+            <td>1% each up to ₱5,000; 2% each above ₱5,000. Standard monthly contribution is ₱200.</td>
+          </tr>
+          <tr>
+            <td>PhilHealth</td>
+            <td>2.5% of basic salary</td>
+            <td>2.5%</td>
+            <td>Applies to salaries between ₱10,000 and ₱100,000 (shared equally by employer and employee).</td>
+          </tr>
+          <tr>
+            <td>SSS</td>
+            <td>See table above</td>
+            <td>10% of monthly salary credit</td>
+            <td>Employee share is 5% of the Monthly Salary Credit; employer share is 10%.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
     </div>
     <div class="tab" id="deductionsTab">
      <div class="controls">
@@ -1533,6 +1571,19 @@ document.addEventListener('DOMContentLoaded', function() {
        <input accept=".xlsx,.xls,.csv" id="deductionsFileInput" type="file"/>
       </label>
       <button id="exportDeductionsCSV">Export CSV</button>
+
+      <!-- Divisor selector for splitting deductions across pay periods (Deductions tab) -->
+      <label>
+       Divide Deductions By
+       <br/>
+       <select id="deductionDivisorDeds">
+        <option value="1">1</option>
+        <option value="2">2</option>
+        <option value="3">3</option>
+        <option value="4">4</option>
+        <option value="5">5</option>
+       </select>
+      </label>
      </div>
      <div class="section note">
       <strong>File Format:</strong> Use the exported CSV from this table, then edit only these columns:
@@ -1702,6 +1753,7 @@ const weekStartEl = document.getElementById('weekStart');
 const weekEndEl = document.getElementById('weekEnd');
 const otMultiplierEl = document.getElementById('otMultiplier');
 const divisorEl = document.getElementById('deductionDivisor');
+const divisorDedsEl = document.getElementById('deductionDivisorDeds');
 const tbody = document.querySelector('#payrollTable tbody');
 document.querySelectorAll('#panelPayroll .tabs .tab-btn').forEach(btn=>{
   btn.addEventListener('click', ()=>{
@@ -1716,11 +1768,29 @@ otMultiplierEl.value = otMultiplier;
 weekStartEl.value = weekStartSaved;
 weekEndEl.value = weekEndSaved;
 divisorEl.value = divisor;
+// Sync the Deductions tab divisor select with the stored divisor value and attach event listener
+if (divisorDedsEl) {
+  divisorDedsEl.value = String(divisor);
+  divisorDedsEl.addEventListener('change', () => {
+    divisor = parseInt(divisorDedsEl.value, 10) || 1;
+    divisorEl.value = String(divisor);
+    localStorage.setItem(LS_DIVISOR, String(divisor));
+    calculateAll();
+  });
+}
 
 otMultiplierEl.addEventListener('input', ()=>{ otMultiplier = parseFloat(otMultiplierEl.value)||0; localStorage.setItem(LS_OTMULT, otMultiplier); calculateAll(); });
 weekStartEl.addEventListener('input', ()=> localStorage.setItem(LS_WEEKSTART, weekStartEl.value));
 weekEndEl.addEventListener('input', ()=> localStorage.setItem(LS_WEEKEND, weekEndEl.value));
-divisorEl.addEventListener('change', ()=>{ divisor = parseInt(divisorEl.value,10)||1; localStorage.setItem(LS_DIVISOR, String(divisor)); calculateAll(); });
+divisorEl.addEventListener('change', () => {
+  divisor = parseInt(divisorEl.value, 10) || 1;
+  localStorage.setItem(LS_DIVISOR, String(divisor));
+  // Sync the Deductions tab divisor select if it exists
+  if (typeof divisorDedsEl !== 'undefined' && divisorDedsEl) {
+    divisorDedsEl.value = String(divisor);
+  }
+  calculateAll();
+});
 function loadEmployees() {
   const stored = JSON.parse(localStorage.getItem('att_employees_v2') || '{}');
   let list = Object.keys(stored).map(id=>({id, name: stored[id]?.name || ''}));
