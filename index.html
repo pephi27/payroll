@@ -56,6 +56,10 @@ const KNOWN_KEYS = [
   "dtr_filter_to",
   "payroll_active_index"
   ,"payroll_adjustments"
+  ,"payroll_pagibig_rate"
+  ,"payroll_philhealth_rate"
+  ,"payroll_pagibig_table"
+  ,"payroll_philhealth_table"
 ]
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY)
@@ -1378,7 +1382,8 @@ document.addEventListener('DOMContentLoaded', function() {
        Print Payslips
       </button>
      </div>
-     <div class="section note">
+     <!-- Contribution formula note with dynamic rates updated via script -->
+     <div id="contribNote" class="section note">
       Pag-IBIG = Regular Pay &times; 2% &divide; Divisor, PhilHealth = Regular Pay &times; 2.5% &divide; Divisor,
     SSS = (Employee Share by Monthly Income) &divide; Divisor. Loans &amp; Vales are manual (not divided).
      </div>
@@ -1526,41 +1531,62 @@ document.addEventListener('DOMContentLoaded', function() {
       </i>
       and use the Employee Share.
      </div>
-    <!-- New section summarising Pag‑IBIG and PhilHealth contributions.  These rates
-         are the employee share and can be adjusted if the government increases
-         the statutory rates in the future. -->
+    <!-- Editable Pag‑IBIG and PhilHealth tables (employee rates).  Each table allows
+         defining income ranges and the corresponding employee rate (as a decimal).
+         The rate is applied to regular pay to compute the contribution. -->
+    <h4>Pag‑IBIG Table (Employee Rate)</h4>
+    <div class="controls">
+      <button id="addPagibigRow">
+       Add Row
+      </button>
+      <button class="primary" id="resetPagibig">
+       Reset to Defaults
+      </button>
+      <button class="danger" id="clearPagibig">
+       Clear Pag-IBIG Table
+      </button>
+    </div>
+    <table id="pagibigTable">
+      <thead>
+        <tr>
+          <th>Range From (₱)</th>
+          <th>Range To (₱)</th>
+          <th>Rate (decimal)</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+      </tbody>
+    </table>
     <div class="section note">
-      <h4>Pag‑IBIG &amp; PhilHealth Contribution Rates</h4>
-      <table>
-        <thead>
-          <tr>
-            <th>Contribution</th>
-            <th>Employee Rate</th>
-            <th>Employer Rate</th>
-            <th>Notes</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr>
-            <td>Pag‑IBIG</td>
-            <td>2% of regular pay</td>
-            <td>2% (matched)</td>
-            <td>1% each up to ₱5,000; 2% each above ₱5,000. Standard monthly contribution is ₱200.</td>
-          </tr>
-          <tr>
-            <td>PhilHealth</td>
-            <td>2.5% of basic salary</td>
-            <td>2.5%</td>
-            <td>Applies to salaries between ₱10,000 and ₱100,000 (shared equally by employer and employee).</td>
-          </tr>
-          <tr>
-            <td>SSS</td>
-            <td>See table above</td>
-            <td>10% of monthly salary credit</td>
-            <td>Employee share is 5% of the Monthly Salary Credit; employer share is 10%.</td>
-          </tr>
-        </tbody>
-      </table>
+      Rate is decimal (e.g. 0.02 = 2% employee share). Employer share is assumed to match the employee share but is not used in calculations.
+    </div>
+    <h4>PhilHealth Table (Employee Rate)</h4>
+    <div class="controls">
+      <button id="addPhilRow">
+       Add Row
+      </button>
+      <button class="primary" id="resetPhil">
+       Reset to Defaults
+      </button>
+      <button class="danger" id="clearPhil">
+       Clear PhilHealth Table
+      </button>
+    </div>
+    <table id="philhealthTable">
+      <thead>
+        <tr>
+          <th>Range From (₱)</th>
+          <th>Range To (₱)</th>
+          <th>Rate (decimal)</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+      </tbody>
+    </table>
+    <div class="section note">
+      Rate is decimal (e.g. 0.025 = 2.5% employee share). Employer share is assumed to match the employee share but is not used in calculations.
     </div>
     </div>
     <div class="tab" id="deductionsTab">
@@ -1658,6 +1684,18 @@ const LS_LOAN_SSS='payroll_loan_sss', LS_LOAN_PI='payroll_loan_pagibig';
 const LS_VALE='payroll_vale', LS_VALE_WED='payroll_vale_wed';
 // LocalStorage key for per-employee payroll adjustments
 const LS_ADJ='payroll_adjustments';
+// LocalStorage keys for dynamic Pag‑IBIG and PhilHealth contribution rates (employee share)
+const LS_PAGIBIG_RATE='payroll_pagibig_rate';
+const LS_PHILHEALTH_RATE='payroll_philhealth_rate';
+// LocalStorage keys for dynamic Pag‑IBIG and PhilHealth contribution tables
+const LS_PAGIBIG_TABLE='payroll_pagibig_table';
+const LS_PHILHEALTH_TABLE='payroll_philhealth_table';
+
+// Current employee contribution rates (decimal form).  Defaults: 0.02 (2%) for Pag‑IBIG and 0.025 (2.5%) for PhilHealth.
+let pagibigRate = parseFloat(localStorage.getItem(LS_PAGIBIG_RATE) ?? '0.02');
+if (isNaN(pagibigRate)) pagibigRate = 0.02;
+let philhealthRate = parseFloat(localStorage.getItem(LS_PHILHEALTH_RATE) ?? '0.025');
+if (isNaN(philhealthRate)) philhealthRate = 0.025;
 const SSS_SEED_2025 = [
   [1, 5249.99, 250],
   [5250, 5749.99, 275],
@@ -1735,6 +1773,42 @@ function ensureSeededSSS() {
   }
 }
 ensureSeededSSS();
+// Seed the Pag‑IBIG and PhilHealth tables with default rates if empty.  These tables
+// define income ranges and the corresponding employee contribution rate (decimal).
+const PAGIBIG_SEED = [
+  [0, 100000000, 0.02]
+];
+const PHILHEALTH_SEED = [
+  [0, 100000000, 0.025]
+];
+
+function ensureSeededPagibig() {
+  try {
+    const cur = JSON.parse(localStorage.getItem(LS_PAGIBIG_TABLE) || '[]');
+    if (!Array.isArray(cur) || cur.length === 0) {
+      const mapped = PAGIBIG_SEED.map(r => ({min: r[0], max: r[1], rate: r[2]}));
+      localStorage.setItem(LS_PAGIBIG_TABLE, JSON.stringify(mapped));
+    }
+  } catch (e) {
+    const mapped = PAGIBIG_SEED.map(r => ({min: r[0], max: r[1], rate: r[2]}));
+    localStorage.setItem(LS_PAGIBIG_TABLE, JSON.stringify(mapped));
+  }
+}
+
+function ensureSeededPhilhealth() {
+  try {
+    const cur = JSON.parse(localStorage.getItem(LS_PHILHEALTH_TABLE) || '[]');
+    if (!Array.isArray(cur) || cur.length === 0) {
+      const mapped = PHILHEALTH_SEED.map(r => ({min: r[0], max: r[1], rate: r[2]}));
+      localStorage.setItem(LS_PHILHEALTH_TABLE, JSON.stringify(mapped));
+    }
+  } catch (e) {
+    const mapped = PHILHEALTH_SEED.map(r => ({min: r[0], max: r[1], rate: r[2]}));
+    localStorage.setItem(LS_PHILHEALTH_TABLE, JSON.stringify(mapped));
+  }
+}
+ensureSeededPagibig();
+ensureSeededPhilhealth();
 let payrollRates = JSON.parse(localStorage.getItem(LS_RATES) || '{}');
 let regHours = JSON.parse(localStorage.getItem(LS_REG_HRS) || '{}');
 let otHours = JSON.parse(localStorage.getItem(LS_OT_HRS) || '{}');
@@ -1825,9 +1899,13 @@ const lSSS = Number(loanSSS[emp.id] ?? 0);
     const v = Number(vale[emp.id] ?? 0);
     const vW = Number(valeWed[emp.id] ?? 0);
     const regPay = +(rH * rate).toFixed(2);
-    const pagibig = +(regPay * 0.02).toFixed(2);
-    const philhealth = +(regPay * 0.025).toFixed(2);
+    // Use dynamic contribution tables for Pag‑IBIG and PhilHealth.  Determine the
+    // applicable rate based on monthly income and multiply by regular pay.
     const monthly = rate * 8 * 24;
+    const piRate = pagibigRateByMonthly(monthly);
+    const phRate = philhealthRateByMonthly(monthly);
+    const pagibig = +(regPay * piRate).toFixed(2);
+    const philhealth = +(regPay * phRate).toFixed(2);
     const sssFull = sssShareByMonthly(monthly);
     const sss = +(sssFull / (Number(divisor)||1)).toFixed(2);
     const sssLoan = +(lSSS / (Number(divisor)||1)).toFixed(2);
@@ -2144,6 +2222,162 @@ document.getElementById('importSss').addEventListener('change', ev=>{
   };
   reader.readAsText(f);
 });
+
+// === Begin Pag‑IBIG and PhilHealth Table Management ===
+// Pag‑IBIG dynamic table helpers.  Defines helper functions for retrieving and
+// setting the table in localStorage, rendering the table in the UI, and applying
+// the employee share rate based on income ranges.
+function getPagibigTable(){
+  let arr = [];
+  try {
+    arr = JSON.parse(localStorage.getItem(LS_PAGIBIG_TABLE) || '[]');
+  } catch(e) { arr = []; }
+  if (!Array.isArray(arr)) arr = [];
+  return arr.map(r => ({
+    min: Number(r.min) || 0,
+    max: Number(r.max) || 0,
+    rate: Number(r.rate) || 0
+  })).sort((a,b) => a.min - b.min);
+}
+function setPagibigTable(rows){
+  localStorage.setItem(LS_PAGIBIG_TABLE, JSON.stringify(rows));
+}
+function renderPagibigTable(){
+  const tbodyP = document.querySelector('#pagibigTable tbody');
+  if(!tbodyP) return;
+  tbodyP.innerHTML = '';
+  const rows = getPagibigTable();
+  rows.forEach((r, idx) => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td><input type="number" step="0.01" class="cell pagibigMin" value="${r.min}"></td>
+      <td><input type="number" step="0.01" class="cell pagibigMax" value="${r.max}"></td>
+      <td><input type="number" step="0.0001" class="cell pagibigRate" value="${r.rate}"></td>
+      <td><button class="delPagibigRow">Delete</button></td>`;
+    tbodyP.appendChild(tr);
+    const minI = tr.querySelector('.pagibigMin');
+    const maxI = tr.querySelector('.pagibigMax');
+    const rateI = tr.querySelector('.pagibigRate');
+    function update(i){
+      const cur = getPagibigTable();
+      cur[i] = {min: Number(minI.value) || 0, max: Number(maxI.value) || 0, rate: Number(rateI.value) || 0};
+      setPagibigTable(cur);
+      calculateAll();
+      if (typeof renderDeductionsTable === 'function') renderDeductionsTable();
+    }
+    minI.addEventListener('input', () => update(idx));
+    maxI.addEventListener('input', () => update(idx));
+    rateI.addEventListener('input', () => update(idx));
+    tr.querySelector('.delPagibigRow').addEventListener('click', () => {
+      const cur = getPagibigTable();
+      cur.splice(idx, 1);
+      setPagibigTable(cur);
+      renderPagibigTable();
+      calculateAll();
+      if (typeof renderDeductionsTable === 'function') renderDeductionsTable();
+    });
+  });
+}
+function getPhilhealthTable(){
+  let arr = [];
+  try {
+    arr = JSON.parse(localStorage.getItem(LS_PHILHEALTH_TABLE) || '[]');
+  } catch(e) { arr = []; }
+  if (!Array.isArray(arr)) arr = [];
+  return arr.map(r => ({
+    min: Number(r.min) || 0,
+    max: Number(r.max) || 0,
+    rate: Number(r.rate) || 0
+  })).sort((a,b) => a.min - b.min);
+}
+function setPhilhealthTable(rows){
+  localStorage.setItem(LS_PHILHEALTH_TABLE, JSON.stringify(rows));
+}
+function renderPhilhealthTable(){
+  const tbodyPh = document.querySelector('#philhealthTable tbody');
+  if(!tbodyPh) return;
+  tbodyPh.innerHTML = '';
+  const rows = getPhilhealthTable();
+  rows.forEach((r, idx) => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td><input type="number" step="0.01" class="cell philMin" value="${r.min}"></td>
+      <td><input type="number" step="0.01" class="cell philMax" value="${r.max}"></td>
+      <td><input type="number" step="0.0001" class="cell philRate" value="${r.rate}"></td>
+      <td><button class="delPhilRow">Delete</button></td>`;
+    tbodyPh.appendChild(tr);
+    const minI = tr.querySelector('.philMin');
+    const maxI = tr.querySelector('.philMax');
+    const rateI = tr.querySelector('.philRate');
+    function update(i){
+      const cur = getPhilhealthTable();
+      cur[i] = {min: Number(minI.value) || 0, max: Number(maxI.value) || 0, rate: Number(rateI.value) || 0};
+      setPhilhealthTable(cur);
+      calculateAll();
+      if (typeof renderDeductionsTable === 'function') renderDeductionsTable();
+    }
+    minI.addEventListener('input', () => update(idx));
+    maxI.addEventListener('input', () => update(idx));
+    rateI.addEventListener('input', () => update(idx));
+    tr.querySelector('.delPhilRow').addEventListener('click', () => {
+      const cur = getPhilhealthTable();
+      cur.splice(idx, 1);
+      setPhilhealthTable(cur);
+      renderPhilhealthTable();
+      calculateAll();
+      if (typeof renderDeductionsTable === 'function') renderDeductionsTable();
+    });
+  });
+}
+// Click handler for adding, resetting and clearing rows in Pag‑IBIG and PhilHealth tables.
+document.addEventListener('click', (e) => {
+  if (e.target && e.target.id === 'addPagibigRow') {
+    const cur = getPagibigTable();
+    cur.push({min: 0, max: 0, rate: 0});
+    setPagibigTable(cur);
+    renderPagibigTable();
+    calculateAll();
+    if (typeof renderDeductionsTable === 'function') renderDeductionsTable();
+  } else if (e.target && e.target.id === 'resetPagibig') {
+    if (confirm('Reset Pag-IBIG table to defaults?')) {
+      const mapped = PAGIBIG_SEED.map(r => ({min: r[0], max: r[1], rate: r[2]}));
+      setPagibigTable(mapped);
+      renderPagibigTable();
+      calculateAll();
+      if (typeof renderDeductionsTable === 'function') renderDeductionsTable();
+    }
+  } else if (e.target && e.target.id === 'clearPagibig') {
+    if (confirm('Clear all Pag-IBIG ranges?')) {
+      setPagibigTable([]);
+      renderPagibigTable();
+      calculateAll();
+      if (typeof renderDeductionsTable === 'function') renderDeductionsTable();
+    }
+  } else if (e.target && e.target.id === 'addPhilRow') {
+    const cur = getPhilhealthTable();
+    cur.push({min: 0, max: 0, rate: 0});
+    setPhilhealthTable(cur);
+    renderPhilhealthTable();
+    calculateAll();
+    if (typeof renderDeductionsTable === 'function') renderDeductionsTable();
+  } else if (e.target && e.target.id === 'resetPhil') {
+    if (confirm('Reset PhilHealth table to defaults?')) {
+      const mapped = PHILHEALTH_SEED.map(r => ({min: r[0], max: r[1], rate: r[2]}));
+      setPhilhealthTable(mapped);
+      renderPhilhealthTable();
+      calculateAll();
+      if (typeof renderDeductionsTable === 'function') renderDeductionsTable();
+    }
+  } else if (e.target && e.target.id === 'clearPhil') {
+    if (confirm('Clear all PhilHealth ranges?')) {
+      setPhilhealthTable([]);
+      renderPhilhealthTable();
+      calculateAll();
+      if (typeof renderDeductionsTable === 'function') renderDeductionsTable();
+    }
+  }
+});
+// === End Pag‑IBIG and PhilHealth Table Management ===
 function sssShareByMonthly(monthly){
   const rows = getSssTable();
   if(rows.length===0) return 0;
@@ -2151,6 +2385,38 @@ function sssShareByMonthly(monthly){
   if(monthly <= rows[0].min) return Number(rows[0].employee)||0;
   for(const r of rows){ if(monthly >= r.min && monthly <= r.max) return Number(r.employee)||0; }
   return Number(rows[rows.length-1].employee)||0;
+}
+
+// Determine Pag‑IBIG contribution rate based on the monthly income.  Uses the
+// editable Pag‑IBIG table; returns a decimal rate (e.g. 0.02).  If no matching
+// range is found, returns the last row's rate.
+function pagibigRateByMonthly(monthly){
+  const rows = getPagibigTable();
+  if(rows.length===0) return 0;
+  rows.sort((a,b)=>a.min-b.min);
+  if(monthly <= rows[0].min) return Number(rows[0].rate)||0;
+  for(const r of rows){
+    if(monthly >= r.min && monthly <= r.max){
+      return Number(r.rate)||0;
+    }
+  }
+  return Number(rows[rows.length-1].rate)||0;
+}
+
+// Determine PhilHealth contribution rate based on the monthly income.  Uses the
+// editable PhilHealth table; returns a decimal rate.  If no matching range is found,
+// returns the last row's rate.
+function philhealthRateByMonthly(monthly){
+  const rows = getPhilhealthTable();
+  if(rows.length===0) return 0;
+  rows.sort((a,b)=>a.min-b.min);
+  if(monthly <= rows[0].min) return Number(rows[0].rate)||0;
+  for(const r of rows){
+    if(monthly >= r.min && monthly <= r.max){
+      return Number(r.rate)||0;
+    }
+  }
+  return Number(rows[rows.length-1].rate)||0;
 }
 
 function calculateRow(tr){
@@ -2166,9 +2432,13 @@ function calculateRow(tr){
   const regPay = +(reg * rate).toFixed(2);
   const otPay = +(ot * rate * (Number(otMultiplier)||0)).toFixed(2);
   const gross = +(regPay + otPay).toFixed(2);
-  const pagibig = +(regPay * 0.02).toFixed(2);
-  const philhealth = +(regPay * 0.025).toFixed(2);
+  // Compute contributions using dynamic tables (employee share).  Determine the
+  // appropriate rate based on the monthly income and multiply by regular pay.
   const monthly = rate * 8 * 24;
+  const piRate = pagibigRateByMonthly(monthly);
+  const phRate = philhealthRateByMonthly(monthly);
+  const pagibig = +(regPay * piRate).toFixed(2);
+  const philhealth = +(regPay * phRate).toFixed(2);
   const sssFull = sssShareByMonthly(monthly);
   const sss = sssFull / (Number(divisor)||1);
   const sssLoan = lSSS / (Number(divisor)||1);
@@ -2251,6 +2521,60 @@ function renderAdjustmentsFoot() {
   });
   cell.textContent = tot.toFixed(2);
 }
+
+// Initialize the dynamic Pag‑IBIG and PhilHealth rate input fields.  This function
+// sets their values from the current global variables and attaches input
+// listeners to persist changes to localStorage and recalculate payroll.
+function initializeContributionRates() {
+  const pagibigInput = document.getElementById('pagibigRateInput');
+  if (pagibigInput) {
+    // Set current value; show as decimal with 3 decimals
+    pagibigInput.value = typeof pagibigRate === 'number' ? pagibigRate.toFixed(3) : '';
+    pagibigInput.addEventListener('change', function() {
+      let val = parseFloat(pagibigInput.value);
+      if (!isNaN(val)) {
+        // If user enters percent (e.g. 2), convert to decimal
+        if (val > 1) val = val / 100;
+        // Bound to 0–1
+        if (val < 0) val = 0;
+        if (val > 1) val = 1;
+        pagibigRate = val;
+        localStorage.setItem(LS_PAGIBIG_RATE, String(val));
+        calculateAll();
+        updateContributionNote();
+      }
+    });
+  }
+  const philInput = document.getElementById('philhealthRateInput');
+  if (philInput) {
+    philInput.value = typeof philhealthRate === 'number' ? philhealthRate.toFixed(3) : '';
+    philInput.addEventListener('change', function() {
+      let val = parseFloat(philInput.value);
+      if (!isNaN(val)) {
+        if (val > 1) val = val / 100;
+        if (val < 0) val = 0;
+        if (val > 1) val = 1;
+        philhealthRate = val;
+        localStorage.setItem(LS_PHILHEALTH_RATE, String(val));
+        calculateAll();
+        updateContributionNote();
+      }
+    });
+  }
+}
+
+// Update the contribution note in the payroll tab to reflect current rates.  It
+// calculates percentages and updates the HTML of the element with id
+// 'contribNote'.  Called after rate changes and on initial load.
+function updateContributionNote() {
+  const noteEl = document.getElementById('contribNote');
+  if (!noteEl) return;
+  const piPct = (pagibigRate * 100).toFixed(2);
+  const phPct = (philhealthRate * 100).toFixed(2);
+  noteEl.innerHTML = 'Pag-IBIG = Regular Pay &times; ' + piPct + '% &divide; Divisor, ' +
+    'PhilHealth = Regular Pay &times; ' + phPct + '% &divide; Divisor, ' +
+    'SSS = (Employee Share by Monthly Income) &divide; Divisor. Loans &amp; Vales are manual (not divided).';
+}
 document.getElementById('downloadPayrollCSV').addEventListener('click', ()=>{
   // Include Adjustments column in payroll CSV export
   const header = ['Week Start','Week End','OT Multiplier','Divisor','ID','Name','Regular Hours','OT Hours','Hourly Rate','Regular Pay','OT Pay','Gross Pay','Pag-IBIG','PhilHealth','SSS','SSS Loan','Pag-IBIG Loan','Vale','Wed Vale','Total Deductions','Adjustments','Net Pay'];
@@ -2284,6 +2608,10 @@ document.getElementById('downloadPayrollCSV').addEventListener('click', ()=>{
 renderTable();
 renderSssTable();
 renderAdjustmentsTable();
+// Render new contribution tables and update the note
+renderPagibigTable();
+renderPhilhealthTable();
+updateContributionNote();
     
   // Wire Project Totals CSV download button (global)
   if (document.getElementById('downloadProjectTotalsCSV')) {
