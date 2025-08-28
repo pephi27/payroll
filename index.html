@@ -60,6 +60,7 @@ const KNOWN_KEYS = [
   ,"payroll_philhealth_rate"
   ,"payroll_pagibig_table"
   ,"payroll_philhealth_table"
+  ,"payroll_adjustment_hours"
 ]
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY)
@@ -305,9 +306,9 @@ document.addEventListener('DOMContentLoaded', function() {
   </style>
   <style>
 
-  /* Hide individual deduction columns in Payroll table (show only Total Deductions) */
-  #payrollTab #payrollTable th:nth-child(9),
-  #payrollTab #payrollTable td:nth-child(9),
+  /* Hide individual deduction columns in Payroll table (show only Total Deductions).
+     After adding the Adjustment Hrs column, the indices shift by one.
+     Hide Pag‑IBIG to Wed Vale columns (cols 10–16). */
   #payrollTab #payrollTable th:nth-child(10),
   #payrollTab #payrollTable td:nth-child(10),
   #payrollTab #payrollTable th:nth-child(11),
@@ -319,7 +320,9 @@ document.addEventListener('DOMContentLoaded', function() {
   #payrollTab #payrollTable th:nth-child(14),
   #payrollTab #payrollTable td:nth-child(14),
   #payrollTab #payrollTable th:nth-child(15),
-  #payrollTab #payrollTable td:nth-child(15) { display: none; }
+  #payrollTab #payrollTable td:nth-child(15),
+  #payrollTab #payrollTable th:nth-child(16),
+  #payrollTab #payrollTable td:nth-child(16) { display: none; }
 
   
 /* ===== Print Styles for Project Totals ===== */
@@ -1423,6 +1426,9 @@ document.addEventListener('DOMContentLoaded', function() {
          OT Hours
         </th>
         <th>
+         Adjustment Hrs
+        </th>
+        <th>
          Hourly Rate
         </th>
         <th>
@@ -1476,6 +1482,7 @@ document.addEventListener('DOMContentLoaded', function() {
           <td colspan="2" class="label-cell">Grand Total</td>
           <td class="num" data-col="regHrs">0.00</td>
           <td class="num" data-col="otHrs">0.00</td>
+          <td class="num" data-col="adjHrs">0.00</td>
           <td class="num" data-col="rate">0.00</td>
           <td class="num" data-col="regPay">0.00</td>
           <td class="num" data-col="otPay">0.00</td>
@@ -1713,6 +1720,7 @@ document.addEventListener('DOMContentLoaded', function() {
         <th>ID</th>
         <th>Name</th>
         <th>Adjustment Amount</th>
+        <th>Adjustment Hrs</th>
        </tr>
       </thead>
       <tbody></tbody>
@@ -1720,6 +1728,7 @@ document.addEventListener('DOMContentLoaded', function() {
        <tr>
         <td colspan="2" class="label-cell">Total Adjustments</td>
         <td class="num" data-col="adjAmt">0.00</td>
+        <td class="num" data-col="adjHrs">0.00</td>
        </tr>
       </tfoot>
      </table>
@@ -1733,6 +1742,8 @@ const LS_LOAN_SSS='payroll_loan_sss', LS_LOAN_PI='payroll_loan_pagibig';
 const LS_VALE='payroll_vale', LS_VALE_WED='payroll_vale_wed';
 // LocalStorage key for per-employee payroll adjustments
 const LS_ADJ='payroll_adjustments';
+// LocalStorage key for per-employee adjustment hours (OT adjustments)
+const LS_ADJ_HRS='payroll_adjustment_hours';
 // LocalStorage keys for dynamic Pag‑IBIG and PhilHealth contribution rates (employee share)
 const LS_PAGIBIG_RATE='payroll_pagibig_rate';
 const LS_PHILHEALTH_RATE='payroll_philhealth_rate';
@@ -1880,6 +1891,9 @@ let cashDed  = JSON.parse(localStorage.getItem(LS_CASH_DED)  || '{}');
 let cashBal  = JSON.parse(localStorage.getItem(LS_CASH_BAL)  || '{}');
 // Per-employee payroll adjustments (positive or negative amounts)
 let adjustments = JSON.parse(localStorage.getItem(LS_ADJ) || '{}');
+// Per‑employee adjustment hours (OT adjustments).  These values represent additional
+// overtime hours that should be added to the regular OT hours when computing OT pay.
+let adjHrs = JSON.parse(localStorage.getItem(LS_ADJ_HRS) || '{}');
 
 let otMultiplier = parseFloat(localStorage.getItem(LS_OTMULT)) || 1.50;
 let weekStartSaved = localStorage.getItem(LS_WEEKSTART) || '';
@@ -2151,6 +2165,8 @@ function renderTable(){
     const tr = document.createElement('tr');
     const rH = Number(regHours[emp.id] ?? 0);
     const oH = Number(otHours[emp.id] ?? 0);
+    // Adjustment hours for this employee (default to 0 if undefined)
+    const aH = Number(adjHrs[emp.id] ?? 0);
     const rate = Number((storedEmployees[emp.id]?.hourlyRate) ?? (payrollRates[emp.id] ?? 0));
     payrollRates[emp.id] = isNaN(rate) ? 0 : rate;
 const lSSS = Number(loanSSS[emp.id] ?? 0);
@@ -2162,6 +2178,7 @@ const lSSS = Number(loanSSS[emp.id] ?? 0);
       <td class="wrap">${emp.name}</td>
       <td><input class="cell regHrs" title="Non-editable in Payroll" type="number" step="0.01" value="${rH}" readonly></td>
       <td><input class="cell otHrs" title="Non-editable in Payroll" type="number" step="0.01" value="${oH}" readonly></td>
+      <td class="adjHrs num">${aH ? aH.toFixed(2) : '0.00'}</td>
       <td><input class="cell rate" title="Non-editable in Payroll" type="number" step="0.01" value="${rate}" readonly></td>
       <td class="regPay num">0.00</td>
       <td class="otPay num">0.00</td>
@@ -2485,6 +2502,10 @@ function calculateRow(tr){
   const id = tr.cells[0].textContent.trim();
   const reg = Number(tr.querySelector('.regHrs').value)||0;
   const ot = Number(tr.querySelector('.otHrs').value)||0;
+  // Adjustment hours from the adjHrs object (if any)
+  const adjHours = Number(adjHrs[id] || 0);
+  // Combined OT hours including adjustments
+  const otTotal = ot + adjHours;
   const rate = Number(tr.querySelector('.rate').value)||0;
   const lSSS = Number(tr.querySelector('.loanSSS').value)||0;
   const lPI = Number(tr.querySelector('.loanPI').value)||0;
@@ -2492,7 +2513,7 @@ function calculateRow(tr){
   const vW = Number(tr.querySelector('.valeWed').value)||0;
 
   const regPay = +(reg * rate).toFixed(2);
-  const otPay = +(ot * rate * (Number(otMultiplier)||0)).toFixed(2);
+  const otPay = +(otTotal * rate * (Number(otMultiplier)||0)).toFixed(2);
   const gross = +(regPay + otPay).toFixed(2);
   // Compute contributions using dynamic tables (employee share).  Determine the
   // appropriate rate based on the monthly income and multiply by regular pay.
@@ -2524,6 +2545,9 @@ function calculateRow(tr){
   if (tr.querySelector('.adjAmt')) {
     tr.querySelector('.adjAmt').textContent = adj.toFixed(2);
   }
+  // Update the displayed adjustment hours cell if present
+  const adjHrsCell = tr.querySelector('.adjHrs');
+  if (adjHrsCell) adjHrsCell.textContent = adjHours ? adjHours.toFixed(2) : '0.00';
   tr.querySelector('.netPay').textContent = net.toFixed(2);
 }
 
@@ -2541,17 +2565,21 @@ function renderAdjustmentsTable() {
   employeeList.forEach(emp => {
     const id = emp.id;
     const name = emp.name;
-    // Use existing adjustment value or empty string for display
+    // Use existing adjustment amount (monetary) or empty string for display
     const val = adjustments[id] !== undefined ? adjustments[id] : '';
+    // Use existing adjustment hours or empty string for display
+    const hrs = adjHrs[id] !== undefined ? adjHrs[id] : '';
     const tr = document.createElement('tr');
     tr.innerHTML = `
       <td>${id}</td>
       <td class="wrap">${name}</td>
       <td><input type="number" step="0.01" class="adjInput" data-id="${id}" value="${val}" /></td>
+      <td><input type="number" step="0.01" class="adjHrsInput" data-id="${id}" value="${hrs}" /></td>
     `;
     atbody.appendChild(tr);
   });
   // Attach input event listeners to persist changes and recalculate payroll
+  // Monetary adjustments
   atbody.querySelectorAll('.adjInput').forEach(inp => {
     inp.addEventListener('input', () => {
       const empId = inp.getAttribute('data-id');
@@ -2568,20 +2596,48 @@ function renderAdjustmentsTable() {
       renderAdjustmentsFoot();
     });
   });
-  // Initialize totals for adjustments
+  // Adjustment hours
+  atbody.querySelectorAll('.adjHrsInput').forEach(inp => {
+    inp.addEventListener('input', () => {
+      const empId = inp.getAttribute('data-id');
+      const n = parseFloat(inp.value);
+      if (!isNaN(n) && n !== 0) {
+        // Round to 2 decimal places and store
+        adjHrs[empId] = +(n.toFixed(2));
+      } else {
+        // Remove the entry when zero or invalid
+        delete adjHrs[empId];
+      }
+      localStorage.setItem(LS_ADJ_HRS, JSON.stringify(adjHrs));
+      calculateAll();
+      renderAdjustmentsFoot();
+    });
+  });
+  // Initialize totals for adjustments (amount and hours)
   renderAdjustmentsFoot();
 }
 
 // Compute and display the total of all adjustment amounts in the adjustments table footer.
 function renderAdjustmentsFoot() {
-  const cell = document.querySelector('#adjustmentsTableFoot [data-col="adjAmt"]');
-  if (!cell) return;
-  let tot = 0;
+  const amtCell = document.querySelector('#adjustmentsTableFoot [data-col="adjAmt"]');
+  const hrsCell = document.querySelector('#adjustmentsTableFoot [data-col="adjHrs"]');
+  if (!amtCell) return;
+  // Sum monetary adjustments
+  let totAmt = 0;
   Object.keys(adjustments || {}).forEach(k => {
     const v = Number(adjustments[k]) || 0;
-    tot += v;
+    totAmt += v;
   });
-  cell.textContent = tot.toFixed(2);
+  amtCell.textContent = totAmt.toFixed(2);
+  // Sum adjustment hours
+  if (hrsCell) {
+    let totHrs = 0;
+    Object.keys(adjHrs || {}).forEach(k => {
+      const v = Number(adjHrs[k]) || 0;
+      totHrs += v;
+    });
+    hrsCell.textContent = totHrs.toFixed(2);
+  }
 }
 
 // Initialize the dynamic Pag‑IBIG and PhilHealth rate input fields.  This function
@@ -5925,10 +5981,12 @@ document.addEventListener('DOMContentLoaded', function(){
     var tb = document.querySelector('#payrollTable tbody');
     var foot = document.querySelector('#payrollTotalsFoot');
     if (!tb || !foot) return;
-    var t = {regHrs:0, otHrs:0, rate:0, regPay:0, otPay:0, grossPay:0, pagibig:0, philhealth:0, sss:0, loanSSS:0, loanPI:0, vale:0, valeWed:0, totalDed:0, adjAmt:0, netPay:0};
+    var t = {regHrs:0, otHrs:0, adjHrs:0, rate:0, regPay:0, otPay:0, grossPay:0, pagibig:0, philhealth:0, sss:0, loanSSS:0, loanPI:0, vale:0, valeWed:0, totalDed:0, adjAmt:0, netPay:0};
     tb.querySelectorAll('tr').forEach(function(tr){
       t.regHrs   += _parse(tr.querySelector('.regHrs')?.value);
       t.otHrs    += _parse(tr.querySelector('.otHrs')?.value);
+      // Sum adjustment hours from the adjHrs cell (displayed as text)
+      t.adjHrs   += _parse(tr.querySelector('.adjHrs')?.textContent);
       t.rate     += _parse(tr.querySelector('.rate')?.value);
       t.regPay   += _parse(tr.querySelector('.regPay')?.textContent);
       t.otPay    += _parse(tr.querySelector('.otPay')?.textContent);
