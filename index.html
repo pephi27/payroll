@@ -4952,7 +4952,9 @@ let otMins = 0;
       summaryEl.textContent = '';
       return;
     }
-    summaryEl.textContent = `Grand Total Regular Hours: ${_dtrTotalReg.toFixed(2)} | OT Hours: ${_dtrTotalOt.toFixed(2)} | Employees: ${_dtrEmpIds.size}`;
+    // Compute combined total hours (regular + OT)
+    const _dtrTotalHours = _dtrTotalReg + _dtrTotalOt;
+    summaryEl.textContent = `Grand Total Hours: ${_dtrTotalHours.toFixed(2)} | Regular Hours: ${_dtrTotalReg.toFixed(2)} | OT Hours: ${_dtrTotalOt.toFixed(2)} | Employees: ${_dtrEmpIds.size}`;
   })();
 }
 
@@ -6305,7 +6307,8 @@ document.addEventListener('click', function(e) {
       });
       // If there are visible rows, update the summary text; otherwise clear it
       if (visibleCount > 0) {
-        summaryEl.textContent = `Grand Total Regular Hours: ${regSum.toFixed(2)} | OT Hours: ${otSum.toFixed(2)} | Employees: ${empSet.size}`;
+        const totalHours = regSum + otSum;
+        summaryEl.textContent = `Grand Total Hours: ${totalHours.toFixed(2)} | Regular Hours: ${regSum.toFixed(2)} | OT Hours: ${otSum.toFixed(2)} | Employees: ${empSet.size}`;
       } else {
         summaryEl.textContent = '';
       }
