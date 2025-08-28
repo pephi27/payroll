@@ -4896,6 +4896,29 @@ let otMins = 0;
           sc.innerHTML = '';
           sc.appendChild(buildScheduleDropdownHalf(empId, date, half, schedIdHalf));
         }
+
+        // Attach metadata to the split row for later reference (e.g., deletion)
+        // Each split row knows its empId, date and which half it represents (AM or PM)
+        trHalf.dataset.empId = empId;
+        trHalf.dataset.date = date;
+        trHalf.dataset.half = half;
+        // Store the specific times associated with this half. These are used by the
+        // delete function to remove only the relevant times. For the AM half we
+        // include amIn and amOut times. For the PM half we include pmIn, pmOut
+        // and any OT in/out times.
+        (function(){
+          const timesForHalf = [];
+          if (half === 'AM') {
+            if (amInActual) timesForHalf.push(amInActual);
+            if (amOutActual) timesForHalf.push(amOutActual);
+          } else {
+            if (pmInActual) timesForHalf.push(pmInActual);
+            if (pmOutActual) timesForHalf.push(pmOutActual);
+            if (otInHalf) timesForHalf.push(otInHalf);
+            if (otOutHalf) timesForHalf.push(otOutHalf);
+          }
+          trHalf.dataset.times = JSON.stringify(timesForHalf);
+        })();
         tbody.appendChild(trHalf);
         // Accumulate DTR summary totals for this half
         // Parse numeric values of regular and OT hours
@@ -5327,12 +5350,52 @@ document.addEventListener('DOMContentLoaded', () => {
         const empIdCell = tr.cells[0] ? tr.cells[0].textContent.trim() : '';
         const dateCell  = tr.cells[4] ? tr.cells[4].textContent.trim() : '';
         if(!empIdCell || !dateCell) return;
-        if(!confirm(`Delete all DTR entries for ${empIdCell} on ${dateCell}?`)) return;
+        // Determine if this row is part of a split (AM/PM). If so, use the attached
+        // metadata to remove only the specific half. Otherwise, remove all times.
+        const isSplitHalf = tr.dataset && tr.dataset.half;
+        const confirmMsg = isSplitHalf
+          ? `Delete this ${tr.dataset.half} DTR for ${empIdCell} on ${dateCell}?`
+          : `Delete all DTR entries for ${empIdCell} on ${dateCell}?`;
+        if(!confirm(confirmMsg)) return;
         try {
-          for(let i = storedRecords.length - 1; i >= 0; i--){
-            const rec = storedRecords[i];
-            if(String(rec.empId) === String(empIdCell) && rec.date === dateCell){
-              storedRecords.splice(i, 1);
+          if (isSplitHalf) {
+            // Parse times to remove for this half. The dataset.times stores an array
+            // of the exact time strings (e.g., "08:00", "12:00") that belong to
+            // this AM or PM half. Only records with matching empId, date and time
+            // found in this array will be removed.
+            let timesForHalf = [];
+            try {
+              timesForHalf = JSON.parse(tr.dataset.times || '[]');
+            } catch(e) { timesForHalf = []; }
+            // Remove only the specific occurrences of each time listed for this half.
+            // We iterate through the array of times and, for each, remove one matching
+            // record (empId/date/time). This avoids removing duplicates beyond the
+            // count present in timesForHalf (e.g., AM out and OT may share the same
+            // time value, so we only remove the intended PM/OT instances).
+            timesForHalf.forEach(t => {
+              for (let i = 0; i < storedRecords.length; i++) {
+                const rec = storedRecords[i];
+                if (String(rec.empId) === String(empIdCell) && rec.date === dateCell && rec.time === t) {
+                  storedRecords.splice(i, 1);
+                  break; // remove only one matching occurrence per time value
+                }
+              }
+            });
+            // After removing the half, unset the split flag for this emp/date so
+            // the remaining records render as a single row. This mirrors the
+            // behavior of the "Unsplit" button.
+            const splitKey = `${empIdCell}___${dateCell}`;
+            if (splits && splits[splitKey]) {
+              splits[splitKey] = false;
+              if (typeof saveSplits === 'function') saveSplits();
+            }
+          } else {
+            // Remove all records for this employee on this date
+            for(let i = storedRecords.length - 1; i >= 0; i--){
+              const rec = storedRecords[i];
+              if(String(rec.empId) === String(empIdCell) && rec.date === dateCell){
+                storedRecords.splice(i, 1);
+              }
             }
           }
           localStorage.setItem(LS_RECORDS, JSON.stringify(storedRecords));
@@ -5816,6 +5879,18 @@ document.addEventListener('DOMContentLoaded', function(){
       if(filterTxt){
         w.document.write('<div class="muted">Project filter: ' + filterTxt.replace(/</g, '&lt;') + '</div>');
       }
+      // Include summary of totals (Grand Total Hours, Regular, OT, Employees) if available
+      try {
+        var summaryEl = document.getElementById('dtrSummary');
+        if(summaryEl){
+          var summaryText = (summaryEl.textContent || '').trim();
+          if(summaryText){
+            // Escape angle brackets
+            var safeSummary = summaryText.replace(/</g,'&lt;');
+            w.document.write('<div style="margin:8px 0;font-weight:bold;font-size:12px;">'+ safeSummary +'</div>');
+          }
+        }
+      } catch(e) {}
       w.document.write(clone.outerHTML);
       w.document.write('</body></html>');
       w.document.close();
