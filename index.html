@@ -945,6 +945,13 @@ document.addEventListener('DOMContentLoaded', function() {
    <div class="controls" style="margin-top:8px;">
      <button id="diffBtn">Diff Selected</button>
    </div>
+   <!-- Detail view for locked payroll snapshots. Hidden by default and shown when a user clicks Open/View on a history row. -->
+   <div id="snapshotDetailsScreen" style="display:none; margin-top:12px;">
+     <h4 id="snapshotDetailTitle"></h4>
+     <div id="snapshotPayrollContainer" style="margin-bottom:16px;"></div>
+     <div id="snapshotDTRContainer"></div>
+     <button id="snapshotBackButton" type="button" style="margin-top:12px;">Back</button>
+   </div>
   </section>
 
   <!-- Original Main panel (DTR) no longer active by default -->
@@ -1046,6 +1053,8 @@ document.addEventListener('DOMContentLoaded', function() {
     <tbody>
     </tbody>
    </table>
+   <!-- Summary of DTR totals and employee count -->
+   <div id="dtrSummary" style="margin-top:4px;font-weight:bold;"></div>
    </div>
   </section>
   
@@ -3007,7 +3016,34 @@ document.addEventListener('DOMContentLoaded', () => {
       data.vale = readNum('.vale', 13);
       data.valeWed = readNum('.valeWed', 14);
       data.totalDed = readNum('.totalDed', 15);
-      data.netPay = readNum('.netPay', 16);
+      // Capture adjustments and correct net pay cell index. The adjustment column is at index 16 and net pay at 17.
+      data.adjAmt = readNum('.adjAmt', 16);
+      data.netPay = readNum('.netPay', 17);
+      // Capture DTR records for this employee within the selected date range. Stores an array of {date, times}
+      try {
+        const recStr = localStorage.getItem('att_records_v2');
+        const recs = recStr ? JSON.parse(recStr) : [];
+        if (Array.isArray(recs)) {
+          const start = startDate || '';
+          const end = endDate || '';
+          const empRecs = recs.filter(r => r && String(r.empId) === String(data.id) && (!start || r.date >= start) && (!end || r.date <= end));
+          const grouped = {};
+          empRecs.forEach(r => {
+            if (!r || !r.date) return;
+            const d = r.date;
+            if (!grouped[d]) grouped[d] = [];
+            if (r.time && !grouped[d].includes(r.time)) grouped[d].push(r.time);
+          });
+          const arr = [];
+          Object.keys(grouped).sort().forEach(dateKey => {
+            const times = grouped[dateKey].sort();
+            arr.push({ date: dateKey, times });
+          });
+          data.dtrs = arr;
+        }
+      } catch (e) {
+        // ignore parse errors
+      }
       rows.push(data);
     });
     // Read totals from footer
@@ -3232,7 +3268,7 @@ document.addEventListener('DOMContentLoaded', () => {
   function snapshotToCSV(snap) {
     const header = [
       'ID','Name','Regular Hours','OT Hours','Rate','Regular Pay','OT Pay','Gross Pay',
-      'Pag-IBIG','PhilHealth','SSS','SSS Loan','Pag-IBIG Loan','Vale','Wed Vale','Total Deductions','Net Pay'
+      'Pag-IBIG','PhilHealth','SSS','SSS Loan','Pag-IBIG Loan','Vale','Wed Vale','Total Deductions','Adjustments','Net Pay'
     ];
     const lines = [header.join(',')];
     snap.rows.forEach(row => {
@@ -3242,7 +3278,7 @@ document.addEventListener('DOMContentLoaded', () => {
         row.regPay, row.otPay, row.grossPay,
         row.pagibig, row.philhealth, row.sss,
         row.loanSSS, row.loanPI, row.vale, row.valeWed,
-        row.totalDed, row.netPay
+        row.totalDed, row.adjAmt, row.netPay
       ];
       lines.push(values.map(v => {
         const s = String(v ?? '');
@@ -3276,6 +3312,14 @@ document.addEventListener('DOMContentLoaded', () => {
       alert('A payroll snapshot for this date range already exists. Please choose a different range or delete the existing entry.');
       return;
     }
+    // Ensure all payroll values are recalculated before taking a snapshot for generation
+    try {
+      if (typeof calculateAll === 'function') {
+        calculateAll();
+      }
+    } catch (e) {
+      // Suppress errors from calculateAll; snapshot will reflect current cell values
+    }
     const snap = await buildSnapshot(start, end);
     if (!snap) {
       alert('Payroll table is missing or empty.');
@@ -3300,6 +3344,18 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!start || !end) {
       alert('Please select both start and end dates.');
       return;
+    }
+    // Recompute all payroll row values prior to building the snapshot. Without this
+    // call, some columns (e.g. contributions, total deductions, adjustments and
+    // net pay) may not be up to date if the user has edited values but not
+    // triggered a recalculation. Ensuring calculateAll() runs here fills all
+    // numeric columns before locking.
+    try {
+      if (typeof calculateAll === 'function') {
+        calculateAll();
+      }
+    } catch (e) {
+      // Ignore errors in calculation; snapshot will still be built from current cells
     }
     const snap = await buildSnapshot(start, end);
     if (!snap) {
@@ -3349,92 +3405,10 @@ document.addEventListener('DOMContentLoaded', () => {
     if (target.classList.contains('openSnapshot')) {
       // Only allow opening locked snapshots
       if (!snap.locked) return;
-      // Clear existing view then render snapshot as a read-only table
-      if (snapshotView) snapshotView.innerHTML = '';
-      const table = document.createElement('table');
-      table.style.borderCollapse = 'collapse';
-      table.style.width = '100%';
-      const thead = document.createElement('thead');
-      const headerRow = document.createElement('tr');
-      const hdrs = ['ID','Name','Regular Hrs','OT Hrs','Rate','Reg Pay','OT Pay','Gross','Pag-IBIG','PhilHealth','SSS','SSS Loan','Pag-IBIG Loan','Vale','Wed Vale','Total Ded','Net Pay'];
-      hdrs.forEach(h => {
-        const th = document.createElement('th');
-        th.textContent = h;
-        th.style.border = '1px solid #e2e8f0';
-        th.style.background = '#f1f5f9';
-        th.style.padding = '4px';
-        headerRow.appendChild(th);
-      });
-      thead.appendChild(headerRow);
-      table.appendChild(thead);
-      const tbodyEl = document.createElement('tbody');
-      snap.rows.forEach(r => {
-        const tr = document.createElement('tr');
-        const vals = [r.id,r.name,r.regHrs,r.otHrs,r.rate,r.regPay,r.otPay,r.grossPay,r.pagibig,r.philhealth,r.sss,r.loanSSS,r.loanPI,r.vale,r.valeWed,r.totalDed,r.netPay];
-        vals.forEach(v => {
-          const td = document.createElement('td');
-          td.textContent = v;
-          td.style.border = '1px solid #e2e8f0';
-          td.style.padding = '4px';
-          td.style.textAlign = (typeof v === 'number') ? 'right' : 'left';
-          tr.appendChild(td);
-        });
-        tbodyEl.appendChild(tr);
-      });
-      table.appendChild(tbodyEl);
-      if (snapshotView) snapshotView.appendChild(table);
-      // Disable editing across DTR, payroll, and project totals until date range changes
-      const disableSelectors = [
-        '#panelPayroll input', '#panelPayroll button', '#panelPayroll select',
-        '#panelMain input', '#panelMain button', '#panelMain select',
-        '#panelProjects input', '#panelProjects button', '#panelProjects select',
-        '#panelProjectTotals input', '#panelProjectTotals button', '#panelProjectTotals select'
-      ];
-      disableSelectors.forEach(sel => {
-        document.querySelectorAll(sel).forEach(el => { el.disabled = true; });
-      });
-      // Disable date range inputs and Generate button, and mark them as forced
-      const ws = document.getElementById('weekStart');
-      const we = document.getElementById('weekEnd');
-      const gen = document.getElementById('dashGenerate');
-      if (ws) {
-        ws.disabled = true;
-        ws.dataset.forced = 'true';
+      // Render the snapshot in a dedicated detail view with DTR breakdown
+      if (typeof showSnapshotDetails === 'function') {
+        showSnapshotDetails(idx);
       }
-      if (we) {
-        we.disabled = true;
-        we.dataset.forced = 'true';
-      }
-      if (gen) gen.disabled = true;
-      function enableOnDateChange() {
-        // Remove listeners
-        if (ws) ws.removeEventListener('change', enableOnDateChange);
-        if (we) we.removeEventListener('change', enableOnDateChange);
-        // Re-enable all disabled inputs/buttons/selects by default
-        disableSelectors.forEach(sel => {
-          document.querySelectorAll(sel).forEach(el => { el.disabled = false; });
-        });
-        // Clear forced flags and re-enable date range inputs and Generate button
-        if (ws) {
-          delete ws.dataset.forced;
-          ws.disabled = false;
-        }
-        if (we) {
-          delete we.dataset.forced;
-          we.disabled = false;
-        }
-        if (gen) gen.disabled = false;
-        // After re-enabling, toggle editing state based on whether the newly
-        // selected period is locked or not. This ensures that switching
-        // directly from one locked period to another keeps the UI disabled.
-        try {
-          if (typeof checkAndToggleEditState === 'function') {
-            checkAndToggleEditState();
-          }
-        } catch (_) {}
-      }
-      if (ws) ws.addEventListener('change', enableOnDateChange);
-      if (we) we.addEventListener('change', enableOnDateChange);
     }
     if (target.classList.contains('deleteSnapshot')) {
       // Delete a snapshot from history if it is not locked
@@ -3533,6 +3507,262 @@ document.addEventListener('DOMContentLoaded', () => {
   // Initial render on page load
   renderHistory();
   if (typeof renderActivePayrolls === 'function') renderActivePayrolls();
+
+  /**
+   * Display a locked payroll snapshot in a dedicated detail view. This hides the dashboard
+   * tables and shows a new section with a summary of the payroll and a breakdown of the
+   * DTR (time entries) per employee for the period. A Back button restores the dashboard.
+   * @param {number} index Index of the snapshot in payrollHistory
+   */
+  window.showSnapshotDetails = function showSnapshotDetails(index) {
+    const snap = Array.isArray(payrollHistory) ? payrollHistory[index] : null;
+    if (!snap) return;
+    // Grab key dashboard elements
+    const activeTable = document.getElementById('activePayrollTable');
+    const historyTable = document.getElementById('historyTable');
+    const diffButton = document.getElementById('diffBtn');
+    const snapshotViewEl = document.getElementById('snapshotView');
+    const detailScreen = document.getElementById('snapshotDetailsScreen');
+    const backBtn = document.getElementById('snapshotBackButton');
+    const titleEl = document.getElementById('snapshotDetailTitle');
+    const payrollContainer = document.getElementById('snapshotPayrollContainer');
+    const dtrContainer = document.getElementById('snapshotDTRContainer');
+    if (!detailScreen || !payrollContainer || !dtrContainer) return;
+    // Determine headers for hiding/showing (h4 elements preceding tables)
+    const activeHeader = activeTable && activeTable.previousElementSibling;
+    const histHeader = historyTable && historyTable.previousElementSibling;
+    // Set title with lock info
+    if (titleEl) {
+      const lockedInfo = snap.lockedAt ? ` (Locked ${new Date(snap.lockedAt).toLocaleString()})` : '';
+      titleEl.textContent = `Payroll Details: ${snap.startDate || ''} — ${snap.endDate || ''}${lockedInfo}`;
+    }
+    // Hide dashboard tables and controls
+    if (activeTable) activeTable.style.display = 'none';
+    if (activeHeader && activeHeader.tagName === 'H4') activeHeader.style.display = 'none';
+    if (historyTable) historyTable.style.display = 'none';
+    if (histHeader && histHeader.tagName === 'H4') histHeader.style.display = 'none';
+    if (diffButton) diffButton.style.display = 'none';
+    if (snapshotViewEl) snapshotViewEl.style.display = 'none';
+    // Build payroll summary table
+    payrollContainer.innerHTML = '';
+    const payTable = document.createElement('table');
+    payTable.style.borderCollapse = 'collapse';
+    payTable.style.width = '100%';
+    const pHead = document.createElement('thead');
+    const pRow = document.createElement('tr');
+    // Define the headers for the payroll summary table. Include an Adjustments
+    // column so that any manual adjustments saved in the snapshot are visible
+    // when viewing a locked payroll. This keeps the summary in sync with the
+    // CSV export and ensures the net pay is clearly explained.
+    const headers = [
+      'ID','Name','Regular Hrs','OT Hrs','Rate','Reg Pay','OT Pay','Gross',
+      'Pag-IBIG','PhilHealth','SSS','SSS Loan','Pag-IBIG Loan','Vale','Wed Vale',
+      'Total Ded','Adjustments','Net Pay'
+    ];
+    headers.forEach(h => {
+      const th = document.createElement('th');
+      th.textContent = h;
+      th.style.border = '1px solid #e2e8f0';
+      th.style.background = '#f1f5f9';
+      th.style.padding = '4px';
+      pRow.appendChild(th);
+    });
+    pHead.appendChild(pRow);
+    payTable.appendChild(pHead);
+    const pBody = document.createElement('tbody');
+    // Each employee row in the snapshot may include an adjAmt property
+    // representing manual adjustments. Build the table row accordingly.
+    (snap.rows || []).forEach(r => {
+      const tr = document.createElement('tr');
+      const vals = [
+        r.id, r.name, r.regHrs, r.otHrs, r.rate,
+        r.regPay, r.otPay, r.grossPay,
+        r.pagibig, r.philhealth, r.sss,
+        r.loanSSS, r.loanPI, r.vale, r.valeWed,
+        r.totalDed, r.adjAmt, r.netPay
+      ];
+      vals.forEach(v => {
+        const td = document.createElement('td');
+        let text = '';
+        if (v != null && v !== '') {
+          // Format numeric values to two decimal places; leave strings (e.g. ID, name)
+          const num = parseFloat(v);
+          if (!isNaN(num) && isFinite(num)) {
+            text = num.toFixed(2);
+          } else {
+            text = v;
+          }
+        }
+        td.textContent = text;
+        td.style.border = '1px solid #e2e8f0';
+        td.style.padding = '4px';
+        // Align numbers to the right and text to the left for better readability
+        if (!isNaN(parseFloat(text)) && isFinite(parseFloat(text))) {
+          td.style.textAlign = 'right';
+        } else {
+          td.style.textAlign = 'left';
+        }
+        tr.appendChild(td);
+      });
+      pBody.appendChild(tr);
+    });
+    payTable.appendChild(pBody);
+    payrollContainer.appendChild(payTable);
+    // Build DTR breakdown
+    dtrContainer.innerHTML = '';
+    // Build DTR data for display. If the snapshot rows include a dtrs array
+    // (captured when the payroll was locked), use it directly so that the
+    // attendance shown reflects the state at locking time. Otherwise, fall
+    // back to reading the current att_records_v2 from localStorage for
+    // backward compatibility with snapshots created before this feature was
+    // implemented.
+    let dtrRows = [];
+    let useSnapDtrs = false;
+    (snap.rows || []).forEach(empRow => {
+      if (Array.isArray(empRow.dtrs) && empRow.dtrs.length) {
+        useSnapDtrs = true;
+      }
+    });
+    if (useSnapDtrs) {
+      // Use the stored dtrs directly from each employee row
+      (snap.rows || []).forEach(empRow => {
+        const id = empRow.id;
+        const name = empRow.name || '';
+        (empRow.dtrs || []).forEach(d => {
+          dtrRows.push({ id, name, date: d.date, times: d.times || [] });
+        });
+      });
+    } else {
+      // Fallback: derive from live attendance records within the snapshot date range
+      let records = [];
+      try {
+        const recStr = localStorage.getItem('att_records_v2');
+        records = recStr ? JSON.parse(recStr) : [];
+        if (!Array.isArray(records)) records = [];
+      } catch (e) {
+        records = [];
+      }
+      const start = snap.startDate || '';
+      const end = snap.endDate || '';
+      function inRange(dateStr) {
+        if (!dateStr) return false;
+        return (!start || dateStr >= start) && (!end || dateStr <= end);
+      }
+      (snap.rows || []).forEach(empRow => {
+        const id = empRow.id;
+        const name = empRow.name || '';
+        const recs = records.filter(r => r && String(r.empId) === String(id) && inRange(r.date));
+        const dateGroups = {};
+        recs.forEach(r => {
+          const d = r.date;
+          if (!dateGroups[d]) dateGroups[d] = [];
+          if (r.time && !dateGroups[d].includes(r.time)) dateGroups[d].push(r.time);
+        });
+        Object.keys(dateGroups).sort().forEach(dateKey => {
+          const times = dateGroups[dateKey].sort();
+          dtrRows.push({ id, name, date: dateKey, times });
+        });
+      });
+    }
+    const dtrTable = document.createElement('table');
+    dtrTable.style.borderCollapse = 'collapse';
+    dtrTable.style.width = '100%';
+    const dtrHead = document.createElement('thead');
+    const dr = document.createElement('tr');
+    ['ID','Name','Date','Times'].forEach(h => {
+      const th = document.createElement('th');
+      th.textContent = h;
+      th.style.border = '1px solid #e2e8f0';
+      th.style.background = '#f1f5f9';
+      th.style.padding = '4px';
+      dr.appendChild(th);
+    });
+    dtrHead.appendChild(dr);
+    dtrTable.appendChild(dtrHead);
+    const dtrBody = document.createElement('tbody');
+    dtrRows.forEach(row => {
+      const tr = document.createElement('tr');
+      const idCell = document.createElement('td');
+      idCell.textContent = row.id;
+      idCell.style.border = '1px solid #e2e8f0';
+      idCell.style.padding = '4px';
+      tr.appendChild(idCell);
+      const nameCell = document.createElement('td');
+      nameCell.textContent = row.name;
+      nameCell.style.border = '1px solid #e2e8f0';
+      nameCell.style.padding = '4px';
+      tr.appendChild(nameCell);
+      const dateCell = document.createElement('td');
+      dateCell.textContent = row.date;
+      dateCell.style.border = '1px solid #e2e8f0';
+      dateCell.style.padding = '4px';
+      tr.appendChild(dateCell);
+      const timesCell = document.createElement('td');
+      timesCell.textContent = (row.times || []).join(', ');
+      timesCell.style.border = '1px solid #e2e8f0';
+      timesCell.style.padding = '4px';
+      tr.appendChild(timesCell);
+      dtrBody.appendChild(tr);
+    });
+    dtrTable.appendChild(dtrBody);
+    if (dtrRows.length) {
+      dtrContainer.appendChild(dtrTable);
+    } else {
+      const p = document.createElement('p');
+      p.textContent = 'No DTR records found for this period.';
+      dtrContainer.appendChild(p);
+    }
+    // Show the detail screen
+    detailScreen.style.display = 'block';
+    // Disable editing across the app
+    if (typeof disablePayrollInputs === 'function') {
+      disablePayrollInputs();
+    }
+    // Mark date range inputs as forced and disabled
+    const wsInput = document.getElementById('weekStart');
+    const weInput = document.getElementById('weekEnd');
+    if (wsInput) {
+      wsInput.disabled = true;
+      wsInput.dataset.forced = 'true';
+    }
+    if (weInput) {
+      weInput.disabled = true;
+      weInput.dataset.forced = 'true';
+    }
+    // Back button: restore previous view
+    if (backBtn) {
+      backBtn.onclick = () => {
+        detailScreen.style.display = 'none';
+        if (activeTable) activeTable.style.display = '';
+        if (activeHeader && activeHeader.tagName === 'H4') activeHeader.style.display = '';
+        if (historyTable) historyTable.style.display = '';
+        if (histHeader && histHeader.tagName === 'H4') histHeader.style.display = '';
+        if (diffButton) diffButton.style.display = '';
+        if (snapshotViewEl) snapshotViewEl.style.display = '';
+        payrollContainer.innerHTML = '';
+        dtrContainer.innerHTML = '';
+        // Remove forced flags and re-enable date inputs
+        if (wsInput) {
+          delete wsInput.dataset.forced;
+          wsInput.disabled = false;
+        }
+        if (weInput) {
+          delete weInput.dataset.forced;
+          weInput.disabled = false;
+        }
+        // Re-enable editing
+        if (typeof enablePayrollInputs === 'function') {
+          enablePayrollInputs();
+        }
+        // Re-check lock status for selected period
+        try {
+          if (typeof checkAndToggleEditState === 'function') {
+            checkAndToggleEditState();
+          }
+        } catch (_) {}
+      };
+    }
+  };
 });
 </script>
    </div>
@@ -4693,6 +4923,38 @@ let otMins = 0;
   }
 
   document.getElementById('downloadCSV').style.display = document.querySelectorAll('#resultsTable tbody tr').length ? 'inline-block' : 'none';
+  // --- DTR Summary ---
+  // Compute the grand total of regular and OT hours and the number of unique employees
+  try {
+    const summaryEl = document.getElementById('dtrSummary');
+    if (summaryEl) {
+      const rows = document.querySelectorAll('#resultsTable tbody tr');
+      let totalReg = 0;
+      let totalOt = 0;
+      const empIds = new Set();
+      rows.forEach(tr => {
+        const cells = tr.querySelectorAll('td');
+        // Grab employee ID from first cell
+        const idText = cells.length ? (cells[0].textContent || '').trim() : '';
+        if (idText) empIds.add(idText);
+        // Regular and OT hours are at fixed positions in the row (index 11 and 12)
+        const regCell = cells[11];
+        const otCell = cells[12];
+        const regVal = regCell && regCell.textContent && !isNaN(parseFloat(regCell.textContent)) ? parseFloat(regCell.textContent) : 0;
+        const otVal = otCell && otCell.textContent && !isNaN(parseFloat(otCell.textContent)) ? parseFloat(otCell.textContent) : 0;
+        totalReg += regVal;
+        totalOt += otVal;
+      });
+      // Display summary text. If no rows, clear the summary area.
+      if (rows.length) {
+        summaryEl.textContent = `Grand Total Regular Hours: ${totalReg.toFixed(2)} | OT Hours: ${totalOt.toFixed(2)} | Employees: ${empIds.size}`;
+      } else {
+        summaryEl.textContent = '';
+      }
+    }
+  } catch (e) {
+    console.warn('DTR summary error', e);
+  }
 }
 
 document.getElementById('addProjectBtn').addEventListener('click', ()=>{
