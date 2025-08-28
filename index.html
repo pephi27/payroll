@@ -4547,6 +4547,10 @@ const groups = {};
   });
 
   const tbody = document.querySelector('#resultsTable tbody'); tbody.innerHTML='';
+  // Initialize totals for DTR summary. We will accumulate regular and OT hours and unique employee IDs
+  let _dtrTotalReg = 0;
+  let _dtrTotalOt  = 0;
+  const _dtrEmpIds = new Set();
 
   const __nameQuery = (document.getElementById('dtrSearchName') ? document.getElementById('dtrSearchName').value.trim().toLowerCase() : '');
   for(const key of keys){
@@ -4893,6 +4897,13 @@ let otMins = 0;
           sc.appendChild(buildScheduleDropdownHalf(empId, date, half, schedIdHalf));
         }
         tbody.appendChild(trHalf);
+        // Accumulate DTR summary totals for this half
+        // Parse numeric values of regular and OT hours
+        const _regVal = parseFloat(regDecHalf) || 0;
+        const _otVal  = parseFloat(otDecHalf) || 0;
+        _dtrTotalReg += _regVal;
+        _dtrTotalOt  += _otVal;
+        _dtrEmpIds.add(empId);
       });
       // Skip default combined row rendering
       continue;
@@ -4920,41 +4931,29 @@ let otMins = 0;
     const schedCell = tr.cells[3];
     if(schedCell){ schedCell.innerHTML = ''; schedCell.appendChild(buildScheduleDropdown(empId, date, scheduleIdForEmp)); }
     tbody.appendChild(tr);
+    // Accumulate totals for unsplit rows
+    const _regVal = parseFloat(totalRegularDecimal) || 0;
+    const _otVal  = parseFloat(otDecimal) || 0;
+    _dtrTotalReg += _regVal;
+    _dtrTotalOt  += _otVal;
+    _dtrEmpIds.add(empId);
   }
 
-  document.getElementById('downloadCSV').style.display = document.querySelectorAll('#resultsTable tbody tr').length ? 'inline-block' : 'none';
+  // Show/hide download button
+  document.getElementById('downloadCSV').style.display =
+    document.querySelectorAll('#resultsTable tbody tr').length ? 'inline-block' : 'none';
   // --- DTR Summary ---
-  // Compute the grand total of regular and OT hours and the number of unique employees
-  try {
+  // After building the table, update the summary using accumulated totals
+  (function(){
     const summaryEl = document.getElementById('dtrSummary');
-    if (summaryEl) {
-      const rows = document.querySelectorAll('#resultsTable tbody tr');
-      let totalReg = 0;
-      let totalOt = 0;
-      const empIds = new Set();
-      rows.forEach(tr => {
-        const cells = tr.querySelectorAll('td');
-        // Grab employee ID from first cell
-        const idText = cells.length ? (cells[0].textContent || '').trim() : '';
-        if (idText) empIds.add(idText);
-        // Regular and OT hours are at fixed positions in the row (index 11 and 12)
-        const regCell = cells[11];
-        const otCell = cells[12];
-        const regVal = regCell && regCell.textContent && !isNaN(parseFloat(regCell.textContent)) ? parseFloat(regCell.textContent) : 0;
-        const otVal = otCell && otCell.textContent && !isNaN(parseFloat(otCell.textContent)) ? parseFloat(otCell.textContent) : 0;
-        totalReg += regVal;
-        totalOt += otVal;
-      });
-      // Display summary text. If no rows, clear the summary area.
-      if (rows.length) {
-        summaryEl.textContent = `Grand Total Regular Hours: ${totalReg.toFixed(2)} | OT Hours: ${totalOt.toFixed(2)} | Employees: ${empIds.size}`;
-      } else {
-        summaryEl.textContent = '';
-      }
+    if (!summaryEl) return;
+    const rowCount = document.querySelectorAll('#resultsTable tbody tr').length;
+    if (!rowCount) {
+      summaryEl.textContent = '';
+      return;
     }
-  } catch (e) {
-    console.warn('DTR summary error', e);
-  }
+    summaryEl.textContent = `Grand Total Regular Hours: ${_dtrTotalReg.toFixed(2)} | OT Hours: ${_dtrTotalOt.toFixed(2)} | Employees: ${_dtrEmpIds.size}`;
+  })();
 }
 
 document.getElementById('addProjectBtn').addEventListener('click', ()=>{
@@ -6281,6 +6280,36 @@ document.addEventListener('click', function(e) {
       const show = !hasRange || withinRange(dateStr, f, t);
       tr.style.display = show ? '' : 'none';
     });
+
+    // After applying the date filter, recompute the DTR summary to reflect only visible rows.
+    const summaryEl = document.getElementById('dtrSummary');
+    if (summaryEl) {
+      // Initialize totals
+      let regSum = 0;
+      let otSum  = 0;
+      const empSet = new Set();
+      const rows = Array.from(tbody.rows);
+      let visibleCount = 0;
+      rows.forEach(row => {
+        // Skip rows hidden by the date filter
+        if (row.style.display === 'none') return;
+        visibleCount++;
+        // Extract values from the Total Regular Hrs and OT Hrs columns (indices 11 and 12)
+        const regVal = parseFloat((row.cells[11]?.textContent || '').trim()) || 0;
+        const otVal  = parseFloat((row.cells[12]?.textContent || '').trim()) || 0;
+        regSum += regVal;
+        otSum  += otVal;
+        // Collect unique employee IDs (column 0)
+        const idCell = (row.cells[0]?.textContent || '').trim();
+        if (idCell) empSet.add(idCell);
+      });
+      // If there are visible rows, update the summary text; otherwise clear it
+      if (visibleCount > 0) {
+        summaryEl.textContent = `Grand Total Regular Hours: ${regSum.toFixed(2)} | OT Hours: ${otSum.toFixed(2)} | Employees: ${empSet.size}`;
+      } else {
+        summaryEl.textContent = '';
+      }
+    }
   }
 
   function hookUI(){
