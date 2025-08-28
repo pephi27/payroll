@@ -5200,34 +5200,54 @@ const dtrEndEl = document.getElementById('filterEnd');
 function calculatePayrollFromRecords(){
   try { if (typeof renderResults === 'function') renderResults(); } catch(e){ console.warn('renderResults failed', e); }
 
-  regHours = {};
-  otHours = {};
-
-  const tbody = document.querySelector('#resultsTable tbody');
-
-  if (tbody) {
-    [...tbody.querySelectorAll('tr')].forEach(tr => {
-      const cells = tr.cells || [];
-      const empId = (cells[0]?.textContent || '').trim();
-      const reg = parseFloat((cells[11]?.textContent || '0').replace(/[^0-9.\-]/g,'')) || 0;
-      const ot  = parseFloat((cells[12]?.textContent || '0').replace(/[^0-9.\-]/g,'')) || 0;
-      if (!empId) return;
-      regHours[empId] = (regHours[empId] || 0) + reg;
-      otHours[empId]  = (otHours[empId]  || 0) + ot;
-    });
-  }
+  /*
+   * Instead of deriving regular and OT hours from the filtered results table
+   * (which can change when the DTR list is filtered), compute these values
+   * directly from the underlying storedRecords for the selected date range.
+   * This ensures that payroll calculations remain fixed regardless of
+   * any filtering performed on the DTR tab.
+   */
   try {
-    localStorage.setItem(LS_REG_HRS, JSON.stringify(regHours));
-    localStorage.setItem(LS_OT_HRS, JSON.stringify(otHours));
-  } catch(e){ console.warn('LS save failed', e); }
-  Object.keys(storedEmployees||{}).forEach(id => {
+    // Determine the date range from the payroll period inputs.  Fall back
+    // to the DTR filter inputs if the payroll period inputs are absent.
+    const start = (typeof weekStartEl !== 'undefined' && weekStartEl && weekStartEl.value) ? weekStartEl.value : (dtrStartEl ? dtrStartEl.value : '');
+    const end   = (typeof weekEndEl   !== 'undefined' && weekEndEl   && weekEndEl.value)   ? weekEndEl.value   : (dtrEndEl   ? dtrEndEl.value   : '');
+    // Use the helper to compute per‑employee hours across the full dataset.
+    const { totalsReg, totalsOT } = computeHoursForDateRange(start, end);
+    // Initialize regHours and otHours with computed totals
+    regHours = Object.assign({}, totalsReg || {});
+    otHours  = Object.assign({}, totalsOT  || {});
+    // Guarantee every employee has a defined entry (default 0)
+    Object.keys(storedEmployees || {}).forEach(id => {
+      if (!regHours.hasOwnProperty(id)) regHours[id] = 0;
+      if (!otHours.hasOwnProperty(id))  otHours[id]  = 0;
+    });
+    // Persist hours to localStorage
+    try {
+      localStorage.setItem(LS_REG_HRS, JSON.stringify(regHours));
+      localStorage.setItem(LS_OT_HRS, JSON.stringify(otHours));
+    } catch (err) {
+      console.warn('LS save failed', err);
+    }
+  } catch (err) {
+    console.warn('Error computing hours from full records', err);
+  }
+  // Ensure hourly rates are populated for all employees
+  Object.keys(storedEmployees || {}).forEach(id => {
     if (!payrollRates[id] || payrollRates[id] === 0) {
       payrollRates[id] = storedEmployees[id]?.hourlyRate || 0;
     }
   });
-
-  try { localStorage.setItem(LS_RATES, JSON.stringify(payrollRates)); } catch(e){}
-  try { if (typeof renderTable==='function') renderTable(); } catch(e){ console.warn('renderTable failed', e); }
+  // Persist rates
+  try {
+    localStorage.setItem(LS_RATES, JSON.stringify(payrollRates));
+  } catch (err) {}
+  // Rebuild the payroll table with the newly computed hours
+  try {
+    if (typeof renderTable === 'function') renderTable();
+  } catch (err) {
+    console.warn('renderTable failed', err);
+  }
 }
 
 weekStartEl.addEventListener('change', () => {
