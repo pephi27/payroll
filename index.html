@@ -7010,22 +7010,16 @@ function updateWeekInputs(snap) {
       // this employee yet, default to the original amount (not yet updated).
       const hasBal = cashBal.hasOwnProperty(id);
       const balVal = hasBal ? Number(cashBal[id] || 0) : origVal;
-      // Determine update state: if a balance has been stored and it differs
-      // from the original amount then an update has already been applied.
-      const updateApplied = hasBal && (balVal !== origVal);
-      // Decide if update button should be disabled and what label it should have
+      // Decide if update button should be disabled and what label it should have.
+      // The update button remains active after each click to allow multiple deductions until the balance is zero.
       let btnLabel = 'Update';
       let disabled = false;
       if (!origVal || !dedVal) {
         // Need both original amount and deduction to enable update
         disabled = true;
       } else if (balVal <= 0) {
-        // Fully paid
+        // Fully paid off
         btnLabel = 'Paid';
-        disabled = true;
-      } else if (updateApplied) {
-        // Already updated once; disable further updates
-        btnLabel = 'Updated';
         disabled = true;
       }
       const tr = document.createElement('tr');
@@ -7096,10 +7090,13 @@ function updateWeekInputs(snap) {
       btn.addEventListener('click', () => {
         const id = btn.getAttribute('data-id');
         const orig = Number(cashOrig[id] ?? 0);
-        const ded = Number(cashDed[id] ?? 0);
+        const ded  = Number(cashDed[id] ?? 0);
+        // Only proceed if we have valid original and deduction amounts
         if (!orig || !ded) return;
-        // Compute new balance as original minus one deduction
-        let newBal = +(orig - ded);
+        // Determine the current balance; fall back to original amount if no stored balance exists.
+        const currentBal = cashBal.hasOwnProperty(id) ? Number(cashBal[id] || 0) : orig;
+        // Compute new balance by subtracting the deduction from the current balance.
+        let newBal = +(currentBal - ded);
         if (newBal <= 0) {
           // Fully paid off: set balance to zero and clear deduction and vale
           newBal = 0;
@@ -7108,9 +7105,11 @@ function updateWeekInputs(snap) {
           localStorage.setItem(LS_CASH_DED, JSON.stringify(cashDed));
           localStorage.setItem(LS_VALE, JSON.stringify(vale));
         }
+        // Persist the new balance
         cashBal[id] = +(newBal.toFixed(2));
         localStorage.setItem(LS_CASH_BAL, JSON.stringify(cashBal));
         calculateAll();
+        // Re-render the table to reflect the updated balance; the update button remains active.
         renderCashAdvanceTable();
       });
     });
