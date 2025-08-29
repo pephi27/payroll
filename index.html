@@ -770,10 +770,12 @@ document.addEventListener('DOMContentLoaded', function() {
         }
       }
       // Attendance records store (att_records_v2)
-      // DTR records are no longer synced via kv_store to avoid exceeding
-      // localStorage quotas.  Instead we load the offline cache from
-      // localStorage here and hydrate from Supabase in a separate step.
       if (typeof window.storedRecords === 'undefined') {
+        // Attendance records are no longer synced via kv_store; instead they
+        // are loaded from localStorage here and later hydrated from the
+        // dedicated dtr_records table in Supabase.  We skip
+        // fetchFromSupabase('att_records_v2') to avoid loading large
+        // datasets into localStorage.
         window.storedRecords = JSON.parse(localStorage.getItem('att_records_v2') || '[]');
       }
       // Projects store (att_projects_v1)
@@ -4432,13 +4434,11 @@ document.getElementById('fileInput').addEventListener('change', (ev)=>{
             added++;
           }
         }
-        // Persist to localStorage for offline use
+        // Persist records locally for offline use
         try { localStorage.setItem(LS_RECORDS, JSON.stringify(storedRecords)); } catch(e){}
-        // Refresh the on‑screen results after processing all lines
+        // Refresh the DTR grid
         if (typeof renderResults === 'function') renderResults();
-        // Also save the full DTR dataset to Supabase.  This call is asynchronous;
-        // we don't await it here to avoid blocking the UI.  The helper
-        // saveDtrToCloud will upsert the records into the dtr_records table.
+        // Persist the records to Supabase for cross‑device sync
         try {
           if (typeof saveDtrToCloud === 'function') saveDtrToCloud(storedRecords);
         } catch (e) {
@@ -4475,9 +4475,9 @@ document.getElementById('fileInput').addEventListener('change', (ev)=>{
 document.getElementById('clearData').addEventListener('click', ()=>{
   if(!confirm('Clear all saved attendance data?')) return;
   storedRecords = [];
-  // Remove the locally cached attendance data and refresh the display
+  // Remove the locally cached attendance data
   localStorage.removeItem(LS_RECORDS);
-  // Persist the cleared dataset to Supabase so all devices remain in sync
+  // Persist the cleared dataset to Supabase for cross‑device sync
   try {
     if (typeof saveDtrToCloud === 'function') saveDtrToCloud(storedRecords);
   } catch (e) {
@@ -5408,10 +5408,9 @@ document.addEventListener('DOMContentLoaded', () => {
       }
       try {
         storedRecords.push({ empId: String(empId), date: dateVal, time: timeVal });
-        // Persist to localStorage and Supabase.  Even though the dataset
-        // may be large, localStorage helps with offline caching while
-        // Supabase provides cross‑device sync.
+        // Persist to localStorage
         localStorage.setItem(LS_RECORDS, JSON.stringify(storedRecords));
+        // Persist to Supabase for cross‑device sync
         if (typeof saveDtrToCloud === 'function') saveDtrToCloud(storedRecords);
       } catch(e) { console.error('Saving manual DTR failed', e); }
       closeManualModal();
@@ -5494,9 +5493,9 @@ document.addEventListener('DOMContentLoaded', () => {
               }
             }
           }
-          // Update local and cloud storage after deletion.  Local storage
-          // provides offline caching while Supabase keeps devices in sync.
+          // Persist updated records to localStorage
           localStorage.setItem(LS_RECORDS, JSON.stringify(storedRecords));
+          // Also persist to Supabase so all devices reflect the deletion
           try {
             if (typeof saveDtrToCloud === 'function') saveDtrToCloud(storedRecords);
           } catch (e) {
