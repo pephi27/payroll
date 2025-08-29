@@ -1300,7 +1300,11 @@ document.addEventListener('DOMContentLoaded', function() {
       <th>
        Project
       </th>
-      <th>Bank Account</th><th>Action</th>
+      <th>Bank Account</th>
+      <th>Pag-IBIG</th>
+      <th>PhilHealth</th>
+      <th>SSS</th>
+      <th>Action</th>
      </tr>
     </thead>
     <tbody>
@@ -1980,18 +1984,24 @@ const lSSS = Number(loanSSS[emp.id] ?? 0);
     const monthly = rate * 8 * 24;
     const piRate = pagibigRateByMonthly(monthly);
     const phRate = philhealthRateByMonthly(monthly);
-    const pagibig = +(regPay * piRate).toFixed(2);
-    const philhealth = +(regPay * phRate).toFixed(2);
+    // Determine per-employee inclusion flags; default to true when undefined
+    const empFlags = storedEmployees[emp.id] || {};
+    const includePagibig = empFlags.includePagibig !== false;
+    const includePhilhealth = empFlags.includePhilhealth !== false;
+    const includeSss = empFlags.includeSss !== false;
+    // Compute contribution values based on flags
+    const pagibigVal = includePagibig ? +(regPay * piRate).toFixed(2) : 0;
+    const philhealthVal = includePhilhealth ? +(regPay * phRate).toFixed(2) : 0;
     const sssFull = sssShareByMonthly(monthly);
-    const sss = +(sssFull / (Number(divisor)||1)).toFixed(2);
+    const sssVal = includeSss ? +(sssFull / (Number(divisor)||1)).toFixed(2) : 0;
     const sssLoan = +(lSSS / (Number(divisor)||1)).toFixed(2);
     const piLoan = +(lPI / (Number(divisor)||1)).toFixed(2);
-    const total = +(pagibig + philhealth + sss + sssLoan + piLoan + v + vW).toFixed(2);
+    const total = +(pagibigVal + philhealthVal + sssVal + sssLoan + piLoan + v + vW).toFixed(2);
     const tr = document.createElement('tr');
     tr.innerHTML = `<td>${emp.id}</td><td class="wrap">${emp.name}</td>
-      <td class="num">${pagibig.toFixed(2)}</td>
-      <td class="num">${philhealth.toFixed(2)}</td>
-      <td class="num">${sss.toFixed(2)}</td>
+      <td class="num">${pagibigVal.toFixed(2)}</td>
+      <td class="num">${philhealthVal.toFixed(2)}</td>
+      <td class="num">${sssVal.toFixed(2)}</td>
       <td class="num">${sssLoan.toFixed(2)}</td>
       <td class="num">${piLoan.toFixed(2)}</td>
       <td class="num">${v.toFixed(2)}</td>
@@ -2520,10 +2530,15 @@ function calculateRow(tr){
   const monthly = rate * 8 * 24;
   const piRate = pagibigRateByMonthly(monthly);
   const phRate = philhealthRateByMonthly(monthly);
-  const pagibig = +(regPay * piRate).toFixed(2);
-  const philhealth = +(regPay * phRate).toFixed(2);
+  // Determine inclusion flags for contributions; default to true when undefined
+  const empFlags = storedEmployees[id] || {};
+  const includePagibig = empFlags.includePagibig !== false;
+  const includePhilhealth = empFlags.includePhilhealth !== false;
+  const includeSss = empFlags.includeSss !== false;
+  const pagibig = includePagibig ? +(regPay * piRate).toFixed(2) : 0;
+  const philhealth = includePhilhealth ? +(regPay * phRate).toFixed(2) : 0;
   const sssFull = sssShareByMonthly(monthly);
-  const sss = sssFull / (Number(divisor)||1);
+  const sss = includeSss ? sssFull / (Number(divisor)||1) : 0;
   const sssLoan = lSSS / (Number(divisor)||1);
   const piLoan = lPI / (Number(divisor)||1);
   const valeAmt = v;
@@ -4300,6 +4315,10 @@ ids.forEach(id => {
     Object.keys(storedProjects).forEach(pid=>{
       projectOptionsHtml += `<option value="${pid}" ${emp.projectId===pid ? 'selected' : ''}>${storedProjects[pid].name}</option>`;
     });
+    // Determine inclusion flags for contributions; default to true when undefined
+    const includePagibig = emp.includePagibig !== false;
+    const includePhilhealth = emp.includePhilhealth !== false;
+    const includeSss = emp.includeSss !== false;
     const tr = document.createElement('tr');
     tr.innerHTML = `<td>${id}</td>
       <td><input class="cell emp-name-input" data-id="${id}" value="${emp.name}"></td>
@@ -4307,6 +4326,9 @@ ids.forEach(id => {
       <td><select class="emp-sel-schedule" data-id="${id}">${scheduleOptionsHtml}</select></td>
       <td><select class="emp-sel-project" data-id="${id}">${projectOptionsHtml}</select></td>
       <td><input class="cell emp-bank-input" data-id="${id}" value="${emp.bankAccount != null ? emp.bankAccount : ''}"></td>
+      <td style="text-align:center;"><input type="checkbox" class="emp-pagibig-flag" data-id="${id}" ${includePagibig ? 'checked' : ''}></td>
+      <td style="text-align:center;"><input type="checkbox" class="emp-philhealth-flag" data-id="${id}" ${includePhilhealth ? 'checked' : ''}></td>
+      <td style="text-align:center;"><input type="checkbox" class="emp-sss-flag" data-id="${id}" ${includeSss ? 'checked' : ''}></td>
       <td><button class="del-emp" data-id="${id}">Delete</button></td>`;
     tbody.appendChild(tr);
   });
@@ -4333,6 +4355,35 @@ document.querySelectorAll('.emp-sel-schedule').forEach(sel=> sel.addEventListene
       delete storedEmployees[id]; saveEmployeesToLS(); renderEmployees(); renderResults();
     }
   }));
+
+  // Attach event listeners to new contribution checkboxes
+  document.querySelectorAll('.emp-pagibig-flag').forEach(cb=> cb.addEventListener('change', (e)=>{
+    const empId = e.target.dataset.id;
+    const val = e.target.checked;
+    if (storedEmployees[empId]) {
+      storedEmployees[empId].includePagibig = val;
+      saveEmployeesToLS();
+      renderResults();
+    }
+  }));
+  document.querySelectorAll('.emp-philhealth-flag').forEach(cb=> cb.addEventListener('change', (e)=>{
+    const empId = e.target.dataset.id;
+    const val = e.target.checked;
+    if (storedEmployees[empId]) {
+      storedEmployees[empId].includePhilhealth = val;
+      saveEmployeesToLS();
+      renderResults();
+    }
+  }));
+  document.querySelectorAll('.emp-sss-flag').forEach(cb=> cb.addEventListener('change', (e)=>{
+    const empId = e.target.dataset.id;
+    const val = e.target.checked;
+    if (storedEmployees[empId]) {
+      storedEmployees[empId].includeSss = val;
+      saveEmployeesToLS();
+      renderResults();
+    }
+  }));
 }
 
 document.getElementById('addEmployeeBtn').addEventListener('click', ()=>{
@@ -4343,7 +4394,16 @@ document.getElementById('addEmployeeBtn').addEventListener('click', ()=>{
   const projectId = document.getElementById('empProjectSelect').value || null;
   const bank = document.getElementById('empBankInput').value.trim();
   if(!id){ alert('Enter ID'); return; } if(!name){ alert('Enter Name'); return; }
-  storedEmployees[id] = { name: name, hourlyRate: rate, bankAccount: bank, scheduleId: scheduleId, projectId: projectId };
+  storedEmployees[id] = {
+    name: name,
+    hourlyRate: rate,
+    bankAccount: bank,
+    scheduleId: scheduleId,
+    projectId: projectId,
+    includePagibig: true,
+    includePhilhealth: true,
+    includeSss: true
+  };
   saveEmployeesToLS();
   document.getElementById('empIdInput').value=''; document.getElementById('empNameInput').value=''; document.getElementById('empRateInput').value=''; document.getElementById('empBankInput').value='';
   renderEmployees(); renderResults();
@@ -4378,7 +4438,19 @@ rows.slice(1).forEach(row => {
       let scheduleId = Object.keys(storedSchedules).find(k => storedSchedules[k].name.toLowerCase() === schedName) || defaultScheduleId;
       let projectId = Object.keys(storedProjects).find(k => storedProjects[k].name.toLowerCase() === projName) || null;
 
-      storedEmployees[id] = { name: name, hourlyRate: rate, bankAccount: bank, scheduleId: scheduleId, projectId: projectId };
+      // Preserve existing inclusion flags or default to true
+      const prevEmp = storedEmployees[id] || {};
+      storedEmployees[id] = {
+        ...prevEmp,
+        name: name,
+        hourlyRate: rate,
+        bankAccount: bank,
+        scheduleId: scheduleId,
+        projectId: projectId,
+        includePagibig: prevEmp.includePagibig !== false,
+        includePhilhealth: prevEmp.includePhilhealth !== false,
+        includeSss: prevEmp.includeSss !== false
+      };
     }
   }
 });
