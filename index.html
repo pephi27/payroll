@@ -29,7 +29,6 @@ const TABLE = "kv_store"
 // strictly device‑local.
 const KNOWN_KEYS = [
   "att_employees_v2",
-  "att_records_v2",
   "att_schedules_v2",
   "att_schedules_default",
   "att_projects_v1",
@@ -771,13 +770,11 @@ document.addEventListener('DOMContentLoaded', function() {
         }
       }
       // Attendance records store (att_records_v2)
+      // DTR records are no longer synced via kv_store to avoid exceeding
+      // localStorage quotas.  Instead we load the offline cache from
+      // localStorage here and hydrate from Supabase in a separate step.
       if (typeof window.storedRecords === 'undefined') {
-        const supaVal = await fetchFromSupabase('att_records_v2');
-        if (supaVal !== undefined) {
-          window.storedRecords = supaVal;
-        } else {
-          window.storedRecords = JSON.parse(localStorage.getItem('att_records_v2') || '[]');
-        }
+        window.storedRecords = JSON.parse(localStorage.getItem('att_records_v2') || '[]');
       }
       // Projects store (att_projects_v1)
       if (typeof window.storedProjects === 'undefined') {
@@ -1300,11 +1297,7 @@ document.addEventListener('DOMContentLoaded', function() {
       <th>
        Project
       </th>
-      <th>Bank Account</th>
-      <th>Pag-IBIG</th>
-      <th>PhilHealth</th>
-      <th>SSS</th>
-      <th>Action</th>
+      <th>Bank Account</th><th>Action</th>
      </tr>
     </thead>
     <tbody>
@@ -1984,24 +1977,18 @@ const lSSS = Number(loanSSS[emp.id] ?? 0);
     const monthly = rate * 8 * 24;
     const piRate = pagibigRateByMonthly(monthly);
     const phRate = philhealthRateByMonthly(monthly);
-    // Determine per-employee inclusion flags; default to true when undefined
-    const empFlags = storedEmployees[emp.id] || {};
-    const includePagibig = empFlags.includePagibig !== false;
-    const includePhilhealth = empFlags.includePhilhealth !== false;
-    const includeSss = empFlags.includeSss !== false;
-    // Compute contribution values based on flags
-    const pagibigVal = includePagibig ? +(regPay * piRate).toFixed(2) : 0;
-    const philhealthVal = includePhilhealth ? +(regPay * phRate).toFixed(2) : 0;
+    const pagibig = +(regPay * piRate).toFixed(2);
+    const philhealth = +(regPay * phRate).toFixed(2);
     const sssFull = sssShareByMonthly(monthly);
-    const sssVal = includeSss ? +(sssFull / (Number(divisor)||1)).toFixed(2) : 0;
+    const sss = +(sssFull / (Number(divisor)||1)).toFixed(2);
     const sssLoan = +(lSSS / (Number(divisor)||1)).toFixed(2);
     const piLoan = +(lPI / (Number(divisor)||1)).toFixed(2);
-    const total = +(pagibigVal + philhealthVal + sssVal + sssLoan + piLoan + v + vW).toFixed(2);
+    const total = +(pagibig + philhealth + sss + sssLoan + piLoan + v + vW).toFixed(2);
     const tr = document.createElement('tr');
     tr.innerHTML = `<td>${emp.id}</td><td class="wrap">${emp.name}</td>
-      <td class="num">${pagibigVal.toFixed(2)}</td>
-      <td class="num">${philhealthVal.toFixed(2)}</td>
-      <td class="num">${sssVal.toFixed(2)}</td>
+      <td class="num">${pagibig.toFixed(2)}</td>
+      <td class="num">${philhealth.toFixed(2)}</td>
+      <td class="num">${sss.toFixed(2)}</td>
       <td class="num">${sssLoan.toFixed(2)}</td>
       <td class="num">${piLoan.toFixed(2)}</td>
       <td class="num">${v.toFixed(2)}</td>
@@ -2530,15 +2517,10 @@ function calculateRow(tr){
   const monthly = rate * 8 * 24;
   const piRate = pagibigRateByMonthly(monthly);
   const phRate = philhealthRateByMonthly(monthly);
-  // Determine inclusion flags for contributions; default to true when undefined
-  const empFlags = storedEmployees[id] || {};
-  const includePagibig = empFlags.includePagibig !== false;
-  const includePhilhealth = empFlags.includePhilhealth !== false;
-  const includeSss = empFlags.includeSss !== false;
-  const pagibig = includePagibig ? +(regPay * piRate).toFixed(2) : 0;
-  const philhealth = includePhilhealth ? +(regPay * phRate).toFixed(2) : 0;
+  const pagibig = +(regPay * piRate).toFixed(2);
+  const philhealth = +(regPay * phRate).toFixed(2);
   const sssFull = sssShareByMonthly(monthly);
-  const sss = includeSss ? sssFull / (Number(divisor)||1) : 0;
+  const sss = sssFull / (Number(divisor)||1);
   const sssLoan = lSSS / (Number(divisor)||1);
   const piLoan = lPI / (Number(divisor)||1);
   const valeAmt = v;
@@ -4315,10 +4297,6 @@ ids.forEach(id => {
     Object.keys(storedProjects).forEach(pid=>{
       projectOptionsHtml += `<option value="${pid}" ${emp.projectId===pid ? 'selected' : ''}>${storedProjects[pid].name}</option>`;
     });
-    // Determine inclusion flags for contributions; default to true when undefined
-    const includePagibig = emp.includePagibig !== false;
-    const includePhilhealth = emp.includePhilhealth !== false;
-    const includeSss = emp.includeSss !== false;
     const tr = document.createElement('tr');
     tr.innerHTML = `<td>${id}</td>
       <td><input class="cell emp-name-input" data-id="${id}" value="${emp.name}"></td>
@@ -4326,9 +4304,6 @@ ids.forEach(id => {
       <td><select class="emp-sel-schedule" data-id="${id}">${scheduleOptionsHtml}</select></td>
       <td><select class="emp-sel-project" data-id="${id}">${projectOptionsHtml}</select></td>
       <td><input class="cell emp-bank-input" data-id="${id}" value="${emp.bankAccount != null ? emp.bankAccount : ''}"></td>
-      <td style="text-align:center;"><input type="checkbox" class="emp-pagibig-flag" data-id="${id}" ${includePagibig ? 'checked' : ''}></td>
-      <td style="text-align:center;"><input type="checkbox" class="emp-philhealth-flag" data-id="${id}" ${includePhilhealth ? 'checked' : ''}></td>
-      <td style="text-align:center;"><input type="checkbox" class="emp-sss-flag" data-id="${id}" ${includeSss ? 'checked' : ''}></td>
       <td><button class="del-emp" data-id="${id}">Delete</button></td>`;
     tbody.appendChild(tr);
   });
@@ -4355,35 +4330,6 @@ document.querySelectorAll('.emp-sel-schedule').forEach(sel=> sel.addEventListene
       delete storedEmployees[id]; saveEmployeesToLS(); renderEmployees(); renderResults();
     }
   }));
-
-  // Attach event listeners to new contribution checkboxes
-  document.querySelectorAll('.emp-pagibig-flag').forEach(cb=> cb.addEventListener('change', (e)=>{
-    const empId = e.target.dataset.id;
-    const val = e.target.checked;
-    if (storedEmployees[empId]) {
-      storedEmployees[empId].includePagibig = val;
-      saveEmployeesToLS();
-      renderResults();
-    }
-  }));
-  document.querySelectorAll('.emp-philhealth-flag').forEach(cb=> cb.addEventListener('change', (e)=>{
-    const empId = e.target.dataset.id;
-    const val = e.target.checked;
-    if (storedEmployees[empId]) {
-      storedEmployees[empId].includePhilhealth = val;
-      saveEmployeesToLS();
-      renderResults();
-    }
-  }));
-  document.querySelectorAll('.emp-sss-flag').forEach(cb=> cb.addEventListener('change', (e)=>{
-    const empId = e.target.dataset.id;
-    const val = e.target.checked;
-    if (storedEmployees[empId]) {
-      storedEmployees[empId].includeSss = val;
-      saveEmployeesToLS();
-      renderResults();
-    }
-  }));
 }
 
 document.getElementById('addEmployeeBtn').addEventListener('click', ()=>{
@@ -4394,16 +4340,7 @@ document.getElementById('addEmployeeBtn').addEventListener('click', ()=>{
   const projectId = document.getElementById('empProjectSelect').value || null;
   const bank = document.getElementById('empBankInput').value.trim();
   if(!id){ alert('Enter ID'); return; } if(!name){ alert('Enter Name'); return; }
-  storedEmployees[id] = {
-    name: name,
-    hourlyRate: rate,
-    bankAccount: bank,
-    scheduleId: scheduleId,
-    projectId: projectId,
-    includePagibig: true,
-    includePhilhealth: true,
-    includeSss: true
-  };
+  storedEmployees[id] = { name: name, hourlyRate: rate, bankAccount: bank, scheduleId: scheduleId, projectId: projectId };
   saveEmployeesToLS();
   document.getElementById('empIdInput').value=''; document.getElementById('empNameInput').value=''; document.getElementById('empRateInput').value=''; document.getElementById('empBankInput').value='';
   renderEmployees(); renderResults();
@@ -4438,19 +4375,7 @@ rows.slice(1).forEach(row => {
       let scheduleId = Object.keys(storedSchedules).find(k => storedSchedules[k].name.toLowerCase() === schedName) || defaultScheduleId;
       let projectId = Object.keys(storedProjects).find(k => storedProjects[k].name.toLowerCase() === projName) || null;
 
-      // Preserve existing inclusion flags or default to true
-      const prevEmp = storedEmployees[id] || {};
-      storedEmployees[id] = {
-        ...prevEmp,
-        name: name,
-        hourlyRate: rate,
-        bankAccount: bank,
-        scheduleId: scheduleId,
-        projectId: projectId,
-        includePagibig: prevEmp.includePagibig !== false,
-        includePhilhealth: prevEmp.includePhilhealth !== false,
-        includeSss: prevEmp.includeSss !== false
-      };
+      storedEmployees[id] = { name: name, hourlyRate: rate, bankAccount: bank, scheduleId: scheduleId, projectId: projectId };
     }
   }
 });
@@ -4507,8 +4432,18 @@ document.getElementById('fileInput').addEventListener('change', (ev)=>{
             added++;
           }
         }
+        // Persist to localStorage for offline use
         try { localStorage.setItem(LS_RECORDS, JSON.stringify(storedRecords)); } catch(e){}
+        // Refresh the on‑screen results after processing all lines
         if (typeof renderResults === 'function') renderResults();
+        // Also save the full DTR dataset to Supabase.  This call is asynchronous;
+        // we don't await it here to avoid blocking the UI.  The helper
+        // saveDtrToCloud will upsert the records into the dtr_records table.
+        try {
+          if (typeof saveDtrToCloud === 'function') saveDtrToCloud(storedRecords);
+        } catch (e) {
+          console.warn('Failed to save DTR to Supabase', e);
+        }
         totalAdded += added;
       } catch(err){
         console.error('Error reading', file.name, err);
@@ -4539,7 +4474,16 @@ document.getElementById('fileInput').addEventListener('change', (ev)=>{
 
 document.getElementById('clearData').addEventListener('click', ()=>{
   if(!confirm('Clear all saved attendance data?')) return;
-  storedRecords = []; localStorage.removeItem(LS_RECORDS); renderResults();
+  storedRecords = [];
+  // Remove the locally cached attendance data and refresh the display
+  localStorage.removeItem(LS_RECORDS);
+  // Persist the cleared dataset to Supabase so all devices remain in sync
+  try {
+    if (typeof saveDtrToCloud === 'function') saveDtrToCloud(storedRecords);
+  } catch (e) {
+    console.warn('Failed to clear DTR in Supabase', e);
+  }
+  renderResults();
 });
 document.getElementById('downloadCSV').addEventListener('click', ()=>{
   const rows = [['ID','Name','Project','Schedule','Date','AM In','AM Out','PM In','PM Out','OT In','OT Out','Total Regular Hrs','OT Hrs']];
@@ -5464,7 +5408,11 @@ document.addEventListener('DOMContentLoaded', () => {
       }
       try {
         storedRecords.push({ empId: String(empId), date: dateVal, time: timeVal });
+        // Persist to localStorage and Supabase.  Even though the dataset
+        // may be large, localStorage helps with offline caching while
+        // Supabase provides cross‑device sync.
         localStorage.setItem(LS_RECORDS, JSON.stringify(storedRecords));
+        if (typeof saveDtrToCloud === 'function') saveDtrToCloud(storedRecords);
       } catch(e) { console.error('Saving manual DTR failed', e); }
       closeManualModal();
       if(typeof renderResults === 'function') renderResults();
@@ -5546,7 +5494,14 @@ document.addEventListener('DOMContentLoaded', () => {
               }
             }
           }
+          // Update local and cloud storage after deletion.  Local storage
+          // provides offline caching while Supabase keeps devices in sync.
           localStorage.setItem(LS_RECORDS, JSON.stringify(storedRecords));
+          try {
+            if (typeof saveDtrToCloud === 'function') saveDtrToCloud(storedRecords);
+          } catch (e) {
+            console.warn('Failed to sync DTR deletion to Supabase', e);
+          }
           renderResults();
         } catch(e){ console.error('DTR delete failed', e); }
       });
@@ -7298,6 +7253,113 @@ function updateWeekInputs(snap) {
     } catch (e) {}
   });
 })();
+</script>
+
+<!-- =====================================================================
+     DTR Cloud Persistence with Supabase
+
+     The payroll application originally stored uploaded DTR records exclusively
+     in localStorage.  Browsers typically limit localStorage to about 5 MB,
+     which can be quickly exceeded when importing large attendance files.  To
+     provide true cross‑device persistence and remove the size constraint,
+     the functions below save and load the DTR dataset via Supabase.  They
+     expect a table named `dtr_records` in your Supabase database with the
+     following schema:
+
+         CREATE TABLE dtr_records (
+           id text PRIMARY KEY,
+           data jsonb
+         );
+
+     The policy can mirror the permissive configuration used for kv_store:
+
+         -- Allow anon users to read and write the single row
+         CREATE POLICY "Allow all access to dtr_records" ON dtr_records
+           FOR ALL USING (true) WITH CHECK (true);
+
+     The row uses a fixed primary key (id = 'records') so that each upsert
+     overwrites the existing dataset.  If you wish to store separate sets
+     by period or company, you can adjust the id accordingly.  When the
+     page loads it attempts to fetch the remote DTR and, if found, will
+     populate the global `storedRecords` array and update localStorage.
+     Uploaded files are automatically persisted to the cloud via
+     saveDtrToCloud(), invoked in the file upload handler above.
+===================================================================== -->
+<script>
+/*
+ * Save the entire DTR dataset to Supabase.  This helper uses the
+ * globally scoped `supabase` client (injected by the KV sync adapter)
+ * to upsert the records into the `dtr_records` table.  The primary
+ * key is fixed to 'records' so that only a single row is maintained.
+ */
+async function saveDtrToCloud(records) {
+  try {
+    const supa = window.supabase || (typeof supabase !== 'undefined' ? supabase : null);
+    if (!supa) return;
+    const { error } = await supa
+      .from('dtr_records')
+      .upsert({ id: 'records', data: records }, { onConflict: 'id' });
+    if (error) console.error('Supabase DTR save error:', error.message);
+  } catch (e) {
+    console.error('Supabase DTR save failed', e);
+  }
+}
+
+/*
+ * Retrieve the DTR dataset from Supabase.  Returns an array of
+ * attendance records if available, otherwise null.  The returned
+ * object is expected to have the shape { data: [...] }, so we
+ * unwrap the nested data field when present.
+ */
+async function loadDtrFromCloud() {
+  try {
+    const supa = window.supabase || (typeof supabase !== 'undefined' ? supabase : null);
+    if (!supa) return null;
+    const { data, error } = await supa
+      .from('dtr_records')
+      .select('data')
+      .eq('id', 'records')
+      .single();
+    if (error) {
+      // Only warn on fetch errors to avoid blocking page load.  The
+      // application will fall back to localStorage if the fetch fails.
+      console.warn('Supabase DTR fetch error:', error.message);
+      return null;
+    }
+    return data && Array.isArray(data.data) ? data.data : null;
+  } catch (e) {
+    console.error('Supabase DTR fetch failed', e);
+    return null;
+  }
+}
+
+// On initial load, attempt to hydrate storedRecords from Supabase.  If
+// remote data exists it will overwrite the current storedRecords array
+// and localStorage.  This ensures that the latest DTR data is available
+// across devices while preserving offline capability.  The call is
+// performed after DOMContentLoaded to ensure that other scripts have
+// defined storedRecords and renderResults() before we modify them.
+document.addEventListener('DOMContentLoaded', async function () {
+  try {
+    const remote = await loadDtrFromCloud();
+    if (remote && Array.isArray(remote)) {
+      // Update global storedRecords if defined
+      if (typeof storedRecords !== 'undefined') {
+        storedRecords = remote;
+      } else {
+        window.storedRecords = remote;
+      }
+      // Persist into localStorage for offline fallback
+      try { localStorage.setItem(LS_RECORDS, JSON.stringify(remote)); } catch (e) {}
+      // Re-render the DTR results grid with the new data
+      if (typeof renderResults === 'function') {
+        try { renderResults(); } catch (e) {}
+      }
+    }
+  } catch (e) {
+    console.error('Error hydrating DTR from Supabase', e);
+  }
+});
 </script>
 
 </body>
