@@ -2008,24 +2008,67 @@ const lSSS = Number(loanSSS[emp.id] ?? 0);
 }
 document.addEventListener('click', (e)=>{
   if(e.target && e.target.id === 'exportDeductionsCSV'){
-    const header = ['ID','Name','Pag-IBIG','PhilHealth','SSS','SSS Loan','Pag-IBIG Loan','Vale','Wed Vale','Total Deductions'];
-    const rows=[header];
-    document.querySelectorAll('#deductionsTable tbody tr').forEach(tr=>{
-      const cells = Array.from(tr.children).map(td=>td.textContent.trim());
-      rows.push(cells);
-    });
-    const csv = rows.map(r=>r.map(s=>{
-      s = String(s ?? '');
-      return /[",\n]/.test(s) ? '"' + s.replace(/"/g,'""') + '"' : s;
-    }).join(',')).join('\n');
-    const blob = new Blob([csv], {type:'text/csv'});
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a'); a.href=url; a.download='deductions.csv'; document.body.appendChild(a); a.click(); a.remove();
-  }
-});
+    try {
+      const header = ['ID','Name','Pag-IBIG','PhilHealth','SSS','SSS Loan','Pag-IBIG Loan','Vale','Wed Vale','Total Deductions'];
+      const rows = [header];
 
-// Handle deductions file upload
-document.addEventListener('change', (e)=>{
+      const div = Number(typeof divisor !== 'undefined' ? divisor : 1) || 1;
+
+      (employeeList || []).forEach(emp => {
+        const id = emp.id;
+        const name = (typeof storedEmployees !== 'undefined' && storedEmployees && storedEmployees[id] && storedEmployees[id].name) ? storedEmployees[id].name : (emp.name || '');
+
+        const rate = Number((typeof storedEmployees !== 'undefined' && storedEmployees?.[id]?.hourlyRate) ?? (typeof payrollRates !== 'undefined' ? payrollRates?.[id] : 0)) || 0;
+        const rH   = Number((typeof regHours !== 'undefined' ? regHours?.[id] : 0)) || 0;
+        const regPay = +(rH * rate).toFixed(2);
+
+        const monthly  = rate * 8 * 24;
+        const piRate   = (typeof pagibigRateByMonthly === 'function') ? pagibigRateByMonthly(monthly) : 0;
+        const phRate   = (typeof philhealthRateByMonthly === 'function') ? philhealthRateByMonthly(monthly) : 0;
+        const sssFull  = (typeof sssShareByMonthly === 'function') ? sssShareByMonthly(monthly) : 0;
+
+        const pagibig    = +(regPay * piRate).toFixed(2);
+        const philhealth = +(regPay * phRate).toFixed(2);
+        const sssPer     = +(sssFull / div).toFixed(2);
+
+        // RAW totals from storage (NOT divided) for editable columns
+        const sssLoanRaw = +(Number((typeof loanSSS !== 'undefined' ? loanSSS?.[id] : 0)) || 0).toFixed(2);
+        const piLoanRaw  = +(Number((typeof loanPI  !== 'undefined' ? loanPI?.[id]  : 0)) || 0).toFixed(2);
+        const valeRaw    = +(Number((typeof vale   !== 'undefined' ? vale?.[id]   : 0)) || 0).toFixed(2);
+        const wedValeRaw = +(Number((typeof valeWed!== 'undefined' ? valeWed?.[id]: 0)) || 0).toFixed(2);
+
+        // Total per-period (loans contribute their per-period share here)
+        const totalPer  = +(pagibig + philhealth + sssPer + (sssLoanRaw/div) + (piLoanRaw/div) + valeRaw + wedValeRaw).toFixed(2);
+
+        rows.push([
+          id, name,
+          pagibig.toFixed(2),
+          philhealth.toFixed(2),
+          sssPer.toFixed(2),
+          sssLoanRaw.toFixed(2),
+          piLoanRaw.toFixed(2),
+          valeRaw.toFixed(2),
+          wedValeRaw.toFixed(2),
+          totalPer.toFixed(2)
+        ]);
+      });
+
+      const csv = rows.map(r => r.map(s => {
+        s = String(s ?? '');
+        return /[",\n]/.test(s) ? '"' + s.replace(/"/g,'""') + '"' : s;
+      }).join(',')).join('\n');
+
+      const blob = new Blob([csv], {type:'text/csv'});
+      const url  = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = 'deductions.csv';
+      document.body.appendChild(a); a.click(); a.remove();
+    } catch(err){
+      console.error('Export (Deductions) failed:', err);
+      alert('Export failed. Please try again.');
+    }
+  }
+});document.addEventListener('change', (e)=>{
   if(e.target && e.target.id === 'deductionsFileInput'){
     const file = e.target.files && e.target.files[0]; 
     if (!file) return;
