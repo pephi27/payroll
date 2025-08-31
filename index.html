@@ -7366,7 +7366,10 @@ async function loadDtrFromCloud() {
       .from('dtr_records')
       .select('data')
       .eq('id', 'records')
-      .single();
+      // maybeSingle() returns at most one row and avoids a 406 error when zero
+      // rows are returned.  Without this, .single() will cause a 406 when
+      // there are no matching records or duplicates.
+      .maybeSingle();
     if (error) {
       const msg = String(error.message || '');
       // When the table doesn't exist, gracefully skip cloud load.  Otherwise
