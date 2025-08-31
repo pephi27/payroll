@@ -771,12 +771,14 @@ document.addEventListener('DOMContentLoaded', function() {
       }
       // Attendance records store (att_records_v2)
       if (typeof window.storedRecords === 'undefined') {
-        // Attendance records are no longer synced via kv_store; instead they
-        // are loaded from localStorage here and later hydrated from the
-        // dedicated dtr_records table in Supabase.  We skip
-        // fetchFromSupabase('att_records_v2') to avoid loading large
-        // datasets into localStorage.
-        window.storedRecords = JSON.parse(localStorage.getItem('att_records_v2') || '[]');
+        /*
+         * Always initialize the attendance record array as empty.  Unlike other
+         * data stores, DTR records are persisted in a dedicated Supabase table
+         * (`dtr_records`) and should not be bootstrapped from localStorage.  By
+         * starting with an empty array here, the application ensures that any
+         * locally cached data is ignored until the remote dataset is loaded.
+         */
+        window.storedRecords = [];
       }
       // Projects store (att_projects_v1)
       if (typeof window.storedProjects === 'undefined') {
@@ -982,6 +984,11 @@ document.addEventListener('DOMContentLoaded', function() {
    </div>
    <div class="note">
     Regular hours computed per schedule segments. Grace applies to AM/PM in. OT detected after PM out reference.
+   </div>
+   <!-- Alert to display when there is no remote DTR data and no local DTR data.  This
+        banner is hidden by default and shown via showRemoteDtrAlert() -->
+   <div id="remoteDtrAlert" style="display:none;margin:8px 0;padding:10px;border:1px solid #facc15;background:#fef9c3;color:#713f12;border-radius:6px;font-weight:600;">
+     ⚠ No remote DTR data found. Import a .DAT/.TXT file on this device to populate cloud data.
    </div>
    <!-- Wrap the results table in a scrollable container so horizontal overflow
         is always visible. Without this wrapper some layouts (especially when
@@ -3076,26 +3083,31 @@ document.addEventListener('DOMContentLoaded', () => {
       data.netPay = readNum('.netPay', 17);
       // Capture DTR records for this employee within the selected date range. Stores an array of {date, times}
       try {
-        const recStr = localStorage.getItem('att_records_v2');
-        const recs = recStr ? JSON.parse(recStr) : [];
-        if (Array.isArray(recs)) {
-          const start = startDate || '';
-          const end = endDate || '';
-          const empRecs = recs.filter(r => r && String(r.empId) === String(data.id) && (!start || r.date >= start) && (!end || r.date <= end));
-          const grouped = {};
-          empRecs.forEach(r => {
-            if (!r || !r.date) return;
-            const d = r.date;
-            if (!grouped[d]) grouped[d] = [];
-            if (r.time && !grouped[d].includes(r.time)) grouped[d].push(r.time);
-          });
-          const arr = [];
-          Object.keys(grouped).sort().forEach(dateKey => {
-            const times = grouped[dateKey].sort();
-            arr.push({ date: dateKey, times });
-          });
-          data.dtrs = arr;
-        }
+        /*
+         * Use the in‑memory storedRecords array (populated from Supabase) to
+         * derive attendance for payroll exports.  Avoid reading from
+         * localStorage so that stale browser caches do not leak into
+         * cross‑device exports.  The records array is filtered by the
+         * current employee and date range, grouped by date, and then
+         * converted into { date, times } objects for export.
+         */
+        const recs = Array.isArray(storedRecords) ? storedRecords : [];
+        const start = startDate || '';
+        const end = endDate || '';
+        const empRecs = recs.filter(r => r && String(r.empId) === String(data.id) && (!start || r.date >= start) && (!end || r.date <= end));
+        const grouped = {};
+        empRecs.forEach(r => {
+          if (!r || !r.date) return;
+          const d = r.date;
+          if (!grouped[d]) grouped[d] = [];
+          if (r.time && !grouped[d].includes(r.time)) grouped[d].push(r.time);
+        });
+        const arr = [];
+        Object.keys(grouped).sort().forEach(dateKey => {
+          const times = grouped[dateKey].sort();
+          arr.push({ date: dateKey, times });
+        });
+        data.dtrs = arr;
       } catch (e) {
         // ignore parse errors
       }
@@ -3689,14 +3701,10 @@ document.addEventListener('DOMContentLoaded', () => {
       });
     } else {
       // Fallback: derive from live attendance records within the snapshot date range
-      let records = [];
-      try {
-        const recStr = localStorage.getItem('att_records_v2');
-        records = recStr ? JSON.parse(recStr) : [];
-        if (!Array.isArray(records)) records = [];
-      } catch (e) {
-        records = [];
-      }
+      // Use the in‑memory storedRecords array rather than localStorage.  If no
+      // remote data exists the array will be empty, which is preferable to
+      // reading stale cache entries.
+      let records = Array.isArray(storedRecords) ? storedRecords : [];
       const start = snap.startDate || '';
       const end = snap.endDate || '';
       function inRange(dateStr) {
@@ -3939,7 +3947,17 @@ const DEFAULT_SCHEDULE = {
 
 };
 
-let storedRecords = JSON.parse(localStorage.getItem(LS_RECORDS) || '[]');
+/*
+ * Initialize the local storedRecords variable from the global store.  The
+ * global `window.storedRecords` is set by the boot guard.  Avoid pulling
+ * from localStorage here so that Supabase data is always preferred.  If
+ * the global has not been defined for some reason, fall back to an empty
+ * array.  This ensures the application never silently falls back to a
+ * stale local cache when a remote dataset may be available.
+ */
+let storedRecords = (typeof window !== 'undefined' && Array.isArray(window.storedRecords))
+  ? window.storedRecords
+  : [];
 let storedEmployees = JSON.parse(localStorage.getItem(LS_EMPLOYEES) || '{}');
 let storedSchedules = JSON.parse(localStorage.getItem(LS_SCHEDULES) || 'null');
 let defaultScheduleId = localStorage.getItem(LS_SCHEDULES_DEFAULT) || null;
@@ -4421,6 +4439,14 @@ document.getElementById('fileInput').addEventListener('change', (ev)=>{
   inputEl.disabled = true;
 
   Array.from(files).forEach(file=>{
+    // Upload the raw .DAT/.TXT file to Supabase for backup/cross‑device sync.
+    try {
+      if (typeof uploadDtrFileToCloud === 'function') {
+        uploadDtrFileToCloud(file);
+      }
+    } catch (err) {
+      // Ignore upload errors to avoid blocking file parsing
+    }
     const r = new FileReader();
     r.onload = (e)=>{
       try {
@@ -4443,6 +4469,12 @@ document.getElementById('fileInput').addEventListener('change', (ev)=>{
           if (typeof saveDtrToCloud === 'function') saveDtrToCloud(storedRecords);
         } catch (e) {
           console.warn('Failed to save DTR to Supabase', e);
+        }
+        // Hide the remote alert since we now have data after upload
+        try {
+          if (typeof hideRemoteDtrAlert === 'function') hideRemoteDtrAlert();
+        } catch (e) {
+          // ignore alert errors
         }
         totalAdded += added;
       } catch(err){
@@ -4483,6 +4515,12 @@ document.getElementById('clearData').addEventListener('click', ()=>{
   } catch (e) {
     console.warn('Failed to clear DTR in Supabase', e);
   }
+  // Show alert after clearing since both local and remote are now empty
+  try {
+    if (typeof showRemoteDtrAlert === 'function') {
+      showRemoteDtrAlert('No remote DTR data found. Import a .DAT/.TXT file to populate cloud data.');
+    }
+  } catch (e) {}
   renderResults();
 });
 document.getElementById('downloadCSV').addEventListener('click', ()=>{
@@ -7305,6 +7343,29 @@ async function saveDtrToCloud(records) {
 }
 
 /*
+ * Upload a raw DTR file to Supabase Storage.  This helper uploads the
+ * original .DAT/.TXT file into the 'dtr_uploads' folder of the 'app'
+ * storage bucket.  If the bucket does not exist or the upload fails,
+ * the error is logged and the application continues silently.  Each
+ * upload uses a timestamp and random suffix to avoid collisions.
+ */
+async function uploadDtrFileToCloud(file) {
+  try {
+    const supa = window.supabase || (typeof supabase !== 'undefined' ? supabase : null);
+    if (!supa || !file) return;
+    const bucket = supa.storage.from('app');
+    // Compose a unique path using a timestamp and random number to avoid collisions
+    const path = `dtr_uploads/${Date.now()}_${Math.floor(Math.random() * 1000)}_${file.name}`;
+    const { error } = await bucket.upload(path, file, { upsert: false });
+    if (error) {
+      console.warn('Supabase DTR file upload error:', error.message);
+    }
+  } catch (err) {
+    console.warn('Supabase DTR file upload failed', err);
+  }
+}
+
+/*
  * Retrieve the DTR dataset from Supabase.  Returns an array of
  * attendance records if available, otherwise null.  The returned
  * object is expected to have the shape { data: [...] }, so we
@@ -7318,7 +7379,7 @@ async function loadDtrFromCloud() {
       .from('dtr_records')
       .select('data')
       .eq('id', 'records')
-      .single();
+      .maybeSingle();
     if (error) {
       // Only warn on fetch errors to avoid blocking page load.  The
       // application will fall back to localStorage if the fetch fails.
@@ -7332,6 +7393,25 @@ async function loadDtrFromCloud() {
   }
 }
 
+// Helpers to control the remote DTR alert banner.  These functions
+// locate the #remoteDtrAlert element and toggle its visibility.  The
+// banner notifies users when there is no remote DTR data available
+// and encourages them to upload a .DAT/.TXT file to populate the
+// cloud.  If the element is not present these helpers silently do
+// nothing.
+function showRemoteDtrAlert(msg){
+  const el = document.getElementById('remoteDtrAlert');
+  if (!el) return;
+  // Prefix the message with a warning symbol for emphasis
+  el.textContent = `⚠ ${msg}`;
+  el.style.display = '';
+}
+function hideRemoteDtrAlert(){
+  const el = document.getElementById('remoteDtrAlert');
+  if (!el) return;
+  el.style.display = 'none';
+}
+
 // On initial load, attempt to hydrate storedRecords from Supabase.  If
 // remote data exists it will overwrite the current storedRecords array
 // and localStorage.  This ensures that the latest DTR data is available
@@ -7341,18 +7421,29 @@ async function loadDtrFromCloud() {
 document.addEventListener('DOMContentLoaded', async function () {
   try {
     const remote = await loadDtrFromCloud();
-    if (remote && Array.isArray(remote)) {
-      // Update global storedRecords if defined
-      if (typeof storedRecords !== 'undefined') {
-        storedRecords = remote;
-      } else {
-        window.storedRecords = remote;
-      }
-      // Persist into localStorage for offline fallback
+    if (Array.isArray(remote) && remote.length) {
+      // When remote data is available, replace the in‑memory dataset.  We
+      // deliberately overwrite both the local variable and the global
+      // window.storedRecords to ensure all modules reference the same
+      // canonical source of truth.  Persist into localStorage as an
+      // offline fallback, but always prefer Supabase on subsequent loads.
+      storedRecords = remote;
+      window.storedRecords = remote;
       try { localStorage.setItem(LS_RECORDS, JSON.stringify(remote)); } catch (e) {}
-      // Re-render the DTR results grid with the new data
       if (typeof renderResults === 'function') {
         try { renderResults(); } catch (e) {}
+      }
+      if (typeof hideRemoteDtrAlert === 'function') hideRemoteDtrAlert();
+    } else {
+      // No remote data: clear any existing local dataset and inform the user.
+      storedRecords = [];
+      window.storedRecords = [];
+      try { localStorage.removeItem(LS_RECORDS); } catch (e) {}
+      if (typeof renderResults === 'function') {
+        try { renderResults(); } catch (e) {}
+      }
+      if (typeof showRemoteDtrAlert === 'function') {
+        showRemoteDtrAlert('No remote DTR data found. Import a .DAT/.TXT file to populate cloud data.');
       }
     }
   } catch (e) {
