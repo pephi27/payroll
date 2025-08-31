@@ -158,6 +158,37 @@ function safeStringify(v){
 
 <!-- Multi payslip printing functionality -->
 <script>
+
+/*
+ * Upload a raw DTR file to Supabase Storage.  When a .DAT or .TXT
+ * attendance file is imported, this helper is invoked by the file
+ * input handler to persist the original file in the cloud.  Files
+ * are saved into a "dtr_uploads" folder within the "app" bucket
+ * (or whichever bucket exists in your Supabase project).  A unique
+ * timestamp prefix is used to avoid collisions.  If the bucket does
+ * not exist, the upload will be silently ignored and localStorage
+ * will continue to handle persistence.
+ */
+async function uploadDtrFileToCloud(file) {
+  try {
+    const supa = window.supabase || (typeof supabase !== 'undefined' ? supabase : null);
+    if (!supa || !file) return;
+    const timestamp = Date.now();
+    const bucket = 'app';
+    const path = `dtr_uploads/${timestamp}_${encodeURIComponent(file.name)}`;
+    const { error } = await supa.storage.from(bucket).upload(path, file, { upsert: true, cacheControl: '3600' });
+    if (error) {
+      const msg = String(error.message || '').toLowerCase();
+      // Suppress missing bucket errors; log other issues for debugging
+      if (!msg.includes('bucket not found')) {
+        console.error('Supabase DTR file upload error:', error.message);
+      }
+    }
+  } catch (e) {
+    console.error('Supabase DTR file upload failed', e);
+  }
+}
+
 document.addEventListener('DOMContentLoaded', function() {
   var multiBtn = document.getElementById('printAllPayslipsBtn');
   if (multiBtn) {
@@ -4421,13 +4452,13 @@ document.getElementById('fileInput').addEventListener('change', (ev)=>{
   inputEl.disabled = true;
 
   Array.from(files).forEach(file=>{
-    // Upload the raw .DAT/.TXT file to Supabase Storage before processing.  This
-    // preserves the original file outside of the browser so it can be
-    // recovered even if localStorage is cleared or the user changes device.
+    // Upload the raw file to Supabase before processing.  See
+    // uploadDtrFileToCloud() for details.  Errors are suppressed when
+    // the bucket is missing.
     try {
       if (typeof uploadDtrFileToCloud === 'function') uploadDtrFileToCloud(file);
     } catch (e) {
-      console.warn('Supabase DTR file upload failed', e);
+      console.warn('Failed to upload DTR file to Supabase', e);
     }
     const r = new FileReader();
     r.onload = (e)=>{
@@ -7299,36 +7330,6 @@ function updateWeekInputs(snap) {
  * to upsert the records into the `dtr_records` table.  The primary
  * key is fixed to 'records' so that only a single row is maintained.
  */
-/*
- * Upload a raw DTR file to Supabase Storage.  When a .DAT or .TXT
- * attendance file is imported, this helper is invoked by the file
- * input handler to persist the original file in the cloud.  Files
- * are saved into a "dtr_uploads" folder within the "app" bucket
- * (or whichever bucket exists in your Supabase project).  A unique
- * timestamp prefix is used to avoid collisions.  If you wish to
- * organise files differently (e.g. by period or company) you can
- * modify the path.
- */
-async function uploadDtrFileToCloud(file) {
-  try {
-    const supa = window.supabase || (typeof supabase !== 'undefined' ? supabase : null);
-    if (!supa || !file) return;
-    const timestamp = Date.now();
-    // Choose a storage bucket.  "app" is used here; ensure it exists in your
-    // Supabase project or adjust accordingly.  Files will be stored under
-    // dtr_uploads/<timestamp>_<original_filename>
-    const bucket = 'app';
-    const path = `dtr_uploads/${timestamp}_${encodeURIComponent(file.name)}`;
-    const { error } = await supa.storage.from(bucket).upload(path, file, {
-      upsert: true,
-      cacheControl: '3600'
-    });
-    if (error) console.error('Supabase DTR file upload error:', error.message);
-  } catch (e) {
-    console.error('Supabase DTR file upload failed', e);
-  }
-}
-
 async function saveDtrToCloud(records) {
   try {
     const supa = window.supabase || (typeof supabase !== 'undefined' ? supabase : null);
@@ -7336,7 +7337,16 @@ async function saveDtrToCloud(records) {
     const { error } = await supa
       .from('dtr_records')
       .upsert({ id: 'records', data: records }, { onConflict: 'id' });
-    if (error) console.error('Supabase DTR save error:', error.message);
+    // If the table does not exist in Supabase, suppress the error and fall back
+    // to local persistence.  Without a dtr_records table this call will
+    // return an error like "Could not find the table ..." which we ignore.
+    if (error) {
+      const msg = String(error.message || '');
+      if (!msg.toLowerCase().includes('could not find the table')) {
+        console.error('Supabase DTR save error:', error.message);
+      }
+      return;
+    }
   } catch (e) {
     console.error('Supabase DTR save failed', e);
   }
@@ -7358,9 +7368,12 @@ async function loadDtrFromCloud() {
       .eq('id', 'records')
       .single();
     if (error) {
-      // Only warn on fetch errors to avoid blocking page load.  The
-      // application will fall back to localStorage if the fetch fails.
-      console.warn('Supabase DTR fetch error:', error.message);
+      const msg = String(error.message || '');
+      // When the table doesn't exist, gracefully skip cloud load.  Otherwise
+      // log a warning so the UI can fall back to localStorage.
+      if (!msg.toLowerCase().includes('could not find the table')) {
+        console.warn('Supabase DTR fetch error:', error.message);
+      }
       return null;
     }
     return data && Array.isArray(data.data) ? data.data : null;
