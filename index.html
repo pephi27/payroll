@@ -3939,7 +3939,12 @@ const DEFAULT_SCHEDULE = {
 
 };
 
-let storedRecords = JSON.parse(localStorage.getItem(LS_RECORDS) || '[]');
+// Do not seed storedRecords from localStorage by default.  The DTR data
+// is persisted in Supabase and is loaded on page initialization via
+// loadAttendanceByDateRange() or loadDtrFromCloud().  Initializing with
+// an empty array prevents exceeding local storage quotas and avoids
+// stale or partial data.
+let storedRecords = [];
 let storedEmployees = JSON.parse(localStorage.getItem(LS_EMPLOYEES) || '{}');
 let storedSchedules = JSON.parse(localStorage.getItem(LS_SCHEDULES) || 'null');
 let defaultScheduleId = localStorage.getItem(LS_SCHEDULES_DEFAULT) || null;
@@ -4434,11 +4439,10 @@ document.getElementById('fileInput').addEventListener('change', (ev)=>{
             added++;
           }
         }
-        // Persist records locally for offline use
-        try { localStorage.setItem(LS_RECORDS, JSON.stringify(storedRecords)); } catch(e){}
         // Refresh the DTR grid
         if (typeof renderResults === 'function') renderResults();
-        // Persist the records to Supabase for cross‑device sync
+        // Persist the records to Supabase for cross‑device sync.  We avoid
+        // using localStorage here to prevent exceeding browser storage quotas.
         try {
           if (typeof saveDtrToCloud === 'function') saveDtrToCloud(storedRecords);
         } catch (e) {
@@ -5408,9 +5412,8 @@ document.addEventListener('DOMContentLoaded', () => {
       }
       try {
         storedRecords.push({ empId: String(empId), date: dateVal, time: timeVal });
-        // Persist to localStorage
-        localStorage.setItem(LS_RECORDS, JSON.stringify(storedRecords));
-        // Persist to Supabase for cross‑device sync
+        // Persist to Supabase for cross‑device sync.  LocalStorage is not used
+        // here to avoid hitting browser storage limits.
         if (typeof saveDtrToCloud === 'function') saveDtrToCloud(storedRecords);
       } catch(e) { console.error('Saving manual DTR failed', e); }
       closeManualModal();
@@ -5493,9 +5496,9 @@ document.addEventListener('DOMContentLoaded', () => {
               }
             }
           }
-          // Persist updated records to localStorage
-          localStorage.setItem(LS_RECORDS, JSON.stringify(storedRecords));
-          // Also persist to Supabase so all devices reflect the deletion
+          // Persist updated records to Supabase so all devices reflect the
+          // deletion.  LocalStorage is intentionally not used here to
+          // prevent exceeding browser storage quotas.
           try {
             if (typeof saveDtrToCloud === 'function') saveDtrToCloud(storedRecords);
           } catch (e) {
@@ -7340,17 +7343,45 @@ async function loadDtrFromCloud() {
 // defined storedRecords and renderResults() before we modify them.
 document.addEventListener('DOMContentLoaded', async function () {
   try {
+    // Prefer the new attendance table if available.  This fetches all
+    // records when no start/end dates are provided.  If data exists
+    // it will replace the in-memory storedRecords and skip the old
+    // bulk JSON hydration logic.
+    const remoteRows = await loadAttendanceByDateRange();
+    if (Array.isArray(remoteRows) && remoteRows.length) {
+      if (typeof storedRecords !== 'undefined') {
+        storedRecords = remoteRows;
+      } else {
+        window.storedRecords = remoteRows;
+      }
+      // Avoid filling up localStorage with the full dataset; remove any
+      // prior cached copy instead of re-saving it.  Offline access may
+      // be limited but the remote store will persist across devices.
+      try { localStorage.removeItem(LS_RECORDS); } catch (_) {}
+      // Render the DTR grid using the fresh data
+      if (typeof renderResults === 'function') {
+        try { renderResults(); } catch (e) {}
+      }
+      return;
+    }
+  } catch (e) {
+    console.error('Supabase attendance hydration failed', e);
+  }
+  try {
+    // Fallback to the legacy bulk JSON record when attendance table is
+    // empty or unavailable.  This mirrors the previous behaviour of
+    // loading a single row of JSON from the dtr_records table.
     const remote = await loadDtrFromCloud();
     if (remote && Array.isArray(remote)) {
-      // Update global storedRecords if defined
       if (typeof storedRecords !== 'undefined') {
         storedRecords = remote;
       } else {
         window.storedRecords = remote;
       }
-      // Persist into localStorage for offline fallback
+      // Persist into localStorage for offline fallback; this may exceed
+      // browser storage quotas on very large datasets, in which case
+      // saving may silently fail.
       try { localStorage.setItem(LS_RECORDS, JSON.stringify(remote)); } catch (e) {}
-      // Re-render the DTR results grid with the new data
       if (typeof renderResults === 'function') {
         try { renderResults(); } catch (e) {}
       }
