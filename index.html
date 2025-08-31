@@ -983,11 +983,6 @@ document.addEventListener('DOMContentLoaded', function() {
    <div class="note">
     Regular hours computed per schedule segments. Grace applies to AM/PM in. OT detected after PM out reference.
    </div>
-   <!-- Alert to display when there is no remote DTR data and no local DTR data.  This
-        banner is hidden by default and shown via showRemoteDtrAlert() -->
-   <div id="remoteDtrAlert" style="display:none;margin:8px 0;padding:10px;border:1px solid #facc15;background:#fef9c3;color:#713f12;border-radius:6px;font-weight:600;">
-     ⚠ No remote DTR data found. Import a .DAT/.TXT file on this device to populate cloud data.
-   </div>
    <!-- Wrap the results table in a scrollable container so horizontal overflow
         is always visible. Without this wrapper some layouts (especially when
         embedding this page in an iframe or within a limited-width container)
@@ -4426,14 +4421,6 @@ document.getElementById('fileInput').addEventListener('change', (ev)=>{
   inputEl.disabled = true;
 
   Array.from(files).forEach(file=>{
-    // Upload the raw .DAT/.TXT file to Supabase for backup/cross‑device sync.
-    try {
-      if (typeof uploadDtrFileToCloud === 'function') {
-        uploadDtrFileToCloud(file);
-      }
-    } catch (err) {
-      // Ignore upload errors to avoid blocking file parsing
-    }
     const r = new FileReader();
     r.onload = (e)=>{
       try {
@@ -4456,12 +4443,6 @@ document.getElementById('fileInput').addEventListener('change', (ev)=>{
           if (typeof saveDtrToCloud === 'function') saveDtrToCloud(storedRecords);
         } catch (e) {
           console.warn('Failed to save DTR to Supabase', e);
-        }
-        // Hide the remote alert since we now have data after upload
-        try {
-          if (typeof hideRemoteDtrAlert === 'function') hideRemoteDtrAlert();
-        } catch (e) {
-          // ignore alert errors
         }
         totalAdded += added;
       } catch(err){
@@ -4502,12 +4483,6 @@ document.getElementById('clearData').addEventListener('click', ()=>{
   } catch (e) {
     console.warn('Failed to clear DTR in Supabase', e);
   }
-  // Show alert after clearing since both local and remote are now empty
-  try {
-    if (typeof showRemoteDtrAlert === 'function') {
-      showRemoteDtrAlert('No remote DTR data found. Import a .DAT/.TXT file to populate cloud data.');
-    }
-  } catch (e) {}
   renderResults();
 });
 document.getElementById('downloadCSV').addEventListener('click', ()=>{
@@ -7330,29 +7305,6 @@ async function saveDtrToCloud(records) {
 }
 
 /*
- * Upload a raw DTR file to Supabase Storage.  This helper uploads the
- * original .DAT/.TXT file into the 'dtr_uploads' folder of the 'app'
- * storage bucket.  If the bucket does not exist or the upload fails,
- * the error is logged and the application continues silently.  Each
- * upload uses a timestamp and random suffix to avoid collisions.
- */
-async function uploadDtrFileToCloud(file) {
-  try {
-    const supa = window.supabase || (typeof supabase !== 'undefined' ? supabase : null);
-    if (!supa || !file) return;
-    const bucket = supa.storage.from('app');
-    // Compose a unique path using a timestamp and random number to avoid collisions
-    const path = `dtr_uploads/${Date.now()}_${Math.floor(Math.random() * 1000)}_${file.name}`;
-    const { error } = await bucket.upload(path, file, { upsert: false });
-    if (error) {
-      console.warn('Supabase DTR file upload error:', error.message);
-    }
-  } catch (err) {
-    console.warn('Supabase DTR file upload failed', err);
-  }
-}
-
-/*
  * Retrieve the DTR dataset from Supabase.  Returns an array of
  * attendance records if available, otherwise null.  The returned
  * object is expected to have the shape { data: [...] }, so we
@@ -7366,7 +7318,7 @@ async function loadDtrFromCloud() {
       .from('dtr_records')
       .select('data')
       .eq('id', 'records')
-      .maybeSingle();
+      .single();
     if (error) {
       // Only warn on fetch errors to avoid blocking page load.  The
       // application will fall back to localStorage if the fetch fails.
@@ -7380,25 +7332,6 @@ async function loadDtrFromCloud() {
   }
 }
 
-// Helpers to control the remote DTR alert banner.  These functions
-// locate the #remoteDtrAlert element and toggle its visibility.  The
-// banner notifies users when there is no remote DTR data available
-// and encourages them to upload a .DAT/.TXT file to populate the
-// cloud.  If the element is not present these helpers silently do
-// nothing.
-function showRemoteDtrAlert(msg){
-  const el = document.getElementById('remoteDtrAlert');
-  if (!el) return;
-  // Prefix the message with a warning symbol for emphasis
-  el.textContent = `⚠ ${msg}`;
-  el.style.display = '';
-}
-function hideRemoteDtrAlert(){
-  const el = document.getElementById('remoteDtrAlert');
-  if (!el) return;
-  el.style.display = 'none';
-}
-
 // On initial load, attempt to hydrate storedRecords from Supabase.  If
 // remote data exists it will overwrite the current storedRecords array
 // and localStorage.  This ensures that the latest DTR data is available
@@ -7408,7 +7341,7 @@ function hideRemoteDtrAlert(){
 document.addEventListener('DOMContentLoaded', async function () {
   try {
     const remote = await loadDtrFromCloud();
-    if (remote && Array.isArray(remote) && remote.length) {
+    if (remote && Array.isArray(remote)) {
       // Update global storedRecords if defined
       if (typeof storedRecords !== 'undefined') {
         storedRecords = remote;
@@ -7420,14 +7353,6 @@ document.addEventListener('DOMContentLoaded', async function () {
       // Re-render the DTR results grid with the new data
       if (typeof renderResults === 'function') {
         try { renderResults(); } catch (e) {}
-      }
-      // Hide the remote data alert since we have remote data
-      if (typeof hideRemoteDtrAlert === 'function') hideRemoteDtrAlert();
-    } else {
-      // Show alert if there is no remote data and no local data
-      const localEmpty = !(JSON.parse(localStorage.getItem(LS_RECORDS) || '[]') || []).length;
-      if (localEmpty && typeof showRemoteDtrAlert === 'function') {
-        showRemoteDtrAlert('No remote DTR data found. Import a .DAT/.TXT file to populate cloud data.');
       }
     }
   } catch (e) {
