@@ -60,6 +60,13 @@ const KNOWN_KEYS = [
   ,"payroll_pagibig_table"
   ,"payroll_philhealth_table"
   ,"payroll_adjustment_hours"
+
+  // Added additional payroll and cash advance keys so they persist across sessions via Supabase
+  ,"payroll_cashAdvanceOrig"
+  ,"payroll_cashAdvanceDed"
+  ,"payroll_cashAdvanceBal"
+  ,"payroll_active"
+  ,"current_active_week"
 ]
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY)
@@ -76,8 +83,17 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_KEY)
 window.supabase = supabase;
 window.SUPABASE_TABLE = TABLE;
 
+// Save original localStorage methods (unused) in case other code relies on them
 const __origSetItem = Storage.prototype.setItem
 const __origRemoveItem = Storage.prototype.removeItem
+const __origGetItem = Storage.prototype.getItem
+
+// In-memory key/value store that represents our persisted data.  We avoid
+// writing anything to the browser's localStorage so that all state is
+// fetched from and persisted to Supabase.  All calls to
+// `Storage.prototype.getItem`, `setItem`, and `removeItem` will refer
+// solely to this in‑memory object.  See overrides below.
+const cloudData = {};
 
 async function cloudUpsert(key, value) {
   try {
@@ -98,20 +114,36 @@ function tryParse(v) {
   try { return JSON.parse(v) } catch { return v }
 }
 
-// Write-through on any localStorage change
+// Override Storage methods to bypass browser localStorage and instead
+// operate entirely on the in‑memory `cloudData` object.  When a key
+// included in the KNOWN_KEYS list is written or removed, the change is
+// immediately persisted to Supabase.  Reads return the corresponding
+// value from `cloudData` if present; otherwise null.
+Storage.prototype.getItem = function(k) {
+  if (Object.prototype.hasOwnProperty.call(cloudData, k)) {
+    return cloudData[k];
+  }
+  return null;
+};
 Storage.prototype.setItem = function(k, v) {
-  try { __origSetItem.call(this, k, v) } catch {}
-  // Only mirror known keys to reduce noise
-  if (KNOWN_KEYS.includes(k)) cloudUpsert(k, v)
-}
+  // Update our in‑memory state
+  cloudData[k] = v;
+  // Persist changes to Supabase for known keys
+  if (KNOWN_KEYS.includes(k)) cloudUpsert(k, v);
+};
 Storage.prototype.removeItem = function(k) {
-  try { __origRemoveItem.call(this, k) } catch {}
-  if (KNOWN_KEYS.includes(k)) cloudDelete(k)
-}
+  // Delete from in‑memory state
+  if (Object.prototype.hasOwnProperty.call(cloudData, k)) delete cloudData[k];
+  // Remove from Supabase as well
+  if (KNOWN_KEYS.includes(k)) cloudDelete(k);
+};
 
-// On first load, pull from cloud and hydrate localStorage automatically.
-// If we detect changes vs. current localStorage, we populate and reload once
-// so the rest of the app sees the new data without manual "sync".
+// On first load, pull from cloud and hydrate the in‑memory store.  We do not
+// populate browser localStorage – all data lives in `cloudData`.  If we
+// detect changes versus the existing in‑memory data, we update our store
+// and perform a one‑time reload so downstream scripts render with the
+// hydrated data.  Without this reload, some synchronous code may see
+// undefined values before the asynchronous fetch completes.
 ;(async function initialHydrate(){
   try {
     const { data, error } = await supabase
@@ -119,25 +151,26 @@ Storage.prototype.removeItem = function(k) {
       .select("key, value")
       .in("key", KNOWN_KEYS)
     if (error) { console.warn("Supabase fetch error:", error.message); return }
-    let changed = false
-    ;(data || []).forEach(row => {
-      const k = row.key
-      const cloudStr = safeStringify(row.value)
-      const cur = localStorage.getItem(k)
+    let changed = false;
+    (data || []).forEach(row => {
+      const k = row.key;
+      const cloudStr = safeStringify(row.value);
+      const cur = Object.prototype.hasOwnProperty.call(cloudData, k) ? cloudData[k] : null;
       if (cloudStr != null && cloudStr !== cur) {
-        try { __origSetItem.call(localStorage, k, cloudStr) } catch {}
-        changed = true
+        cloudData[k] = cloudStr;
+        changed = true;
       }
-    })
+    });
     if (changed) {
-      // One-time reload to let downstream scripts render with hydrated data
       if (!sessionStorage.getItem("__kv_reloaded")) {
-        sessionStorage.setItem("__kv_reloaded","1")
-        location.reload()
+        sessionStorage.setItem("__kv_reloaded", "1");
+        location.reload();
       }
     }
-  } catch (e) { console.warn("Initial hydrate failed", e) }
-})()
+  } catch (e) {
+    console.warn("Initial hydrate failed", e);
+  }
+})();
 
 function safeStringify(v){
   try { return typeof v === "string" ? v : JSON.stringify(v) } catch { return null }
@@ -765,8 +798,10 @@ document.addEventListener('DOMContentLoaded', function() {
         if (supaVal !== undefined) {
           window.storedEmployees = supaVal;
         } else {
-          // fallback to localStorage
-          window.storedEmployees = JSON.parse(localStorage.getItem('att_employees_v2') || '{}');
+          // fallback to an empty object when no Supabase value exists.  Do not
+          // attempt to read from browser localStorage since all state lives
+          // in Supabase.
+          window.storedEmployees = {};
         }
       }
       // Attendance records store (att_records_v2)
@@ -786,7 +821,8 @@ document.addEventListener('DOMContentLoaded', function() {
         if (supaVal !== undefined) {
           window.storedProjects = supaVal;
         } else {
-          window.storedProjects = JSON.parse(localStorage.getItem('att_projects_v1') || '{}');
+          // fallback to an empty object when no Supabase value exists
+          window.storedProjects = {};
         }
       }
       // Schedules store (att_schedules_v2) – ensures schedules are available early
@@ -795,7 +831,8 @@ document.addEventListener('DOMContentLoaded', function() {
         if (supaVal !== undefined) {
           window.storedSchedules = supaVal;
         } else {
-          window.storedSchedules = JSON.parse(localStorage.getItem('att_schedules_v2') || '{}');
+          // fallback to an empty object when no Supabase value exists
+          window.storedSchedules = {};
         }
       }
     } catch (e) {
