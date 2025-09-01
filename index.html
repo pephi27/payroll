@@ -4882,6 +4882,34 @@ let otMins = 0;
         }
       }
     } catch(e){ console.warn('Saturday OT direct compute failed', e); }
+
+    // Fallback OT computation for non‑Saturday days.
+    // When there are no explicit OT punches (or the OT IN occurs before
+    // the end of the regular shift), treat any minutes worked beyond
+    // the scheduled PM end as overtime. Only the final clock‑out time
+    // is considered to avoid counting intermediate segments.
+    try {
+      if (!__isSaturday) {
+        // Determine the reference end time for regular work (PM shift end)
+        const pmRef = pmOutActual ? toMins(pmOutActual) : toMins(schedule.sch_pm_end || (typeof DEFAULT_SCHEDULE !== 'undefined' ? DEFAULT_SCHEDULE.sch_pm_end : '17:00'));
+        // Determine if explicit OT was applied (OT IN after PM end)
+        let hasExplicitOT = false;
+        if (typeof otInCalc !== 'undefined' && typeof otOutCalc !== 'undefined' && otInCalc && otOutCalc) {
+          const otInM = toMins(otInCalc);
+          if (otInM > pmRef) hasExplicitOT = true;
+        }
+        if (!hasExplicitOT) {
+          const lastOutFallback = pmOutActual || amOutActual || null;
+          if (lastOutFallback) {
+            const lastOutM = toMins(lastOutFallback);
+            if (lastOutM > pmRef) {
+              otMins = lastOutM - pmRef;
+            }
+          }
+        }
+      }
+    } catch(err) { console.warn('Non‑Saturday OT fallback failed', err); }
+
     const otDecimal = minsToDecimal(otMins);
 
     // --- Begin AM/PM/OT Split Logic ---
@@ -4986,6 +5014,32 @@ let otMins = 0;
             }
           }
         } catch(e) { /* ignore */ }
+
+        // --- Fallback OT logic for non‑Saturday halves ---
+        // If there are no explicit OT punches (or the OT IN occurs before the end
+        // of the regular shift), and there is a final clock‑out beyond the end
+        // of the PM shift, treat the extra time as OT.  This ensures that
+        // after‑hours work is captured even without separate OT punches.
+        try {
+          if (!isSat) {
+            // Determine if an explicit OT was captured (OT IN starts after the PM reference)
+            let explicitOT = false;
+            if (otIn && otOut) {
+              const otInM = toMins(otIn);
+              if (otInM > pmOutRef) explicitOT = true;
+            }
+            if (!explicitOT) {
+              const lastOutF = pmOutActual || amOutActual || null;
+              if (lastOutF) {
+                const lastOutM = toMins(lastOutF);
+                if (lastOutM > pmOutRef) {
+                  otM = lastOutM - pmOutRef;
+                  // Leave otIn/otOut unchanged; OT minutes will still be reflected in mins
+                }
+              }
+            }
+          }
+        } catch(err) { /* ignore fallback errors */ }
         return { mins: otM, otIn: otIn, otOut: otOut };
       };
       // Build three rows for AM, PM and OT segments.  Each row displays its own
@@ -5308,22 +5362,101 @@ const otInActual = pickEarliest({start: schedule.rng_ot_in_start, end: schedule.
       const endM = Math.min(outM, sE);
       return Math.max(0, endM - inM);
     };
-    // Normal pairs
-    regMins += segMins(amInActual, amOutActual, schedule.sch_am_start, schedule.sch_am_end);
-    regMins += segMins(pmInActual, pmOutActual, schedule.sch_pm_start, schedule.sch_pm_end);
-    // Bridge case: AM IN + PM OUT only
+    // Compute regular minutes.  Use Saturday-specific start/end ranges when
+    // applicable; otherwise fall back to the normal AM/PM schedule ranges.
+    if (__isSaturday) {
+      // On Saturdays, clamp both AM and PM segments to the Saturday window
+      regMins += segMins(amInActual, amOutActual, __satStart, __satEnd);
+      regMins += segMins(pmInActual, pmOutActual, __satStart, __satEnd);
+    } else {
+      regMins += segMins(amInActual, amOutActual, schedule.sch_am_start, schedule.sch_am_end);
+      regMins += segMins(pmInActual, pmOutActual, schedule.sch_pm_start, schedule.sch_pm_end);
+    }
+    // Bridge case: AM IN + PM OUT only.  If no regular minutes were
+    // computed above, but we have an AM clock-in and a PM clock-out,
+    // synthesize a noon break.  On Saturdays, treat the entire day as
+    // a single continuous window between __satStart and __satEnd.
     if (regMins === 0 && amInActual && !amOutActual && !pmInActual && pmOutActual) {
-      const synthAmOut = schedule.sch_am_end || "12:00";
-      const synthPmIn  = schedule.sch_pm_start || "13:00";
-      regMins =
-        segMins(amInActual, synthAmOut, schedule.sch_am_start, schedule.sch_am_end) +
-        segMins(synthPmIn,  pmOutActual, schedule.sch_pm_start, schedule.sch_pm_end);
+      if (__isSaturday) {
+        // Saturday bridging: compute the full span between the first
+        // clock-in and final clock-out within the Saturday window.
+        regMins = segMins(amInActual, pmOutActual, __satStart, __satEnd);
+      } else {
+        const synthAmOut = schedule.sch_am_end || "12:00";
+        const synthPmIn  = schedule.sch_pm_start || "13:00";
+        regMins =
+          segMins(amInActual, synthAmOut, schedule.sch_am_start, schedule.sch_am_end) +
+          segMins(synthPmIn,  pmOutActual, schedule.sch_pm_start, schedule.sch_pm_end);
+      }
     }
     totalsReg[empId] += minsToDec(regMins);
 
-    if (otInActual && otOutActual && toMins(otInActual) > pmOutRefMins) {
-      totalsOT[empId] += minsToDec(toMins(otOutActual) - toMins(otInActual));
+    /*
+     * Compute OT minutes for the current day/employee.  There are three
+     * scenarios handled here:
+     *
+     *   1) Saturday: Any time worked after the scheduled Saturday end
+     *      counts as OT, regardless of whether explicit OT punches were
+     *      recorded.  Each in/out segment contributes separately to the
+     *      OT total.  The resulting OT minutes are added to the employee's
+     *      running total.
+     *
+     *   2) Non‑Saturday with explicit OT punches: When OT In and OT Out
+     *      times are recorded and the OT In occurs after the normal
+     *      scheduled end (pmOutRefMins), compute OT as the difference
+     *      between OT Out and OT In.  This respects the configured OT
+     *      ranges and leaves any early departures uncounted.
+     *
+     *   3) Non‑Saturday without explicit OT punches: When no valid OT
+     *      punches exist but there is a single end‑of‑day clock‑out, treat
+     *      any minutes worked after the scheduled end as OT.  This
+     *      allows after‑hours work to be captured without requiring
+     *      separate OT punches.  If multiple segments exist for the day
+     *      (more than one in/out pair), only the final clock‑out is
+     *      considered for the fallback; intermediate segments are
+     *      presumed to be normal work/breaks and do not contribute to OT.
+     */
+    let dayOTMins = 0;
+    if (__isSaturday) {
+      // Saturday override: sum minutes worked after the Saturday end for
+      // every recorded segment.  Each segment contributes its own OT
+      // minutes without regard to explicit OT punches.
+      let extraOTMins = 0;
+      const satEndM = toMins(__satEnd);
+      for (let i = 0; i < times.length; i += 2) {
+        const inStr  = times[i];
+        const outStr = times[i+1];
+        if (!outStr) continue;
+        const inM  = toMins(inStr);
+        const outM = toMins(outStr);
+        const startM = Math.max(inM, satEndM);
+        if (outM > startM) {
+          extraOTMins += (outM - startM);
+        }
+      }
+      dayOTMins = extraOTMins;
+    } else {
+      // Non‑Saturday: prefer explicit OT punches when they exist
+      if (otInActual && otOutActual && toMins(otInActual) > pmOutRefMins) {
+        dayOTMins = Math.max(0, toMins(otOutActual) - toMins(otInActual));
+      } else {
+        // Fallback: no explicit OT punches.  Check the last clock‑out and
+        // count any minutes worked after the scheduled end as OT.  Only
+        // the final out of the day is considered to avoid counting
+        // intermediate segments twice.
+        let lastOutM = null;
+        for (let i = 0; i < times.length; i += 2) {
+          const outStr = times[i+1];
+          if (!outStr) continue;
+          const outM = toMins(outStr);
+          if (lastOutM === null || outM > lastOutM) lastOutM = outM;
+        }
+        if (lastOutM != null && lastOutM > pmOutRefMins) {
+          dayOTMins = lastOutM - pmOutRefMins;
+        }
+      }
     }
+    totalsOT[empId] += minsToDec(dayOTMins);
   }
   return { totalsReg, totalsOT };
 }
