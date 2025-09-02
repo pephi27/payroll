@@ -5574,26 +5574,7 @@ function restoreData(file) {
   };
   reader.readAsText(file);
 }
-document.addEventListener('DOMContentLoaded', () => {
-  const container = document.createElement('div');
-  container.style.marginTop = '20px';
-  container.innerHTML = `
-    <hr>
-    <h3>Data Backup & Restore</h3>
-    <button id="backupBtn">Backup Data</button>
-    <input type="file" id="restoreInput" style="display:none;" />
-    <button id="restoreBtn">Restore Data</button>
-  `;
-  document.body.appendChild(container);
-
-  document.getElementById('backupBtn').addEventListener('click', backupData);
-  document.getElementById('restoreBtn').addEventListener('click', () => {
-    document.getElementById('restoreInput').click();
-  });
-  document.getElementById('restoreInput').addEventListener('change', function(){
-    if (this.files.length) restoreData(this.files[0]);
-  });
-});
+// Legacy backup UI removed — replaced by enhanced Backup & Restore controls.
   </script>
  
 <!-- Manual DTR Modal -->
@@ -7664,5 +7645,282 @@ document.addEventListener('DOMContentLoaded', async function () {
 });
 </script>
 
+<script>
+(function(){
+  document.addEventListener('DOMContentLoaded', function(){
+    const supabase = window.supabase;
+    const KV_TABLE = window.SUPABASE_TABLE || 'kv_store';
+    const DTR_TABLE = 'dtr_records';
+    const BUCKET = 'backups';
+    // locate header to attach controls (fallback to body if missing)
+    const header = document.querySelector('#panelPayroll header') || document.body;
+    const wrap = document.createElement('div');
+    wrap.style.display = 'flex';
+    wrap.style.flexWrap = 'wrap';
+    wrap.style.gap = '6px';
+    wrap.style.alignItems = 'center';
+    wrap.style.marginTop = '10px';
+    // status element
+    const statusSpan = document.createElement('span');
+    statusSpan.id = 'backupStatus';
+    statusSpan.style.fontSize = '12px';
+    statusSpan.style.color = '#374151';
+    // Buttons
+    const backupBtn = document.createElement('button');
+    backupBtn.id = 'backupNowBtn';
+    backupBtn.type = 'button';
+    backupBtn.textContent = '🔒 Backup Now';
+    backupBtn.style.cursor = 'pointer';
+    const testBtn = document.createElement('button');
+    testBtn.id = 'testRestoreBtn';
+    testBtn.type = 'button';
+    testBtn.textContent = '🧪 Test Restore (Dry Run)';
+    testBtn.style.cursor = 'pointer';
+    const restoreBtn = document.createElement('button');
+    restoreBtn.id = 'restoreBundleBtn';
+    restoreBtn.type = 'button';
+    restoreBtn.textContent = 'Restore Bundle';
+    restoreBtn.style.cursor = 'pointer';
+    const healthBtn = document.createElement('button');
+    healthBtn.id = 'healthCheckBtn';
+    healthBtn.type = 'button';
+    healthBtn.textContent = '🩺 Health Check';
+    healthBtn.style.cursor = 'pointer';
+    const restoreInput = document.createElement('input');
+    restoreInput.id = 'restoreFileInput';
+    restoreInput.type = 'file';
+    restoreInput.accept = '.json';
+    restoreInput.style.display = 'none';
+    const logDiv = document.createElement('div');
+    logDiv.id = 'backupLog';
+    logDiv.style.width = '100%';
+    logDiv.style.maxWidth = '920px';
+    logDiv.style.background = '#ffffff';
+    logDiv.style.border = '1px solid #e5e7eb';
+    logDiv.style.borderRadius = '8px';
+    logDiv.style.padding = '10px';
+    logDiv.style.fontSize = '12px';
+    logDiv.style.color = '#111111';
+    logDiv.style.lineHeight = '1.35';
+    logDiv.style.display = 'none';
+    // Append children
+    wrap.appendChild(statusSpan);
+    wrap.appendChild(backupBtn);
+    wrap.appendChild(testBtn);
+    wrap.appendChild(restoreBtn);
+    wrap.appendChild(healthBtn);
+    wrap.appendChild(logDiv);
+    wrap.appendChild(restoreInput);
+    header.appendChild(wrap);
+    // Local references
+    const statusEl = statusSpan;
+    const logEl = logDiv;
+    const btnBackup = backupBtn;
+    const btnDry = testBtn;
+    const btnRestore = restoreBtn;
+    const btnHealth = healthBtn;
+    const inputRestore = restoreInput;
+    // Utility functions
+    function setStatus(msg, isError){
+      if (!statusEl) return;
+      statusEl.textContent = msg || '';
+      statusEl.style.color = isError ? '#b91c1c' : '#374151';
+    }
+    function logMsg(msg){
+      if (!logEl) return;
+      if (logEl.style.display === 'none') logEl.style.display = 'block';
+      const div = document.createElement('div');
+      const now = new Date();
+      div.textContent = now.toLocaleTimeString() + ' — ' + msg;
+      logEl.appendChild(div);
+      logEl.scrollTop = logEl.scrollHeight;
+    }
+    function clearLog(){
+      if (logEl){ logEl.innerHTML = ''; logEl.style.display = 'none'; }
+    }
+    function lockUI(lock){
+      [btnBackup, btnDry, btnRestore, btnHealth, inputRestore].forEach(function(el){ if (el){ el.disabled = lock; el.style.opacity = lock ? '0.7' : '1'; }});
+    }
+    function nowStamp(){
+      const d = new Date();
+      const iso = d.toISOString().replace(/[:]/g,'').replace(/\.\d{3}Z$/,'Z');
+      return iso;
+    }
+    async function sha256Hex(str){
+      const enc = new TextEncoder().encode(str);
+      const buf = await crypto.subtle.digest('SHA-256', enc);
+      return Array.from(new Uint8Array(buf)).map(b=>b.toString(16).padStart(2,'0')).join('');
+    }
+    async function fetchKV(keys){
+      if (!supabase) throw new Error('Supabase client not available');
+      const { data, error } = await supabase.from(KV_TABLE).select('key,value').in('key', keys);
+      if (error) throw new Error('KV fetch failed: ' + error.message);
+      const out = {};
+      (data || []).forEach(function(r){ out[r.key] = r.value; });
+      return { map: out, count: (data || []).length };
+    }
+    async function fetchDTR(){
+      if (!supabase) throw new Error('Supabase client not available');
+      const { data, error } = await supabase.from(DTR_TABLE).select('*').limit(200000);
+      if (error){ return { rows: [], error: error.message }; }
+      return { rows: data || [], error: null };
+    }
+    async function backupNow(){
+      try {
+        lockUI(true); clearLog(); setStatus('Running backup...');
+        logMsg('Starting backup');
+        const keys = Array.isArray(window.KNOWN_KEYS) ? window.KNOWN_KEYS.slice() : [];
+        if (!keys.includes('payroll_hist')) keys.push('payroll_hist');
+        logMsg('KV keys to include: ' + keys.length);
+        const [kvRes, dtrRes] = await Promise.all([ fetchKV(keys), fetchDTR() ]);
+        logMsg('KV fetched: ' + kvRes.count + ' rows');
+        if (dtrRes.error){ logMsg('DTR fetch warning: ' + dtrRes.error); }
+        logMsg('DTR rows: ' + (dtrRes.rows || []).length);
+        const bundle = {
+          schema: 'payrollhub.backup.v1',
+          createdAt: new Date().toISOString(),
+          kv_keys: keys,
+          kv: kvRes.map,
+          dtr: { rows: dtrRes.rows || [], __warning: dtrRes.error || null }
+        };
+        const withoutHash = JSON.stringify(bundle);
+        const hash = await sha256Hex(withoutHash);
+        bundle.hash = hash;
+        const final = JSON.stringify(bundle, null, 2);
+        const blob = new Blob([final], { type: 'application/json' });
+        const filename = 'backup-' + nowStamp() + '.json';
+        try {
+          if (supabase && supabase.storage){
+            const { error: upErr } = await supabase.storage.from(BUCKET).upload(filename, blob, { upsert: true, contentType: 'application/json' });
+            if (upErr) logMsg('Storage upload skipped: ' + upErr.message);
+            else logMsg('Uploaded to storage bucket: ' + BUCKET + '/' + filename);
+          }
+        } catch(e){ logMsg('Storage error: ' + e.message); }
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url; a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+        setStatus('Backup complete ✓  (KV: ' + kvRes.count + ', DTR: ' + (dtrRes.rows || []).length + ')');
+        logMsg('Backup complete — SHA256: ' + hash);
+      } catch(e){
+        console.error(e);
+        setStatus('Backup failed: ' + e.message, true);
+        logMsg('ERROR: ' + e.message);
+        alert('Backup failed: ' + e.message);
+      } finally {
+        lockUI(false);
+      }
+    }
+    function isObject(o){ return o && typeof o === 'object' && !Array.isArray(o); }
+    async function restoreFile(file, opts){
+      lockUI(true); clearLog();
+      try {
+        setStatus((opts && opts.dryRun ? 'Dry run: ' : '') + 'Reading file...');
+        logMsg('Reading file: ' + file.name);
+        const text = await file.text();
+        let bundle;
+        try { bundle = JSON.parse(text); } catch(e){ setStatus('Invalid JSON', true); throw e; }
+        if (!isObject(bundle) || bundle.schema !== 'payrollhub.backup.v1'){ setStatus('Schema mismatch', true); throw new Error('Schema mismatch'); }
+        const clone = Object.assign({}, bundle);
+        const declared = clone.hash; delete clone.hash;
+        const recompute = await sha256Hex(JSON.stringify(clone));
+        if (declared && declared !== recompute){ setStatus('Hash mismatch', true); throw new Error('Hash mismatch'); }
+        const keys = Array.isArray(bundle.kv_keys) ? bundle.kv_keys : [];
+        const dtrRows = (bundle.dtr && Array.isArray(bundle.dtr.rows)) ? bundle.dtr.rows : [];
+        logMsg('Bundle valid — KV keys: ' + keys.length + ', DTR rows: ' + dtrRows.length);
+        if (opts && opts.dryRun){ setStatus('Dry run passed ✓'); logMsg('No writes performed'); alert('Dry run OK — no data written.'); return; }
+        // Upsert KV to Supabase
+        if (supabase && keys.length){
+          try {
+            const kvRows = keys.map(function(k){ return { key: k, value: bundle.kv[k] }; });
+            const { error } = await supabase.from(KV_TABLE).upsert(kvRows, { onConflict: 'key' });
+            if (error) logMsg('KV upsert warning: ' + error.message);
+            else logMsg('KV upserted: ' + kvRows.length);
+          } catch(e){ logMsg('KV upsert failed: ' + e.message); }
+        }
+        // Hydrate localStorage
+        try {
+          keys.forEach(function(k){
+            const v = bundle.kv[k];
+            const str = typeof v === 'string' ? v : JSON.stringify(v);
+            localStorage.setItem(k, str);
+          });
+          logMsg('LocalStorage hydrated: ' + keys.length + ' keys');
+        } catch(e){ logMsg('LocalStorage hydrate warning: ' + e.message); }
+        // Upsert DTR
+        if (supabase && dtrRows.length){
+          try {
+            const { error } = await supabase.from(DTR_TABLE).upsert(dtrRows);
+            if (error) logMsg('DTR upsert warning: ' + error.message);
+            else logMsg('DTR upserted: ' + dtrRows.length);
+          } catch(e){ logMsg('DTR upsert failed: ' + e.message); }
+        }
+        try {
+          if (typeof calculateAll === 'function') calculateAll();
+          if (typeof renderDeductionsTable === 'function') renderDeductionsTable();
+          if (typeof renderTable === 'function') renderTable();
+        } catch(e){}
+        setStatus('Restore complete ✓ (KV: ' + keys.length + ', DTR: ' + dtrRows.length + ')');
+        logMsg('Restore complete');
+        alert('Restore complete.');
+      } catch(e){
+        console.error(e);
+        setStatus('Restore failed: ' + e.message, true);
+        logMsg('ERROR: ' + e.message);
+        alert('Restore failed: ' + e.message);
+      } finally {
+        lockUI(false);
+      }
+    }
+    async function healthCheck(){
+      lockUI(true); clearLog();
+      setStatus('Running health check…');
+      logMsg('Checking KV table, DTR table, and Storage bucket');
+      const results = { kv:false, dtr:false, storage:false };
+      try {
+        const r = await supabase.from(KV_TABLE).select('key').limit(1);
+        if (!r.error){ results.kv = true; logMsg('KV table OK'); } else { logMsg('KV issue: ' + r.error.message); }
+      } catch(e){ logMsg('KV exception: ' + e.message); }
+      try {
+        const r2 = await supabase.from(DTR_TABLE).select('count', { count: 'exact', head: true });
+        if (!r2.error){ results.dtr = true; logMsg('DTR table OK'); } else { logMsg('DTR issue: ' + r2.error.message); }
+      } catch(e){ logMsg('DTR exception: ' + e.message); }
+      try {
+        if (supabase && supabase.storage){
+          const r3 = await supabase.storage.from(BUCKET).list('', { limit: 1 });
+          if (!r3.error){ results.storage = true; logMsg('Storage bucket OK'); } else { logMsg('Storage bucket issue: ' + r3.error.message); }
+        } else { logMsg('Supabase storage client not available'); }
+      } catch(e){ logMsg('Storage exception: ' + e.message); }
+      const summary = 'KV: ' + (results.kv?'OK':'Issue') + ' | DTR: ' + (results.dtr?'OK':'Issue') + ' | Storage: ' + (results.storage?'OK':'Issue');
+      setStatus('Health check done — ' + summary, !(results.kv && results.dtr));
+      lockUI(false);
+    }
+    // Attach event listeners
+    backupBtn.addEventListener('click', backupNow);
+    testBtn.addEventListener('click', function(){
+      const tmpInput = document.createElement('input');
+      tmpInput.type = 'file';
+      tmpInput.accept = '.json';
+      tmpInput.onchange = function(e){
+        const f = e.target.files && e.target.files[0];
+        if (f) restoreFile(f, { dryRun: true });
+      };
+      tmpInput.click();
+    });
+    restoreBtn.addEventListener('click', function(){
+      inputRestore.click();
+    });
+    inputRestore.addEventListener('change', function(e){
+      const f = e.target.files && e.target.files[0];
+      if (f) restoreFile(f, { dryRun: false });
+      e.target.value = '';
+    });
+    healthBtn.addEventListener('click', healthCheck);
+  });
+})();
+</script>
 </body>
 </html>
