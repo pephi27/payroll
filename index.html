@@ -1474,6 +1474,9 @@ document.addEventListener('DOMContentLoaded', function() {
          Adjustments
         </th>
         <th>
+         Bantay
+        </th>
+        <th>
          Net Pay
         </th>
         <th>
@@ -1502,6 +1505,7 @@ document.addEventListener('DOMContentLoaded', function() {
           <td class="num" data-col="valeWed">0.00</td>
           <td class="num" data-col="totalDed">0.00</td>
           <td class="num" data-col="adjAmt">0.00</td>
+          <td class="num" data-col="bantay">0.00</td>
           <td class="num" data-col="netPay">0.00</td>
           <td></td>
         </tr>
@@ -1901,6 +1905,55 @@ let adjustments = JSON.parse(localStorage.getItem(LS_ADJ) || '{}');
 // overtime hours that should be added to the regular OT hours when computing OT pay.
 let adjHrs = JSON.parse(localStorage.getItem(LS_ADJ_HRS) || '{}');
 
+// === Bantay Column Storage via Supabase ===
+// Table name used to persist per-employee Bantay values. Each row has columns: id (text, primary key), bantay (numeric).
+const BANTAY_TABLE = 'payroll_bantay';
+// In-memory map of Bantay values keyed by employee ID.
+let bantayData = {};
+
+/**
+ * Load all Bantay values from Supabase into the bantayData object. This should be invoked on page load.
+ */
+async function loadBantayData() {
+  try {
+    const supa = window.supabase || (typeof supabase !== 'undefined' ? supabase : null);
+    if (!supa) return;
+    const { data, error } = await supa.from(BANTAY_TABLE).select('id, bantay');
+    if (error) {
+      console.warn('Error loading Bantay data from Supabase:', error.message);
+      return;
+    }
+    // Reset and repopulate the in-memory map
+    bantayData = {};
+    (data || []).forEach(row => {
+      bantayData[row.id] = Number(row.bantay) || 0;
+    });
+  } catch (e) {
+    console.warn('Error fetching Bantay data', e);
+  }
+}
+
+/**
+ * Save a single Bantay value to Supabase. The upsert ensures the record is created or updated.
+ * @param {string} id Employee ID
+ * @param {number} value The Bantay amount to persist
+ */
+async function saveBantayValue(id, value) {
+  try {
+    const supa = window.supabase || (typeof supabase !== 'undefined' ? supabase : null);
+    if (!supa) return;
+    const val = Number(value) || 0;
+    // Update in-memory map immediately
+    bantayData[id] = val;
+    const { error } = await supa.from(BANTAY_TABLE).upsert({ id: id, bantay: val }, { onConflict: 'id' });
+    if (error) {
+      console.warn('Error saving Bantay to Supabase:', error.message);
+    }
+  } catch (e) {
+    console.warn('Error saving Bantay', e);
+  }
+}
+
 let otMultiplier = parseFloat(localStorage.getItem(LS_OTMULT)) || 1.50;
 let weekStartSaved = localStorage.getItem(LS_WEEKSTART) || '';
 let weekEndSaved = localStorage.getItem(LS_WEEKEND) || '';
@@ -2241,6 +2294,7 @@ const lSSS = Number(loanSSS[emp.id] ?? 0);
       <td><input class="cell valeWed" type="number" step="0.01" value="${vW}"></td>
       <td class="totalDed num">0.00</td>
       <td class="adjAmt num">0.00</td>
+      <td><input class="cell bantay" type="number" step="0.01" value="${(bantayData[emp.id] ?? 0).toFixed(2)}"></td>
       <td class="netPay num">0.00</td>
       <td><button type="button" class="payslipBtn">Payslip</button></td>`;
     tbody.appendChild(tr);
@@ -2278,6 +2332,20 @@ function attachRowEvents(){
         calculateRow(row);
       });
     });
+
+    // Attach event for Bantay input to persist to Supabase and recalculate values
+    const bantayI = row.querySelector('.bantay');
+    if (bantayI) {
+      bantayI.addEventListener('input', () => {
+        const v = parseFloat(bantayI.value);
+        // Persist to Supabase; update in-memory map as well
+        saveBantayValue(id, isNaN(v) ? 0 : v);
+        // Recalculate payroll values for this row
+        calculateRow(row);
+        // Update the grand totals
+        if (typeof updatePayrollGrandTotals === 'function') updatePayrollGrandTotals();
+      });
+    }
   });
 }
 function renderSssTable(){
@@ -2581,7 +2649,10 @@ function calculateRow(tr){
   const total = pagibig + philhealth + sss + sssLoan + piLoan + valeAmt + wedValeAmt;
   // Adjustment amount for this employee (may be positive or negative)
   const adj = Number(adjustments[id] || 0);
-  const net = gross - total + adj;
+  // Include the Bantay value (if present) in the net pay.  This value is stored in the in-memory
+  // bantayData map and persisted to Supabase.  Missing or invalid entries default to 0.
+  const bantayVal = Number(bantayData[id] || 0);
+  const net = gross - total + adj + bantayVal;
 
   tr.querySelector('.regPay').textContent = regPay.toFixed(2);
   tr.querySelector('.otPay').textContent = otPay.toFixed(2);
@@ -2772,13 +2843,17 @@ document.getElementById('downloadPayrollCSV').addEventListener('click', ()=>{
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a'); a.href=url; a.download='payroll.csv'; document.body.appendChild(a); a.click(); a.remove();
 });
-renderTable();
-renderSssTable();
-renderAdjustmentsTable();
-// Render new contribution tables and update the note
-renderPagibigTable();
-renderPhilhealthTable();
-updateContributionNote();
+// Load Bantay data from Supabase before rendering payroll. Once loaded,
+// build all tables and update contribution notes.
+loadBantayData().then(() => {
+  renderTable();
+  renderSssTable();
+  renderAdjustmentsTable();
+  // Render new contribution tables and update the note
+  renderPagibigTable();
+  renderPhilhealthTable();
+  updateContributionNote();
+});
     
   // Wire Project Totals CSV download button (global)
   if (document.getElementById('downloadProjectTotalsCSV')) {
@@ -6258,7 +6333,7 @@ document.addEventListener('DOMContentLoaded', function(){
     var tb = document.querySelector('#payrollTable tbody');
     var foot = document.querySelector('#payrollTotalsFoot');
     if (!tb || !foot) return;
-    var t = {regHrs:0, otHrs:0, adjHrs:0, rate:0, regPay:0, otPay:0, grossPay:0, pagibig:0, philhealth:0, sss:0, loanSSS:0, loanPI:0, vale:0, valeWed:0, totalDed:0, adjAmt:0, netPay:0};
+    var t = {regHrs:0, otHrs:0, adjHrs:0, rate:0, regPay:0, otPay:0, grossPay:0, pagibig:0, philhealth:0, sss:0, loanSSS:0, loanPI:0, vale:0, valeWed:0, totalDed:0, adjAmt:0, bantay:0, netPay:0};
     tb.querySelectorAll('tr').forEach(function(tr){
       t.regHrs   += _parse(tr.querySelector('.regHrs')?.value);
       t.otHrs    += _parse(tr.querySelector('.otHrs')?.value);
@@ -6277,6 +6352,7 @@ document.addEventListener('DOMContentLoaded', function(){
       t.valeWed  += _parse(tr.querySelector('.valeWed')?.value);
       t.totalDed += _parse(tr.querySelector('.totalDed')?.textContent);
       t.adjAmt   += _parse(tr.querySelector('.adjAmt')?.textContent);
+      t.bantay   += _parse(tr.querySelector('.bantay')?.value);
       t.netPay   += _parse(tr.querySelector('.netPay')?.textContent);
     });
     Object.keys(t).forEach(function(k){
