@@ -62,6 +62,7 @@ const KNOWN_KEYS = [
   ,"payroll_philhealth_table"
   ,"payroll_adjustment_hours"
   ,"payroll_bantay"
+  ,"payroll_contrib_flags"
 ]
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY)
@@ -199,15 +200,6 @@ document.addEventListener('DOMContentLoaded', function() {
         var adj = gv('.adjAmt','textContent');
         var total = gv('.totalDed','textContent');
         var net = gv('.netPay','textContent');
-
-        // Compute adjustment hours, total hours and Bantay allowance for this employee.
-        var adjHoursStr = gv('.adjHrs','textContent') || '';
-        var adjHoursNum = parseFloat(adjHoursStr) || 0;
-        var regNum = parseFloat(reg) || 0;
-        var otNum = parseFloat(ot) || 0;
-        var totalHours = (regNum + otNum + adjHoursNum).toFixed(2);
-        var adjHoursDisplay = adjHoursNum.toFixed(2);
-        var bantayVal = gv('.bantay','value') || '';
         html += '<div class="payslip">' +
           '<h3>Payslip</h3>' +
           '<p><strong>Employee ID:</strong> ' + id + '</p>' +
@@ -215,9 +207,8 @@ document.addEventListener('DOMContentLoaded', function() {
           '<p><strong>Period:</strong> ' + ws + (we ? (' to ' + we) : '') + '</p>' +
           '<table>' +
           '<tr><th>Description</th><th>Value</th></tr>' +
-          // Show adjustment hours and total hours (Reg + OT + Adjustment)
-          '<tr><td>Adjustment Hours</td><td>' + adjHoursDisplay + '</td></tr>' +
-          '<tr><td>Total Hours</td><td>' + totalHours + '</td></tr>' +
+          '<tr><td>Regular Hours</td><td>' + reg + '</td></tr>' +
+          '<tr><td>OT Hours</td><td>' + ot + '</td></tr>' +
           '<tr><td>Hourly Rate</td><td>' + rate + '</td></tr>' +
           '<tr><td>Regular Pay</td><td>' + regPay + '</td></tr>' +
           '<tr><td>OT Pay</td><td>' + otPay + '</td></tr>' +
@@ -229,7 +220,6 @@ document.addEventListener('DOMContentLoaded', function() {
           '<tr><td>Pag-IBIG Loan</td><td>' + piLoan + '</td></tr>' +
           '<tr><td>Vale</td><td>' + v + '</td></tr>' +
           '<tr><td>Wed Vale</td><td>' + vW + '</td></tr>' +
-          '<tr><td>Bantay</td><td>' + bantayVal + '</td></tr>' +
           '<tr><td>Adjustments</td><td>' + adj + '</td></tr>' +
           '<tr><td>Total Deductions</td><td>' + total + '</td></tr>' +
           '<tr><th>Net Pay</th><th>' + net + '</th></tr>' +
@@ -1319,7 +1309,7 @@ document.addEventListener('DOMContentLoaded', function() {
       <th>
        Project
       </th>
-      <th>Bank Account</th><th>Action</th>
+      <th>Bank Account</th><th>Pag-IBIG</th><th>PhilHealth</th><th>SSS</th><th>Action</th>
      </tr>
     </thead>
     <tbody>
@@ -1776,6 +1766,8 @@ const LS_PAGIBIG_TABLE='payroll_pagibig_table';
 const LS_PHILHEALTH_TABLE='payroll_philhealth_table';
 // LocalStorage key for per-employee Bantay allowance
 const LS_BANTAY='payroll_bantay';
+// LocalStorage key for per-employee contribution flags (Pag-IBIG, PhilHealth, SSS)
+const LS_CONTRIB_FLAGS='payroll_contrib_flags';
 
 // Current employee contribution rates (decimal form).  Defaults: 0.02 (2%) for Pag‑IBIG and 0.025 (2.5%) for PhilHealth.
 let pagibigRate = parseFloat(localStorage.getItem(LS_PAGIBIG_RATE) ?? '0.02');
@@ -1905,6 +1897,8 @@ let valeWed = JSON.parse(localStorage.getItem(LS_VALE_WED) || '{}');
 
 // Bantay allowance values per employee. Defaults to empty object if not present.
 let bantay = JSON.parse(localStorage.getItem(LS_BANTAY) || '{}');
+// Per-employee contribution deduction flags. Each entry keyed by employee ID holds booleans {pagibig, philhealth, sss}
+let contribFlags = JSON.parse(localStorage.getItem(LS_CONTRIB_FLAGS) || '{}');
 
 // Cash advance localStorage keys and in-memory objects.  These store per-employee
 // original cash advance amounts, per-payroll deductions and the current
@@ -2605,10 +2599,12 @@ function calculateRow(tr){
   const monthly = rate * 8 * 24;
   const piRate = pagibigRateByMonthly(monthly);
   const phRate = philhealthRateByMonthly(monthly);
-  const pagibig = +(regPay * piRate).toFixed(2);
-  const philhealth = +(regPay * phRate).toFixed(2);
+  // Check per-employee contribution deduction flags; default to true if not set
+  const flags = contribFlags[id] || {};
+  const pagibig = (flags.pagibig !== false ? +(regPay * piRate).toFixed(2) : 0);
+  const philhealth = (flags.philhealth !== false ? +(regPay * phRate).toFixed(2) : 0);
   const sssFull = sssShareByMonthly(monthly);
-  const sss = sssFull / (Number(divisor)||1);
+  const sss = (flags.sss !== false ? sssFull / (Number(divisor)||1) : 0);
   const sssLoan = lSSS / (Number(divisor)||1);
   const piLoan = lPI / (Number(divisor)||1);
   const valeAmt = v;
@@ -4419,8 +4415,39 @@ ids.forEach(id => {
       <td><select class="emp-sel-schedule" data-id="${id}">${scheduleOptionsHtml}</select></td>
       <td><select class="emp-sel-project" data-id="${id}">${projectOptionsHtml}</select></td>
       <td><input class="cell emp-bank-input" data-id="${id}" value="${emp.bankAccount != null ? emp.bankAccount : ''}"></td>
+      <td><input type="checkbox" class="emp-pagibig" data-id="${id}" ${ (contribFlags[id] && contribFlags[id].pagibig === false) ? '' : 'checked'}></td>
+      <td><input type="checkbox" class="emp-philhealth" data-id="${id}" ${ (contribFlags[id] && contribFlags[id].philhealth === false) ? '' : 'checked'}></td>
+      <td><input type="checkbox" class="emp-sss" data-id="${id}" ${ (contribFlags[id] && contribFlags[id].sss === false) ? '' : 'checked'}></td>
       <td><button class="del-emp" data-id="${id}">Delete</button></td>`;
     tbody.appendChild(tr);
+    // Attach event listeners for contribution checkboxes for this employee
+    const cbPagibig = tr.querySelector('.emp-pagibig');
+    const cbPhilhealth = tr.querySelector('.emp-philhealth');
+    const cbSss = tr.querySelector('.emp-sss');
+    if (cbPagibig) {
+      cbPagibig.addEventListener('change', () => {
+        if (!contribFlags[id]) contribFlags[id] = {};
+        contribFlags[id].pagibig = cbPagibig.checked;
+        localStorage.setItem(LS_CONTRIB_FLAGS, JSON.stringify(contribFlags));
+        calculateAll();
+      });
+    }
+    if (cbPhilhealth) {
+      cbPhilhealth.addEventListener('change', () => {
+        if (!contribFlags[id]) contribFlags[id] = {};
+        contribFlags[id].philhealth = cbPhilhealth.checked;
+        localStorage.setItem(LS_CONTRIB_FLAGS, JSON.stringify(contribFlags));
+        calculateAll();
+      });
+    }
+    if (cbSss) {
+      cbSss.addEventListener('change', () => {
+        if (!contribFlags[id]) contribFlags[id] = {};
+        contribFlags[id].sss = cbSss.checked;
+        localStorage.setItem(LS_CONTRIB_FLAGS, JSON.stringify(contribFlags));
+        calculateAll();
+      });
+    }
   });
 
   document.querySelectorAll('.emp-name-input').forEach(inp=> inp.addEventListener('change', (e)=>{
@@ -4456,6 +4483,11 @@ document.getElementById('addEmployeeBtn').addEventListener('click', ()=>{
   const bank = document.getElementById('empBankInput').value.trim();
   if(!id){ alert('Enter ID'); return; } if(!name){ alert('Enter Name'); return; }
   storedEmployees[id] = { name: name, hourlyRate: rate, bankAccount: bank, scheduleId: scheduleId, projectId: projectId };
+  // Initialize default contribution deduction flags for new employee if not already set
+  if (!contribFlags[id]) {
+    contribFlags[id] = { pagibig: true, philhealth: true, sss: true };
+    localStorage.setItem(LS_CONTRIB_FLAGS, JSON.stringify(contribFlags));
+  }
   saveEmployeesToLS();
   document.getElementById('empIdInput').value=''; document.getElementById('empNameInput').value=''; document.getElementById('empRateInput').value=''; document.getElementById('empBankInput').value='';
   renderEmployees(); renderResults();
@@ -6730,15 +6762,6 @@ document.addEventListener('click', function(e) {
     var total = getVal('.totalDed', 'textContent');
     var net = getVal('.netPay', 'textContent');
     var adjAmt = getVal('.adjAmt', 'textContent');
-
-    // Determine adjustment hours, total hours and Bantay allowance for this row
-    var adjHrsVal = getVal('.adjHrs', 'textContent');
-    var bantayVal = getVal('.bantay', 'value');
-    var regNum = parseFloat(reg) || 0;
-    var otNum = parseFloat(ot) || 0;
-    var adjNum = parseFloat(adjHrsVal) || 0;
-    var totalHours = (regNum + otNum + adjNum).toFixed(2);
-    var adjHrsDisplay = (adjNum).toFixed(2);
     // Period from week start/end inputs if available
     var ws = (typeof weekStartEl !== 'undefined' && weekStartEl) ? (weekStartEl.value || '') : '';
     var we = (typeof weekEndEl !== 'undefined' && weekEndEl) ? (weekEndEl.value || '') : '';
@@ -6753,9 +6776,8 @@ document.addEventListener('click', function(e) {
       '<p><strong>Period:</strong> ' + ws + (we ? (' to ' + we) : '') + '</p>' +
       '<table>' +
       '<tr><th>Description</th><th>Value</th></tr>' +
-      // Show adjustment hours and total hours (Reg + OT + Adjustment)
-      '<tr><td>Adjustment Hours</td><td>' + adjHrsDisplay + '</td></tr>' +
-      '<tr><td>Total Hours</td><td>' + totalHours + '</td></tr>' +
+      '<tr><td>Regular Hours</td><td>' + reg + '</td></tr>' +
+      '<tr><td>OT Hours</td><td>' + ot + '</td></tr>' +
       '<tr><td>Hourly Rate</td><td>' + rate + '</td></tr>' +
       '<tr><td>Regular Pay</td><td>' + regPay + '</td></tr>' +
       '<tr><td>OT Pay</td><td>' + otPay + '</td></tr>' +
@@ -6767,7 +6789,6 @@ document.addEventListener('click', function(e) {
       '<tr><td>Pag-IBIG Loan</td><td>' + piLoan + '</td></tr>' +
       '<tr><td>Vale</td><td>' + valeAmt + '</td></tr>' +
       '<tr><td>Wed Vale</td><td>' + wedValeAmt + '</td></tr>' +
-      '<tr><td>Bantay</td><td>' + bantayVal + '</td></tr>' +
       '<tr><td>Adjustments</td><td>' + adjAmt + '</td></tr>' +
       '<tr><td>Total Deductions</td><td>' + total + '</td></tr>' +
       '<tr><th>Net Pay</th><th>' + net + '</th></tr>' +
