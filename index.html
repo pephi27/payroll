@@ -1,3 +1,4 @@
+
 <!DOCTYPE html>
 <html>
  
@@ -60,6 +61,7 @@ const KNOWN_KEYS = [
   ,"payroll_pagibig_table"
   ,"payroll_philhealth_table"
   ,"payroll_adjustment_hours"
+  ,"payroll_bantay"
 ]
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY)
@@ -1474,6 +1476,9 @@ document.addEventListener('DOMContentLoaded', function() {
          Adjustments
         </th>
         <th>
+         Bantay
+        </th>
+        <th>
          Net Pay
         </th>
         <th>
@@ -1502,6 +1507,8 @@ document.addEventListener('DOMContentLoaded', function() {
           <td class="num" data-col="valeWed">0.00</td>
           <td class="num" data-col="totalDed">0.00</td>
           <td class="num" data-col="adjAmt">0.00</td>
+          <!-- Bantay totals column (left blank as allowances are not aggregated) -->
+          <td></td>
           <td class="num" data-col="netPay">0.00</td>
           <td></td>
         </tr>
@@ -1756,6 +1763,8 @@ const LS_PHILHEALTH_RATE='payroll_philhealth_rate';
 // LocalStorage keys for dynamic Pag‑IBIG and PhilHealth contribution tables
 const LS_PAGIBIG_TABLE='payroll_pagibig_table';
 const LS_PHILHEALTH_TABLE='payroll_philhealth_table';
+// LocalStorage key for per-employee Bantay allowance
+const LS_BANTAY='payroll_bantay';
 
 // Current employee contribution rates (decimal form).  Defaults: 0.02 (2%) for Pag‑IBIG and 0.025 (2.5%) for PhilHealth.
 let pagibigRate = parseFloat(localStorage.getItem(LS_PAGIBIG_RATE) ?? '0.02');
@@ -1882,6 +1891,9 @@ let loanSSS = JSON.parse(localStorage.getItem(LS_LOAN_SSS) || '{}');
 let loanPI = JSON.parse(localStorage.getItem(LS_LOAN_PI) || '{}');
 let vale = JSON.parse(localStorage.getItem(LS_VALE) || '{}');
 let valeWed = JSON.parse(localStorage.getItem(LS_VALE_WED) || '{}');
+
+// Bantay allowance values per employee. Defaults to empty object if not present.
+let bantay = JSON.parse(localStorage.getItem(LS_BANTAY) || '{}');
 
 // Cash advance localStorage keys and in-memory objects.  These store per-employee
 // original cash advance amounts, per-payroll deductions and the current
@@ -2222,6 +2234,8 @@ const lSSS = Number(loanSSS[emp.id] ?? 0);
     const lPI = Number(loanPI[emp.id] ?? 0);
     const v = Number(vale[emp.id] ?? 0);
     const vW = Number(valeWed[emp.id] ?? 0);
+    // Load stored Bantay allowance for this employee or default to empty string
+    const bVal = bantay[emp.id] ?? '';
     tr.innerHTML = `
       <td>${emp.id}</td>
       <td class="wrap">${emp.name}</td>
@@ -2241,6 +2255,7 @@ const lSSS = Number(loanSSS[emp.id] ?? 0);
       <td><input class="cell valeWed" type="number" step="0.01" value="${vW}"></td>
       <td class="totalDed num">0.00</td>
       <td class="adjAmt num">0.00</td>
+      <td><input class="cell bantay" type="number" step="0.01" value="${bVal}"></td>
       <td class="netPay num">0.00</td>
       <td><button type="button" class="payslipBtn">Payslip</button></td>`;
     tbody.appendChild(tr);
@@ -2278,6 +2293,16 @@ function attachRowEvents(){
         calculateRow(row);
       });
     });
+
+    // Add event listener for Bantay allowance input. Store in localStorage and recalc net pay.
+    const bantayI = row.querySelector('.bantay');
+    if (bantayI) {
+      bantayI.addEventListener('input', () => {
+        bantay[id] = bantayI.value;
+        localStorage.setItem(LS_BANTAY, JSON.stringify(bantay));
+        calculateRow(row);
+      });
+    }
   });
 }
 function renderSssTable(){
@@ -2581,7 +2606,9 @@ function calculateRow(tr){
   const total = pagibig + philhealth + sss + sssLoan + piLoan + valeAmt + wedValeAmt;
   // Adjustment amount for this employee (may be positive or negative)
   const adj = Number(adjustments[id] || 0);
-  const net = gross - total + adj;
+  // Bantay allowance (treated as positive allowance).  Parse numeric value from bantay input.
+  const bVal = parseFloat((tr.querySelector('.bantay')?.value || '').trim()) || 0;
+  const net = gross - total + adj + bVal;
 
   tr.querySelector('.regPay').textContent = regPay.toFixed(2);
   tr.querySelector('.otPay').textContent = otPay.toFixed(2);
@@ -3121,9 +3148,9 @@ document.addEventListener('DOMContentLoaded', () => {
       data.vale = readNum('.vale', 13);
       data.valeWed = readNum('.valeWed', 14);
       data.totalDed = readNum('.totalDed', 15);
-      // Capture adjustments and correct net pay cell index. The adjustment column is at index 16 and net pay at 17.
-      data.adjAmt = readNum('.adjAmt', 16);
-      data.netPay = readNum('.netPay', 17);
+      // Capture adjustments and net pay. With the Bantay column inserted after adjustments, adjustment column index is 17 and net pay column index is 19.
+      data.adjAmt = readNum('.adjAmt', 17);
+      data.netPay = readNum('.netPay', 19);
       // Capture DTR records for this employee within the selected date range. Stores an array of {date, times}
       try {
         /*
