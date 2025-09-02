@@ -228,7 +228,9 @@ document.addEventListener('DOMContentLoaded', function() {
           html += '</div><div class="page-break"></div><div class="payslip-grid">';
         }
       });
-      html += '</div></body></html>';
+      html += '</div>
+
+</body></html>';
       var w = window.open('', '', 'width=800,height=900');
       if (!w) return;
       w.document.open();
@@ -8108,6 +8110,143 @@ document.addEventListener('DOMContentLoaded', async function () {
     });
     healthBtn.addEventListener('click', healthCheck);
   });
+})();
+</script>
+
+<script>
+// ===== DTR Editor Column (Total Regular & OT editable) =====
+(function(){
+  const LS_OVR_HOURS = 'att_overrides_hours_v1';
+  let overridesHours = {};
+  try { overridesHours = JSON.parse(localStorage.getItem(LS_OVR_HOURS) || '{}') || {}; } catch(e){ overridesHours = {}; }
+  function saveOverridesHours(){ try { localStorage.setItem(LS_OVR_HOURS, JSON.stringify(overridesHours)); } catch(e){} }
+
+  function ensureEditorHeader(){
+    const table = document.getElementById('resultsTable');
+    if(!table) return;
+    const theadRow = table.querySelector('thead tr');
+    if(!theadRow) return;
+    if(!theadRow.querySelector('.editor-header')){
+      const th = document.createElement('th');
+      th.textContent = 'Editor';
+      th.className = 'editor-header';
+      theadRow.appendChild(th);
+    }
+  }
+
+  function getColIndexes(table){
+    const heads = Array.from(table.querySelectorAll('thead th')).map(th=>th.textContent.trim());
+    return {
+      regIdx: heads.findIndex(t => /Total\s+Regular\s+Hrs/i.test(t)),
+      otIdx:  heads.findIndex(t => /^OT\s*Hrs$/i.test(t))
+    };
+  }
+
+  function keyForRow(tr){
+    const empId = tr.cells[0] ? tr.cells[0].textContent.trim() : '';
+    const date  = tr.cells[4] ? tr.cells[4].textContent.trim() : '';
+    let k = empId + '___' + date;
+    if (tr.dataset && tr.dataset.half) k += '___' + tr.dataset.half; // AM/PM/OT
+    return k;
+  }
+
+  function applyOverridesToTable(){
+    const table = document.getElementById('resultsTable');
+    if(!table) return;
+    const {regIdx, otIdx} = getColIndexes(table);
+    if(regIdx < 0 || otIdx < 0) return;
+    table.querySelectorAll('tbody tr').forEach(tr=>{
+      const k = keyForRow(tr);
+      const ov = overridesHours[k];
+      if(ov){
+        tr.cells[regIdx].textContent = (parseFloat(ov.reg)||0).toFixed(2);
+        tr.cells[otIdx ].textContent = (parseFloat(ov.ot )||0).toFixed(2);
+      }
+    });
+  }
+
+  function recomputeDtrSummaryFromTable(){
+    const table = document.getElementById('resultsTable');
+    if(!table) return;
+    const {regIdx, otIdx} = getColIndexes(table);
+    if(regIdx < 0 || otIdx < 0) return;
+    let sumReg = 0, sumOt = 0, empSet = new Set();
+    table.querySelectorAll('tbody tr').forEach(tr=>{
+      const empId = tr.cells[0] ? tr.cells[0].textContent.trim() : '';
+      if(empId) empSet.add(empId);
+      const reg = parseFloat(tr.cells[regIdx] && tr.cells[regIdx].textContent) || 0;
+      const ot  = parseFloat(tr.cells[otIdx]  && tr.cells[otIdx].textContent)  || 0;
+      sumReg += reg; sumOt += ot;
+    });
+    const summaryEl = document.getElementById('dtrSummary');
+    if(summaryEl){
+      const total = +(sumReg + sumOt).toFixed(2);
+      summaryEl.textContent = 'Grand Total Hours: ' + total.toFixed(2) + ' | Regular: ' + sumReg.toFixed(2) + ' | OT Hours: ' + sumOt.toFixed(2) + ' | Employees: ' + empSet.size;
+    }
+  }
+
+  function addDtrEditorButtons(){
+    const table = document.getElementById('resultsTable');
+    if(!table) return;
+    ensureEditorHeader();
+    const {regIdx, otIdx} = getColIndexes(table);
+    if(regIdx < 0 || otIdx < 0) return;
+    table.querySelectorAll('tbody tr').forEach(tr => {
+      if(tr.querySelector('.dtr-edit-btn')) return;
+      const td = document.createElement('td');
+      td.className = 'editor-cell';
+      const btn = document.createElement('button');
+      btn.textContent = 'Edit';
+      btn.className = 'dtr-edit-btn';
+      btn.addEventListener('click', () => {
+        const regCell = tr.cells[regIdx];
+        const otCell  = tr.cells[otIdx];
+        if(btn.textContent === 'Edit'){
+          const regVal = parseFloat(regCell.textContent) || 0;
+          const otVal  = parseFloat(otCell.textContent)  || 0;
+          regCell.innerHTML = '<input type="number" step="0.01" class="edit-reg" value="'+regVal+'">';
+          otCell .innerHTML = '<input type="number" step="0.01" class="edit-ot"  value="'+otVal+'">';
+          btn.textContent = 'Save';
+        } else {
+          const regInput = tr.querySelector('input.edit-reg');
+          const otInput  = tr.querySelector('input.edit-ot');
+          const regVal = parseFloat(regInput && regInput.value) || 0;
+          const otVal  = parseFloat(otInput  && otInput.value)  || 0;
+          const k = keyForRow(tr);
+          overridesHours[k] = { reg: regVal, ot: otVal };
+          saveOverridesHours();
+          tr.cells[regIdx].textContent = regVal.toFixed(2);
+          tr.cells[otIdx ].textContent = otVal.toFixed(2);
+          btn.textContent = 'Edit';
+          recomputeDtrSummaryFromTable();
+        }
+      });
+      td.appendChild(btn);
+      tr.appendChild(td);
+    });
+  }
+
+  function afterRender(){
+    applyOverridesToTable();
+    addDtrEditorButtons();
+    recomputeDtrSummaryFromTable();
+  }
+
+  function patchOnce(){
+    if (window.__DTR_EDITOR_PATCHED) return;
+    window.__DTR_EDITOR_PATCHED = true;
+    const orig = window.renderResults;
+    if (typeof orig === 'function'){
+      window.renderResults = function(){
+        const out = orig.apply(this, arguments);
+        try { afterRender(); } catch(e){}
+        return out;
+      };
+    }
+    document.addEventListener('DOMContentLoaded', afterRender);
+  }
+
+  patchOnce();
 })();
 </script>
 </body>
