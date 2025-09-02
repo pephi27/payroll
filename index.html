@@ -4756,6 +4756,22 @@ function buildScheduleDropdownHalf(empId, date, half, currentScheduleId){
 }
 
 function renderResults(){
+
+// 12-hour clock formatter for display only (keeps underlying logic 24h)
+function __fmt12Clock(hhmm){
+  if(!hhmm || typeof hhmm !== 'string') return hhmm || '';
+  const m = hhmm.match(/^\s*(\d{1,2})\s*:\s*(\d{2})\s*$/);
+  if(!m) return hhmm;
+  let h = parseInt(m[1],10), mm = m[2];
+  let suffix = 'AM';
+  if(h === 0){ h = 12; suffix = 'AM'; }
+  else if(h === 12){ suffix = 'PM'; }
+  else if(h > 12){ h = h - 12; suffix = 'PM'; }
+  else { suffix = 'AM'; }
+  return h + ':' + mm + ' ' + suffix;
+}
+
+
   renderScheduleSelector();
   renderProjectFilterOptions();
 
@@ -5167,19 +5183,19 @@ let otMins = 0;
 if(!__segPass){ return; }
 const trSeg = document.createElement('tr');
         let htmlSeg = '';
-        htmlSeg += '<td>' + empId + '</td>';
+        htmlSeg += '<td>' + __fmt12Clock(empId) + '</td>';
         htmlSeg += '<td>' + (name || '') + '</td>';
         htmlSeg += '<td></td><td></td>';
-        htmlSeg += '<td>' + date + '</td>';
+        htmlSeg += '<td>' + __fmt12Clock(date) + '</td>';
         // Clock in/out columns based on segment.  AM displays morning punches; PM
         // displays afternoon punches; OT leaves these blank.
         if (segment === 'AM') {
-          htmlSeg += (amInActual ? '<td>' + amInActual + '</td>' : '<td class="missing">—</td>');
+          htmlSeg += (amInActual ? '<td>' + __fmt12Clock(amInActual) + '</td>' : '<td class="missing">—</td>');
           // Show AM out only when not bridging and a punch exists
           if (hasBridge || !amOutActual) {
             htmlSeg += '<td class="missing">—</td>';
           } else {
-            htmlSeg += '<td>' + amOutActual + '</td>';
+            htmlSeg += '<td>' + __fmt12Clock(amOutActual) + '</td>';
           }
           htmlSeg += '<td class="missing">—</td><td class="missing">—</td>';
         } else if (segment === 'PM') {
@@ -5188,17 +5204,17 @@ const trSeg = document.createElement('tr');
           if (hasBridge || !pmInActual) {
             htmlSeg += '<td class="missing">—</td>';
           } else {
-            htmlSeg += '<td>' + pmInActual + '</td>';
+            htmlSeg += '<td>' + __fmt12Clock(pmInActual) + '</td>';
           }
-          htmlSeg += (pmOutActual ? '<td>' + pmOutActual + '</td>' : '<td class="missing">—</td>');
+          htmlSeg += (pmOutActual ? '<td>' + __fmt12Clock(pmOutActual) + '</td>' : '<td class="missing">—</td>');
         } else {
           // OT segment leaves both AM and PM punch cells blank
           htmlSeg += '<td class="missing">—</td><td class="missing">—</td><td class="missing">—</td><td class="missing">—</td>';
         }
         // OT in/out columns: filled only for OT segment
         if (segment === 'OT') {
-          htmlSeg += (otInSeg ? '<td>' + otInSeg + '</td>' : '<td class="missing">—</td>');
-          htmlSeg += (otOutSeg ? '<td>' + otOutSeg + '</td>' : '<td class="missing">—</td>');
+          htmlSeg += (otInSeg ? '<td>' + __fmt12Clock(otInSeg) + '</td>' : '<td class="missing">—</td>');
+          htmlSeg += (otOutSeg ? '<td>' + __fmt12Clock(otOutSeg) + '</td>' : '<td class="missing">—</td>');
         } else {
           htmlSeg += '<td class="missing">—</td><td class="missing">—</td>';
         }
@@ -5260,13 +5276,13 @@ const trSeg = document.createElement('tr');
     const scheduleName = storedSchedules[scheduleIdForEmp] ? storedSchedules[scheduleIdForEmp].name + (scheduleIdForEmp===defaultScheduleId ? ' (Default)' : '') : '';
     const projectName = (empProjId && storedProjects[empProjId]) ? storedProjects[empProjId].name : (emp && !emp.projectId ? '' : '');
 
-    const cell = (v) => v ? '<td>'+v+'</td>' : '<td class="missing">—</td>';
+    const cell = (v) => v ? '<td>' + __fmt12Clock(v) + '</td>' : '<td class="missing">—</td>';
     const tr = document.createElement('tr');
     tr.innerHTML =
       '<td>'+empId+'</td><td>'+name+'</td><td>'+projectName+'</td><td>'+scheduleName+'</td><td>'+date+'</td>' +
       cell(amInActual) + cell(amOutActual) + cell(pmInActual) + cell(pmOutActual) +
-      (otInCalc ? '<td>'+otInCalc+'</td>' : '<td class=\"missing\">—</td>') +
-      (otOutCalc ? '<td>'+otOutCalc+'</td>' : '<td class=\"missing\">—</td>') +
+      (otInCalc ? '<td>' + __fmt12Clock(otInCalc) + '</td>' : '<td class=\"missing\">—</td>') +
+      (otOutCalc ? '<td>' + __fmt12Clock(otOutCalc) + '</td>' : '<td class=\"missing\">—</td>') +
       '<td>'+totalRegularDecimal+'</td><td>'+otDecimal+'</td>' +
       // Use a named handler with a data-key attribute instead of an inline IIFE.
       '<td><button type="button" class="btn-split" data-key="' + empId + '___' + date + '" onclick="splitRecord(this.dataset.key)">Split</button></td>';
