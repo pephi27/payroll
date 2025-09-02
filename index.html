@@ -199,6 +199,15 @@ document.addEventListener('DOMContentLoaded', function() {
         var adj = gv('.adjAmt','textContent');
         var total = gv('.totalDed','textContent');
         var net = gv('.netPay','textContent');
+
+        // Compute adjustment hours, total hours and Bantay allowance for this employee.
+        var adjHoursStr = gv('.adjHrs','textContent') || '';
+        var adjHoursNum = parseFloat(adjHoursStr) || 0;
+        var regNum = parseFloat(reg) || 0;
+        var otNum = parseFloat(ot) || 0;
+        var totalHours = (regNum + otNum + adjHoursNum).toFixed(2);
+        var adjHoursDisplay = adjHoursNum.toFixed(2);
+        var bantayVal = gv('.bantay','value') || '';
         html += '<div class="payslip">' +
           '<h3>Payslip</h3>' +
           '<p><strong>Employee ID:</strong> ' + id + '</p>' +
@@ -206,8 +215,9 @@ document.addEventListener('DOMContentLoaded', function() {
           '<p><strong>Period:</strong> ' + ws + (we ? (' to ' + we) : '') + '</p>' +
           '<table>' +
           '<tr><th>Description</th><th>Value</th></tr>' +
-          '<tr><td>Regular Hours</td><td>' + reg + '</td></tr>' +
-          '<tr><td>OT Hours</td><td>' + ot + '</td></tr>' +
+          // Show adjustment hours and total hours (Reg + OT + Adjustment)
+          '<tr><td>Adjustment Hours</td><td>' + adjHoursDisplay + '</td></tr>' +
+          '<tr><td>Total Hours</td><td>' + totalHours + '</td></tr>' +
           '<tr><td>Hourly Rate</td><td>' + rate + '</td></tr>' +
           '<tr><td>Regular Pay</td><td>' + regPay + '</td></tr>' +
           '<tr><td>OT Pay</td><td>' + otPay + '</td></tr>' +
@@ -219,6 +229,7 @@ document.addEventListener('DOMContentLoaded', function() {
           '<tr><td>Pag-IBIG Loan</td><td>' + piLoan + '</td></tr>' +
           '<tr><td>Vale</td><td>' + v + '</td></tr>' +
           '<tr><td>Wed Vale</td><td>' + vW + '</td></tr>' +
+          '<tr><td>Bantay</td><td>' + bantayVal + '</td></tr>' +
           '<tr><td>Adjustments</td><td>' + adj + '</td></tr>' +
           '<tr><td>Total Deductions</td><td>' + total + '</td></tr>' +
           '<tr><th>Net Pay</th><th>' + net + '</th></tr>' +
@@ -6719,6 +6730,15 @@ document.addEventListener('click', function(e) {
     var total = getVal('.totalDed', 'textContent');
     var net = getVal('.netPay', 'textContent');
     var adjAmt = getVal('.adjAmt', 'textContent');
+
+    // Determine adjustment hours, total hours and Bantay allowance for this row
+    var adjHrsVal = getVal('.adjHrs', 'textContent');
+    var bantayVal = getVal('.bantay', 'value');
+    var regNum = parseFloat(reg) || 0;
+    var otNum = parseFloat(ot) || 0;
+    var adjNum = parseFloat(adjHrsVal) || 0;
+    var totalHours = (regNum + otNum + adjNum).toFixed(2);
+    var adjHrsDisplay = (adjNum).toFixed(2);
     // Period from week start/end inputs if available
     var ws = (typeof weekStartEl !== 'undefined' && weekStartEl) ? (weekStartEl.value || '') : '';
     var we = (typeof weekEndEl !== 'undefined' && weekEndEl) ? (weekEndEl.value || '') : '';
@@ -6733,8 +6753,9 @@ document.addEventListener('click', function(e) {
       '<p><strong>Period:</strong> ' + ws + (we ? (' to ' + we) : '') + '</p>' +
       '<table>' +
       '<tr><th>Description</th><th>Value</th></tr>' +
-      '<tr><td>Regular Hours</td><td>' + reg + '</td></tr>' +
-      '<tr><td>OT Hours</td><td>' + ot + '</td></tr>' +
+      // Show adjustment hours and total hours (Reg + OT + Adjustment)
+      '<tr><td>Adjustment Hours</td><td>' + adjHrsDisplay + '</td></tr>' +
+      '<tr><td>Total Hours</td><td>' + totalHours + '</td></tr>' +
       '<tr><td>Hourly Rate</td><td>' + rate + '</td></tr>' +
       '<tr><td>Regular Pay</td><td>' + regPay + '</td></tr>' +
       '<tr><td>OT Pay</td><td>' + otPay + '</td></tr>' +
@@ -6746,6 +6767,7 @@ document.addEventListener('click', function(e) {
       '<tr><td>Pag-IBIG Loan</td><td>' + piLoan + '</td></tr>' +
       '<tr><td>Vale</td><td>' + valeAmt + '</td></tr>' +
       '<tr><td>Wed Vale</td><td>' + wedValeAmt + '</td></tr>' +
+      '<tr><td>Bantay</td><td>' + bantayVal + '</td></tr>' +
       '<tr><td>Adjustments</td><td>' + adjAmt + '</td></tr>' +
       '<tr><td>Total Deductions</td><td>' + total + '</td></tr>' +
       '<tr><th>Net Pay</th><th>' + net + '</th></tr>' +
