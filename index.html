@@ -4801,7 +4801,16 @@ let empProjId = emp ? (emp.projectId || '') : '';
       currentProjectFilter === 'all' ||
       (currentProjectFilter === 'none' && !empProjId) ||
       currentProjectFilter === empProjId;
-    if(!passesProject) continue;
+    let _passes = passesProject;
+if(!_passes && typeof splits !== 'undefined' && splits && splits[empId + '___' + date]){
+  const segs = ['AM','PM','OT'];
+  for (let i=0;i<segs.length;i++){
+    const hk = empId + '___' + date + '___' + segs[i];
+    const pidSeg = (typeof overridesProjects !== 'undefined' && overridesProjects && Object.prototype.hasOwnProperty.call(overridesProjects, hk)) ? overridesProjects[hk] : empProjId;
+    if (currentProjectFilter === 'all' || (currentProjectFilter === 'none' && !pidSeg) || currentProjectFilter === pidSeg){ _passes = true; break; }
+  }
+}
+if(!_passes) continue;
 
     const times = Array.from(new Set(groups[key])).sort();
 
@@ -5154,7 +5163,9 @@ let otMins = 0;
         } else {
           projIdSeg = empProjId;
         }
-        const trSeg = document.createElement('tr');
+        const __segPass = (currentProjectFilter === 'all' || (currentProjectFilter === 'none' && !projIdSeg) || currentProjectFilter === projIdSeg);
+if(!__segPass){ return; }
+const trSeg = document.createElement('tr');
         let htmlSeg = '';
         htmlSeg += '<td>' + empId + '</td>';
         htmlSeg += '<td>' + (name || '') + '</td>';
