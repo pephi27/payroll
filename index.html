@@ -8658,5 +8658,92 @@ document.addEventListener('DOMContentLoaded', async function () {
 })();
 </script>
 <!-- === / DTR Time Columns Cross-Device Sync === -->
+
+<!-- === Apply DTR Overrides on Hydration/Load === -->
+<script>
+(function(){
+  function loadJSON(k, def){ try{ return JSON.parse(localStorage.getItem(k)) ?? def; }catch(_){ return def; } }
+
+  function setField(rec, field, val){
+    if (val === undefined) return;
+    if (val === '') val = null;
+    if (field === 'project') rec.project = val;
+    if (field === 'schedule') rec.schedule = val;
+    if (field === 'ci1') rec.ci1 = val, rec.clockIn1 = val;
+    if (field === 'co1') rec.co1 = val, rec.clockOut1 = val;
+    if (field === 'ci2') rec.ci2 = val, rec.clockIn2 = val;
+    if (field === 'co2') rec.co2 = val, rec.clockOut2 = val;
+    if (field === 'otIn') rec.otIn = val, rec.ot_in = val;
+    if (field === 'otOut') rec.otOut = val, rec.ot_out = val;
+  }
+
+  function applyOverrides(){
+    try {
+      const projMap = loadJSON('att_overrides_projects', {});
+      const schMap  = loadJSON('att_overrides_schedules', {});
+      const timeMap = loadJSON('att_overrides_times', {});
+      // Ensure records are present
+      if (!Array.isArray(window.storedRecords)) {
+        try { window.storedRecords = JSON.parse(localStorage.getItem('att_records_v2')||'[]') || []; } catch(e){ window.storedRecords = []; }
+      }
+      // Index by key for quick set/merge
+      const recByKey = {};
+      window.storedRecords.forEach(r => {
+        const id = r.empId || r.id;
+        const date = r.date || r.work_date || r.workDate;
+        if (id && date) recByKey[id + '|' + date] = r;
+      });
+
+      // Merge project/schedule
+      Object.keys(projMap).forEach(k => {
+        const rec = recByKey[k];
+        if (rec) setField(rec, 'project', projMap[k]);
+      });
+      Object.keys(schMap).forEach(k => {
+        const rec = recByKey[k];
+        if (rec) setField(rec, 'schedule', schMap[k]);
+      });
+      // Merge times
+      Object.keys(timeMap).forEach(k => {
+        const rec = recByKey[k];
+        if (!rec) {
+          // Create a stub record if necessary, so overrides still display
+          const [empId, date] = k.split('|');
+          if (empId && date) {
+            const stub = { empId, date };
+            window.storedRecords.push(stub);
+            recByKey[k] = stub;
+          }
+        }
+        const r = recByKey[k];
+        if (!r) return;
+        const t = timeMap[k] || {};
+        setField(r, 'ci1', t.ci1);
+        setField(r, 'co1', t.co1);
+        setField(r, 'ci2', t.ci2);
+        setField(r, 'co2', t.co2);
+        setField(r, 'otIn', t.otIn);
+        setField(r, 'otOut', t.otOut);
+      });
+
+      try { localStorage.setItem('att_records_v2', JSON.stringify(window.storedRecords)); } catch(e){}
+      // Re-render if available
+      try { if (typeof window.renderResults==='function') window.renderResults(); } catch(e){}
+    } catch(e) { console.warn('applyOverrides failed', e); }
+  }
+
+  // Run after hydration + DOM ready using the helper promise
+  if (window.__kvReady) {
+    window.__kvReady.then(applyOverrides);
+  } else {
+    // Fallback: run after DOM ready
+    if (document.readyState !== 'loading') applyOverrides();
+    else document.addEventListener('DOMContentLoaded', applyOverrides, { once: true });
+  }
+  // Also re-apply on future hydration events (if any)
+  window.addEventListener('kv-hydrated', applyOverrides);
+})();
+</script>
+<!-- === / Apply DTR Overrides on Hydration/Load === -->
 </body>
 </html>
