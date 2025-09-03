@@ -63,7 +63,8 @@ const KNOWN_KEYS = [
   ,"payroll_adjustment_hours"
   ,"payroll_bantay"
   ,"payroll_contrib_flags",
-  "att_overrides_times"
+  "att_overrides_times",
+  "att_overrides_hours"
 ]
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY)
@@ -8745,5 +8746,118 @@ document.addEventListener('DOMContentLoaded', async function () {
 })();
 </script>
 <!-- === / Apply DTR Overrides on Hydration/Load === -->
+
+<!-- === DTR Hours Columns Cross-Device Sync (Reg & OT) === -->
+<script>
+(function(){
+  function loadJSON(k, def){ try{ return JSON.parse(localStorage.getItem(k)) ?? def; }catch(_){ return def; } }
+  function saveJSON(k, v){ try{ localStorage.setItem(k, JSON.stringify(v)); }catch(e){ console.warn('localStorage save failed for', k, e); } }
+
+  function detectCols(){
+    const table = document.getElementById('resultsTable');
+    if (!table) return null;
+    const ths = table.tHead ? table.tHead.querySelectorAll('th') : table.querySelectorAll('thead th');
+    const map = {};
+    ths.forEach((th, i) => map[(th.textContent||'').trim().toLowerCase()] = i);
+    const req = ['id','date','total regular hrs','ot hrs'];
+    for (const r of req){ if (!(r in map)) return null; }
+    return { table, idx: { id: map['id'], date: map['date'], reg: map['total regular hrs'], ot: map['ot hrs'] } };
+  }
+
+  function getCellVal(td){
+    if (!td) return '';
+    const el = td.querySelector('input,select,textarea');
+    if (el) return (el.value || '').trim();
+    return (td.textContent || '').trim();
+  }
+
+  function parseNum(v){
+    const n = parseFloat((v||'').replace(/[, ]+/g,''));
+    return isFinite(n) ? n : null;
+  }
+
+  function wireHoursSync(){
+    const meta = detectCols();
+    if (!meta) return;
+    const { table, idx } = meta;
+
+    // We listen broadly in case an "Edit" modal updates the row programmatically.
+    // On every change/blur/input, read current row reg/ot, persist overrides.
+    function onMaybeChange(ev){
+      const el = ev.target;
+      if (!el || !el.closest) return;
+      const tr = el.closest('tr');
+      if (!tr || tr.parentElement.tagName !== 'TBODY') return;
+      const tds = tr.children;
+      const id = getCellVal(tds[idx.id]);
+      const date = getCellVal(tds[idx.date]);
+      if (!id || !date) return;
+      const key = id + '|' + date;
+
+      // Only act if event originated from reg/ot cells or if class hints apply
+      const td = el.closest('td');
+      const cIndex = Array.prototype.indexOf.call(tds, td);
+      const likelyHours = (cIndex === idx.reg || cIndex === idx.ot) ||
+                          el.classList.contains('regHrs') || el.classList.contains('otHrs') ||
+                          /hours?/i.test(el.name || '') || /ot/i.test(el.name || '');
+
+      if (!likelyHours) return;
+
+      const regV = parseNum(getCellVal(tds[idx.reg]));
+      const otV  = parseNum(getCellVal(tds[idx.ot]));
+
+      const map = loadJSON('att_overrides_hours', {});
+      map[key] = Object.assign({}, map[key]||{}, { regHrs: regV, otHrs: otV });
+      saveJSON('att_overrides_hours', map);
+    }
+
+    table.addEventListener('change', onMaybeChange, true);
+    table.addEventListener('blur', onMaybeChange, true);
+    table.addEventListener('input', onMaybeChange, true);
+  }
+
+  document.addEventListener('DOMContentLoaded', wireHoursSync);
+})();
+</script>
+<!-- === / DTR Hours Columns Cross-Device Sync === -->
+
+<script>
+(function(){
+  function loadJSON(k, def){ try{ return JSON.parse(localStorage.getItem(k)) ?? def; }catch(_){ return def; } }
+  function setNumText(cell, n){
+    if (!cell) return;
+    const el = cell.querySelector('input,textarea');
+    if (el) { el.value = (n==null ? '' : String(n)); }
+    else { cell.textContent = (n==null ? '' : String(n)); }
+  }
+  function applyHours(){
+    const table = document.getElementById('resultsTable');
+    if (!table || !table.tHead) return;
+    const ths = table.tHead.querySelectorAll('th');
+    const map = {};
+    ths.forEach((th,i)=> map[(th.textContent||'').trim().toLowerCase()] = i);
+    if (!('id' in map) || !('date' in map) || !('total regular hrs' in map) || !('ot hrs' in map)) return;
+
+    const hoursMap = loadJSON('att_overrides_hours', {});
+    const rows = table.tBodies[0] ? table.tBodies[0].rows : [];
+    for (const tr of rows){
+      const id = (tr.cells[map['id']].textContent||'').trim();
+      const date = (tr.cells[map['date']].textContent||'').trim();
+      const key = id + '|' + date;
+      const ov = hoursMap[key];
+      if (!ov) continue;
+      if ('regHrs' in ov && ov.regHrs != null) setNumText(tr.cells[map['total regular hrs']], ov.regHrs);
+      if ('otHrs' in ov && ov.otHrs != null) setNumText(tr.cells[map['ot hrs']], ov.otHrs);
+    }
+    // If app provides totals recompute, invoke it
+    try { if (typeof window.renderResults==='function') window.renderResults(); } catch(e){}
+  }
+
+  if (window.__kvReady) window.__kvReady.then(applyHours);
+  else if (document.readyState !== 'loading') applyHours();
+  else document.addEventListener('DOMContentLoaded', applyHours, { once: true });
+  window.addEventListener('kv-hydrated', applyHours);
+})();
+</script>
 </body>
 </html>
