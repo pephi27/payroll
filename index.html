@@ -8251,254 +8251,190 @@ document.addEventListener('DOMContentLoaded', async function () {
 })();
 </script>
 
-<!-- === Minimal Cross-Device Overrides Sync (Non-invasive) === -->
+<!-- === Direct Remote DTR Sync (Bypass localStorage) === -->
 <script>
 (function(){
   'use strict';
 
-  // Config
-  var KV_TABLE = (window.SUPABASE_TABLE || 'kv_store');
-  var KEYS = {
-    proj: 'att_overrides_projects',
-    sched: 'att_overrides_schedules',
-    times: 'att_overrides_times',
-    hours: 'att_overrides_hours'
-  };
+  var TABLE = (window.SUPABASE_TABLE || 'kv_store'); // existing table used by your app
+  var KEY_PREFIX = 'dtr:'; // rows will be keyed as dtr:<empId>|<date>
 
-  // Helpers
-  function loadJSON(k, def){ try{ return JSON.parse(localStorage.getItem(k)) ?? def; }catch(_){ return def; } }
-  function saveJSON(k, v){ try{ localStorage.setItem(k, JSON.stringify(v)); }catch(e){ console.warn('localStorage save failed for', k, e); } }
-  function getCellInputValue(td){
-    if (!td) return '';
-    var el = td.querySelector('input,select,textarea');
-    if (el) return (el.value || '').trim();
-    return (td.textContent || '').trim();
-  }
+  function hasSupabase(){ return !!(window.supabase && window.supabase.from); }
+
+  // --- small DOM helpers ---
   function detectCols(){
     var t = document.getElementById('resultsTable');
     if (!t) return null;
     var ths = (t.tHead ? t.tHead.querySelectorAll('th') : t.querySelectorAll('thead th')) || [];
     var map = {};
     for (var i=0;i<ths.length;i++){
-      var label = (ths[i].textContent||'').trim().toLowerCase();
+      var label = (ths[i].textContent || '').trim().toLowerCase();
       map[label] = i;
     }
-    function has(xs){ for (var j=0;j<xs.length;j++){ if (!(xs[j] in map)) return false; } return true; }
-    // Required basics
-    if (!has(['id','date'])) return null;
-    // Optional columns (guarded uses)
-    return {
-      table: t, idx: map
-    };
+    if (!('id' in map) || !('date' in map)) return null;
+    return { table: t, idx: map };
+  }
+  function getCellVal(td){
+    if (!td) return '';
+    var el = td.querySelector('input,select,textarea');
+    return (el ? el.value : td.textContent) || '';
+  }
+  function setCellVal(td, v){
+    if (!td) return;
+    var el = td.querySelector('input,select,textarea');
+    if (el) el.value = v == null ? '' : String(v);
+    else td.textContent = v == null ? '' : String(v);
+  }
+  function findRowByKey(table, idx, key){
+    var pipe = key.indexOf('|'); if (pipe < 0) return null;
+    var id = key.slice(0, pipe), date = key.slice(pipe+1);
+    var tb = table.tBodies && table.tBodies[0]; if (!tb) return null;
+    var rows = tb.rows || [];
+    for (var r=0;r<rows.length;r++){
+      var tr = rows[r];
+      var idCell = tr.cells[idx['id']], dateCell = tr.cells[idx['date']];
+      if (!idCell || !dateCell) continue;
+      var rid = (idCell.textContent||'').trim(), rdate = (dateCell.textContent||'').trim();
+      if (rid === id && rdate === date) return tr;
+    }
+    return null;
   }
 
-  // Supabase direct helpers (optional)
-  function kvUpsert(key, value){
-    try{
-      var s = window.supabase;
-      if (!s) return;
-      s.from(KV_TABLE).upsert({ key: key, value: value }, { onConflict: 'key' })
-       .then(function(r){ if (r && r.error) console.warn('kv upsert error', r.error.message); })
-       .catch(function(e){ console.warn('kv upsert fail', e && e.message); });
-    }catch(e){ console.warn('kvUpsert exception', e && e.message); }
+  // --- Supabase helpers (promise-based, no top-level await) ---
+  function upsertKey(key, value){
+    if (!hasSupabase()) return;
+    return window.supabase.from(TABLE)
+      .upsert({ key: key, value: value }, { onConflict: 'key' })
+      .then(function(res){ if (res.error) console.warn('Supabase upsert error:', res.error.message); })
+      .catch(function(e){ console.warn('Supabase upsert failed:', e && e.message); });
   }
-  function kvFetch(keys, cb){
+  function fetchAllDtr(cb){
+    if (!hasSupabase()) return cb && cb(null);
+    window.supabase.from(TABLE)
+      .select('key,value')
+      .like('key', KEY_PREFIX + '%')
+      .then(function(res){
+        if (res.error) { console.warn('Supabase fetch error:', res.error.message); cb && cb(null); return; }
+        var map = {};
+        (res.data || []).forEach(function(row){ map[row.key.slice(KEY_PREFIX.length)] = row.value; });
+        cb && cb(map);
+      }).catch(function(e){ console.warn('Supabase fetch failed:', e && e.message); cb && cb(null); });
+  }
+  function subscribeRealtime(onChange){
     try{
-      var s = window.supabase;
-      if (!s || !keys || !keys.length) return cb && cb(null);
-      s.from(KV_TABLE).select('key,value').in('key', keys)
-        .then(function(r){
-          if (r && r.data && Array.isArray(r.data)){
-            var out = {}; for (var i=0;i<r.data.length;i++){ out[r.data[i].key] = r.data[i].value; }
-            cb && cb(out);
-          } else { cb && cb(null); }
+      if (!window.supabase || !window.supabase.channel) return;
+      var ch = window.supabase
+        .channel('kv_dtr_changes')
+        .on('postgres_changes', { event: '*', schema: 'public', table: TABLE }, function(payload){
+          try{
+            var row = payload.new || payload.old;
+            if (!row || !row.key || row.key.indexOf(KEY_PREFIX) !== 0) return;
+            var key = row.key.slice(KEY_PREFIX.length);
+            onChange && onChange(key, payload.new ? payload.new.value : null);
+          }catch(e){ console.warn('realtime handler failed', e && e.message); }
         })
-        .catch(function(e){ console.warn('kvFetch fail', e && e.message); cb && cb(null); });
-    }catch(e){ console.warn('kvFetch exception', e && e.message); cb && cb(null); }
+        .subscribe();
+    }catch(e){ console.warn('subscribeRealtime failed', e && e.message); }
   }
 
-  // Apply overrides to storedRecords and/or table cells
-  function overlayOverrides(){
-    try{
-      var meta = detectCols();
-      if (!meta) return;
-      var t = meta.table, idx = meta.idx;
-      var projMap = loadJSON(KEYS.proj, {});
-      var schedMap = loadJSON(KEYS.sched, {});
-      var timeMap = loadJSON(KEYS.times, {});
-      var hoursMap = loadJSON(KEYS.hours, {});
-      // Try to ensure storedRecords exists
-      if (!Array.isArray(window.storedRecords)) {
-        try { window.storedRecords = JSON.parse(localStorage.getItem('att_records_v2')||'[]') || []; } catch(e){ window.storedRecords = []; }
-      }
-      var tbody = t.tBodies && t.tBodies[0];
-      if (!tbody) return;
-      var rows = tbody.rows || [];
-      for (var r=0;r<rows.length;r++){
-        var tr = rows[r];
-        var id = (tr.cells[idx['id']] ? (tr.cells[idx['id']].textContent||'').trim() : '');
-        var date = (tr.cells[idx['date']] ? (tr.cells[idx['date']].textContent||'').trim() : '');
-        if (!id || !date) continue;
-        var key = id + '|' + date;
-        // Find or create record
-        var rec = null;
-        for (var i=0;i<(window.storedRecords||[]).length;i++){
-          var rr = window.storedRecords[i];
-          var rid = rr.empId || rr.id; var rdate = rr.date || rr.work_date || rr.workDate;
-          if (rid === id && rdate === date){ rec = rr; break; }
-        }
-        if (!rec){ rec = { empId:id, date:date }; window.storedRecords.push(rec); }
-
-        // Overlay project/schedule
-        if (projMap[key] && ('project' in idx)){
-          rec.project = projMap[key];
-          // Update cell if visible
-          var c = tr.cells[idx['project']];
-          if (c){
-            var el = c.querySelector('input,select,textarea');
-            if (el) el.value = projMap[key]; else c.textContent = projMap[key];
-          }
-        }
-        if (schedMap[key] && ('schedule' in idx)){
-          rec.schedule = schedMap[key];
-          var c2 = tr.cells[idx['schedule']];
-          if (c2){
-            var el2 = c2.querySelector('input,select,textarea');
-            if (el2) el2.value = schedMap[key]; else c2.textContent = schedMap[key];
-          }
-        }
-        // Overlay times
-        var tm = timeMap[key] || null;
-        if (tm){
-          function setTime(field, colName){
-            if (!(colName in idx)) return;
-            rec[field] = tm[field] || tm[field === 'otIn' ? 'ot_in' : field] || null;
-            var c3 = tr.cells[idx[colName]];
-            if (c3){
-              var el3 = c3.querySelector('input,select,textarea');
-              var v = tm[field] || '';
-              if (el3) el3.value = v; else c3.textContent = v;
-            }
-          }
-          setTime('ci1','clock in 1');
-          setTime('co1','clock out 1');
-          setTime('ci2','clock in 2');
-          setTime('co2','clock out 2');
-          setTime('otIn','ot in');
-          setTime('otOut','ot out');
-        }
-        // Overlay hours
-        var hm = hoursMap[key] || null;
-        if (hm){
-          function setNum(colName, n){
-            if (!(colName in idx)) return;
-            var txt = (n==null || n==='') ? '' : String(n);
-            var c4 = tr.cells[idx[colName]];
-            if (c4){
-              var el4 = c4.querySelector('input,textarea');
-              if (el4) el4.value = txt; else c4.textContent = txt;
-            }
-          }
-          if ('regHrs' in hm) setNum('total regular hrs', hm.regHrs);
-          if ('otHrs' in hm) setNum('ot hrs', hm.otHrs);
-        }
-      }
-      try { localStorage.setItem('att_records_v2', JSON.stringify(window.storedRecords)); } catch(e){}
-    }catch(e){ console.warn('overlayOverrides failed', e && e.message); }
+  // --- Data extract/overlay ---
+  var COLS_TIME = ['clock in 1','clock out 1','clock in 2','clock out 2','ot in','ot out'];
+  function readRow(meta, tr){
+    var idx = meta.idx;
+    function pick(col){ return (col in idx) ? getCellVal(tr.cells[idx[col]]).trim() : null; }
+    var row = {
+      project: pick('project') || null,
+      schedule: pick('schedule') || null,
+      ci1: pick('clock in 1') || null,
+      co1: pick('clock out 1') || null,
+      ci2: pick('clock in 2') || null,
+      co2: pick('clock out 2') || null,
+      ot_in: pick('ot in') || null,
+      ot_out: pick('ot out') || null,
+      reg_hrs: (function(v){ v = pick('total regular hrs'); var n = parseFloat((v||'').replace(/[, ]+/g,'')); return isFinite(n) ? n : null; })(),
+      ot_hrs: (function(v){ v = pick('ot hrs'); var n = parseFloat((v||'').replace(/[, ]+/g,'')); return isFinite(n) ? n : null; })(),
+      updated_at: new Date().toISOString()
+    };
+    return row;
+  }
+  function overlayRow(meta, tr, row){
+    if (!row) return;
+    var idx = meta.idx;
+    function set(col, val){ if (!(col in idx)) return; setCellVal(tr.cells[idx[col]], val); }
+    if ('project' in row) set('project', row.project);
+    if ('schedule' in row) set('schedule', row.schedule);
+    set('clock in 1', row.ci1);
+    set('clock out 1', row.co1);
+    set('clock in 2', row.ci2);
+    set('clock out 2', row.co2);
+    set('ot in', row.ot_in);
+    set('ot out', row.ot_out);
+    if (row.reg_hrs != null) set('total regular hrs', row.reg_hrs);
+    if (row.ot_hrs != null) set('ot hrs', row.ot_hrs);
   }
 
-  // Listeners to capture edits
-  function wireEditors(){
-    var meta = detectCols();
-    if (!meta) return;
+  // --- Wire editors to save DIRECTLY to Supabase ---
+  function wire(){
+    var meta = detectCols(); if (!meta) return;
     var t = meta.table, idx = meta.idx;
-    t.addEventListener('change', onEdit, true);
-    t.addEventListener('blur', onEdit, true);
-    t.addEventListener('input', onEdit, true);
+    t.addEventListener('change', onChange, true);
+    t.addEventListener('input', onChange, true);
+    t.addEventListener('blur', onChange, true);
 
-    function onEdit(ev){
+    function onChange(ev){
       var el = ev.target;
       if (!el || !el.closest) return;
-      var tr = el.closest('tr');
-      if (!tr || !tr.parentElement || tr.parentElement.tagName !== 'TBODY') return;
-      var idCell = ('id' in idx) ? tr.cells[idx['id']] : null;
-      var dateCell = ('date' in idx) ? tr.cells[idx['date']] : null;
-      var id = idCell ? (idCell.textContent||'').trim() : '';
-      var date = dateCell ? (dateCell.textContent||'').trim() : '';
+      var td = el.closest('td'); if (!td) return;
+      var tr = el.closest('tr'); if (!tr || tr.parentElement.tagName !== 'TBODY') return;
+      // Identify row key
+      var idCell = tr.cells[idx['id']], dateCell = tr.cells[idx['date']];
+      if (!idCell || !dateCell) return;
+      var id = (idCell.textContent||'').trim();
+      var date = (dateCell.textContent||'').trim();
       if (!id || !date) return;
-      var key = id + '|' + date;
-
-      // Determine which column changed
-      var td = el.closest('td');
-      var cellIndex = Array.prototype.indexOf.call(tr.children, td);
-      function isCol(label){ return (label in idx) && (cellIndex === idx[label]); }
-
-      // Project / Schedule
-      if (isCol('project') || isCol('schedule')){
-        if (isCol('project')){
-          var proj = getCellInputValue(td);
-          var pmap = loadJSON(KEYS.proj, {});
-          if (proj) pmap[key] = proj; else delete pmap[key];
-          saveJSON(KEYS.proj, pmap); kvUpsert(KEYS.proj, pmap);
-        }
-        if (isCol('schedule')){
-          var sch = getCellInputValue(td);
-          var smap = loadJSON(KEYS.sched, {});
-          if (sch) smap[key] = sch; else delete smap[key];
-          saveJSON(KEYS.sched, smap); kvUpsert(KEYS.sched, smap);
-        }
-        return;
-      }
-
-      // Time cells
-      var timeCols = ['clock in 1','clock out 1','clock in 2','clock out 2','ot in','ot out'];
-      var isTime = false; for (var i=0;i<timeCols.length;i++){ if (isCol(timeCols[i])) { isTime = true; break; } }
-      if (isTime){
-        var tmap = loadJSON(KEYS.times, {});
-        var payload = tmap[key] || {};
-        if ('clock in 1' in idx) payload.ci1 = (tr.cells[idx['clock in 1']] ? getCellInputValue(tr.cells[idx['clock in 1']]) : null) || null;
-        if ('clock out 1' in idx) payload.co1 = (tr.cells[idx['clock out 1']] ? getCellInputValue(tr.cells[idx['clock out 1']]) : null) || null;
-        if ('clock in 2' in idx) payload.ci2 = (tr.cells[idx['clock in 2']] ? getCellInputValue(tr.cells[idx['clock in 2']]) : null) || null;
-        if ('clock out 2' in idx) payload.co2 = (tr.cells[idx['clock out 2']] ? getCellInputValue(tr.cells[idx['clock out 2']]) : null) || null;
-        if ('ot in' in idx) payload.otIn = (tr.cells[idx['ot in']] ? getCellInputValue(tr.cells[idx['ot in']]) : null) || null;
-        if ('ot out' in idx) payload.otOut = (tr.cells[idx['ot out']] ? getCellInputValue(tr.cells[idx['ot out']]) : null) || null;
-        tmap[key] = payload;
-        saveJSON(KEYS.times, tmap); kvUpsert(KEYS.times, tmap);
-        return;
-      }
-
-      // Hours cells
-      if (isCol('total regular hrs') || isCol('ot hrs')){
-        var hmap = loadJSON(KEYS.hours, {});
-        var rec = hmap[key] || {};
-        function parseNum(v){ var n = parseFloat((v||'').replace(/[, ]+/g,'')); return isFinite(n)?n:null; }
-        if ('total regular hrs' in idx) rec.regHrs = parseNum(getCellInputValue(tr.cells[idx['total regular hrs']]));
-        if ('ot hrs' in idx) rec.otHrs = parseNum(getCellInputValue(tr.cells[idx['ot hrs']]));
-        hmap[key] = rec;
-        saveJSON(KEYS.hours, hmap); kvUpsert(KEYS.hours, hmap);
-        return;
-      }
+      var key = KEY_PREFIX + id + '|' + date;
+      var row = readRow(meta, tr);
+      upsertKey(key, row);
     }
   }
 
-  function bootstrap(){
-    // 1) Pull latest time + hours overrides from Supabase kv_store (if client is present)
-    kvFetch([KEYS.times, KEYS.hours], function(map){
-      if (map){
-        if (map[KEYS.times]) saveJSON(KEYS.times, map[KEYS.times]);
-        if (map[KEYS.hours]) saveJSON(KEYS.hours, map[KEYS.hours]);
-      }
-      // 2) Overlay local overrides on the current view
-      overlayOverrides();
-      // 3) Wire editors (so further edits sync)
-      wireEditors();
+  // --- Boot: fetch remote rows and subscribe to realtime ---
+  function boot(){
+    var meta = detectCols();
+    if (!meta) return;
+    // initial overlay
+    fetchAllDtr(function(map){
+      try{
+        if (!map) return;
+        var t = meta.table, idx = meta.idx;
+        var tb = t.tBodies && t.tBodies[0];
+        if (!tb) return;
+        var rows = tb.rows || [];
+        for (var r=0;r<rows.length;r++){
+          var tr = rows[r];
+          var id = (tr.cells[idx['id']] ? (tr.cells[idx['id']].textContent||'').trim() : '');
+          var date = (tr.cells[idx['date']] ? (tr.cells[idx['date']].textContent||'').trim() : '');
+          if (!id || !date) continue;
+          var payload = map[id + '|' + date];
+          if (payload) overlayRow(meta, tr, payload);
+        }
+      }catch(e){ console.warn('initial overlay failed', e && e.message); }
     });
+    // realtime overlay
+    subscribeRealtime(function(rowKey, value){
+      try{
+        var tr = findRowByKey(meta.table, meta.idx, rowKey);
+        if (tr) overlayRow(meta, tr, value);
+      }catch(e){ console.warn('realtime overlay failed', e && e.message); }
+    });
+    // editors
+    wire();
   }
 
-  if (document.readyState !== 'loading') bootstrap();
-  else document.addEventListener('DOMContentLoaded', bootstrap, { once: true });
+  if (document.readyState !== 'loading') boot();
+  else document.addEventListener('DOMContentLoaded', boot, { once: true });
 })();
 </script>
-<!-- === / Minimal Cross-Device Overrides Sync === -->
+<!-- === / Direct Remote DTR Sync === -->
 </body>
 </html>
