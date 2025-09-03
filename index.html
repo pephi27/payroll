@@ -63,6 +63,7 @@ const KNOWN_KEYS = [
   ,"payroll_adjustment_hours"
   ,"payroll_bantay"
   ,"payroll_contrib_flags"
+  ,"att_overrides_hours_v1"
 ]
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY)
@@ -8121,6 +8122,70 @@ document.addEventListener('DOMContentLoaded', async function () {
   let overridesHours = {};
   try { overridesHours = JSON.parse(localStorage.getItem(LS_OVR_HOURS) || '{}') || {}; } catch(e){ overridesHours = {}; }
   function saveOverridesHours(){ try { localStorage.setItem(LS_OVR_HOURS, JSON.stringify(overridesHours)); } catch(e){} }
+  // Persist overrides to Supabase (kv_store) and fetch initial remote data
+  function saveOverridesHoursRemote(){
+    try {
+      const supabaseClient = window.supabase;
+      const table = window.SUPABASE_TABLE;
+      if(!supabaseClient || !table) return;
+      // Upsert the entire overridesHours object as the value for LS_OVR_HOURS
+      supabaseClient
+        .from(table)
+        .upsert({ key: LS_OVR_HOURS, value: overridesHours }, { onConflict: 'key' })
+        .then(({ error }) => {
+          if (error) console.warn('Supabase upsert overridesHours error:', error);
+        });
+    } catch(e){ console.warn('Supabase upsert overridesHours failed', e); }
+  }
+  // Load remote overridesHours from Supabase on startup, merge/replace local state and apply to table
+  (async function loadRemoteOverrides(){
+    try {
+      const supabaseClient = window.supabase;
+      const table = window.SUPABASE_TABLE;
+      if(!supabaseClient || !table) return;
+      const { data, error } = await supabaseClient
+        .from(table)
+        .select('value')
+        .eq('key', LS_OVR_HOURS)
+        .maybeSingle();
+      if(!error && data && data.value){
+        // replace overridesHours with remote value
+        if (typeof data.value === 'object') {
+          overridesHours = data.value;
+          // persist to local storage for offline use
+          saveOverridesHours();
+          // apply remote values to table after they've loaded
+          applyOverridesToTable();
+          recomputeDtrSummaryFromTable();
+        }
+      }
+    } catch(e){ console.warn('Load remote overrides failed', e); }
+  })();
+  // Subscribe to realtime updates for overridesHours in Supabase so edits on other devices reflect here
+  try {
+    const supabaseClient = window.supabase;
+    const table = window.SUPABASE_TABLE;
+    if (supabaseClient && table && supabaseClient.channel) {
+      supabaseClient
+        .channel('dtr_overrides_hours')
+        .on(
+          'postgres_changes',
+          { event: '*', schema: 'public', table: table, filter: `key=eq.${LS_OVR_HOURS}` },
+          (payload) => {
+            try {
+              const newVal = payload.new && payload.new.value;
+              if (newVal && typeof newVal === 'object') {
+                overridesHours = newVal;
+                saveOverridesHours();
+                applyOverridesToTable();
+                recomputeDtrSummaryFromTable();
+              }
+            } catch(e) { console.warn('Realtime payload handling error', e); }
+          }
+        )
+        .subscribe();
+    }
+  } catch(e){ console.warn('Realtime subscription error:', e); }
 
   function ensureEditorHeader(){
     const table = document.getElementById('resultsTable');
@@ -8214,8 +8279,13 @@ document.addEventListener('DOMContentLoaded', async function () {
           const regVal = parseFloat(regInput && regInput.value) || 0;
           const otVal  = parseFloat(otInput  && otInput.value)  || 0;
           const k = keyForRow(tr);
+          // Update the overridesHours object and persist locally & remotely
           overridesHours[k] = { reg: regVal, ot: otVal };
           saveOverridesHours();
+          // Persist to Supabase kv store so other devices pick up the change
+          if (typeof saveOverridesHoursRemote === 'function') {
+            saveOverridesHoursRemote();
+          }
           tr.cells[regIdx].textContent = regVal.toFixed(2);
           tr.cells[otIdx ].textContent = otVal.toFixed(2);
           btn.textContent = 'Edit';
@@ -8250,191 +8320,5 @@ document.addEventListener('DOMContentLoaded', async function () {
   patchOnce();
 })();
 </script>
-
-<!-- === Direct Remote DTR Sync (Bypass localStorage) === -->
-<script>
-(function(){
-  'use strict';
-
-  var TABLE = (window.SUPABASE_TABLE || 'kv_store'); // existing table used by your app
-  var KEY_PREFIX = 'dtr:'; // rows will be keyed as dtr:<empId>|<date>
-
-  function hasSupabase(){ return !!(window.supabase && window.supabase.from); }
-
-  // --- small DOM helpers ---
-  function detectCols(){
-    var t = document.getElementById('resultsTable');
-    if (!t) return null;
-    var ths = (t.tHead ? t.tHead.querySelectorAll('th') : t.querySelectorAll('thead th')) || [];
-    var map = {};
-    for (var i=0;i<ths.length;i++){
-      var label = (ths[i].textContent || '').trim().toLowerCase();
-      map[label] = i;
-    }
-    if (!('id' in map) || !('date' in map)) return null;
-    return { table: t, idx: map };
-  }
-  function getCellVal(td){
-    if (!td) return '';
-    var el = td.querySelector('input,select,textarea');
-    return (el ? el.value : td.textContent) || '';
-  }
-  function setCellVal(td, v){
-    if (!td) return;
-    var el = td.querySelector('input,select,textarea');
-    if (el) el.value = v == null ? '' : String(v);
-    else td.textContent = v == null ? '' : String(v);
-  }
-  function findRowByKey(table, idx, key){
-    var pipe = key.indexOf('|'); if (pipe < 0) return null;
-    var id = key.slice(0, pipe), date = key.slice(pipe+1);
-    var tb = table.tBodies && table.tBodies[0]; if (!tb) return null;
-    var rows = tb.rows || [];
-    for (var r=0;r<rows.length;r++){
-      var tr = rows[r];
-      var idCell = tr.cells[idx['id']], dateCell = tr.cells[idx['date']];
-      if (!idCell || !dateCell) continue;
-      var rid = (idCell.textContent||'').trim(), rdate = (dateCell.textContent||'').trim();
-      if (rid === id && rdate === date) return tr;
-    }
-    return null;
-  }
-
-  // --- Supabase helpers (promise-based, no top-level await) ---
-  function upsertKey(key, value){
-    if (!hasSupabase()) return;
-    return window.supabase.from(TABLE)
-      .upsert({ key: key, value: value }, { onConflict: 'key' })
-      .then(function(res){ if (res.error) console.warn('Supabase upsert error:', res.error.message); })
-      .catch(function(e){ console.warn('Supabase upsert failed:', e && e.message); });
-  }
-  function fetchAllDtr(cb){
-    if (!hasSupabase()) return cb && cb(null);
-    window.supabase.from(TABLE)
-      .select('key,value')
-      .like('key', KEY_PREFIX + '%')
-      .then(function(res){
-        if (res.error) { console.warn('Supabase fetch error:', res.error.message); cb && cb(null); return; }
-        var map = {};
-        (res.data || []).forEach(function(row){ map[row.key.slice(KEY_PREFIX.length)] = row.value; });
-        cb && cb(map);
-      }).catch(function(e){ console.warn('Supabase fetch failed:', e && e.message); cb && cb(null); });
-  }
-  function subscribeRealtime(onChange){
-    try{
-      if (!window.supabase || !window.supabase.channel) return;
-      var ch = window.supabase
-        .channel('kv_dtr_changes')
-        .on('postgres_changes', { event: '*', schema: 'public', table: TABLE }, function(payload){
-          try{
-            var row = payload.new || payload.old;
-            if (!row || !row.key || row.key.indexOf(KEY_PREFIX) !== 0) return;
-            var key = row.key.slice(KEY_PREFIX.length);
-            onChange && onChange(key, payload.new ? payload.new.value : null);
-          }catch(e){ console.warn('realtime handler failed', e && e.message); }
-        })
-        .subscribe();
-    }catch(e){ console.warn('subscribeRealtime failed', e && e.message); }
-  }
-
-  // --- Data extract/overlay ---
-  var COLS_TIME = ['clock in 1','clock out 1','clock in 2','clock out 2','ot in','ot out'];
-  function readRow(meta, tr){
-    var idx = meta.idx;
-    function pick(col){ return (col in idx) ? getCellVal(tr.cells[idx[col]]).trim() : null; }
-    var row = {
-      project: pick('project') || null,
-      schedule: pick('schedule') || null,
-      ci1: pick('clock in 1') || null,
-      co1: pick('clock out 1') || null,
-      ci2: pick('clock in 2') || null,
-      co2: pick('clock out 2') || null,
-      ot_in: pick('ot in') || null,
-      ot_out: pick('ot out') || null,
-      reg_hrs: (function(v){ v = pick('total regular hrs'); var n = parseFloat((v||'').replace(/[, ]+/g,'')); return isFinite(n) ? n : null; })(),
-      ot_hrs: (function(v){ v = pick('ot hrs'); var n = parseFloat((v||'').replace(/[, ]+/g,'')); return isFinite(n) ? n : null; })(),
-      updated_at: new Date().toISOString()
-    };
-    return row;
-  }
-  function overlayRow(meta, tr, row){
-    if (!row) return;
-    var idx = meta.idx;
-    function set(col, val){ if (!(col in idx)) return; setCellVal(tr.cells[idx[col]], val); }
-    if ('project' in row) set('project', row.project);
-    if ('schedule' in row) set('schedule', row.schedule);
-    set('clock in 1', row.ci1);
-    set('clock out 1', row.co1);
-    set('clock in 2', row.ci2);
-    set('clock out 2', row.co2);
-    set('ot in', row.ot_in);
-    set('ot out', row.ot_out);
-    if (row.reg_hrs != null) set('total regular hrs', row.reg_hrs);
-    if (row.ot_hrs != null) set('ot hrs', row.ot_hrs);
-  }
-
-  // --- Wire editors to save DIRECTLY to Supabase ---
-  function wire(){
-    var meta = detectCols(); if (!meta) return;
-    var t = meta.table, idx = meta.idx;
-    t.addEventListener('change', onChange, true);
-    t.addEventListener('input', onChange, true);
-    t.addEventListener('blur', onChange, true);
-
-    function onChange(ev){
-      var el = ev.target;
-      if (!el || !el.closest) return;
-      var td = el.closest('td'); if (!td) return;
-      var tr = el.closest('tr'); if (!tr || tr.parentElement.tagName !== 'TBODY') return;
-      // Identify row key
-      var idCell = tr.cells[idx['id']], dateCell = tr.cells[idx['date']];
-      if (!idCell || !dateCell) return;
-      var id = (idCell.textContent||'').trim();
-      var date = (dateCell.textContent||'').trim();
-      if (!id || !date) return;
-      var key = KEY_PREFIX + id + '|' + date;
-      var row = readRow(meta, tr);
-      upsertKey(key, row);
-    }
-  }
-
-  // --- Boot: fetch remote rows and subscribe to realtime ---
-  function boot(){
-    var meta = detectCols();
-    if (!meta) return;
-    // initial overlay
-    fetchAllDtr(function(map){
-      try{
-        if (!map) return;
-        var t = meta.table, idx = meta.idx;
-        var tb = t.tBodies && t.tBodies[0];
-        if (!tb) return;
-        var rows = tb.rows || [];
-        for (var r=0;r<rows.length;r++){
-          var tr = rows[r];
-          var id = (tr.cells[idx['id']] ? (tr.cells[idx['id']].textContent||'').trim() : '');
-          var date = (tr.cells[idx['date']] ? (tr.cells[idx['date']].textContent||'').trim() : '');
-          if (!id || !date) continue;
-          var payload = map[id + '|' + date];
-          if (payload) overlayRow(meta, tr, payload);
-        }
-      }catch(e){ console.warn('initial overlay failed', e && e.message); }
-    });
-    // realtime overlay
-    subscribeRealtime(function(rowKey, value){
-      try{
-        var tr = findRowByKey(meta.table, meta.idx, rowKey);
-        if (tr) overlayRow(meta, tr, value);
-      }catch(e){ console.warn('realtime overlay failed', e && e.message); }
-    });
-    // editors
-    wire();
-  }
-
-  if (document.readyState !== 'loading') boot();
-  else document.addEventListener('DOMContentLoaded', boot, { once: true });
-})();
-</script>
-<!-- === / Direct Remote DTR Sync === -->
 </body>
 </html>
