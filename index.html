@@ -133,11 +133,12 @@ Storage.prototype.removeItem = function(k) {
       }
     })
     if (changed) {
-      // One-time reload to let downstream scripts render with hydrated data
-      if (!sessionStorage.getItem("__kv_reloaded")) {
-        sessionStorage.setItem("__kv_reloaded","1")
-        location.reload()
-      }
+      // No-reload hydration: announce to the app that cloud data has been applied.
+      try {
+        window.__kv_hydrated = true;
+        window.dispatchEvent(new Event('kv-hydrated'));
+        if (typeof window.onKvHydrated === 'function') { try { window.onKvHydrated(); } catch(e){} }
+      } catch(e) { console.warn('kv-hydrated event dispatch failed', e); }
     }
   } catch (e) { console.warn("Initial hydrate failed", e) }
 })()
@@ -8414,5 +8415,32 @@ document.addEventListener('DOMContentLoaded', async function () {
 })();
 </script>
 <!-- === / Manual DTR Modal + Cloud Save Wiring (Patched) === -->
+
+<script>
+// Provide a small helper the rest of the app can await to ensure hydration & DOM are ready
+(function(){
+  if (!window.__kvReady) {
+    window.__kvReady = new Promise((resolve) => {
+      let resolved = false;
+      function done(){ if (!resolved){ resolved = true; resolve(); } }
+      function Done(){ if (!resolved){ resolved = true; resolve(); } }
+      // Resolve on DOMContentLoaded and also when kv-hydrated fires (whichever comes last)
+      const domReady = () => {
+        if (document.readyState !== 'loading') Done();
+        else document.addEventListener('DOMContentLoaded', Done, { once: true });
+      };
+      domReady();
+      if (window.__kv_hydrated) Done();
+      else window.addEventListener('kv-hydrated', Done, { once: true });
+      // Absolute safety valve after 2s
+      setTimeout(Done, 2000);
+    });
+  }
+  // Convenience: run queued functions when ready
+  const q = (window.__kvQueue = window.__kvQueue || []);
+  window.__kvWhenReady = function(fn){ if (window.__kvReady) window.__kvReady.then(()=>{ try{ fn(); }catch(e){} }); else q.push(fn); };
+  if (q.length) { while(q.length) { try{ window.__kvWhenReady(q.shift()); } catch(e){} } }
+})();
+</script>
 </body>
 </html>
