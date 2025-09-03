@@ -62,7 +62,8 @@ const KNOWN_KEYS = [
   ,"payroll_philhealth_table"
   ,"payroll_adjustment_hours"
   ,"payroll_bantay"
-  ,"payroll_contrib_flags"
+  ,"payroll_contrib_flags",
+  "att_overrides_times"
 ]
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY)
@@ -8442,5 +8443,220 @@ document.addEventListener('DOMContentLoaded', async function () {
   if (q.length) { while(q.length) { try{ window.__kvWhenReady(q.shift()); } catch(e){} } }
 })();
 </script>
+
+<!-- === DTR Editor Column Sync Fix (Projects & Schedules) === -->
+<script>
+(function(){
+  // Utility: safely load/store JSON in localStorage
+  function loadJSON(k, def){ try{ return JSON.parse(localStorage.getItem(k)) ?? def; }catch(_){ return def; } }
+  function saveJSON(k, v){ try{ localStorage.setItem(k, JSON.stringify(v)); }catch(e){ console.warn('localStorage save failed for', k, e); } }
+
+  // Find the DTR results table and detect the column indices for Project and Schedule
+  function detectDtrColumns(){
+    const table = document.getElementById('resultsTable');
+    if (!table) return null;
+    const ths = table.tHead ? table.tHead.querySelectorAll('th') : table.querySelectorAll('thead th');
+    let idx = { project: -1, schedule: -1, date: -1, id: -1 };
+    ths.forEach((th, i) => {
+      const label = (th.textContent || '').trim().toLowerCase();
+      if (label === 'project') idx.project = i;
+      else if (label === 'schedule') idx.schedule = i;
+      else if (label === 'date') idx.date = i;
+      else if (label === 'id') idx.id = i;
+    });
+    if (idx.project === -1 || idx.schedule === -1 || idx.date === -1 || idx.id === -1) return null;
+    return { table, idx };
+  }
+
+  function getCellText(td){
+    if (!td) return '';
+    const inp = td.querySelector('input,select,textarea');
+    if (inp) return (inp.value || '').trim();
+    return (td.textContent || '').trim();
+  }
+
+  function wireDtrOverrideSync(){
+    const meta = detectDtrColumns();
+    if (!meta) return;
+    const { table, idx } = meta;
+
+    table.addEventListener('change', onEdit, true);
+    table.addEventListener('blur', onEdit, true);
+
+    function onEdit(ev){
+      const el = ev.target;
+      if (!el || !el.closest) return;
+      const tr = el.closest('tr');
+      if (!tr || !tr.parentElement || tr.parentElement.tagName !== 'TBODY') return;
+      const tds = tr.children;
+      if (!tds || !tds.length) return;
+
+      // Read key fields
+      const idVal = getCellText(tds[idx.id]);
+      const dateVal = getCellText(tds[idx.date]);
+      if (!idVal || !dateVal) return;
+
+      // Determine if we edited Project or Schedule columns
+      const td = el.closest('td');
+      const cellIndex = Array.prototype.indexOf.call(tds, td);
+      const isProj = (cellIndex === idx.project);
+      const isSched = (cellIndex === idx.schedule);
+
+      if (!isProj && !isSched) return; // ignore other columns
+
+      // Load existing maps
+      const projMap = loadJSON('att_overrides_projects', {});
+      const schMap  = loadJSON('att_overrides_schedules', {});
+
+      const key = idVal + '|' + dateVal;
+
+      if (isProj) {
+        const v = getCellText(tds[idx.project]) || null;
+        if (v && v.length) projMap[key] = v;
+        else delete projMap[key];
+        saveJSON('att_overrides_projects', projMap);
+      }
+      if (isSched) {
+        const v = getCellText(tds[idx.schedule]) || null;
+        if (v && v.length) schMap[key] = v;
+        else delete schMap[key];
+        saveJSON('att_overrides_schedules', schMap);
+      }
+
+      // Optional: if a cloud saver exists for DTR, call it to ensure immediate propagation
+      try { if (typeof window.saveDtrToCloud === 'function') window.saveDtrToCloud(window.storedRecords || []); } catch(e){}
+    }
+
+    // In case the page renders existing selects/inputs programmatically after hydration,
+    // run this wiring again after hydration event.
+    window.addEventListener('kv-hydrated', () => {
+      // no-op; listeners already attached with capture=true
+    }, { once: true });
+  }
+
+  document.addEventListener('DOMContentLoaded', wireDtrOverrideSync);
+})();
+</script>
+<!-- === / DTR Editor Column Sync Fix === -->
+
+<!-- === DTR Time Columns Cross-Device Sync === -->
+<script>
+(function(){
+  function loadJSON(k, def){ try{ return JSON.parse(localStorage.getItem(k)) ?? def; }catch(_){ return def; } }
+  function saveJSON(k, v){ try{ localStorage.setItem(k, JSON.stringify(v)); }catch(e){ console.warn('localStorage save failed for', k, e); } }
+
+  function detectCols(){
+    const table = document.getElementById('resultsTable');
+    if (!table) return null;
+    const ths = table.tHead ? table.tHead.querySelectorAll('th') : table.querySelectorAll('thead th');
+    const labelToIdx = {};
+    ths.forEach((th, i) => labelToIdx[(th.textContent||'').trim().toLowerCase()] = i);
+    const need = ['id','date','clock in 1','clock out 1','clock in 2','clock out 2','ot in','ot out'];
+    for (const n of need){ if (!(n in labelToIdx)) return null; }
+    return {
+      table,
+      idx: {
+        id: labelToIdx['id'],
+        date: labelToIdx['date'],
+        ci1: labelToIdx['clock in 1'],
+        co1: labelToIdx['clock out 1'],
+        ci2: labelToIdx['clock in 2'],
+        co2: labelToIdx['clock out 2'],
+        oti: labelToIdx['ot in'],
+        oto: labelToIdx['ot out'],
+      }
+    };
+  }
+
+  function getCellValue(td){
+    if (!td) return '';
+    const el = td.querySelector('input,select,textarea');
+    if (el) return (el.value || '').trim();
+    return (td.textContent || '').trim();
+  }
+
+  function setRecordField(rec, field, val){
+    if (!rec) return;
+    if (val === '') val = null;
+    if (field === 'ci1') rec.ci1 = val, rec.clockIn1 = val;
+    if (field === 'co1') rec.co1 = val, rec.clockOut1 = val;
+    if (field === 'ci2') rec.ci2 = val, rec.clockIn2 = val;
+    if (field === 'co2') rec.co2 = val, rec.clockOut2 = val;
+    if (field === 'oti') rec.otIn = val, rec.ot_in = val;
+    if (field === 'oto') rec.otOut = val, rec.ot_out = val;
+  }
+
+  function wireTimeSync(){
+    const meta = detectCols();
+    if (!meta) return;
+    const { table, idx } = meta;
+
+    table.addEventListener('change', handleEdit, true);
+    table.addEventListener('blur', handleEdit, true);
+
+    function handleEdit(ev){
+      const el = ev.target;
+      if (!el || !el.closest) return;
+      const tr = el.closest('tr');
+      if (!tr || tr.parentElement.tagName !== 'TBODY') return;
+      const tds = tr.children;
+
+      const id = getCellValue(tds[idx.id]);
+      const date = getCellValue(tds[idx.date]);
+      if (!id || !date) return;
+
+      // Determine which time cell changed
+      const td = el.closest('td');
+      const cIndex = Array.prototype.indexOf.call(tds, td);
+      const which =
+        cIndex === idx.ci1 ? 'ci1' :
+        cIndex === idx.co1 ? 'co1' :
+        cIndex === idx.ci2 ? 'ci2' :
+        cIndex === idx.co2 ? 'co2' :
+        cIndex === idx.oti ? 'oti' :
+        cIndex === idx.oto ? 'oto' : null;
+      if (!which) return;
+
+      // Read all time cells for this row to keep overrides cohesive
+      const payload = {
+        ci1: getCellValue(tds[idx.ci1]) || null,
+        co1: getCellValue(tds[idx.co1]) || null,
+        ci2: getCellValue(tds[idx.ci2]) || null,
+        co2: getCellValue(tds[idx.co2]) || null,
+        otIn: getCellValue(tds[idx.oti]) || null,
+        otOut: getCellValue(tds[idx.oto]) || null,
+      };
+
+      // Save to overrides map (mirrored to Supabase via KV adapter)
+      const map = loadJSON('att_overrides_times', {});
+      map[id + '|' + date] = payload;
+      saveJSON('att_overrides_times', map);
+
+      // Update in-memory records so current device UI recomputes immediately
+      try {
+        if (!Array.isArray(window.storedRecords)) window.storedRecords = [];
+        let rec = window.storedRecords.find(r => (r.empId===id || r.id===id) && (r.date===date || r.work_date===date));
+        if (!rec) { rec = { empId:id, date }; window.storedRecords.push(rec); }
+        setRecordField(rec, 'ci1', payload.ci1);
+        setRecordField(rec, 'co1', payload.co1);
+        setRecordField(rec, 'ci2', payload.ci2);
+        setRecordField(rec, 'co2', payload.co2);
+        setRecordField(rec, 'oti', payload.otIn);
+        setRecordField(rec, 'oto', payload.otOut);
+        // Persist locally (not mirrored by KV by default, but good for offline)
+        try { localStorage.setItem('att_records_v2', JSON.stringify(window.storedRecords)); } catch(e){}
+        // Re-render if available
+        try { if (typeof window.renderResults==='function') window.renderResults(); } catch(e){}
+      } catch(e){ console.warn('update storedRecords failed', e); }
+
+      // Save to cloud so other devices see the change even if they don't read overrides
+      try { if (typeof window.saveDtrToCloud==='function') window.saveDtrToCloud(window.storedRecords); } catch(e){}
+    }
+  }
+
+  document.addEventListener('DOMContentLoaded', wireTimeSync);
+})();
+</script>
+<!-- === / DTR Time Columns Cross-Device Sync === -->
 </body>
 </html>
