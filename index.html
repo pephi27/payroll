@@ -8250,5 +8250,169 @@ document.addEventListener('DOMContentLoaded', async function () {
   patchOnce();
 })();
 </script>
+
+<!-- === Manual DTR Modal + Cloud Save Wiring (Patched) === -->
+<style>
+  #manualDtrModal{position:fixed;inset:0;display:none;place-items:center;background:rgba(0,0,0,.45);z-index:9999}
+  #manualDtrCard{background:#fff;min-width:320px;max-width:520px;border-radius:12px;padding:16px;border:1px solid #e2e8f0;box-shadow:0 10px 30px rgba(0,0,0,.15)}
+  #manualDtrCard h3{margin:.25rem 0 .75rem 0}
+  #manualDtrForm{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+  #manualDtrForm label{display:flex;flex-direction:column;font-size:12px;color:#334155;font-weight:600}
+  #manualDtrForm input,#manualDtrForm select{padding:8px;border:1px solid #cbd5e1;border-radius:8px}
+  #manualDtrActions{display:flex;justify-content:flex-end;gap:8px;margin-top:12px}
+</style>
+<div id="manualDtrModal" aria-hidden="true">
+  <div id="manualDtrCard" role="dialog" aria-modal="true" aria-labelledby="manualDtrTitle">
+    <h3 id="manualDtrTitle">Manual DTR Entry</h3>
+    <form id="manualDtrForm">
+      <label>Employee ID<input id="md_empId" required placeholder="e.g. 0001" /></label>
+      <label>Date<input id="md_date" type="date" required /></label>
+      <label>Project<select id="md_project"><option value="">(default)</option></select></label>
+      <label>Schedule<select id="md_schedule"><option value="">(default)</option></select></label>
+      <label>Clock In 1<input id="md_ci1" type="time" /></label>
+      <label>Clock Out 1<input id="md_co1" type="time" /></label>
+      <label>Clock In 2<input id="md_ci2" type="time" /></label>
+      <label>Clock Out 2<input id="md_co2" type="time" /></label>
+      <label>OT In<input id="md_oti" type="time" /></label>
+      <label>OT Out<input id="md_oto" type="time" /></label>
+    </form>
+    <div id="manualDtrActions">
+      <button type="button" id="cancelManualDtr">Cancel</button>
+      <button type="button" id="saveManualDtr">Save</button>
+    </div>
+  </div>
+</div>
+<script>
+(function(){
+  // Fill project & schedule selects using existing stores if available
+  function fillSelectOptions(){
+    try{
+      const projSel = document.getElementById('md_project');
+      const schSel  = document.getElementById('md_schedule');
+      if (projSel && window.storedProjects && typeof window.storedProjects === 'object'){
+        projSel.innerHTML = '<option value=\"\">(default)</option>' +
+          Object.keys(window.storedProjects).map(p => `<option>${p}</option>`).join('');
+      }
+      if (schSel && window.storedSchedules && typeof window.storedSchedules === 'object'){
+        schSel.innerHTML = '<option value=\"\">(default)</option>' +
+          Object.keys(window.storedSchedules).map(s => `<option>${s}</option>`).join('');
+      }
+    }catch(e){}
+  }
+
+  // Robust cloud save: 1) kv_store 'att_records_v2' snapshot; 2) best-effort upsert to 'dtr_records'
+  async function saveDtrToCloud(records){
+    try{
+      const supa = window.supabase;
+      const TABLE_KV = window.SUPABASE_TABLE || 'kv_store';
+      if (supa){
+        // 1) Save the whole array snapshot into kv_store so it's guaranteed persisted
+        try{
+          const payload = { key: 'att_records_v2', value: records };
+          const { error } = await supa.from(TABLE_KV).upsert(payload, { onConflict: 'key' });
+          if (error) console.warn('kv_store upsert error:', error.message);
+        }catch(e){ console.warn('kv_store upsert failed', e); }
+
+        // 2) Optional: also upsert individual rows into dtr_records if that table exists
+        // We assume conflict target (emp_id,date). Failures are non-fatal.
+        try{
+          if (Array.isArray(records) && records.length){
+            // Map into a normalized shape; tolerate different source shapes
+            const rows = records.map(r => {
+              return {
+                emp_id: r.empId || r.id || r.employeeId || null,
+                work_date: r.date || r.work_date || r.workDate || null,
+                project: r.project || null,
+                schedule: r.schedule || null,
+                ci1: r.ci1 || r.clockIn1 || r.clock_in_1 || null,
+                co1: r.co1 || r.clockOut1 || r.clock_out_1 || null,
+                ci2: r.ci2 || r.clockIn2 || r.clock_in_2 || null,
+                co2: r.co2 || r.clockOut2 || r.clock_out_2 || null,
+                ot_in: r.otIn || r.ot_in || null,
+                ot_out: r.otOut || r.ot_out || null,
+                updated_at: new Date().toISOString()
+              };
+            });
+            // Filter obviously incomplete rows
+            const filtered = rows.filter(x => x.emp_id && x.work_date);
+            if (filtered.length){
+              const { error } = await supa.from('dtr_records').upsert(filtered, { onConflict: 'emp_id,work_date' });
+              if (error) console.warn('dtr_records upsert error:', error.message);
+            }
+          }
+        }catch(e){ console.warn('dtr_records upsert failed', e); }
+      }
+    }catch(e){ console.warn('saveDtrToCloud failed', e); }
+  }
+  window.saveDtrToCloud = window.saveDtrToCloud || saveDtrToCloud;
+
+  function openManualDtr(){
+    fillSelectOptions();
+    const m = document.getElementById('manualDtrModal');
+    if (m){ m.style.display = 'grid'; m.setAttribute('aria-hidden','false'); }
+  }
+  function closeManualDtr(){
+    const m = document.getElementById('manualDtrModal');
+    if (m){ m.style.display = 'none'; m.setAttribute('aria-hidden','true'); }
+    const form = document.getElementById('manualDtrForm');
+    if (form) form.reset();
+  }
+
+  // Wire open button
+  document.addEventListener('DOMContentLoaded', function(){
+    const btn = document.getElementById('manualDtrBtn');
+    if (btn){ btn.addEventListener('click', openManualDtr); }
+    const cancel = document.getElementById('cancelManualDtr');
+    if (cancel){ cancel.addEventListener('click', closeManualDtr); }
+    const modal = document.getElementById('manualDtrModal');
+    if (modal){ modal.addEventListener('click', (e)=>{ if(e.target===modal) closeManualDtr(); }); }
+
+    // Save handler
+    const saveBtn = document.getElementById('saveManualDtr');
+    if (saveBtn){
+      saveBtn.addEventListener('click', async function(){
+        const empId = (document.getElementById('md_empId')||{}).value?.trim();
+        const date  = (document.getElementById('md_date')||{}).value;
+        const project  = (document.getElementById('md_project')||{}).value || null;
+        const schedule = (document.getElementById('md_schedule')||{}).value || null;
+        const ci1 = (document.getElementById('md_ci1')||{}).value || null;
+        const co1 = (document.getElementById('md_co1')||{}).value || null;
+        const ci2 = (document.getElementById('md_ci2')||{}).value || null;
+        const co2 = (document.getElementById('md_co2')||{}).value || null;
+        const ot_in = (document.getElementById('md_oti')||{}).value || null;
+        const ot_out= (document.getElementById('md_oto')||{}).value || null;
+
+        if(!empId || !date){
+          alert('Employee ID and Date are required.');
+          return;
+        }
+
+        // Initialize store
+        if (!Array.isArray(window.storedRecords)) window.storedRecords = [];
+        const rec = { empId, date, project, schedule, ci1, co1, ci2, co2, otIn: ot_in, otOut: ot_out };
+
+        // Add/merge by (empId,date) — if exists, overwrite
+        const idx = window.storedRecords.findIndex(r => (r.empId===empId || r.id===empId) && (r.date===date || r.work_date===date));
+        if (idx >= 0) window.storedRecords[idx] = Object.assign({}, window.storedRecords[idx], rec);
+        else window.storedRecords.push(rec);
+
+        try{
+          // persist locally for offline and existing app flows
+          localStorage.setItem('att_records_v2', JSON.stringify(window.storedRecords));
+        }catch(e){ console.warn('localStorage write failed', e); }
+
+        // re-render grid if app provides renderResults()
+        try{ if (typeof window.renderResults==='function') window.renderResults(); }catch(e){}
+
+        // Save to Supabase (kv_store snapshot + dtr_records upsert)
+        try{ await window.saveDtrToCloud(window.storedRecords); }catch(e){}
+
+        closeManualDtr();
+      });
+    }
+  });
+})();
+</script>
+<!-- === / Manual DTR Modal + Cloud Save Wiring (Patched) === -->
 </body>
 </html>
