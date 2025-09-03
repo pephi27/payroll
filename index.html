@@ -62,9 +62,7 @@ const KNOWN_KEYS = [
   ,"payroll_philhealth_table"
   ,"payroll_adjustment_hours"
   ,"payroll_bantay"
-  ,"payroll_contrib_flags",
-  "att_overrides_times",
-  "att_overrides_hours"
+  ,"payroll_contrib_flags"
 ]
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY)
@@ -135,12 +133,11 @@ Storage.prototype.removeItem = function(k) {
       }
     })
     if (changed) {
-      // No-reload hydration: announce to the app that cloud data has been applied.
-      try {
-        window.__kv_hydrated = true;
-        window.dispatchEvent(new Event('kv-hydrated'));
-        if (typeof window.onKvHydrated === 'function') { try { window.onKvHydrated(); } catch(e){} }
-      } catch(e) { console.warn('kv-hydrated event dispatch failed', e); }
+      // One-time reload to let downstream scripts render with hydrated data
+      if (!sessionStorage.getItem("__kv_reloaded")) {
+        sessionStorage.setItem("__kv_reloaded","1")
+        location.reload()
+      }
     }
   } catch (e) { console.warn("Initial hydrate failed", e) }
 })()
@@ -8254,610 +8251,254 @@ document.addEventListener('DOMContentLoaded', async function () {
 })();
 </script>
 
-<!-- === Manual DTR Modal + Cloud Save Wiring (Patched) === -->
-<style>
-  #manualDtrModal{position:fixed;inset:0;display:none;place-items:center;background:rgba(0,0,0,.45);z-index:9999}
-  #manualDtrCard{background:#fff;min-width:320px;max-width:520px;border-radius:12px;padding:16px;border:1px solid #e2e8f0;box-shadow:0 10px 30px rgba(0,0,0,.15)}
-  #manualDtrCard h3{margin:.25rem 0 .75rem 0}
-  #manualDtrForm{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
-  #manualDtrForm label{display:flex;flex-direction:column;font-size:12px;color:#334155;font-weight:600}
-  #manualDtrForm input,#manualDtrForm select{padding:8px;border:1px solid #cbd5e1;border-radius:8px}
-  #manualDtrActions{display:flex;justify-content:flex-end;gap:8px;margin-top:12px}
-</style>
-<div id="manualDtrModal" aria-hidden="true">
-  <div id="manualDtrCard" role="dialog" aria-modal="true" aria-labelledby="manualDtrTitle">
-    <h3 id="manualDtrTitle">Manual DTR Entry</h3>
-    <form id="manualDtrForm">
-      <label>Employee ID<input id="md_empId" required placeholder="e.g. 0001" /></label>
-      <label>Date<input id="md_date" type="date" required /></label>
-      <label>Project<select id="md_project"><option value="">(default)</option></select></label>
-      <label>Schedule<select id="md_schedule"><option value="">(default)</option></select></label>
-      <label>Clock In 1<input id="md_ci1" type="time" /></label>
-      <label>Clock Out 1<input id="md_co1" type="time" /></label>
-      <label>Clock In 2<input id="md_ci2" type="time" /></label>
-      <label>Clock Out 2<input id="md_co2" type="time" /></label>
-      <label>OT In<input id="md_oti" type="time" /></label>
-      <label>OT Out<input id="md_oto" type="time" /></label>
-    </form>
-    <div id="manualDtrActions">
-      <button type="button" id="cancelManualDtr">Cancel</button>
-      <button type="button" id="saveManualDtr">Save</button>
-    </div>
-  </div>
-</div>
+<!-- === Minimal Cross-Device Overrides Sync (Non-invasive) === -->
 <script>
 (function(){
-  // Fill project & schedule selects using existing stores if available
-  function fillSelectOptions(){
-    try{
-      const projSel = document.getElementById('md_project');
-      const schSel  = document.getElementById('md_schedule');
-      if (projSel && window.storedProjects && typeof window.storedProjects === 'object'){
-        projSel.innerHTML = '<option value=\"\">(default)</option>' +
-          Object.keys(window.storedProjects).map(p => `<option>${p}</option>`).join('');
-      }
-      if (schSel && window.storedSchedules && typeof window.storedSchedules === 'object'){
-        schSel.innerHTML = '<option value=\"\">(default)</option>' +
-          Object.keys(window.storedSchedules).map(s => `<option>${s}</option>`).join('');
-      }
-    }catch(e){}
-  }
+  'use strict';
 
-  // Robust cloud save: 1) kv_store 'att_records_v2' snapshot; 2) best-effort upsert to 'dtr_records'
-  async function saveDtrToCloud(records){
-    try{
-      const supa = window.supabase;
-      const TABLE_KV = window.SUPABASE_TABLE || 'kv_store';
-      if (supa){
-        // 1) Save the whole array snapshot into kv_store so it's guaranteed persisted
-        try{
-          const payload = { key: 'att_records_v2', value: records };
-          const { error } = await supa.from(TABLE_KV).upsert(payload, { onConflict: 'key' });
-          if (error) console.warn('kv_store upsert error:', error.message);
-        }catch(e){ console.warn('kv_store upsert failed', e); }
+  // Config
+  var KV_TABLE = (window.SUPABASE_TABLE || 'kv_store');
+  var KEYS = {
+    proj: 'att_overrides_projects',
+    sched: 'att_overrides_schedules',
+    times: 'att_overrides_times',
+    hours: 'att_overrides_hours'
+  };
 
-        // 2) Optional: also upsert individual rows into dtr_records if that table exists
-        // We assume conflict target (emp_id,date). Failures are non-fatal.
-        try{
-          if (Array.isArray(records) && records.length){
-            // Map into a normalized shape; tolerate different source shapes
-            const rows = records.map(r => {
-              return {
-                emp_id: r.empId || r.id || r.employeeId || null,
-                work_date: r.date || r.work_date || r.workDate || null,
-                project: r.project || null,
-                schedule: r.schedule || null,
-                ci1: r.ci1 || r.clockIn1 || r.clock_in_1 || null,
-                co1: r.co1 || r.clockOut1 || r.clock_out_1 || null,
-                ci2: r.ci2 || r.clockIn2 || r.clock_in_2 || null,
-                co2: r.co2 || r.clockOut2 || r.clock_out_2 || null,
-                ot_in: r.otIn || r.ot_in || null,
-                ot_out: r.otOut || r.ot_out || null,
-                updated_at: new Date().toISOString()
-              };
-            });
-            // Filter obviously incomplete rows
-            const filtered = rows.filter(x => x.emp_id && x.work_date);
-            if (filtered.length){
-              const { error } = await supa.from('dtr_records').upsert(filtered, { onConflict: 'emp_id,work_date' });
-              if (error) console.warn('dtr_records upsert error:', error.message);
-            }
-          }
-        }catch(e){ console.warn('dtr_records upsert failed', e); }
-      }
-    }catch(e){ console.warn('saveDtrToCloud failed', e); }
-  }
-  window.saveDtrToCloud = window.saveDtrToCloud || saveDtrToCloud;
-
-  function openManualDtr(){
-    fillSelectOptions();
-    const m = document.getElementById('manualDtrModal');
-    if (m){ m.style.display = 'grid'; m.setAttribute('aria-hidden','false'); }
-  }
-  function closeManualDtr(){
-    const m = document.getElementById('manualDtrModal');
-    if (m){ m.style.display = 'none'; m.setAttribute('aria-hidden','true'); }
-    const form = document.getElementById('manualDtrForm');
-    if (form) form.reset();
-  }
-
-  // Wire open button
-  document.addEventListener('DOMContentLoaded', function(){
-    const btn = document.getElementById('manualDtrBtn');
-    if (btn){ btn.addEventListener('click', openManualDtr); }
-    const cancel = document.getElementById('cancelManualDtr');
-    if (cancel){ cancel.addEventListener('click', closeManualDtr); }
-    const modal = document.getElementById('manualDtrModal');
-    if (modal){ modal.addEventListener('click', (e)=>{ if(e.target===modal) closeManualDtr(); }); }
-
-    // Save handler
-    const saveBtn = document.getElementById('saveManualDtr');
-    if (saveBtn){
-      saveBtn.addEventListener('click', async function(){
-        const empId = (document.getElementById('md_empId')||{}).value?.trim();
-        const date  = (document.getElementById('md_date')||{}).value;
-        const project  = (document.getElementById('md_project')||{}).value || null;
-        const schedule = (document.getElementById('md_schedule')||{}).value || null;
-        const ci1 = (document.getElementById('md_ci1')||{}).value || null;
-        const co1 = (document.getElementById('md_co1')||{}).value || null;
-        const ci2 = (document.getElementById('md_ci2')||{}).value || null;
-        const co2 = (document.getElementById('md_co2')||{}).value || null;
-        const ot_in = (document.getElementById('md_oti')||{}).value || null;
-        const ot_out= (document.getElementById('md_oto')||{}).value || null;
-
-        if(!empId || !date){
-          alert('Employee ID and Date are required.');
-          return;
-        }
-
-        // Initialize store
-        if (!Array.isArray(window.storedRecords)) window.storedRecords = [];
-        const rec = { empId, date, project, schedule, ci1, co1, ci2, co2, otIn: ot_in, otOut: ot_out };
-
-        // Add/merge by (empId,date) — if exists, overwrite
-        const idx = window.storedRecords.findIndex(r => (r.empId===empId || r.id===empId) && (r.date===date || r.work_date===date));
-        if (idx >= 0) window.storedRecords[idx] = Object.assign({}, window.storedRecords[idx], rec);
-        else window.storedRecords.push(rec);
-
-        try{
-          // persist locally for offline and existing app flows
-          localStorage.setItem('att_records_v2', JSON.stringify(window.storedRecords));
-        }catch(e){ console.warn('localStorage write failed', e); }
-
-        // re-render grid if app provides renderResults()
-        try{ if (typeof window.renderResults==='function') window.renderResults(); }catch(e){}
-
-        // Save to Supabase (kv_store snapshot + dtr_records upsert)
-        try{ await window.saveDtrToCloud(window.storedRecords); }catch(e){}
-
-        closeManualDtr();
-      });
-    }
-  });
-})();
-</script>
-<!-- === / Manual DTR Modal + Cloud Save Wiring (Patched) === -->
-
-<script>
-// Provide a small helper the rest of the app can await to ensure hydration & DOM are ready
-(function(){
-  if (!window.__kvReady) {
-    window.__kvReady = new Promise((resolve) => {
-      let resolved = false;
-      function done(){ if (!resolved){ resolved = true; resolve(); } }
-      function Done(){ if (!resolved){ resolved = true; resolve(); } }
-      // Resolve on DOMContentLoaded and also when kv-hydrated fires (whichever comes last)
-      const domReady = () => {
-        if (document.readyState !== 'loading') Done();
-        else document.addEventListener('DOMContentLoaded', Done, { once: true });
-      };
-      domReady();
-      if (window.__kv_hydrated) Done();
-      else window.addEventListener('kv-hydrated', Done, { once: true });
-      // Absolute safety valve after 2s
-      setTimeout(Done, 2000);
-    });
-  }
-  // Convenience: run queued functions when ready
-  const q = (window.__kvQueue = window.__kvQueue || []);
-  window.__kvWhenReady = function(fn){ if (window.__kvReady) window.__kvReady.then(()=>{ try{ fn(); }catch(e){} }); else q.push(fn); };
-  if (q.length) { while(q.length) { try{ window.__kvWhenReady(q.shift()); } catch(e){} } }
-})();
-</script>
-
-<!-- === DTR Editor Column Sync Fix (Projects & Schedules) === -->
-<script>
-(function(){
-  // Utility: safely load/store JSON in localStorage
+  // Helpers
   function loadJSON(k, def){ try{ return JSON.parse(localStorage.getItem(k)) ?? def; }catch(_){ return def; } }
   function saveJSON(k, v){ try{ localStorage.setItem(k, JSON.stringify(v)); }catch(e){ console.warn('localStorage save failed for', k, e); } }
-
-  // Find the DTR results table and detect the column indices for Project and Schedule
-  function detectDtrColumns(){
-    const table = document.getElementById('resultsTable');
-    if (!table) return null;
-    const ths = table.tHead ? table.tHead.querySelectorAll('th') : table.querySelectorAll('thead th');
-    let idx = { project: -1, schedule: -1, date: -1, id: -1 };
-    ths.forEach((th, i) => {
-      const label = (th.textContent || '').trim().toLowerCase();
-      if (label === 'project') idx.project = i;
-      else if (label === 'schedule') idx.schedule = i;
-      else if (label === 'date') idx.date = i;
-      else if (label === 'id') idx.id = i;
-    });
-    if (idx.project === -1 || idx.schedule === -1 || idx.date === -1 || idx.id === -1) return null;
-    return { table, idx };
-  }
-
-  function getCellText(td){
+  function getCellInputValue(td){
     if (!td) return '';
-    const inp = td.querySelector('input,select,textarea');
-    if (inp) return (inp.value || '').trim();
+    var el = td.querySelector('input,select,textarea');
+    if (el) return (el.value || '').trim();
     return (td.textContent || '').trim();
   }
-
-  function wireDtrOverrideSync(){
-    const meta = detectDtrColumns();
-    if (!meta) return;
-    const { table, idx } = meta;
-
-    table.addEventListener('change', onEdit, true);
-    table.addEventListener('blur', onEdit, true);
-
-    function onEdit(ev){
-      const el = ev.target;
-      if (!el || !el.closest) return;
-      const tr = el.closest('tr');
-      if (!tr || !tr.parentElement || tr.parentElement.tagName !== 'TBODY') return;
-      const tds = tr.children;
-      if (!tds || !tds.length) return;
-
-      // Read key fields
-      const idVal = getCellText(tds[idx.id]);
-      const dateVal = getCellText(tds[idx.date]);
-      if (!idVal || !dateVal) return;
-
-      // Determine if we edited Project or Schedule columns
-      const td = el.closest('td');
-      const cellIndex = Array.prototype.indexOf.call(tds, td);
-      const isProj = (cellIndex === idx.project);
-      const isSched = (cellIndex === idx.schedule);
-
-      if (!isProj && !isSched) return; // ignore other columns
-
-      // Load existing maps
-      const projMap = loadJSON('att_overrides_projects', {});
-      const schMap  = loadJSON('att_overrides_schedules', {});
-
-      const key = idVal + '|' + dateVal;
-
-      if (isProj) {
-        const v = getCellText(tds[idx.project]) || null;
-        if (v && v.length) projMap[key] = v;
-        else delete projMap[key];
-        saveJSON('att_overrides_projects', projMap);
-      }
-      if (isSched) {
-        const v = getCellText(tds[idx.schedule]) || null;
-        if (v && v.length) schMap[key] = v;
-        else delete schMap[key];
-        saveJSON('att_overrides_schedules', schMap);
-      }
-
-      // Optional: if a cloud saver exists for DTR, call it to ensure immediate propagation
-      try { if (typeof window.saveDtrToCloud === 'function') window.saveDtrToCloud(window.storedRecords || []); } catch(e){}
-    }
-
-    // In case the page renders existing selects/inputs programmatically after hydration,
-    // run this wiring again after hydration event.
-    window.addEventListener('kv-hydrated', () => {
-      // no-op; listeners already attached with capture=true
-    }, { once: true });
-  }
-
-  document.addEventListener('DOMContentLoaded', wireDtrOverrideSync);
-})();
-</script>
-<!-- === / DTR Editor Column Sync Fix === -->
-
-<!-- === DTR Time Columns Cross-Device Sync === -->
-<script>
-(function(){
-  function loadJSON(k, def){ try{ return JSON.parse(localStorage.getItem(k)) ?? def; }catch(_){ return def; } }
-  function saveJSON(k, v){ try{ localStorage.setItem(k, JSON.stringify(v)); }catch(e){ console.warn('localStorage save failed for', k, e); } }
-
   function detectCols(){
-    const table = document.getElementById('resultsTable');
-    if (!table) return null;
-    const ths = table.tHead ? table.tHead.querySelectorAll('th') : table.querySelectorAll('thead th');
-    const labelToIdx = {};
-    ths.forEach((th, i) => labelToIdx[(th.textContent||'').trim().toLowerCase()] = i);
-    const need = ['id','date','clock in 1','clock out 1','clock in 2','clock out 2','ot in','ot out'];
-    for (const n of need){ if (!(n in labelToIdx)) return null; }
+    var t = document.getElementById('resultsTable');
+    if (!t) return null;
+    var ths = (t.tHead ? t.tHead.querySelectorAll('th') : t.querySelectorAll('thead th')) || [];
+    var map = {};
+    for (var i=0;i<ths.length;i++){
+      var label = (ths[i].textContent||'').trim().toLowerCase();
+      map[label] = i;
+    }
+    function has(xs){ for (var j=0;j<xs.length;j++){ if (!(xs[j] in map)) return false; } return true; }
+    // Required basics
+    if (!has(['id','date'])) return null;
+    // Optional columns (guarded uses)
     return {
-      table,
-      idx: {
-        id: labelToIdx['id'],
-        date: labelToIdx['date'],
-        ci1: labelToIdx['clock in 1'],
-        co1: labelToIdx['clock out 1'],
-        ci2: labelToIdx['clock in 2'],
-        co2: labelToIdx['clock out 2'],
-        oti: labelToIdx['ot in'],
-        oto: labelToIdx['ot out'],
-      }
+      table: t, idx: map
     };
   }
 
-  function getCellValue(td){
-    if (!td) return '';
-    const el = td.querySelector('input,select,textarea');
-    if (el) return (el.value || '').trim();
-    return (td.textContent || '').trim();
+  // Supabase direct helpers (optional)
+  function kvUpsert(key, value){
+    try{
+      var s = window.supabase;
+      if (!s) return;
+      s.from(KV_TABLE).upsert({ key: key, value: value }, { onConflict: 'key' })
+       .then(function(r){ if (r && r.error) console.warn('kv upsert error', r.error.message); })
+       .catch(function(e){ console.warn('kv upsert fail', e && e.message); });
+    }catch(e){ console.warn('kvUpsert exception', e && e.message); }
+  }
+  function kvFetch(keys, cb){
+    try{
+      var s = window.supabase;
+      if (!s || !keys || !keys.length) return cb && cb(null);
+      s.from(KV_TABLE).select('key,value').in('key', keys)
+        .then(function(r){
+          if (r && r.data && Array.isArray(r.data)){
+            var out = {}; for (var i=0;i<r.data.length;i++){ out[r.data[i].key] = r.data[i].value; }
+            cb && cb(out);
+          } else { cb && cb(null); }
+        })
+        .catch(function(e){ console.warn('kvFetch fail', e && e.message); cb && cb(null); });
+    }catch(e){ console.warn('kvFetch exception', e && e.message); cb && cb(null); }
   }
 
-  function setRecordField(rec, field, val){
-    if (!rec) return;
-    if (val === '') val = null;
-    if (field === 'ci1') rec.ci1 = val, rec.clockIn1 = val;
-    if (field === 'co1') rec.co1 = val, rec.clockOut1 = val;
-    if (field === 'ci2') rec.ci2 = val, rec.clockIn2 = val;
-    if (field === 'co2') rec.co2 = val, rec.clockOut2 = val;
-    if (field === 'oti') rec.otIn = val, rec.ot_in = val;
-    if (field === 'oto') rec.otOut = val, rec.ot_out = val;
-  }
-
-  function wireTimeSync(){
-    const meta = detectCols();
-    if (!meta) return;
-    const { table, idx } = meta;
-
-    table.addEventListener('change', handleEdit, true);
-    table.addEventListener('blur', handleEdit, true);
-
-    function handleEdit(ev){
-      const el = ev.target;
-      if (!el || !el.closest) return;
-      const tr = el.closest('tr');
-      if (!tr || tr.parentElement.tagName !== 'TBODY') return;
-      const tds = tr.children;
-
-      const id = getCellValue(tds[idx.id]);
-      const date = getCellValue(tds[idx.date]);
-      if (!id || !date) return;
-
-      // Determine which time cell changed
-      const td = el.closest('td');
-      const cIndex = Array.prototype.indexOf.call(tds, td);
-      const which =
-        cIndex === idx.ci1 ? 'ci1' :
-        cIndex === idx.co1 ? 'co1' :
-        cIndex === idx.ci2 ? 'ci2' :
-        cIndex === idx.co2 ? 'co2' :
-        cIndex === idx.oti ? 'oti' :
-        cIndex === idx.oto ? 'oto' : null;
-      if (!which) return;
-
-      // Read all time cells for this row to keep overrides cohesive
-      const payload = {
-        ci1: getCellValue(tds[idx.ci1]) || null,
-        co1: getCellValue(tds[idx.co1]) || null,
-        ci2: getCellValue(tds[idx.ci2]) || null,
-        co2: getCellValue(tds[idx.co2]) || null,
-        otIn: getCellValue(tds[idx.oti]) || null,
-        otOut: getCellValue(tds[idx.oto]) || null,
-      };
-
-      // Save to overrides map (mirrored to Supabase via KV adapter)
-      const map = loadJSON('att_overrides_times', {});
-      map[id + '|' + date] = payload;
-      saveJSON('att_overrides_times', map);
-
-      // Update in-memory records so current device UI recomputes immediately
-      try {
-        if (!Array.isArray(window.storedRecords)) window.storedRecords = [];
-        let rec = window.storedRecords.find(r => (r.empId===id || r.id===id) && (r.date===date || r.work_date===date));
-        if (!rec) { rec = { empId:id, date }; window.storedRecords.push(rec); }
-        setRecordField(rec, 'ci1', payload.ci1);
-        setRecordField(rec, 'co1', payload.co1);
-        setRecordField(rec, 'ci2', payload.ci2);
-        setRecordField(rec, 'co2', payload.co2);
-        setRecordField(rec, 'oti', payload.otIn);
-        setRecordField(rec, 'oto', payload.otOut);
-        // Persist locally (not mirrored by KV by default, but good for offline)
-        try { localStorage.setItem('att_records_v2', JSON.stringify(window.storedRecords)); } catch(e){}
-        // Re-render if available
-        try { if (typeof window.renderResults==='function') window.renderResults(); } catch(e){}
-      } catch(e){ console.warn('update storedRecords failed', e); }
-
-      // Save to cloud so other devices see the change even if they don't read overrides
-      try { if (typeof window.saveDtrToCloud==='function') window.saveDtrToCloud(window.storedRecords); } catch(e){}
-    }
-  }
-
-  document.addEventListener('DOMContentLoaded', wireTimeSync);
-})();
-</script>
-<!-- === / DTR Time Columns Cross-Device Sync === -->
-
-<!-- === Apply DTR Overrides on Hydration/Load === -->
-<script>
-(function(){
-  function loadJSON(k, def){ try{ return JSON.parse(localStorage.getItem(k)) ?? def; }catch(_){ return def; } }
-
-  function setField(rec, field, val){
-    if (val === undefined) return;
-    if (val === '') val = null;
-    if (field === 'project') rec.project = val;
-    if (field === 'schedule') rec.schedule = val;
-    if (field === 'ci1') rec.ci1 = val, rec.clockIn1 = val;
-    if (field === 'co1') rec.co1 = val, rec.clockOut1 = val;
-    if (field === 'ci2') rec.ci2 = val, rec.clockIn2 = val;
-    if (field === 'co2') rec.co2 = val, rec.clockOut2 = val;
-    if (field === 'otIn') rec.otIn = val, rec.ot_in = val;
-    if (field === 'otOut') rec.otOut = val, rec.ot_out = val;
-  }
-
-  function applyOverrides(){
-    try {
-      const projMap = loadJSON('att_overrides_projects', {});
-      const schMap  = loadJSON('att_overrides_schedules', {});
-      const timeMap = loadJSON('att_overrides_times', {});
-      // Ensure records are present
+  // Apply overrides to storedRecords and/or table cells
+  function overlayOverrides(){
+    try{
+      var meta = detectCols();
+      if (!meta) return;
+      var t = meta.table, idx = meta.idx;
+      var projMap = loadJSON(KEYS.proj, {});
+      var schedMap = loadJSON(KEYS.sched, {});
+      var timeMap = loadJSON(KEYS.times, {});
+      var hoursMap = loadJSON(KEYS.hours, {});
+      // Try to ensure storedRecords exists
       if (!Array.isArray(window.storedRecords)) {
         try { window.storedRecords = JSON.parse(localStorage.getItem('att_records_v2')||'[]') || []; } catch(e){ window.storedRecords = []; }
       }
-      // Index by key for quick set/merge
-      const recByKey = {};
-      window.storedRecords.forEach(r => {
-        const id = r.empId || r.id;
-        const date = r.date || r.work_date || r.workDate;
-        if (id && date) recByKey[id + '|' + date] = r;
-      });
+      var tbody = t.tBodies && t.tBodies[0];
+      if (!tbody) return;
+      var rows = tbody.rows || [];
+      for (var r=0;r<rows.length;r++){
+        var tr = rows[r];
+        var id = (tr.cells[idx['id']] ? (tr.cells[idx['id']].textContent||'').trim() : '');
+        var date = (tr.cells[idx['date']] ? (tr.cells[idx['date']].textContent||'').trim() : '');
+        if (!id || !date) continue;
+        var key = id + '|' + date;
+        // Find or create record
+        var rec = null;
+        for (var i=0;i<(window.storedRecords||[]).length;i++){
+          var rr = window.storedRecords[i];
+          var rid = rr.empId || rr.id; var rdate = rr.date || rr.work_date || rr.workDate;
+          if (rid === id && rdate === date){ rec = rr; break; }
+        }
+        if (!rec){ rec = { empId:id, date:date }; window.storedRecords.push(rec); }
 
-      // Merge project/schedule
-      Object.keys(projMap).forEach(k => {
-        const rec = recByKey[k];
-        if (rec) setField(rec, 'project', projMap[k]);
-      });
-      Object.keys(schMap).forEach(k => {
-        const rec = recByKey[k];
-        if (rec) setField(rec, 'schedule', schMap[k]);
-      });
-      // Merge times
-      Object.keys(timeMap).forEach(k => {
-        const rec = recByKey[k];
-        if (!rec) {
-          // Create a stub record if necessary, so overrides still display
-          const [empId, date] = k.split('|');
-          if (empId && date) {
-            const stub = { empId, date };
-            window.storedRecords.push(stub);
-            recByKey[k] = stub;
+        // Overlay project/schedule
+        if (projMap[key] && ('project' in idx)){
+          rec.project = projMap[key];
+          // Update cell if visible
+          var c = tr.cells[idx['project']];
+          if (c){
+            var el = c.querySelector('input,select,textarea');
+            if (el) el.value = projMap[key]; else c.textContent = projMap[key];
           }
         }
-        const r = recByKey[k];
-        if (!r) return;
-        const t = timeMap[k] || {};
-        setField(r, 'ci1', t.ci1);
-        setField(r, 'co1', t.co1);
-        setField(r, 'ci2', t.ci2);
-        setField(r, 'co2', t.co2);
-        setField(r, 'otIn', t.otIn);
-        setField(r, 'otOut', t.otOut);
-      });
-
+        if (schedMap[key] && ('schedule' in idx)){
+          rec.schedule = schedMap[key];
+          var c2 = tr.cells[idx['schedule']];
+          if (c2){
+            var el2 = c2.querySelector('input,select,textarea');
+            if (el2) el2.value = schedMap[key]; else c2.textContent = schedMap[key];
+          }
+        }
+        // Overlay times
+        var tm = timeMap[key] || null;
+        if (tm){
+          function setTime(field, colName){
+            if (!(colName in idx)) return;
+            rec[field] = tm[field] || tm[field === 'otIn' ? 'ot_in' : field] || null;
+            var c3 = tr.cells[idx[colName]];
+            if (c3){
+              var el3 = c3.querySelector('input,select,textarea');
+              var v = tm[field] || '';
+              if (el3) el3.value = v; else c3.textContent = v;
+            }
+          }
+          setTime('ci1','clock in 1');
+          setTime('co1','clock out 1');
+          setTime('ci2','clock in 2');
+          setTime('co2','clock out 2');
+          setTime('otIn','ot in');
+          setTime('otOut','ot out');
+        }
+        // Overlay hours
+        var hm = hoursMap[key] || null;
+        if (hm){
+          function setNum(colName, n){
+            if (!(colName in idx)) return;
+            var txt = (n==null || n==='') ? '' : String(n);
+            var c4 = tr.cells[idx[colName]];
+            if (c4){
+              var el4 = c4.querySelector('input,textarea');
+              if (el4) el4.value = txt; else c4.textContent = txt;
+            }
+          }
+          if ('regHrs' in hm) setNum('total regular hrs', hm.regHrs);
+          if ('otHrs' in hm) setNum('ot hrs', hm.otHrs);
+        }
+      }
       try { localStorage.setItem('att_records_v2', JSON.stringify(window.storedRecords)); } catch(e){}
-      // Re-render if available
-      try { if (typeof window.renderResults==='function') window.renderResults(); } catch(e){}
-    } catch(e) { console.warn('applyOverrides failed', e); }
+    }catch(e){ console.warn('overlayOverrides failed', e && e.message); }
   }
 
-  // Run after hydration + DOM ready using the helper promise
-  if (window.__kvReady) {
-    window.__kvReady.then(applyOverrides);
-  } else {
-    // Fallback: run after DOM ready
-    if (document.readyState !== 'loading') applyOverrides();
-    else document.addEventListener('DOMContentLoaded', applyOverrides, { once: true });
-  }
-  // Also re-apply on future hydration events (if any)
-  window.addEventListener('kv-hydrated', applyOverrides);
-})();
-</script>
-<!-- === / Apply DTR Overrides on Hydration/Load === -->
-
-<!-- === DTR Hours Columns Cross-Device Sync (Reg & OT) === -->
-<script>
-(function(){
-  function loadJSON(k, def){ try{ return JSON.parse(localStorage.getItem(k)) ?? def; }catch(_){ return def; } }
-  function saveJSON(k, v){ try{ localStorage.setItem(k, JSON.stringify(v)); }catch(e){ console.warn('localStorage save failed for', k, e); } }
-
-  function detectCols(){
-    const table = document.getElementById('resultsTable');
-    if (!table) return null;
-    const ths = table.tHead ? table.tHead.querySelectorAll('th') : table.querySelectorAll('thead th');
-    const map = {};
-    ths.forEach((th, i) => map[(th.textContent||'').trim().toLowerCase()] = i);
-    const req = ['id','date','total regular hrs','ot hrs'];
-    for (const r of req){ if (!(r in map)) return null; }
-    return { table, idx: { id: map['id'], date: map['date'], reg: map['total regular hrs'], ot: map['ot hrs'] } };
-  }
-
-  function getCellVal(td){
-    if (!td) return '';
-    const el = td.querySelector('input,select,textarea');
-    if (el) return (el.value || '').trim();
-    return (td.textContent || '').trim();
-  }
-
-  function parseNum(v){
-    const n = parseFloat((v||'').replace(/[, ]+/g,''));
-    return isFinite(n) ? n : null;
-  }
-
-  function wireHoursSync(){
-    const meta = detectCols();
+  // Listeners to capture edits
+  function wireEditors(){
+    var meta = detectCols();
     if (!meta) return;
-    const { table, idx } = meta;
+    var t = meta.table, idx = meta.idx;
+    t.addEventListener('change', onEdit, true);
+    t.addEventListener('blur', onEdit, true);
+    t.addEventListener('input', onEdit, true);
 
-    // We listen broadly in case an "Edit" modal updates the row programmatically.
-    // On every change/blur/input, read current row reg/ot, persist overrides.
-    function onMaybeChange(ev){
-      const el = ev.target;
+    function onEdit(ev){
+      var el = ev.target;
       if (!el || !el.closest) return;
-      const tr = el.closest('tr');
-      if (!tr || tr.parentElement.tagName !== 'TBODY') return;
-      const tds = tr.children;
-      const id = getCellVal(tds[idx.id]);
-      const date = getCellVal(tds[idx.date]);
+      var tr = el.closest('tr');
+      if (!tr || !tr.parentElement || tr.parentElement.tagName !== 'TBODY') return;
+      var idCell = ('id' in idx) ? tr.cells[idx['id']] : null;
+      var dateCell = ('date' in idx) ? tr.cells[idx['date']] : null;
+      var id = idCell ? (idCell.textContent||'').trim() : '';
+      var date = dateCell ? (dateCell.textContent||'').trim() : '';
       if (!id || !date) return;
-      const key = id + '|' + date;
+      var key = id + '|' + date;
 
-      // Only act if event originated from reg/ot cells or if class hints apply
-      const td = el.closest('td');
-      const cIndex = Array.prototype.indexOf.call(tds, td);
-      const likelyHours = (cIndex === idx.reg || cIndex === idx.ot) ||
-                          el.classList.contains('regHrs') || el.classList.contains('otHrs') ||
-                          /hours?/i.test(el.name || '') || /ot/i.test(el.name || '');
+      // Determine which column changed
+      var td = el.closest('td');
+      var cellIndex = Array.prototype.indexOf.call(tr.children, td);
+      function isCol(label){ return (label in idx) && (cellIndex === idx[label]); }
 
-      if (!likelyHours) return;
+      // Project / Schedule
+      if (isCol('project') || isCol('schedule')){
+        if (isCol('project')){
+          var proj = getCellInputValue(td);
+          var pmap = loadJSON(KEYS.proj, {});
+          if (proj) pmap[key] = proj; else delete pmap[key];
+          saveJSON(KEYS.proj, pmap); kvUpsert(KEYS.proj, pmap);
+        }
+        if (isCol('schedule')){
+          var sch = getCellInputValue(td);
+          var smap = loadJSON(KEYS.sched, {});
+          if (sch) smap[key] = sch; else delete smap[key];
+          saveJSON(KEYS.sched, smap); kvUpsert(KEYS.sched, smap);
+        }
+        return;
+      }
 
-      const regV = parseNum(getCellVal(tds[idx.reg]));
-      const otV  = parseNum(getCellVal(tds[idx.ot]));
+      // Time cells
+      var timeCols = ['clock in 1','clock out 1','clock in 2','clock out 2','ot in','ot out'];
+      var isTime = false; for (var i=0;i<timeCols.length;i++){ if (isCol(timeCols[i])) { isTime = true; break; } }
+      if (isTime){
+        var tmap = loadJSON(KEYS.times, {});
+        var payload = tmap[key] || {};
+        if ('clock in 1' in idx) payload.ci1 = (tr.cells[idx['clock in 1']] ? getCellInputValue(tr.cells[idx['clock in 1']]) : null) || null;
+        if ('clock out 1' in idx) payload.co1 = (tr.cells[idx['clock out 1']] ? getCellInputValue(tr.cells[idx['clock out 1']]) : null) || null;
+        if ('clock in 2' in idx) payload.ci2 = (tr.cells[idx['clock in 2']] ? getCellInputValue(tr.cells[idx['clock in 2']]) : null) || null;
+        if ('clock out 2' in idx) payload.co2 = (tr.cells[idx['clock out 2']] ? getCellInputValue(tr.cells[idx['clock out 2']]) : null) || null;
+        if ('ot in' in idx) payload.otIn = (tr.cells[idx['ot in']] ? getCellInputValue(tr.cells[idx['ot in']]) : null) || null;
+        if ('ot out' in idx) payload.otOut = (tr.cells[idx['ot out']] ? getCellInputValue(tr.cells[idx['ot out']]) : null) || null;
+        tmap[key] = payload;
+        saveJSON(KEYS.times, tmap); kvUpsert(KEYS.times, tmap);
+        return;
+      }
 
-      const map = loadJSON('att_overrides_hours', {});
-      map[key] = Object.assign({}, map[key]||{}, { regHrs: regV, otHrs: otV });
-      saveJSON('att_overrides_hours', map);
+      // Hours cells
+      if (isCol('total regular hrs') || isCol('ot hrs')){
+        var hmap = loadJSON(KEYS.hours, {});
+        var rec = hmap[key] || {};
+        function parseNum(v){ var n = parseFloat((v||'').replace(/[, ]+/g,'')); return isFinite(n)?n:null; }
+        if ('total regular hrs' in idx) rec.regHrs = parseNum(getCellInputValue(tr.cells[idx['total regular hrs']]));
+        if ('ot hrs' in idx) rec.otHrs = parseNum(getCellInputValue(tr.cells[idx['ot hrs']]));
+        hmap[key] = rec;
+        saveJSON(KEYS.hours, hmap); kvUpsert(KEYS.hours, hmap);
+        return;
+      }
     }
-
-    table.addEventListener('change', onMaybeChange, true);
-    table.addEventListener('blur', onMaybeChange, true);
-    table.addEventListener('input', onMaybeChange, true);
   }
 
-  document.addEventListener('DOMContentLoaded', wireHoursSync);
+  function bootstrap(){
+    // 1) Pull latest time + hours overrides from Supabase kv_store (if client is present)
+    kvFetch([KEYS.times, KEYS.hours], function(map){
+      if (map){
+        if (map[KEYS.times]) saveJSON(KEYS.times, map[KEYS.times]);
+        if (map[KEYS.hours]) saveJSON(KEYS.hours, map[KEYS.hours]);
+      }
+      // 2) Overlay local overrides on the current view
+      overlayOverrides();
+      // 3) Wire editors (so further edits sync)
+      wireEditors();
+    });
+  }
+
+  if (document.readyState !== 'loading') bootstrap();
+  else document.addEventListener('DOMContentLoaded', bootstrap, { once: true });
 })();
 </script>
-<!-- === / DTR Hours Columns Cross-Device Sync === -->
-
-<script>
-(function(){
-  function loadJSON(k, def){ try{ return JSON.parse(localStorage.getItem(k)) ?? def; }catch(_){ return def; } }
-  function setNumText(cell, n){
-    if (!cell) return;
-    const el = cell.querySelector('input,textarea');
-    if (el) { el.value = (n==null ? '' : String(n)); }
-    else { cell.textContent = (n==null ? '' : String(n)); }
-  }
-  function applyHours(){
-    const table = document.getElementById('resultsTable');
-    if (!table || !table.tHead) return;
-    const ths = table.tHead.querySelectorAll('th');
-    const map = {};
-    ths.forEach((th,i)=> map[(th.textContent||'').trim().toLowerCase()] = i);
-    if (!('id' in map) || !('date' in map) || !('total regular hrs' in map) || !('ot hrs' in map)) return;
-
-    const hoursMap = loadJSON('att_overrides_hours', {});
-    const rows = table.tBodies[0] ? table.tBodies[0].rows : [];
-    for (const tr of rows){
-      const id = (tr.cells[map['id']].textContent||'').trim();
-      const date = (tr.cells[map['date']].textContent||'').trim();
-      const key = id + '|' + date;
-      const ov = hoursMap[key];
-      if (!ov) continue;
-      if ('regHrs' in ov && ov.regHrs != null) setNumText(tr.cells[map['total regular hrs']], ov.regHrs);
-      if ('otHrs' in ov && ov.otHrs != null) setNumText(tr.cells[map['ot hrs']], ov.otHrs);
-    }
-    // If app provides totals recompute, invoke it
-    try { if (typeof window.renderResults==='function') window.renderResults(); } catch(e){}
-  }
-
-  if (window.__kvReady) window.__kvReady.then(applyHours);
-  else if (document.readyState !== 'loading') applyHours();
-  else document.addEventListener('DOMContentLoaded', applyHours, { once: true });
-  window.addEventListener('kv-hydrated', applyHours);
-})();
-</script>
+<!-- === / Minimal Cross-Device Overrides Sync === -->
 </body>
 </html>
