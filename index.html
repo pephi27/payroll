@@ -3912,34 +3912,294 @@ document.addEventListener('DOMContentLoaded', () => {
    </div>
   </section>
   <section class="panel" id="panelProjectTotals">
-    <h3>Reports</h3>
-    <div class="controls" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-      <div class="muted">Uses the global Start/End dates in the header and includes per-day project/schedule overrides.</div>
-      <div style="flex:1 1 auto"></div>
-      <button id="downloadProjectTotalsCSV">Download CSV</button>
-      <button id="printProjectTotalsBtn">Print Reports</button>
+  <style>
+    #panelProjectTotals .card{background:#fff;border:1px solid #e5e7eb;border-radius:14px;padding:18px;box-shadow:0 4px 18px rgba(0,0,0,.06)}
+    #panelProjectTotals .controls{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:12px}
+    #panelProjectTotals table{border-collapse:collapse;width:100%}
+    #panelProjectTotals th,#panelProjectTotals td{border:1px solid #dbe3ef;padding:6px 8px;font-size:12px;text-align:center;white-space:nowrap}
+    #panelProjectTotals thead th{background:#eef4fb;font-weight:700}
+    #panelProjectTotals tr.proj-break td{background:#b9f2ff;font-weight:700;text-align:left}
+    #panelProjectTotals .totals{background:#fff7ed;font-weight:700}
+    #panelProjectTotals .left{text-align:left}
+    #panelProjectTotals .num{text-align:right}
+    @media print{header,.header,.controls{display:none!important} .card{box-shadow:none;border:0;padding:0}}
+  </style>
+
+  <div class="card">
+    <h3 style="margin:0 0 8px 0;">Reports</h3>
+    <div class="controls">
+      <button id="r_gen">Generate</button>
+      <button id="r_print">Print</button>
+      <button id="r_csv">CSV</button>
+      <span id="r_range_hint" style="font-size:12px;color:#64748b;margin-left:auto;"></span>
     </div>
-    <table id="projectTotalsTable">
-      <thead>
-        <tr>
-          <th>Project</th>
-          <th>Regular Hours</th>
-          <th>OT Hours</th>
-          <th>Total Hours</th>
-          <th>Gross Amount</th>
-          <th>Employees (count)</th>
-        </tr>
-      </thead>
-      <tbody></tbody>
-    </table>
-    <!-- Modal for detailed project report -->
-    <div id="projectReportModal" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.5);align-items:center;justify-content:center;z-index:10000;">
-      <div style="background:white;padding:20px;border-radius:10px;max-height:80vh;overflow:auto;width:90%;max-width:800px;position:relative;">
-        <button type="button" id="closeProjectReport" style="position:absolute;top:10px;right:10px;font-size:20px;border:none;background:transparent;cursor:pointer;">&times;</button>
-        <div id="projectReportContent"></div>
-      </div>
-    </div>
-  </section>
+    <div id="r_msg" style="font-size:13px;color:#64748b;display:none;"></div>
+    <table id="r_table" aria-live="polite"></table>
+  </div>
+
+  <script>
+  (function(){
+    const $ = s => document.querySelector(s);
+    const $$ = s => Array.from(document.querySelectorAll(s));
+    const toNum = v => { const n = parseFloat(String(v||'').replace(/,/g,'')); return isNaN(n)?0:n; };
+    const f2 = n => (Number(n)||0).toLocaleString('en-US',{minimumFractionDigits:2, maximumFractionDigits:2});
+    const showMsg = (t)=>{ const m=$('#r_msg'); if(m){ m.textContent=t; m.style.display=t?'block':'none'; } };
+
+    const isRealProject = (p)=>{
+      if (!p) return false;
+      const s = String(p).trim().toLowerCase();
+      return s && !['(none)','none','-','null','undefined',''].includes(s);
+    };
+
+    function cssEscape(val){
+      // Minimal escape for attribute selectors
+      return String(val).replace(/["\\]/g, '\\$&');
+    }
+
+    function getPayrollRange(){
+      try{
+        const ws = document.getElementById('weekStart')?.value;
+        const we = document.getElementById('weekEnd')?.value;
+        if (ws && we) return [ws,we];
+      }catch(e){}
+      try{
+        const ls_ws = localStorage.getItem('payroll_week_start');
+        const ls_we = localStorage.getItem('payroll_week_end');
+        if (ls_ws && ls_we) return [String(ls_ws).replace(/\"/g,''), String(ls_we).replace(/\"/g,'')];
+      }catch(e){}
+      try{
+        const sel = document.getElementById('activePayrollSelect');
+        const txt = sel && sel.options && sel.selectedIndex>=0 ? sel.options[sel.selectedIndex].textContent : '';
+        const m = txt && txt.match(/(\d{4}-\d{2}-\d{2}).*?(\d{4}-\d{2}-\d{2})/);
+        if (m) return [m[1], m[2]];
+      }catch(e){}
+      // DTR bounds
+      const trs = $$('#resultsTable tbody tr');
+      let minD=1e20, maxD=-1e20;
+      trs.forEach(tr=>{
+        const d = tr.cells[4]?.textContent?.trim();
+        if(!d) return;
+        const t = new Date(d).setHours(0,0,0,0);
+        if (!isNaN(t)){ minD = Math.min(minD,t); maxD = Math.max(maxD,t); }
+      });
+      if (maxD < minD) {
+        const today = new Date().toISOString().slice(0,10);
+        return [today,today];
+      }
+      return [new Date(minD).toISOString().slice(0,10), new Date(maxD).toISOString().slice(0,10)];
+    }
+
+    function eachDate(fromMS,toMS){
+      const out=[]; let t=fromMS;
+      while(t<=toMS){ out.push(new Date(t)); t += 86400000; }
+      return out;
+    }
+
+    // --- RATE LOOKUP (robust) ---
+    function getRateById(id){
+      try{
+        const se = (window.storedEmployees||{})[id];
+        if (se){
+          const r = toNum(se.hourlyRate ?? se.rate ?? se.hourly_rate ?? se.payRate ?? se.wage);
+          if (r) return r;
+        }
+      }catch(e){}
+      try{
+        const pr = (window.payrollRates||{})[id];
+        if (pr) return toNum(pr);
+      }catch(e){}
+      // Try Employees table input with matching data-id
+      const inp = document.querySelector(`.emp-rate-input[data-id="${cssEscape(id)}"]`);
+      if (inp) return toNum(inp.value || inp.textContent);
+      return 0;
+    }
+    function getRateByName(name){
+      if (!name) return 0;
+      const target = String(name).toUpperCase();
+      try{
+        const se = window.storedEmployees||{};
+        for (const [id, e] of Object.entries(se)){
+          if ((e?.name||'').toUpperCase() === target){
+            const r = toNum(e.hourlyRate ?? e.rate ?? e.hourly_rate ?? e.payRate ?? e.wage);
+            if (r) return r;
+          }
+        }
+      }catch(e){}
+      // Search Employees table rows
+      const rows = $$('#employeesTable tbody tr');
+      for (const tr of rows){
+        const nm = (tr.querySelector('.emp-name-input')?.value || tr.cells[1]?.textContent || '').trim().toUpperCase();
+        if (nm === target){
+          const inp = tr.querySelector('.emp-rate-input');
+          if (inp) return toNum(inp.value || inp.textContent);
+        }
+      }
+      return 0;
+    }
+    function getRate(id, name){
+      return getRateById(id) || getRateByName(name);
+    }
+
+    // --- Read selected project from DTR row ---
+    function readProjectFromRow(tr){
+      const sel = tr.cells[2]?.querySelector('select');
+      if (sel){
+        const opt = sel.options[sel.selectedIndex];
+        const txt = (opt && (opt.textContent||opt.label)) || sel.value;
+        return (txt||'').trim();
+      }
+      const dp = tr.cells[2]?.dataset?.project;
+      if (dp) return String(dp).trim();
+      return (tr.cells[2]?.textContent||'').trim();
+    }
+
+    function collect(fromStr, toStr){
+      const M = {};
+      const trs = $$('#resultsTable tbody tr');
+      trs.forEach(tr=>{
+        const id   = (tr.cells[0]?.textContent||'').trim();
+        const name = (tr.cells[1]?.textContent||'').trim();
+        const proj = readProjectFromRow(tr);
+        const date = (tr.cells[4]?.textContent||'').trim();
+        const rwh = toNum(tr.cells[11]?.textContent) || toNum(tr.querySelector('.regHrs')?.value);
+        const oth = toNum(tr.cells[12]?.textContent) || toNum(tr.querySelector('.otHrs')?.value);
+        if(!id || !date) return;
+        if(!isRealProject(proj)) return;
+
+        const d = new Date(date).setHours(0,0,0,0);
+        if(fromStr){ const f = new Date(fromStr).setHours(0,0,0,0); if(d < f) return; }
+        if(toStr){ const t = new Date(toStr).setHours(0,0,0,0); if(d > t) return; }
+
+        (M[proj] = M[proj]||{});
+        (M[proj][id] = M[proj][id]||{ name, days:{} });
+        const slot = M[proj][id].days[d] || { rwh:0, oth:0 };
+        slot.rwh += rwh; slot.oth += oth;
+        M[proj][id].days[d] = slot;
+      });
+      return M;
+    }
+
+    function buildTable(){
+      const dtrRows = $$('#resultsTable tbody tr');
+      const table = $('#r_table'); if(!table) return;
+      if (dtrRows.length === 0){
+        showMsg('No DTR rows found. Import DTR or open a period first.');
+        table.innerHTML='';
+        return;
+      }
+      showMsg('');
+
+      const [from, to] = getPayrollRange();
+      const dates = eachDate(new Date(from).setHours(0,0,0,0), new Date(to).setHours(0,0,0,0));
+      const data = collect(from, to);
+      const totalCols = 2 + (dates.length*2) + 4;
+
+      const hint = $('#r_range_hint');
+      if (hint) hint.textContent = `Range: ${from} — ${to}`;
+
+      let thead1 = `<tr><th class="left" rowspan="2">PERSONNEL</th><th rowspan="2">RATE</th>`;
+      dates.forEach(d=>{
+        const lbl = d.toLocaleDateString(undefined,{day:'2-digit',month:'short'});
+        thead1 += `<th colspan="2">${lbl}</th>`;
+      });
+      thead1 += `<th rowspan="2">TOTAL REG HRS</th><th rowspan="2">TOTAL OT HRS</th><th rowspan="2">GRAND TOTAL WORKING HOURS</th><th rowspan="2">GROSS</th></tr>`;
+
+      let thead2 = `<tr>${dates.map(()=>`<th>RWH</th><th>OTH</th>`).join('')}</tr>`;
+
+      let tbody = '';
+      let gReg=0,gOT=0,gGross=0;
+
+      Object.keys(data).sort().forEach(proj=>{
+        const empMap = data[proj];
+        tbody += `<tr class="proj-break"><td colspan="${totalCols}">${proj}</td></tr>`;
+
+        let pReg=0,pOT=0,pGross=0;
+
+        Object.keys(empMap).sort((a,b)=>{
+          const A = (empMap[a].name||a).toUpperCase();
+          const B = (empMap[b].name||b).toUpperCase();
+          return A.localeCompare(B);
+        }).forEach(empId=>{
+          const rec = empMap[empId];
+          const display = rec.name || empId;
+          const rate = getRate(empId, display);
+          let rReg=0,rOT=0;
+
+          const cells = dates.map(d=>{
+            const key = d.setHours(0,0,0,0);
+            const v = rec.days[key] || { rwh:0, oth:0 };
+            rReg += v.rwh; rOT += v.oth;
+            return `<td class="num">${f2(v.rwh)}</td><td class="num">${f2(v.oth)}</td>`;
+          }).join('');
+
+          const otMult = toNum(document.querySelector('#otMultiplier')?.value || 1.5);
+          const gross = (rReg * rate) + (rOT * rate * otMult);
+          pReg += rReg; pOT += rOT; pGross += gross;
+
+          tbody += `<tr>
+            <td class="left">${display}</td>
+            <td class="num">${f2(rate)}</td>
+            ${cells}
+            <td class="num">${f2(rReg)}</td>
+            <td class="num">${f2(rOT)}</td>
+            <td class="num">${f2(rReg + rOT)}</td>
+            <td class="num">${f2(gross)}</td>
+          </tr>`;
+        });
+
+        gReg += pReg; gOT += pOT; gGross += pGross;
+        tbody += `<tr class="totals">
+          <td class="left" colspan="${2 + dates.length*2}">Project Total</td>
+          <td class="num">${f2(pReg)}</td>
+          <td class="num">${f2(pOT)}</td>
+          <td class="num">${f2(pReg + pOT)}</td>
+          <td class="num">${f2(pGross)}</td>
+        </tr>`;
+      });
+
+      const foot = `<tr class="totals">
+        <td class="left" colspan="${2 + dates.length*2}">Grand Total</td>
+        <td class="num">${f2(gReg)}</td>
+        <td class="num">${f2(gOT)}</td>
+        <td class="num">${f2(gReg + gOT)}</td>
+        <td class="num">${f2(gGross)}</td>
+      </tr>`;
+
+      table.innerHTML = `<thead>${thead1}${thead2}</thead><tbody>${tbody}</tbody><tfoot>${foot}</tfoot>`;
+      // Force comma formatting on all numeric cells
+      (function applyCommas(){
+        const fmt = (v)=>{
+          const n = parseFloat(String(v||'').replace(/,/g,''));
+          if (isNaN(n)) return v;
+          return n.toLocaleString('en-US',{minimumFractionDigits:2, maximumFractionDigits:2});
+        };
+        const cells = Array.from(document.querySelectorAll('#r_table td.num, #r_table tfoot td.num'));
+        cells.forEach(td=>{ td.textContent = fmt(td.textContent); });
+      })();
+    }
+
+    // Events
+    const rebuild = () => buildTable();
+    $('#r_gen')?.addEventListener('click', rebuild);
+    $('#r_print')?.addEventListener('click', ()=> window.print());
+    $('#r_csv')?.addEventListener('click', ()=>{
+      const rows = Array.from($('#r_table')?.querySelectorAll('tr')||[]);
+      const csv = rows.map(tr=>Array.from(tr.children).map(td=>`"${td.textContent.replace(/"/g,'""')}"`).join(',')).join('\n');
+      const blob = new Blob([csv],{type:'text/csv'}); const a=document.createElement('a');
+      a.href=URL.createObjectURL(blob); a.download='reports.csv'; a.click(); URL.revokeObjectURL(a.href);
+    });
+
+    const dtr = document.getElementById('resultsTable');
+    if (dtr && 'MutationObserver' in window){
+      const mo = new MutationObserver(()=> { buildTable(); });
+      mo.observe(dtr, { childList:true, subtree:true });
+    }
+    if (document.readyState === 'loading'){
+      document.addEventListener('DOMContentLoaded', buildTable, { once:true });
+    } else { buildTable(); }
+  })();
+  </script>
+</section>
       </main>
     </div>
     <!-- Sidebar navigation behaviour -->
