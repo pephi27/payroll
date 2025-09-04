@@ -166,6 +166,13 @@ function safeStringify(v){
 #payrollTable { table-layout: fixed; }
 #payrollTable th, #payrollTable td { white-space: nowrap; }
 
+
+/* === Reports: GRAND TOTAL HOURS column width via nth-last-child(2) === */
+#r_table th:nth-last-child(2),
+#r_table td:nth-last-child(2) { width: 150px; min-width: 150px; max-width: 150px; }
+#projectTotalsTable th:nth-last-child(2),
+#projectTotalsTable td:nth-last-child(2) { width: 150px; min-width: 150px; max-width: 150px; }
+
 </style>
 <!-- === / Supabase KV Sync Adapter === -->
 
@@ -4364,7 +4371,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const lbl = d.toLocaleDateString(undefined,{day:'2-digit',month:'short'});
         thead1 += `<th colspan="2">${lbl}</th>`;
       });
-      thead1 += `<th rowspan="2">TOTAL REG HRS</th><th rowspan="2">TOTAL OT HRS</th><th rowspan="2">GRAND TOTAL WORKING HOURS</th><th rowspan="2">GROSS</th></tr>`;
+      thead1 += `<th rowspan="2">TOTAL REG HRS</th><th rowspan="2">TOTAL OT HRS</th><th rowspan="2">GRAND TOTAL HOURS</th><th rowspan="2">GROSS</th></tr>`;
       let thead2 = `<tr>${dates.map(()=>`<th>RWH</th><th>OTH</th>`).join('')}</tr>`;
 
       // Per-project TBODY blocks
@@ -4464,7 +4471,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
       const header = ['PROJECT','PERSONNEL','RATE']
         .concat(dayHeader)
-        .concat(['TOTAL REG HRS','TOTAL OT HRS','GRAND TOTAL WORKING HOURS','GROSS']);
+        .concat(['TOTAL REG HRS','TOTAL OT HRS','GRAND TOTAL HOURS','GROSS']);
       const rows = [header];
 
       const projects = Object.keys(data).sort();
@@ -4527,7 +4534,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const lbl = d.toLocaleDateString(undefined,{day:'2-digit',month:'short'});
         return [`RWH ${lbl}`, `OTH ${lbl}`];
       }).flat();
-      const header = ['PERSONNEL','RATE'].concat(dayHeader, ['TOTAL REG HRS','TOTAL OT HRS','GRAND TOTAL WORKING HOURS','GROSS']);
+      const header = ['PERSONNEL','RATE'].concat(dayHeader, ['TOTAL REG HRS','TOTAL OT HRS','GRAND TOTAL HOURS','GROSS']);
 
       const projects = Object.keys(data).sort();
       projects.forEach(proj=>{
