@@ -180,129 +180,90 @@ function safeStringify(v){
 <script>
 document.addEventListener('DOMContentLoaded', function() {
   var multiBtn = document.getElementById('printAllPayslipsBtn');
-  if (multiBtn) {
-    multiBtn.addEventListener('click', function() {
-      var rows = document.querySelectorAll('#payrollTable tbody tr');
-      if (!rows || rows.length === 0) return;
-      // Grab period values
-      var wsEl = document.getElementById('weekStart');
-      var weEl = document.getElementById('weekEnd');
-      var ws = wsEl ? (wsEl.value || '') : '';
-      var we = weEl ? (weEl.value || '') : '';
-      // Start building HTML document
-      var html = '<!DOCTYPE html><html><head><meta charset="utf-8"><title>All Payslips</title>' +
-        '<style>body{font-family:Arial,Helvetica,sans-serif;margin:0;padding:10px;} .payslip-grid{display:flex;flex-wrap:wrap;} .payslip{width:50%;box-sizing:border-box;padding:10px;border:1px solid #e2e8f0;} table{border-collapse:collapse;width:100%;font-size:12px;} th,td{border:1px solid #e2e8f0;padding:4px;text-align:left;} th{background:#f1f5f9;} .page-break{page-break-after:always;}</style></head><body>';
-      html += '<div class="payslip-grid">';
-      rows.forEach(function(row, idx){
-        var id = (row.cells[0]?.textContent || '').trim();
-        var name = (row.cells[1]?.textContent || '').trim();
-        function gv(sel, prop) {
-          var el = row.querySelector(sel);
-          if (!el) return '';
-          if (prop === 'value') return el.value || '';
-          return el.textContent || '';
-        }
-        var reg = gv('.regHrs','value');
-        var ot = gv('.otHrs','value');
-        var rate = gv('.rate','value');
-        var regPay = gv('.regPay','textContent');
-        var otPay = gv('.otPay','textContent');
-        var gross = gv('.grossPay','textContent');
-        var pagibig = gv('.pagibig','textContent');
-        var philhealth = gv('.philhealth','textContent');
-        var sss = gv('.sss','textContent');
-        var sssLoan = gv('.loanSSS','value');
-        var piLoan = gv('.loanPI','value');
-        var v = gv('.vale','value');
-        var vW = gv('.valeWed');
-        var adj = gv('.adjAmt','textContent');
-        var total = gv('.totalDed','textContent');
-        var net = gv('.netPay','textContent');
-        function d(x){
-          var n = parseFloat((x||'').toString().replace(/,/g,''));
-          return (!isNaN(n) && n === 0) ? '-' : (x||'');
-        }
-         '<div class="payslip">' +
-          '<h3>Payslip</h3>' +
-          '<p><strong>Employee ID:</strong> ' + id + '</p>' +
-          '<p><strong>Name:</strong> ' + name + '</p>' +
-          '<p><strong>Period:</strong> ' + ws + (we ? (' to ' + we) : '') + '</p>' +
-          '<table>' +
-          '<tr><th>Description</th><th>Value</th></tr>' +
-          '<tr><td>Regular Hours</td><td>' + d(reg) + '</td></tr>' +
-          '<tr><td>OT Hours</td><td>' + d(ot) + '</td></tr>' +
-          '<tr><td>Hourly Rate</td><td>' + d(rate) + '</td></tr>' +
-          '<tr><td>Regular Pay</td><td>' + d(regPay) + '</td></tr>' +
-          '<tr><td>OT Pay</td><td>' + d(otPay) + '</td></tr>' +
-          '<tr><td>Gross Pay</td><td>' + d(gross) + '</td></tr>' +
-          '<tr><td>Pag-IBIG</td><td>' + d(pagibig) + '</td></tr>' +
-          '<tr><td>PhilHealth</td><td>' + d(philhealth) + '</td></tr>' +
-          '<tr><td>SSS</td><td>' + d(sss) + '</td></tr>' +
-          '<tr><td>SSS Loan</td><td>' + d(sssLoan) + '</td></tr>' +
-          '<tr><td>Pag-IBIG Loan</td><td>' + d(piLoan) + '</td></tr>' +
-          '<tr><td>Vale</td><td>' + d(v) + '</td></tr>' +
-          '<tr><td>Wed Vale</td><td>' + d(vW) + '</td></tr>' +
-          '<tr><td>Adjustments</td><td>' + d(adj) + '</td></tr>' +
-          '<tr><td>Total Deductions</td><td>' + d(total) + '</td></tr>' +
-          '<tr><th>Net Pay</th><th>' + d(net) + '</th></tr>' +
-          '</table></div>';
-        if ((idx + 1) % 4 === 0 && idx !== rows.length - 1) {
-          html += '</div><div class="page-break"></div><div class="payslip-grid">';
-        }
-      });
-      html += '</div>
-<script>
-// === PATCH: robust zero formatting (debounced + observer) ===
-(function(){
-  // Debounced runner so formatting always happens *after* table updates
-  let __fmtTimer = null;
-  function applyFormattingSoon(){
-    clearTimeout(__fmtTimer);
-    __fmtTimer = setTimeout(function(){
-      try { formatAllNumbers(); } catch(e){ /* noop */ }
-    }, 0);
-  }
-
-  // Re-patch key renderers even if they are defined later
-  function latePatch(name){
-    const tryHook = () => {
-      const orig = window[name];
-      if (typeof orig === 'function' && !orig.__wrappedForZeroFmt){
-        window[name] = function(){
-          const out = orig.apply(this, arguments);
-          applyFormattingSoon();
-          return out;
-        };
-        window[name].__wrappedForZeroFmt = true;
-      }
-    };
-    // Try now and again shortly after, for late-loaded functions
-    tryHook();
-    setTimeout(tryHook, 0);
-    document.addEventListener('readystatechange', tryHook);
-    window.addEventListener('load', tryHook);
-  }
-  ['calculateAll','renderTable','renderDeductionsTable','renderReportTable'].forEach(latePatch);
-
-  // MutationObserver on payroll tbody so any DOM change triggers formatting
-  const tbl = document.getElementById('payrollTable');
-  if (tbl && tbl.tBodies && tbl.tBodies[0]){
-    // observer removed for perf
-} else {
-    // If table isn't present yet, try again after load
-    window.addEventListener('load', function(){
-      const t = document.getElementById('payrollTable');
-      if (t && t.tBodies && t.tBodies[0]){
-        // observer removed for perf
-applyFormattingSoon();
+  if (!multiBtn) return;
+  multiBtn.addEventListener('click', function() {
+    var rows = document.querySelectorAll('#payrollTable tbody tr');
+    if (!rows || rows.length === 0) return;
+    var wsEl = document.getElementById('weekStart');
+    var weEl = document.getElementById('weekEnd');
+    var ws = wsEl ? (wsEl.value || '') : '';
+    var we = weEl ? (weEl.value || '') : '';
+    function gv(row, sel, prop) {
+      var el = row.querySelector(sel);
+      if (!el) return '';
+      if (prop === 'value') return (el.value || '');
+      return (el.textContent || '');
+    }
+    function d(x){
+      var n = parseFloat((x||'').toString().replace(/,/g,''));
+      return (!isNaN(n) && n === 0) ? '-' : (x||'');
+    }
+    var html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>All Payslips</title>
+<style>
+body{font-family:Arial,Helvetica,sans-serif;margin:0;padding:10px;}
+.payslip-grid{display:flex;flex-wrap:wrap;gap:10px;}
+.payslip{width:50%;box-sizing:border-box;padding:10px;border:1px solid #e2e8f0;}
+table{border-collapse:collapse;width:100%;font-size:12px;}
+th,td{border:1px solid #e2e8f0;padding:4px;text-align:left;}
+th{background:#f1f5f9;}
+.page-break{page-break-after:always;}
+h3{margin:6px 0 8px 0;}
+</style></head><body><div class="payslip-grid">`;
+    rows.forEach(function(row, idx){
+      var id = (row.cells[0]?.textContent || '').trim();
+      var name = (row.cells[1]?.textContent || '').trim();
+      var reg = gv(row, '.regHrs','value');
+      var ot = gv(row, '.otHrs','value');
+      var rate = gv(row, '.rate','value');
+      var regPay = gv(row, '.regPay','textContent');
+      var otPay = gv(row, '.otPay','textContent');
+      var gross = gv(row, '.grossPay','textContent');
+      var pagibig = gv(row, '.pagibig','textContent');
+      var philhealth = gv(row, '.philhealth','textContent');
+      var sss = gv(row, '.sss','textContent');
+      var sssLoan = gv(row, '.loanSSS','value');
+      var piLoan = gv(row, '.loanPI','value');
+      var v = gv(row, '.vale','value');
+      var vW = gv(row, '.valeWed','value') || gv(row, '.valeWed','textContent');
+      var adj = gv(row, '.adjAmt','textContent');
+      var total = gv(row, '.totalDed','textContent');
+      var net = gv(row, '.netPay','textContent');
+      html += `<div class="payslip">
+        <h3>Payslip</h3>
+        <p><strong>Employee ID:</strong> ${id}</p>
+        <p><strong>Name:</strong> ${name}</p>
+        <p><strong>Period:</strong> ${ws}${we ? (' to ' + we) : ''}</p>
+        <table>
+          <tr><th>Description</th><th>Value</th></tr>
+          <tr><td>Regular Hours</td><td>${d(reg)}</td></tr>
+          <tr><td>OT Hours</td><td>${d(ot)}</td></tr>
+          <tr><td>Hourly Rate</td><td>${d(rate)}</td></tr>
+          <tr><td>Regular Pay</td><td>${d(regPay)}</td></tr>
+          <tr><td>OT Pay</td><td>${d(otPay)}</td></tr>
+          <tr><td>Gross Pay</td><td>${d(gross)}</td></tr>
+          <tr><td>Pag-IBIG</td><td>${d(pagibig)}</td></tr>
+          <tr><td>PhilHealth</td><td>${d(philhealth)}</td></tr>
+          <tr><td>SSS</td><td>${d(sss)}</td></tr>
+          <tr><td>SSS Loan</td><td>${d(sssLoan)}</td></tr>
+          <tr><td>Pag-IBIG Loan</td><td>${d(piLoan)}</td></tr>
+          <tr><td>Vale</td><td>${d(v)}</td></tr>
+          <tr><td>Wed Vale</td><td>${d(vW)}</td></tr>
+          <tr><td>Adjustments</td><td>${d(adj)}</td></tr>
+          <tr><td>Total Deductions</td><td>${d(total)}</td></tr>
+          <tr><th>Net Pay</th><th>${d(net)}</th></tr>
+        </table>
+      </div>`;
+      if ((idx + 1) % 4 === 0 && idx !== rows.length - 1) {
+        html += `</div><div class="page-break"></div><div class="payslip-grid">`;
       }
     });
-  }
-
-  // Also run once at idle to catch anything missed
-  applyFormattingSoon();
-})();
-// === END PATCH ===
+    html += `</div></body></html>`;
+    var w = window.open('', '', 'width=800,height=900');
+    if (!w) return;
+    w.document.open(); w.document.write(html); w.document.close();
+    w.focus(); setTimeout(function(){ try { w.print(); } catch(e){} }, 0);
+  });
+});
 </script>
 
 
@@ -389,32 +350,30 @@ applyZeroSoon();
 
 <script>
 (function(){
-  function hideThenFormat(run){
-    const tbl = document.getElementById('payrollTable');
-    const prevVis = tbl ? tbl.style.visibility : null;
-    if (tbl) tbl.style.visibility = 'hidden';
-    const out = run();
-    try {
-      {
-        // Lightweight: only blank zeros in the three inputs we style as text
-        try{
-          document.querySelectorAll('#payrollTable input.regHrs, #payrollTable input.otHrs, #payrollTable input.rate').forEach(inp=>{
-            const v = parseFloat((inp.value||'').replace(/,/g,''));
-            if(!isNaN(v) && v===0) inp.value = '';
-          });
-        }catch(e){}
+  function zeroBlankInputs(){
+    try{
+      document.querySelectorAll('#payrollTable input.regHrs, #payrollTable input.otHrs, #payrollTable input.rate').forEach(function(inp){
+        var v = parseFloat((inp.value||'').toString().replace(/,/g,''));
+        if(!isNaN(v) && v===0){ inp.value = ''; }
       });
-        }
-      }
-    } catch(e){}
+    }catch(e){}
+  }
+  function hideThenFormat(run){
+    var tbl = document.getElementById('payrollTable');
+    var prevVis = tbl ? tbl.style.visibility : null;
+    if (tbl) tbl.style.visibility = 'hidden';
+    var out;
+    try { out = run(); } catch(e){ out = undefined; }
+    try { zeroBlankInputs(); } catch(e){}
     if (tbl) tbl.style.visibility = (prevVis==null? '' : prevVis);
     return out;
   }
-  ['renderTable','calculateAll'].forEach(fn=>{
-    const orig = window[fn];
-    if (typeof orig !== 'function' || orig.__noflash) return;
-    window[fn] = function(){ return hideThenFormat(()=>orig.apply(this, arguments)); };
-    window[fn].__noflash = true;
+  ['renderTable','calculateAll'].forEach(function(fn){
+    var orig = window[fn];
+    if (typeof orig === 'function' && !orig.__noflash){
+      window[fn] = function(){ return hideThenFormat(function(){ return orig.apply(this, arguments); }); };
+      window[fn].__noflash = true;
+    }
   });
 })();
 </script>
@@ -1738,30 +1697,30 @@ window.addEventListener('load', dashReports);
       <tbody>
       </tbody>
       <tfoot id="payrollTotalsFoot">
-        <tr>
-          <td colspan="2" class="label-cell">Grand Total</td>
-          <td class="num" data-col="regHrs">0.00</td>
-          <td class="num" data-col="otHrs">0.00</td>
-          <td class="num" data-col="adjHrs">0.00</td>
-          <td class="num" data-col="rate">0.00</td>
-          <td class="num" data-col="regPay">0.00</td>
-          <td class="num" data-col="otPay">0.00</td>
-          <td class="num" data-col="grossPay">0.00</td>
-          <td class="num" data-col="pagibig">0.00</td>
-          <td class="num" data-col="philhealth">0.00</td>
-          <td class="num" data-col="sss">0.00</td>
-          <td class="num" data-col="loanSSS">0.00</td>
-          <td class="num" data-col="loanPI">0.00</td>
-          <td class="num" data-col="vale">0.00</td>
-          <td class="num" data-col="valeWed">0.00</td>
-          <td class="num" data-col="totalDed">0.00</td>
-          <td class="num" data-col="adjAmt">0.00</td>
-          <!-- Bantay totals column (left blank as allowances are not aggregated) -->
-          <td></td>
-          <td class="num" data-col="netPay">0.00</td>
-          <td></td>
-        </tr>
-      </tfoot>
+  <tr>
+    <td colspan="2" class="label-cell">Grand Total</td>
+    <td class="num" data-col="rate"></td>
+    <td class="num" data-col="regHrs">0.00</td>
+    <td class="num" data-col="otHrs">0.00</td>
+    <td class="num" data-col="adjHrs">0.00</td>
+    <td class="num" data-col="totalHrs">0.00</td>
+    <td class="num" data-col="regPay">0.00</td>
+    <td class="num" data-col="otPay">0.00</td>
+    <td class="num" data-col="grossPay">0.00</td>
+    <td class="num" data-col="pagibig">0.00</td>
+    <td class="num" data-col="philhealth">0.00</td>
+    <td class="num" data-col="sss">0.00</td>
+    <td class="num" data-col="loanSSS">0.00</td>
+    <td class="num" data-col="loanPI">0.00</td>
+    <td class="num" data-col="vale">0.00</td>
+    <td class="num" data-col="valeWed">0.00</td>
+    <td class="num" data-col="totalDed">0.00</td>
+    <td class="num" data-col="adjAmt">0.00</td>
+    <td></td>
+    <td class="num" data-col="netPay">0.00</td>
+    <td></td>
+  </tr>
+</tfoot>
 
      </table>
      <div class="section note">
@@ -7455,7 +7414,124 @@ document.addEventListener('click', function(e) {
     var html = '<!DOCTYPE html><html><head><meta charset="utf-8"><title>Payslip - ' + name + '</title>' +
       '<style>body{font-family:Arial,Helvetica,sans-serif;padding:20px;line-height:1.4;} h2{text-align:center;}' +
       'table{border-collapse:collapse;width:100%;margin-top:12px;} th,td{border:1px solid #e2e8f0;padding:8px;text-align:left;font-size:14px;}' +
-      'th{background:#f1f5f9;}</style></head><body>' +
+      'th{background:#f1f5f9;}</style>
+<style>
+/* === Reports: final sizing (recreated) === */
+#r_table th.left, #r_table td.left {
+  white-space: normal;
+  min-width: 320px;
+  max-width: 560px;
+  line-height: 1.25;
+  word-break: keep-all;
+  overflow-wrap: anywhere;
+}
+#r_table th:nth-last-child(4), #r_table td:nth-last-child(4) { /* TOTAL REG HRS */
+  width: 100px; min-width: 100px; max-width: 110px;
+}
+#r_table th:nth-last-child(3), #r_table td:nth-last-child(3) { /* TOTAL OT HRS */
+  width: 100px; min-width: 100px; max-width: 110px;
+}
+</style>
+
+<style>
+/* === Reports: sizing per user (400 / 120 / 120) === */
+#r_table th.left, #r_table td.left {
+  white-space: normal;
+  min-width: 400px;
+  max-width: 640px;
+  line-height: 1.25;
+  word-break: keep-all;
+  overflow-wrap: anywhere;
+}
+/* TOTAL REG HRS (4th-from-right) => 120px */
+#r_table th:nth-last-child(4), #r_table td:nth-last-child(4) {
+  width: 120px; min-width: 120px; max-width: 130px;
+}
+/* TOTAL OT HRS (3rd-from-right) => 120px */
+#r_table th:nth-last-child(3), #r_table td:nth-last-child(3) {
+  width: 120px; min-width: 120px; max-width: 130px;
+}
+</style>
+
+<style>
+/* === FORCE sizing: takes precedence with !important === */
+#r_table th.left, #r_table td.left {
+  white-space: normal !important;
+  min-width: 400px !important;
+  max-width: 640px !important;
+  line-height: 1.25 !important;
+  word-break: keep-all !important;
+  overflow-wrap: anywhere !important;
+}
+/* TOTAL REG HRS = 120px (4th from right) */
+#r_table thead th:nth-last-child(4),
+#r_table tbody td:nth-last-child(4) {
+  width: 120px !important;
+  min-width: 120px !important;
+  max-width: 130px !important;
+  white-space: nowrap !important;
+}
+/* TOTAL OT HRS = 120px (3rd from right) */
+#r_table thead th:nth-last-child(3),
+#r_table tbody td:nth-last-child(3) {
+  width: 120px !important;
+  min-width: 120px !important;
+  max-width: 130px !important;
+  white-space: nowrap !important;
+}
+</style>
+
+<style>
+/* === Reports: PERSONNEL no-wrap + ellipsis === */
+#r_table th.left, #r_table td.left {
+  white-space: nowrap !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+}
+</style>
+
+<style>
+/* === Reports: PERSONNEL exact width 200px, no-wrap, ellipsis === */
+#r_table th.left, #r_table td.left {
+  width: 200px !important;
+  min-width: 200px !important;
+  max-width: 200px !important;
+  white-space: nowrap !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+}
+</style>
+
+<style>
+/* === Reports: PERSONNEL exact width 150px, no-wrap, ellipsis (final) === */
+#r_table th.left, #r_table td.left {
+  width: 150px !important;
+  min-width: 150px !important;
+  max-width: 150px !important;
+  white-space: nowrap !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+}
+</style>
+
+<style>
+/* === Reports: force TOTAL REG HRS & TOTAL OT HRS to 100px === */
+#r_table thead th:nth-last-child(4),
+#r_table tbody td:nth-last-child(4) {
+  width: 100px !important;
+  min-width: 100px !important;
+  max-width: 110px !important;
+  white-space: nowrap !important;
+}
+#r_table thead th:nth-last-child(3),
+#r_table tbody td:nth-last-child(3) {
+  width: 100px !important;
+  min-width: 100px !important;
+  max-width: 110px !important;
+  white-space: nowrap !important;
+}
+</style>
+</head><body>' +
       '<h2>Payslip</h2>' +
       '<p><strong>Employee ID:</strong> ' + id + '</p>' +
       '<p><strong>Name:</strong> ' + name + '</p>' +
@@ -9106,6 +9182,289 @@ document.addEventListener('DOMContentLoaded', async function () {
   else init();
 })();
 // === END ===
+</script>
+
+<script>
+(function(){
+  function applyReportSizing(){
+    var tbl = document.getElementById('r_table');
+    if(!tbl) return;
+    var thead = tbl.tHead;
+    if(!thead || !thead.rows.length) return;
+    var ths = thead.rows[0].cells;
+    var N = ths.length;
+    if(N < 6) return; // safety
+
+    var idxPersonnel = 0;
+    var idxReg = N - 4; // TOTAL REG HRS
+    var idxOT  = N - 3; // TOTAL OT HRS
+
+    // Header cells
+    [idxPersonnel, idxReg, idxOT].forEach(function(i){
+      if (ths[i]) {
+        if (i === idxPersonnel) {
+          ths[i].style.whiteSpace = 'nowrap';
+          ths[i].style.minWidth = '400px';
+          ths[i].style.maxWidth = '640px';
+          ths[i].style.lineHeight = '1.25';
+          ths[i].style.wordBreak = 'keep-all';
+          ths[i].style.overflowWrap = 'anywhere'; ths[i].style.overflow='hidden'; ths[i].style.textOverflow='ellipsis';
+        } else {
+          ths[i].style.width = '120px';
+          ths[i].style.minWidth = '120px';
+          ths[i].style.maxWidth = '130px';
+          ths[i].style.whiteSpace = 'nowrap';
+        }
+      }
+    });
+
+    // Body rows
+    var rows = tbl.tBodies ? Array.from(tbl.tBodies).flatMap(tb => Array.from(tb.rows)) : [];
+    rows.forEach(function(r){
+      var cells = r.cells;
+      if (!cells || !cells.length) return;
+      if (cells[idxPersonnel]){
+        var c = cells[idxPersonnel];
+        c.style.whiteSpace = 'nowrap';
+        c.style.minWidth = '400px';
+        c.style.maxWidth = '640px';
+        c.style.lineHeight = '1.25';
+        c.style.wordBreak = 'keep-all';
+        c.style.overflowWrap = 'anywhere'; c.style.overflow='hidden'; c.style.textOverflow='ellipsis';
+      }
+      if (cells[idxReg]){
+        var cR = cells[idxReg];
+        cR.style.width = '120px';
+        cR.style.minWidth = '120px';
+        cR.style.maxWidth = '130px';
+        cR.style.whiteSpace = 'nowrap';
+      }
+      if (cells[idxOT]){
+        var cO = cells[idxOT];
+        cO.style.width = '120px';
+        cO.style.minWidth = '120px';
+        cO.style.maxWidth = '130px';
+        cO.style.whiteSpace = 'nowrap';
+      }
+    });
+  }
+
+  // Apply after build and on any changes
+  function initSizingObserver(){
+    var tbl = document.getElementById('r_table');
+    if(!tbl) return;
+    var mo = new MutationObserver(function(){ applyReportSizing(); });
+    mo.observe(tbl, { childList: true, subtree: true });
+    applyReportSizing();
+  }
+
+  if (document.readyState === 'loading'){
+    document.addEventListener('DOMContentLoaded', initSizingObserver);
+  } else {
+    initSizingObserver();
+  }
+})();
+</script>
+
+<script>
+(function(){
+  function forcePersonnel150(){
+    var tbl = document.getElementById('r_table');
+    if(!tbl || !tbl.tHead || !tbl.tHead.rows.length) return;
+    var th = tbl.tHead.rows[0].cells[0]; // PERSONNEL
+    if (th){
+      th.style.width = '150px';
+      th.style.minWidth = '150px';
+      th.style.maxWidth = '150px';
+      th.style.whiteSpace = 'nowrap';
+      th.style.overflow = 'hidden';
+      th.style.textOverflow = 'ellipsis';
+    }
+    if (tbl.tBodies){
+      Array.prototype.forEach.call(tbl.tBodies, function(tb){
+        Array.prototype.forEach.call(tb.rows || [], function(r){
+          var c = r.cells && r.cells[0];
+          if (c){
+            c.style.width = '150px';
+            c.style.minWidth = '150px';
+            c.style.maxWidth = '150px';
+            c.style.whiteSpace = 'nowrap';
+            c.style.overflow = 'hidden';
+            c.style.textOverflow = 'ellipsis';
+          }
+        });
+      });
+    }
+  }
+  function init(){
+    var tbl = document.getElementById('r_table');
+    if(!tbl) return;
+    forcePersonnel150();
+    try{
+      var mo = new MutationObserver(forcePersonnel150);
+      mo.observe(tbl, { childList:true, subtree:true });
+    }catch(e){}
+  }
+  if (document.readyState === 'loading'){
+    document.addEventListener('DOMContentLoaded', init, { once:true });
+  } else { init(); }
+})();
+</script>
+
+<script>
+(function(){
+  function applyTotalsWidth100(){
+    var tbl = document.getElementById('r_table');
+    if(!tbl || !tbl.tHead || !tbl.tHead.rows.length) return;
+    var ths = tbl.tHead.rows[0].cells;
+    var N = ths.length;
+    if (N < 6) return; // safeguard
+    var idxReg = N - 4; // TOTAL REG HRS
+    var idxOT  = N - 3; // TOTAL OT HRS
+    function setCell(c){
+      if(!c) return;
+      c.style.width = '100px';
+      c.style.minWidth = '100px';
+      c.style.maxWidth = '110px';
+      c.style.whiteSpace = 'nowrap';
+    }
+    setCell(ths[idxReg]);
+    setCell(ths[idxOT]);
+    if (tbl.tBodies){
+      Array.prototype.forEach.call(tbl.tBodies, function(tb){
+        Array.prototype.forEach.call(tb.rows || [], function(r){
+          setCell(r.cells[idxReg]);
+          setCell(r.cells[idxOT]);
+        });
+      });
+    }
+  }
+  function init(){
+    var tbl = document.getElementById('r_table');
+    if(!tbl) return;
+    applyTotalsWidth100();
+    try{
+      var mo = new MutationObserver(applyTotalsWidth100);
+      mo.observe(tbl, { childList:true, subtree:true });
+    }catch(e){}
+  }
+  if (document.readyState === 'loading'){
+    document.addEventListener('DOMContentLoaded', init, { once:true });
+  } else { init(); }
+})();
+</script>
+
+<script>
+// Clean Reports Print: opens a minimal window with just the reports table.
+// Note: Browser header/footer (date, title, URL) are controlled by the print dialog.
+// To remove them entirely, uncheck "Headers and footers" in the print settings.
+(function(){
+  function printReportsClean(){
+    try{
+      var tbl = document.getElementById('r_table');
+      if (!tbl) return;
+      var hint = document.getElementById('r_range_hint');
+      var css = `
+        <style>
+          html,body{margin:0;padding:10px;font-family:Arial,Helvetica,sans-serif}
+          h3{margin:0 0 8px 0}
+          table{width:100%;border-collapse:collapse;font-size:12px}
+          th,td{border:1px solid #e5e7eb;padding:4px 6px;vertical-align:middle}
+          th{background:#f8fafc;text-align:left}
+          .left{text-align:left}
+          .num{text-align:right}
+          @media print{
+            @page { margin: 10mm; }
+          }
+        </style>`;
+      var html = `<!doctype html><html><head><meta charset="utf-8">` + css + `
+<style>
+/* === Reports: set GRAND TOTAL HOURS & GROSS widths === */
+/* GRAND TOTAL HOURS is the 2nd-from-right column */
+#r_table thead th:nth-last-child(2),
+#r_table tbody td:nth-last-child(2) {
+  width: 120px !important;
+  min-width: 120px !important;
+  max-width: 140px !important;
+  white-space: nowrap !important;
+}
+/* GROSS is the last column */
+#r_table thead th:nth-last-child(1),
+#r_table tbody td:nth-last-child(1) {
+  width: 100px !important;
+  min-width: 100px !important;
+  max-width: 110px !important;
+  white-space: nowrap !important;
+}
+</style>
+</head><body>` +
+                 `<h3>Reports</h3>` + (hint ? `<div style="font-size:12px;color:#64748b;margin:0 0 8px 0">${hint.textContent||''}</div>` : '') +
+                 `<table>` + tbl.innerHTML + `</table>` +
+                 `</body></html>`;
+      var w = window.open('', '', 'width=1024,height=768');
+      if (!w) return;
+      w.document.open();
+      w.document.write(html);
+      // Set a blank title to avoid printing the original long page title in some browsers
+      try{ w.document.title = ' '; }catch(e){}
+      w.document.close();
+      w.focus();
+      setTimeout(function(){ try{ w.print(); }catch(e){} }, 0);
+    }catch(e){ console.warn('Clean print failed', e); }
+  }
+
+  function attach(){
+    var btn = document.getElementById('r_print');
+    if (!btn || btn.__cleanPrint) return;
+    btn.addEventListener('click', function(ev){ ev.preventDefault(); printReportsClean(); });
+    btn.__cleanPrint = true;
+  }
+  if (document.readyState === 'loading'){ document.addEventListener('DOMContentLoaded', attach, {once:true}); }
+  else { attach(); }
+})();
+</script>
+
+<script>
+(function(){
+  function applyGrandAndGross(){
+    var tbl = document.getElementById('r_table');
+    if(!tbl || !tbl.tHead || !tbl.tHead.rows.length) return;
+    var ths = tbl.tHead.rows[0].cells;
+    var N = ths.length;
+    if (N < 6) return; // safety
+    var idxGrand = N - 2; // GRAND TOTAL HOURS
+    var idxGross = N - 1; // GROSS
+    function setW(cell, w, max){
+      if(!cell) return;
+      cell.style.width = w + 'px';
+      cell.style.minWidth = w + 'px';
+      cell.style.maxWidth = (max || w) + 'px';
+      cell.style.whiteSpace = 'nowrap';
+    }
+    setW(ths[idxGrand], 120, 140);
+    setW(ths[idxGross], 100, 110);
+    if (tbl.tBodies){
+      Array.prototype.forEach.call(tbl.tBodies, function(tb){
+        Array.prototype.forEach.call(tb.rows || [], function(r){
+          setW(r.cells[idxGrand], 120, 140);
+          setW(r.cells[idxGross], 100, 110);
+        });
+      });
+    }
+  }
+  function init(){
+    var tbl = document.getElementById('r_table');
+    if(!tbl) return;
+    applyGrandAndGross();
+    try{
+      var mo = new MutationObserver(applyGrandAndGross);
+      mo.observe(tbl, { childList:true, subtree:true });
+    }catch(e){}
+  }
+  if (document.readyState === 'loading'){
+    document.addEventListener('DOMContentLoaded', init, { once:true });
+  } else { init(); }
+})();
 </script>
 </body>
 </html>
