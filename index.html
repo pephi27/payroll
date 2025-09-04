@@ -177,13 +177,14 @@ document.addEventListener('DOMContentLoaded', function() {
       var html = '<!DOCTYPE html><html><head><meta charset="utf-8"><title>All Payslips</title>' +
         '<style>body{font-family:Arial,Helvetica,sans-serif;margin:0;padding:10px;} .payslip-grid{display:flex;flex-wrap:wrap;} .payslip{width:50%;box-sizing:border-box;padding:10px;border:1px solid #e2e8f0;} table{border-collapse:collapse;width:100%;font-size:12px;} th,td{border:1px solid #e2e8f0;padding:4px;text-align:left;} th{background:#f1f5f9;} .page-break{page-break-after:always;}</style></head><body>';
       html += '<div class="payslip-grid">';
-      rows.forEach(function(row, idx) {
+      rows.forEach(function(row, idx){
         var id = (row.cells[0]?.textContent || '').trim();
         var name = (row.cells[1]?.textContent || '').trim();
         function gv(sel, prop) {
           var el = row.querySelector(sel);
           if (!el) return '';
-          return prop === 'value' ? (el.value || '') : (el.textContent || '');
+          if (prop === 'value') return el.value || '';
+          return el.textContent || '';
         }
         var reg = gv('.regHrs','value');
         var ot = gv('.otHrs','value');
@@ -201,35 +202,179 @@ document.addEventListener('DOMContentLoaded', function() {
         var adj = gv('.adjAmt','textContent');
         var total = gv('.totalDed','textContent');
         var net = gv('.netPay','textContent');
-        html += '<div class="payslip">' +
+        function d(x){
+          var n = parseFloat((x||'').toString().replace(/,/g,''));
+          return (!isNaN(n) && n === 0) ? '-' : (x||'');
+        }
+         '<div class="payslip">' +
           '<h3>Payslip</h3>' +
           '<p><strong>Employee ID:</strong> ' + id + '</p>' +
           '<p><strong>Name:</strong> ' + name + '</p>' +
           '<p><strong>Period:</strong> ' + ws + (we ? (' to ' + we) : '') + '</p>' +
           '<table>' +
           '<tr><th>Description</th><th>Value</th></tr>' +
-          '<tr><td>Regular Hours</td><td>' + reg + '</td></tr>' +
-          '<tr><td>OT Hours</td><td>' + ot + '</td></tr>' +
-          '<tr><td>Hourly Rate</td><td>' + rate + '</td></tr>' +
-          '<tr><td>Regular Pay</td><td>' + regPay + '</td></tr>' +
-          '<tr><td>OT Pay</td><td>' + otPay + '</td></tr>' +
-          '<tr><td>Gross Pay</td><td>' + gross + '</td></tr>' +
-          '<tr><td>Pag-IBIG</td><td>' + pagibig + '</td></tr>' +
-          '<tr><td>PhilHealth</td><td>' + philhealth + '</td></tr>' +
-          '<tr><td>SSS</td><td>' + sss + '</td></tr>' +
-          '<tr><td>SSS Loan</td><td>' + sssLoan + '</td></tr>' +
-          '<tr><td>Pag-IBIG Loan</td><td>' + piLoan + '</td></tr>' +
-          '<tr><td>Vale</td><td>' + v + '</td></tr>' +
-          '<tr><td>Wed Vale</td><td>' + vW + '</td></tr>' +
-          '<tr><td>Adjustments</td><td>' + adj + '</td></tr>' +
-          '<tr><td>Total Deductions</td><td>' + total + '</td></tr>' +
-          '<tr><th>Net Pay</th><th>' + net + '</th></tr>' +
+          '<tr><td>Regular Hours</td><td>' + d(reg) + '</td></tr>' +
+          '<tr><td>OT Hours</td><td>' + d(ot) + '</td></tr>' +
+          '<tr><td>Hourly Rate</td><td>' + d(rate) + '</td></tr>' +
+          '<tr><td>Regular Pay</td><td>' + d(regPay) + '</td></tr>' +
+          '<tr><td>OT Pay</td><td>' + d(otPay) + '</td></tr>' +
+          '<tr><td>Gross Pay</td><td>' + d(gross) + '</td></tr>' +
+          '<tr><td>Pag-IBIG</td><td>' + d(pagibig) + '</td></tr>' +
+          '<tr><td>PhilHealth</td><td>' + d(philhealth) + '</td></tr>' +
+          '<tr><td>SSS</td><td>' + d(sss) + '</td></tr>' +
+          '<tr><td>SSS Loan</td><td>' + d(sssLoan) + '</td></tr>' +
+          '<tr><td>Pag-IBIG Loan</td><td>' + d(piLoan) + '</td></tr>' +
+          '<tr><td>Vale</td><td>' + d(v) + '</td></tr>' +
+          '<tr><td>Wed Vale</td><td>' + d(vW) + '</td></tr>' +
+          '<tr><td>Adjustments</td><td>' + d(adj) + '</td></tr>' +
+          '<tr><td>Total Deductions</td><td>' + d(total) + '</td></tr>' +
+          '<tr><th>Net Pay</th><th>' + d(net) + '</th></tr>' +
           '</table></div>';
         if ((idx + 1) % 4 === 0 && idx !== rows.length - 1) {
           html += '</div><div class="page-break"></div><div class="payslip-grid">';
         }
       });
-      html += '</div></body></html>';
+      html += '</div>
+<script>
+// === PATCH: robust zero formatting (debounced + observer) ===
+(function(){
+  // Debounced runner so formatting always happens *after* table updates
+  let __fmtTimer = null;
+  function applyFormattingSoon(){
+    clearTimeout(__fmtTimer);
+    __fmtTimer = setTimeout(function(){
+      try { formatAllNumbers(); } catch(e){ /* noop */ }
+    }, 0);
+  }
+
+  // Re-patch key renderers even if they are defined later
+  function latePatch(name){
+    const tryHook = () => {
+      const orig = window[name];
+      if (typeof orig === 'function' && !orig.__wrappedForZeroFmt){
+        window[name] = function(){
+          const out = orig.apply(this, arguments);
+          applyFormattingSoon();
+          return out;
+        };
+        window[name].__wrappedForZeroFmt = true;
+      }
+    };
+    // Try now and again shortly after, for late-loaded functions
+    tryHook();
+    setTimeout(tryHook, 0);
+    document.addEventListener('readystatechange', tryHook);
+    window.addEventListener('load', tryHook);
+  }
+  ['calculateAll','renderTable','renderDeductionsTable','renderReportTable'].forEach(latePatch);
+
+  // MutationObserver on payroll tbody so any DOM change triggers formatting
+  const tbl = document.getElementById('payrollTable');
+  if (tbl && tbl.tBodies && tbl.tBodies[0]){
+    const obs = new MutationObserver(applyFormattingSoon);
+    obs.observe(tbl.tBodies[0], {childList:true, subtree:true, characterData:true});
+  } else {
+    // If table isn't present yet, try again after load
+    window.addEventListener('load', function(){
+      const t = document.getElementById('payrollTable');
+      if (t && t.tBodies && t.tBodies[0]){
+        const obs = new MutationObserver(applyFormattingSoon);
+        obs.observe(t.tBodies[0], {childList:true, subtree:true, characterData:true});
+        applyFormattingSoon();
+      }
+    });
+  }
+
+  // Also run once at idle to catch anything missed
+  applyFormattingSoon();
+})();
+// === END PATCH ===
+</script>
+
+
+<script>
+// === PATCH v15: Strong zero formatting in Reports/Payroll tab ===
+(function(){
+  function zeroToDashInTable(){
+    try{
+      const tbl = document.getElementById('payrollTable');
+      if(!tbl || !tbl.tBodies || !tbl.tBodies[0]) return;
+      const tbody = tbl.tBodies[0];
+      // Inputs: blank zeros only for the three computed fields
+      tbody.querySelectorAll('input.regHrs, input.otHrs, input.rate').forEach(inp=>{
+        const v = parseFloat((inp.value||'').toString().replace(/,/g,''));
+        if(!isNaN(v) && v===0){ inp.value = ''; }
+      });
+      // Text cells: convert 0/0.00 to '-'
+      Array.from(tbody.querySelectorAll('td')).forEach(td=>{
+        if(td.querySelector('input')) return; // inputs handled above
+        const raw = (td.textContent||'').replace(/,/g,'').trim();
+        if(raw==='') return;
+        const n = parseFloat(raw);
+        if(!isNaN(n) && isFinite(n) && n===0){
+          td.textContent = '-';
+        }
+      });
+      // Footer totals too
+      if(tbl.tFoot){
+        Array.from(tbl.tFoot.querySelectorAll('td')).forEach(td=>{
+          const raw = (td.textContent||'').replace(/,/g,'').trim();
+          if(!raw) return;
+          const n = parseFloat(raw);
+          if(!isNaN(n) && n===0){ td.textContent = '-'; }
+        });
+      }
+    }catch(e){ /* no-op */ }
+  }
+
+  // Debounced wrapper
+  let __zTimer=null;
+  function applyZeroSoon(){
+    clearTimeout(__zTimer);
+    __zTimer = setTimeout(zeroToDashInTable, 0);
+  }
+
+  // Hook common renderers (if defined later too)
+  ['calculateAll','renderTable','renderDeductionsTable','renderReportTable'].forEach(fn=>{
+    const hook = ()=>{
+      const orig = window[fn];
+      if(typeof orig==='function' && !orig.__zeroWrapped){
+        window[fn] = function(){
+          const out = orig.apply(this, arguments);
+          applyZeroSoon();
+          return out;
+        };
+        window[fn].__zeroWrapped = true;
+      }
+    };
+    hook();
+    document.addEventListener('readystatechange', hook);
+    window.addEventListener('load', hook);
+    setTimeout(hook, 0);
+  });
+
+  // Observe tbody for DOM changes
+  const startObserver = ()=>{
+    const tbl = document.getElementById('payrollTable');
+    if(tbl && tbl.tBodies && tbl.tBodies[0]){
+      const obs = new MutationObserver(applyZeroSoon);
+      obs.observe(tbl.tBodies[0], {childList:true, subtree:true, characterData:true});
+      applyZeroSoon();
+    }
+  };
+  if(document.readyState === 'loading'){
+    document.addEventListener('DOMContentLoaded', startObserver);
+  }else{
+    startObserver();
+  }
+
+  // Periodic fallback (lightweight) in case rendering bypasses hooks
+  setInterval(zeroToDashInTable, 1000);
+})();
+// === END PATCH v15 ===
+</script>
+
+</body></html>';
 
       var w = window.open('', '', 'width=800,height=900');
       if (!w) return;
@@ -2974,6 +3119,14 @@ document.addEventListener('DOMContentLoaded', function(){
       const td = inp.parentElement;
       const val = (inp.value || inp.textContent || '').toString();
       td.textContent = val;
+    });
+    // Replace numeric zeros with dashes in clone
+    clone.querySelectorAll('td').forEach(function(td){
+      if (td.querySelector('input')) return;
+      var raw = (td.textContent || '').replace(/,/g,'').trim();
+      if (!raw) return;
+      var num = parseFloat(raw);
+      if (!isNaN(num) && num === 0) td.textContent = '-';
     });
     // Build a new window for printing
     const w = window.open('', '', 'width=900,height=700');
@@ -7243,25 +7396,24 @@ document.addEventListener('click', function(e) {
       '<p><strong>Period:</strong> ' + ws + (we ? (' to ' + we) : '') + '</p>' +
       '<table>' +
       '<tr><th>Description</th><th>Value</th></tr>' +
-      '<tr><td>Regular Hours</td><td>' + reg + '</td></tr>' +
-      '<tr><td>OT Hours</td><td>' + ot + '</td></tr>' +
-      '<tr><td>Hourly Rate</td><td>' + rate + '</td></tr>' +
-      '<tr><td>Regular Pay</td><td>' + regPay + '</td></tr>' +
-      '<tr><td>OT Pay</td><td>' + otPay + '</td></tr>' +
-      '<tr><td>Gross Pay</td><td>' + gross + '</td></tr>' +
-      '<tr><td>Pag-IBIG</td><td>' + pagibig + '</td></tr>' +
-      '<tr><td>PhilHealth</td><td>' + philhealth + '</td></tr>' +
-      '<tr><td>SSS</td><td>' + sss + '</td></tr>' +
-      '<tr><td>SSS Loan</td><td>' + sssLoan + '</td></tr>' +
-      '<tr><td>Pag-IBIG Loan</td><td>' + piLoan + '</td></tr>' +
-      '<tr><td>Vale</td><td>' + valeAmt + '</td></tr>' +
-      '<tr><td>Wed Vale</td><td>' + wedValeAmt + '</td></tr>' +
-      '<tr><td>Adjustments</td><td>' + adjAmt + '</td></tr>' +
-      '<tr><td>Total Deductions</td><td>' + total + '</td></tr>' +
-      '<tr><th>Net Pay</th><th>' + net + '</th></tr>' +
+      '<tr><td>Regular Hours</td><td>' + d(reg) + '</td></tr>' +
+      '<tr><td>OT Hours</td><td>' + d(ot) + '</td></tr>' +
+      '<tr><td>Hourly Rate</td><td>' + d(rate) + '</td></tr>' +
+      '<tr><td>Regular Pay</td><td>' + d(regPay) + '</td></tr>' +
+      '<tr><td>OT Pay</td><td>' + d(otPay) + '</td></tr>' +
+      '<tr><td>Gross Pay</td><td>' + d(gross) + '</td></tr>' +
+      '<tr><td>Pag-IBIG</td><td>' + d(pagibig) + '</td></tr>' +
+      '<tr><td>PhilHealth</td><td>' + d(philhealth) + '</td></tr>' +
+      '<tr><td>SSS</td><td>' + d(sss) + '</td></tr>' +
+      '<tr><td>SSS Loan</td><td>' + d(sssLoan) + '</td></tr>' +
+      '<tr><td>Pag-IBIG Loan</td><td>' + d(piLoan) + '</td></tr>' +
+      '<tr><td>Vale</td><td>' + d(valeAmt) + '</td></tr>' +
+      '<tr><td>Wed Vale</td><td>' + d(wedValeAmt) + '</td></tr>' +
+      '<tr><td>Adjustments</td><td>' + d(adjAmt) + '</td></tr>' +
+      '<tr><td>Total Deductions</td><td>' + d(total) + '</td></tr>' +
+      '<tr><th>Net Pay</th><th>' + d(net) + '</th></tr>' +
       '</table>' +
-      '
-</body></html>';
+      '</body></html>';
     // Open new window and write payslip content
     var w = window.open('', '', 'width=600,height=800');
     if (!w) return; // popup blocked
@@ -7413,8 +7565,20 @@ document.addEventListener('click', function(e) {
     document.querySelectorAll(sels).forEach(function(td){
       var raw = (td.textContent || '').replace(/,/g, '').trim();
       var num = parseFloat(raw);
-      if (isFinite(num)) td.textContent = fmt(num);
+      if (isFinite(num)) {
+        if (num === 0) {
+          td.textContent = '-';
+        } else {
+          td.textContent = fmt(num);
+        }
+      }
     });
+    // Inputs: hide zeros by showing blank
+    document.querySelectorAll('#payrollTable input.regHrs, #payrollTable input.otHrs, #payrollTable input.rate').forEach(function(inp){
+      var v = parseFloat(inp.value);
+      if (!isNaN(v) && v === 0) { inp.value = ''; }
+    });
+});
   }
 
   // Patch calculateAll to apply formatting after calculations
@@ -7490,6 +7654,7 @@ document.addEventListener('click', function(e) {
   patch('calculateAll');
   patch('renderDeductionsTable');
   patch('renderReportTable');
+  patch('renderTable');
   document.addEventListener('DOMContentLoaded',formatAllNumbers);
 })();
 </script>
