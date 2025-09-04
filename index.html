@@ -157,6 +157,15 @@ function safeStringify(v){
     pointer-events: none;
     opacity: 0.6;
   }
+
+/* === PATCH: Bantay column width === */
+#payrollTable th:nth-child(21), #payrollTable td:nth-child(21) { width: 100px; min-width: 100px; }
+/* === END PATCH === */
+
+/* === PERF: faster layout for payroll table === */
+#payrollTable { table-layout: fixed; }
+#payrollTable th, #payrollTable td { white-space: nowrap; }
+
 </style>
 <!-- === / Supabase KV Sync Adapter === -->
 
@@ -271,16 +280,14 @@ document.addEventListener('DOMContentLoaded', function() {
   // MutationObserver on payroll tbody so any DOM change triggers formatting
   const tbl = document.getElementById('payrollTable');
   if (tbl && tbl.tBodies && tbl.tBodies[0]){
-    const obs = new MutationObserver(applyFormattingSoon);
-    obs.observe(tbl.tBodies[0], {childList:true, subtree:true, characterData:true});
-  } else {
+    // observer removed for perf
+} else {
     // If table isn't present yet, try again after load
     window.addEventListener('load', function(){
       const t = document.getElementById('payrollTable');
       if (t && t.tBodies && t.tBodies[0]){
-        const obs = new MutationObserver(applyFormattingSoon);
-        obs.observe(t.tBodies[0], {childList:true, subtree:true, characterData:true});
-        applyFormattingSoon();
+        // observer removed for perf
+applyFormattingSoon();
       }
     });
   }
@@ -357,9 +364,8 @@ document.addEventListener('DOMContentLoaded', function() {
   const startObserver = ()=>{
     const tbl = document.getElementById('payrollTable');
     if(tbl && tbl.tBodies && tbl.tBodies[0]){
-      const obs = new MutationObserver(applyZeroSoon);
-      obs.observe(tbl.tBodies[0], {childList:true, subtree:true, characterData:true});
-      applyZeroSoon();
+      // observer removed for perf
+applyZeroSoon();
     }
   };
   if(document.readyState === 'loading'){
@@ -369,7 +375,6 @@ document.addEventListener('DOMContentLoaded', function() {
   }
 
   // Periodic fallback (lightweight) in case rendering bypasses hooks
-  setInterval(zeroToDashInTable, 1000);
 })();
 // === END PATCH v15 ===
 </script>
@@ -383,16 +388,15 @@ document.addEventListener('DOMContentLoaded', function() {
     if (tbl) tbl.style.visibility = 'hidden';
     const out = run();
     try {
-      if (typeof formatAllNumbers === 'function') { formatAllNumbers(); }
-      else {
-        const t = document.getElementById('payrollTable');
-        if (t && t.tBodies && t.tBodies[0]) {
-          t.tBodies[0].querySelectorAll('td').forEach(td=>{
-            if (td.querySelector('input')) return;
-            const raw = String(td.textContent||'').replace(/,/g,'').trim();
-            const n = parseFloat(raw);
-            if (!isNaN(n) && isFinite(n) && n===0) td.textContent = '-';
+      {
+        // Lightweight: only blank zeros in the three inputs we style as text
+        try{
+          document.querySelectorAll('#payrollTable input.regHrs, #payrollTable input.otHrs, #payrollTable input.rate').forEach(inp=>{
+            const v = parseFloat((inp.value||'').replace(/,/g,''));
+            if(!isNaN(v) && v===0) inp.value = '';
           });
+        }catch(e){}
+      });
         }
       }
     } catch(e){}
@@ -413,11 +417,11 @@ document.addEventListener('DOMContentLoaded', function() {
 (function(){
   function dashReports(){ try { if (typeof applyCommas === 'function') applyCommas(); } catch(e){} }
   const panel = document.getElementById('panelReports') || document.body;
-  const obs = new MutationObserver(dashReports);
-  obs.observe(panel, { childList:true, subtree:true, characterData:true });
-  window.addEventListener('load', dashReports);
+  // observer removed for perf
+window.addEventListener('load', dashReports);
 })();
 </script>
+
 
 </body></html>';
 
@@ -2817,6 +2821,8 @@ function philhealthRateByMonthly(monthly){
 }
 
 function calculateRow(tr){  const readNum = sel => { const el = tr.querySelector(sel); if (!el) return 0; const v = (typeof el.value !== 'undefined' ? el.value : el.textContent); const n = parseFloat(String(v).replace(/,/g,'')); return isNaN(n)?0:n; };
+  const w = (sel, val) => { const el = tr.querySelector(sel); if (!el) return; el.textContent = (val===0 ? '-' : (+val).toFixed(2)); };
+
 
   const id = tr.cells[0].textContent.trim();
   const reg = Number(tr.querySelector('.regHrs').value)||0;
@@ -2859,21 +2865,20 @@ function calculateRow(tr){  const readNum = sel => { const el = tr.querySelector
   const bVal = parseFloat((tr.querySelector('.bantay')?.value || '').trim()) || 0;
   const net = gross - total + adj + bVal;
 
-  tr.querySelector('.regPay').textContent = regPay.toFixed(2);
-  tr.querySelector('.otPay').textContent = otPay.toFixed(2);
-  tr.querySelector('.grossPay').textContent = gross.toFixed(2);
-  tr.querySelector('.pagibig').textContent = pagibig.toFixed(2);
-  tr.querySelector('.philhealth').textContent = philhealth.toFixed(2);
-  tr.querySelector('.sss').textContent = sss.toFixed(2);
-  tr.querySelector('.totalDed').textContent = total.toFixed(2);
+  w('.regPay', regPay);
+  w('.otPay', otPay);
+  w('.grossPay', gross);
+  w('.pagibig', pagibig);
+  w('.philhealth', philhealth);
+  w('.sss', sss);
+  w('.totalDed', total);
   // Populate adjustment cell (if exists) and net pay
   if (tr.querySelector('.adjAmt')) {
-    tr.querySelector('.adjAmt').textContent = adj.toFixed(2);
+    w('.adjAmt', adj);
   }
   // Update the displayed adjustment hours cell if present
-  const adjHrsCell = tr.querySelector('.adjHrs');
-  if (adjHrsCell) adjHrsCell.textContent = adjHours ? adjHours.toFixed(2) : '0.00';
-  tr.querySelector('.netPay').textContent = net.toFixed(2);
+  const adjHrsCell = tr.querySelector('.adjHrs'); if (adjHrsCell) { adjHrsCell.textContent = (adjHours===0 ? '-' : adjHours.toFixed(2)); }
+  w('.netPay', net);
 }
 
 function calculateAll(){
