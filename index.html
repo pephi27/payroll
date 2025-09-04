@@ -8988,5 +8988,124 @@ document.addEventListener('DOMContentLoaded', async function () {
   patchOnce();
 })();
 </script>
+
+<script>
+// === Reports: match last date (RWH & OTH) width to the common RWH width of other dates ===
+(function(){
+  function getTable(){
+    const host = document.getElementById('r_table');
+    return host ? (host.tagName.toLowerCase()==='table' ? host : host.querySelector('table')) : null;
+  }
+  function bottomHeader(t){ return t && t.tHead ? t.tHead.rows[t.tHead.rows.length-1] : null; }
+  function lastPairIdx(t){
+    const row = bottomHeader(t); if (!row) return null;
+    const ths = Array.from(row.cells);
+    let rwh = -1, oth = -1;
+    for (let i = ths.length-1; i >= 0; i--){
+      const txt = (ths[i].textContent||'').trim().toUpperCase();
+      if (oth === -1 && txt === 'OTH'){ oth = i; continue; }
+      if (oth !== -1 && txt === 'RWH'){ rwh = i; break; }
+    }
+    return (rwh !== -1 && oth !== -1) ? {rwh, oth, ths} : null;
+  }
+  function modeWidth(numbers){
+    const map = new Map();
+    numbers.forEach(v=>{ map.set(Math.round(v), (map.get(Math.round(v))||0)+1); });
+    let best=0, bestCount=-1;
+    map.forEach((c, w)=>{ if (c>bestCount){ best=w; bestCount=c; } });
+    return best||90;
+  }
+  function computeRefWidth(t, idx){
+    const row = bottomHeader(t); const ths = Array.from(row.cells);
+    const widths = [];
+    for (let i=0;i<ths.length;i++){
+      const txt = (ths[i].textContent||'').trim().toUpperCase();
+      if (txt === 'RWH' && i !== idx.rwh){
+        widths.push(ths[i].getBoundingClientRect().width);
+      }
+    }
+    if (!widths.length){
+      for (let i=0;i<ths.length;i++){
+        const txt = (ths[i].textContent||'').trim().toUpperCase();
+        if (txt === 'OTH' && i !== idx.oth){
+          widths.push(ths[i].getBoundingClientRect().width);
+        }
+      }
+    }
+    return modeWidth(widths);
+  }
+  function classCols(t, idx, cls){
+    // add class to header and all body cells at the given column index
+    const row = bottomHeader(t);
+    if (row && row.cells[idx]) row.cells[idx].classList.add(cls);
+    if (t.tBodies && t.tBodies.length){
+      for (const tr of Array.from(t.tBodies[0].rows)){
+        if (tr.cells[idx]) tr.cells[idx].classList.add(cls);
+      }
+    }
+  }
+  function apply(){
+    const t = getTable(); if (!t) return false;
+    const pair = lastPairIdx(t); if (!pair) return false;
+    const w = computeRefWidth(t, pair);
+
+    // ensure a style root with CSS var
+    let style = document.getElementById('__match_last_pair_style');
+    if (!style){
+      style = document.createElement('style');
+      style.id = '__match_last_pair_style';
+      style.textContent = `
+        :root { --LAST_PAIR_W: ${w}px; }
+        #r_table { table-layout: fixed; }
+        #r_table .__lastR, #r_table .__lastO {
+          width: var(--LAST_PAIR_W) !important;
+          min-width: var(--LAST_PAIR_W) !important;
+          max-width: var(--LAST_PAIR_W) !important;
+          box-sizing: border-box;
+          white-space: nowrap;
+          text-align: center;
+          padding-left: 8px; padding-right: 8px;
+        }
+        #r_table .__lastR > *, #r_table .__lastO > * {
+          display:block; max-width:100%; overflow:hidden;
+        }
+      `;
+      document.head.appendChild(style);
+    } else {
+      style.textContent = style.textContent.replace(/--LAST_PAIR_W:\s*\d+px/, `--LAST_PAIR_W: ${w}px`);
+    }
+
+    // mark both columns with classes
+    classCols(t, pair.rwh, '__lastR');
+    classCols(t, pair.oth, '__lastO');
+
+    // also set parent header colspan cell width to 2*ref
+    if (t.tHead && t.tHead.rows.length >= 2){
+      const top = t.tHead.rows[t.tHead.rows.length-2];
+      let cur = 0;
+      for (const th of Array.from(top.cells)){
+        const span = Number(th.getAttribute('colspan')||1);
+        if (cur <= pair.rwh && pair.oth < cur + span){
+          th.style.width = (w*2) + 'px';
+          th.style.minWidth = (w*2) + 'px';
+          th.style.maxWidth = (w*2) + 'px';
+          th.style.boxSizing = 'border-box';
+          break;
+        }
+        cur += span;
+      }
+    }
+    return true;
+  }
+  function init(){
+    let tries = 0;
+    const timer = setInterval(()=>{ tries++; if (apply()) clearInterval(timer); if (tries>80) clearInterval(timer); }, 200);
+    try{ new MutationObserver(apply).observe(document.body, {childList:true, subtree:true}); }catch(e){}
+  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
+  else init();
+})();
+// === END ===
+</script>
 </body>
 </html>
