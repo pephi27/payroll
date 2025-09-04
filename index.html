@@ -3922,13 +3922,21 @@ document.addEventListener('DOMContentLoaded', () => {
     #panelProjectTotals .totals{background:#fff7ed;font-weight:700}
     #panelProjectTotals .left{text-align:left}
     #panelProjectTotals .num{text-align:right}
-    @media print{header,.header,.controls{display:none!important} .card{box-shadow:none;border:0;padding:0}}
+    /* Print: one sheet per project, repeat header/footer */
+    @media print{
+      header,.header,.controls{display:none!important}
+      .card{box-shadow:none;border:0;padding:0}
+      #r_table thead{display:table-header-group}
+      #r_table tfoot{display:none!important}
+      #r_table tbody.proj-page{display:table-row-group;break-inside:avoid;page-break-inside:avoid}
+      #r_table tbody.proj-page{break-before:page;page-break-before:always}
+      #r_table tbody.proj-page:first-of-type{break-before:auto;page-break-before:auto}
+    }
   </style>
 
   <div class="card">
     <h3 style="margin:0 0 8px 0;">Reports</h3>
     <div class="controls">
-      <button id="r_gen">Generate</button>
       <button id="r_print">Print</button>
       <button id="r_csv">CSV</button>
       <span id="r_range_hint" style="font-size:12px;color:#64748b;margin-left:auto;"></span>
@@ -3942,7 +3950,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const $ = s => document.querySelector(s);
     const $$ = s => Array.from(document.querySelectorAll(s));
     const toNum = v => { const n = parseFloat(String(v||'').replace(/,/g,'')); return isNaN(n)?0:n; };
-    const f2 = n => (Number(n)||0).toLocaleString('en-US',{minimumFractionDigits:2, maximumFractionDigits:2});
+    const f2  = n => (Number(n)||0).toLocaleString('en-US',{minimumFractionDigits:2, maximumFractionDigits:2});
     const showMsg = (t)=>{ const m=$('#r_msg'); if(m){ m.textContent=t; m.style.display=t?'block':'none'; } };
 
     const isRealProject = (p)=>{
@@ -3951,10 +3959,7 @@ document.addEventListener('DOMContentLoaded', () => {
       return s && !['(none)','none','-','null','undefined',''].includes(s);
     };
 
-    function cssEscape(val){
-      // Minimal escape for attribute selectors
-      return String(val).replace(/["\\]/g, '\\$&');
-    }
+    function cssEscape(val){ return String(val).replace(/["\\\\]/g, '\\\\$&'); }
 
     function getPayrollRange(){
       try{
@@ -3973,7 +3978,6 @@ document.addEventListener('DOMContentLoaded', () => {
         const m = txt && txt.match(/(\d{4}-\d{2}-\d{2}).*?(\d{4}-\d{2}-\d{2})/);
         if (m) return [m[1], m[2]];
       }catch(e){}
-      // DTR bounds
       const trs = $$('#resultsTable tbody tr');
       let minD=1e20, maxD=-1e20;
       trs.forEach(tr=>{
@@ -3995,7 +3999,7 @@ document.addEventListener('DOMContentLoaded', () => {
       return out;
     }
 
-    // --- RATE LOOKUP (robust) ---
+    // --- Robust rate lookup ---
     function getRateById(id){
       try{
         const se = (window.storedEmployees||{})[id];
@@ -4008,7 +4012,6 @@ document.addEventListener('DOMContentLoaded', () => {
         const pr = (window.payrollRates||{})[id];
         if (pr) return toNum(pr);
       }catch(e){}
-      // Try Employees table input with matching data-id
       const inp = document.querySelector(`.emp-rate-input[data-id="${cssEscape(id)}"]`);
       if (inp) return toNum(inp.value || inp.textContent);
       return 0;
@@ -4025,7 +4028,6 @@ document.addEventListener('DOMContentLoaded', () => {
           }
         }
       }catch(e){}
-      // Search Employees table rows
       const rows = $$('#employeesTable tbody tr');
       for (const tr of rows){
         const nm = (tr.querySelector('.emp-name-input')?.value || tr.cells[1]?.textContent || '').trim().toUpperCase();
@@ -4036,11 +4038,8 @@ document.addEventListener('DOMContentLoaded', () => {
       }
       return 0;
     }
-    function getRate(id, name){
-      return getRateById(id) || getRateByName(name);
-    }
+    function getRate(id, name){ return getRateById(id) || getRateByName(name); }
 
-    // --- Read selected project from DTR row ---
     function readProjectFromRow(tr){
       const sel = tr.cells[2]?.querySelector('select');
       if (sel){
@@ -4097,23 +4096,27 @@ document.addEventListener('DOMContentLoaded', () => {
       const hint = $('#r_range_hint');
       if (hint) hint.textContent = `Range: ${from} — ${to}`;
 
+      // THEAD
       let thead1 = `<tr><th class="left" rowspan="2">PERSONNEL</th><th rowspan="2">RATE</th>`;
       dates.forEach(d=>{
         const lbl = d.toLocaleDateString(undefined,{day:'2-digit',month:'short'});
         thead1 += `<th colspan="2">${lbl}</th>`;
       });
       thead1 += `<th rowspan="2">TOTAL REG HRS</th><th rowspan="2">TOTAL OT HRS</th><th rowspan="2">GRAND TOTAL WORKING HOURS</th><th rowspan="2">GROSS</th></tr>`;
-
       let thead2 = `<tr>${dates.map(()=>`<th>RWH</th><th>OTH</th>`).join('')}</tr>`;
 
-      let tbody = '';
+      // Per-project TBODY blocks (each prints on its own page)
+      const tbodies = [];
       let gReg=0,gOT=0,gGross=0;
+      const projects = Object.keys(data).sort();
 
-      Object.keys(data).sort().forEach(proj=>{
+      projects.forEach(proj=>{
         const empMap = data[proj];
-        tbody += `<tr class="proj-break"><td colspan="${totalCols}">${proj}</td></tr>`;
-
         let pReg=0,pOT=0,pGross=0;
+        let rows='';
+
+        // Project header spanning all columns
+        rows += `<tr class="proj-break"><td colspan="${totalCols}">${proj}</td></tr>`;
 
         Object.keys(empMap).sort((a,b)=>{
           const A = (empMap[a].name||a).toUpperCase();
@@ -4136,7 +4139,7 @@ document.addEventListener('DOMContentLoaded', () => {
           const gross = (rReg * rate) + (rOT * rate * otMult);
           pReg += rReg; pOT += rOT; pGross += gross;
 
-          tbody += `<tr>
+          rows += `<tr>
             <td class="left">${display}</td>
             <td class="num">${f2(rate)}</td>
             ${cells}
@@ -4148,13 +4151,15 @@ document.addEventListener('DOMContentLoaded', () => {
         });
 
         gReg += pReg; gOT += pOT; gGross += pGross;
-        tbody += `<tr class="totals">
+        rows += `<tr class="totals">
           <td class="left" colspan="${2 + dates.length*2}">Project Total</td>
           <td class="num">${f2(pReg)}</td>
           <td class="num">${f2(pOT)}</td>
           <td class="num">${f2(pReg + pOT)}</td>
           <td class="num">${f2(pGross)}</td>
         </tr>`;
+
+        tbodies.push(`<tbody class="proj-page">${rows}</tbody>`);
       });
 
       const foot = `<tr class="totals">
@@ -4165,8 +4170,9 @@ document.addEventListener('DOMContentLoaded', () => {
         <td class="num">${f2(gGross)}</td>
       </tr>`;
 
-      table.innerHTML = `<thead>${thead1}${thead2}</thead><tbody>${tbody}</tbody><tfoot>${foot}</tfoot>`;
-      // Force comma formatting on all numeric cells
+      table.innerHTML = `<thead>${thead1}${thead2}</thead>${tbodies.join('')}<tfoot>${foot}</tfoot>`;
+
+      // Format commas post-render
       (function applyCommas(){
         const fmt = (v)=>{
           const n = parseFloat(String(v||'').replace(/,/g,''));
@@ -4178,10 +4184,7 @@ document.addEventListener('DOMContentLoaded', () => {
       })();
     }
 
-    // Events
-    const rebuild = () => buildTable();
-    $('#r_gen')?.addEventListener('click', rebuild);
-    $('#r_print')?.addEventListener('click', ()=> window.print());
+    // Events$('#r_print')?.addEventListener('click', ()=> window.print());
     $('#r_csv')?.addEventListener('click', ()=>{
       const rows = Array.from($('#r_table')?.querySelectorAll('tr')||[]);
       const csv = rows.map(tr=>Array.from(tr.children).map(td=>`"${td.textContent.replace(/"/g,'""')}"`).join(',')).join('\n');
@@ -4189,6 +4192,7 @@ document.addEventListener('DOMContentLoaded', () => {
       a.href=URL.createObjectURL(blob); a.download='reports.csv'; a.click(); URL.revokeObjectURL(a.href);
     });
 
+    // Auto rebuild when DTR changes
     const dtr = document.getElementById('resultsTable');
     if (dtr && 'MutationObserver' in window){
       const mo = new MutationObserver(()=> { buildTable(); });
