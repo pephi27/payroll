@@ -3922,7 +3922,7 @@ document.addEventListener('DOMContentLoaded', () => {
     #panelProjectTotals .totals{background:#fff7ed;font-weight:700}
     #panelProjectTotals .left{text-align:left}
     #panelProjectTotals .num{text-align:right}
-    /* Print: one sheet per project, repeat header/footer */
+    /* Print: one sheet per project, repeat header; hide grand total (redundant) */
     @media print{
       header,.header,.controls{display:none!important}
       .card{box-shadow:none;border:0;padding:0}
@@ -3938,7 +3938,7 @@ document.addEventListener('DOMContentLoaded', () => {
     <h3 style="margin:0 0 8px 0;">Reports</h3>
     <div class="controls">
       <button id="r_print">Print</button>
-      <button id="r_csv">CSV</button>
+      <button id="r_csv">CSV (All)</button>
       <span id="r_range_hint" style="font-size:12px;color:#64748b;margin-left:auto;"></span>
     </div>
     <div id="r_msg" style="font-size:13px;color:#64748b;display:none;"></div>
@@ -3947,6 +3947,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
   <script>
   (function(){
+    let __report = null;
+
     const $ = s => document.querySelector(s);
     const $$ = s => Array.from(document.querySelectorAll(s));
     const toNum = v => { const n = parseFloat(String(v||'').replace(/,/g,'')); return isNaN(n)?0:n; };
@@ -4084,6 +4086,7 @@ document.addEventListener('DOMContentLoaded', () => {
       if (dtrRows.length === 0){
         showMsg('No DTR rows found. Import DTR or open a period first.');
         table.innerHTML='';
+        __report = null;
         return;
       }
       showMsg('');
@@ -4091,8 +4094,9 @@ document.addEventListener('DOMContentLoaded', () => {
       const [from, to] = getPayrollRange();
       const dates = eachDate(new Date(from).setHours(0,0,0,0), new Date(to).setHours(0,0,0,0));
       const data = collect(from, to);
-      const totalCols = 2 + (dates.length*2) + 4;
+      __report = { data, from, to, dates };
 
+      const totalCols = 2 + (dates.length*2) + 4;
       const hint = $('#r_range_hint');
       if (hint) hint.textContent = `Range: ${from} — ${to}`;
 
@@ -4105,7 +4109,7 @@ document.addEventListener('DOMContentLoaded', () => {
       thead1 += `<th rowspan="2">TOTAL REG HRS</th><th rowspan="2">TOTAL OT HRS</th><th rowspan="2">GRAND TOTAL WORKING HOURS</th><th rowspan="2">GROSS</th></tr>`;
       let thead2 = `<tr>${dates.map(()=>`<th>RWH</th><th>OTH</th>`).join('')}</tr>`;
 
-      // Per-project TBODY blocks (each prints on its own page)
+      // Per-project TBODY blocks
       const tbodies = [];
       let gReg=0,gOT=0,gGross=0;
       const projects = Object.keys(data).sort();
@@ -4115,7 +4119,6 @@ document.addEventListener('DOMContentLoaded', () => {
         let pReg=0,pOT=0,pGross=0;
         let rows='';
 
-        // Project header spanning all columns
         rows += `<tr class="proj-break"><td colspan="${totalCols}">${proj}</td></tr>`;
 
         Object.keys(empMap).sort((a,b)=>{
@@ -4170,9 +4173,9 @@ document.addEventListener('DOMContentLoaded', () => {
         <td class="num">${f2(gGross)}</td>
       </tr>`;
 
-      table.innerHTML = `<thead>${thead1}${thead2}</thead>${tbodies.join('')}<tfoot>${foot}</tfoot>`;
+      $('#r_table').innerHTML = `<thead>${thead1}${thead2}</thead>${tbodies.join('')}<tfoot>${foot}</tfoot>`;
 
-      // Format commas post-render
+      // Commas for numeric cells
       (function applyCommas(){
         const fmt = (v)=>{
           const n = parseFloat(String(v||'').replace(/,/g,''));
@@ -4184,16 +4187,137 @@ document.addEventListener('DOMContentLoaded', () => {
       })();
     }
 
-    // Events$('#r_print')?.addEventListener('click', ()=> window.print());
-    $('#r_csv')?.addEventListener('click', ()=>{
-      const rows = Array.from($('#r_table')?.querySelectorAll('tr')||[]);
-      const csv = rows.map(tr=>Array.from(tr.children).map(td=>`"${td.textContent.replace(/"/g,'""')}"`).join(',')).join('\n');
-      const blob = new Blob([csv],{type:'text/csv'}); const a=document.createElement('a');
-      a.href=URL.createObjectURL(blob); a.download='reports.csv'; a.click(); URL.revokeObjectURL(a.href);
-    });
+    function csvEscape(s){
+      if (s == null) return '';
+      s = String(s);
+      if (/[",\n]/.test(s)) return '"' + s.replace(/"/g,'""') + '"';
+      return s;
+    }
+    function to2(n){ n = parseFloat(String(n).replace(/,/g,'')); if (isNaN(n)) n = 0; return (Math.round(n*100)/100).toFixed(2); }
 
-    // Auto rebuild when DTR changes
-    const dtr = document.getElementById('resultsTable');
+    function exportCSVAll(){
+      if (!__report){ alert('No report to export yet.'); return; }
+      const { data, dates, from, to } = __report;
+
+      const dayHeader = dates.map(d=>{
+        const lbl = d.toLocaleDateString(undefined,{day:'2-digit',month:'short'});
+        return [`RWH ${lbl}`, `OTH ${lbl}`];
+      }).flat();
+
+      const header = ['PROJECT','PERSONNEL','RATE']
+        .concat(dayHeader)
+        .concat(['TOTAL REG HRS','TOTAL OT HRS','GRAND TOTAL WORKING HOURS','GROSS']);
+      const rows = [header];
+
+      const projects = Object.keys(data).sort();
+      let gReg=0,gOT=0,gGross=0;
+
+      projects.forEach(proj=>{
+        const empMap = data[proj];
+        let pReg=0,pOT=0,pGross=0;
+
+        Object.keys(empMap).sort((a,b)=>{
+          const A = (empMap[a].name||a).toUpperCase();
+          const B = (empMap[b].name||b).toUpperCase();
+          return A.localeCompare(B);
+        }).forEach(empId=>{
+          const rec = empMap[empId];
+          const display = rec.name || empId;
+
+          const rate = getRate(empId, display);
+
+          let rReg=0,rOT=0;
+          const dayCells = [];
+          dates.forEach(d=>{
+            const key = d.setHours(0,0,0,0);
+            const v = rec.days[key] || { rwh:0, oth:0 };
+            rReg += v.rwh; rOT += v.oth;
+            dayCells.push(to2(v.rwh), to2(v.oth));
+          });
+
+          const otMult = toNum(document.querySelector('#otMultiplier')?.value || 1.5);
+          const gross = (rReg * rate) + (rOT * rate * otMult);
+          pReg += rReg; pOT += rOT; pGross += gross;
+
+          rows.push([proj, display, to2(rate)].concat(dayCells, [to2(rReg), to2(rOT), to2(rReg + rOT), to2(gross)]));
+        });
+
+        gReg += pReg; gOT += pOT; gGross += pGross;
+        rows.push([proj, 'Project Total', ''].concat(
+          new Array(dates.length*2).fill(''),
+          [to2(pReg), to2(pOT), to2(pReg+pOT), to2(pGross)]
+        ));
+      });
+
+      rows.push(['', 'Grand Total', ''].concat(
+        new Array(dates.length*2).fill(''),
+        [to2(gReg), to2(gOT), to2(gReg+gOT), to2(gGross)]
+      ));
+
+      const csv = rows.map(r=>r.map(csvEscape).join(',')).join('\n');
+      const a=document.createElement('a');
+      a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'}));
+      a.download=`reports_all_${from}_to_${to}.csv`;
+      a.click(); URL.revokeObjectURL(a.href);
+    }
+
+    function exportCSVPerProject(){
+      if (!__report){ alert('No report to export yet.'); return; }
+      const { data, dates, from, to } = __report;
+
+      const dayHeader = dates.map(d=>{
+        const lbl = d.toLocaleDateString(undefined,{day:'2-digit',month:'short'});
+        return [`RWH ${lbl}`, `OTH ${lbl}`];
+      }).flat();
+      const header = ['PERSONNEL','RATE'].concat(dayHeader, ['TOTAL REG HRS','TOTAL OT HRS','GRAND TOTAL WORKING HOURS','GROSS']);
+
+      const projects = Object.keys(data).sort();
+      projects.forEach(proj=>{
+        const empMap = data[proj];
+        const rows = [header];
+        let pReg=0,pOT=0,pGross=0;
+
+        Object.keys(empMap).sort((a,b)=>{
+          const A = (empMap[a].name||a).toUpperCase();
+          const B = (empMap[b].name||b).toUpperCase();
+          return A.localeCompare(B);
+        }).forEach(empId=>{
+          const rec = empMap[empId];
+          const display = rec.name || empId;
+          const rate = getRate(empId, display);
+
+          let rReg=0,rOT=0;
+          const dayCells = [];
+          dates.forEach(d=>{
+            const key = d.setHours(0,0,0,0);
+            const v = rec.days[key] || { rwh:0, oth:0 };
+            rReg += v.rwh; rOT += v.oth;
+            dayCells.push(to2(v.rwh), to2(v.oth));
+          });
+
+          const otMult = toNum(document.querySelector('#otMultiplier')?.value || 1.5);
+          const gross = (rReg * rate) + (rOT * rate * otMult);
+          pReg += rReg; pOT += rOT; pGross += gross;
+
+          rows.push([display, to2(rate)].concat(dayCells, [to2(rReg), to2(rOT), to2(rReg + rOT), to2(gross)]));
+        });
+
+        rows.push(['Project Total', ''].concat(
+          new Array(dates.length*2).fill(''),
+          [to2(pReg), to2(pOT), to2(pReg+pOT), to2(pGross)]
+        ));
+
+        const csv = rows.map(r=>r.map(csvEscape).join(',')).join('\n');
+        const a=document.createElement('a');
+        const safeProj = proj.replace(/[^a-z0-9_\-]+/gi,'_');
+        a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'}));
+        a.download=`report_${safeProj}_${from}_to_${to}.csv`;
+        a.click(); URL.revokeObjectURL(a.href);
+      });
+    }
+
+    $('#r_print')?.addEventListener('click', ()=> window.print());
+    $('#r_csv')?.addEventListener('click', exportCSVAll);const dtr = document.getElementById('resultsTable');
     if (dtr && 'MutationObserver' in window){
       const mo = new MutationObserver(()=> { buildTable(); });
       mo.observe(dtr, { childList:true, subtree:true });
