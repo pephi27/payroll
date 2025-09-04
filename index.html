@@ -374,6 +374,107 @@ document.addEventListener('DOMContentLoaded', function() {
 // === END PATCH v15 ===
 </script>
 
+
+<script>
+(function(){
+  function hideThenFormat(run){
+    const tbl = document.getElementById('payrollTable');
+    const prevVis = tbl ? tbl.style.visibility : null;
+    if (tbl) tbl.style.visibility = 'hidden';
+    const out = run();
+    try {
+      if (typeof formatAllNumbers === 'function') {
+        formatAllNumbers();
+      } else {
+        const t = document.getElementById('payrollTable');
+        if (t && t.tBodies && t.tBodies[0]) {
+          t.tBodies[0].querySelectorAll('td').forEach(td=>{
+            if (td.querySelector('input')) return;
+            const raw = String(td.textContent||'').replace(/,/g,'').trim();
+            const n = parseFloat(raw);
+            if (!isNaN(n) && isFinite(n) && n===0) td.textContent = '-';
+          });
+        }
+      }
+    } catch(e){ /* noop */ }
+    if (tbl) tbl.style.visibility = (prevVis==null? '' : prevVis);
+    return out;
+  }
+  ['renderTable','calculateAll'].forEach(fn=>{
+    const orig = window[fn];
+    if (typeof orig !== 'function' || orig.__noflash) return;
+    window[fn] = function(){ return hideThenFormat(()=>orig.apply(this, arguments)); };
+    window[fn].__noflash = true;
+  });
+})();
+</script>
+
+<script>
+// === PATCH: Reports no-flash with auto-rebind on table replacement ===
+(function(){
+  let __rBusy = false, __obs = null, __node = null;
+
+  function dashZerosInReports(){
+    const t = document.getElementById('r_table');
+    if (!t) return;
+    const scan = (root) => {
+      root.querySelectorAll('td').forEach(td => {
+        if (td.querySelector('input')) return;
+        const raw = String(td.textContent || '').replace(/,/g,'').trim();
+        if (!raw) return;
+        const n = parseFloat(raw);
+        if (!isNaN(n) && isFinite(n) && n === 0) td.textContent = '-';
+      });
+    };
+    if (t.tBodies && t.tBodies[0]) scan(t.tBodies[0]);
+    if (t.tFoot) scan(t.tFoot);
+  }
+
+  function hideThenFormatReports(){
+    if (__rBusy) return;
+    const t = document.getElementById('r_table');
+    if (!t) return;
+    __rBusy = true;
+    const prev = t.style.visibility;
+    t.style.visibility = 'hidden';
+    setTimeout(function(){
+      try {
+        dashZerosInReports();
+        setTimeout(dashZerosInReports, 0);
+        if (window.requestAnimationFrame) requestAnimationFrame(dashZerosInReports);
+      } finally {
+        t.style.visibility = prev || '';
+        __rBusy = false;
+      }
+    }, 0);
+  }
+
+  function rebind(){
+    const t = document.getElementById('r_table');
+    if (t === __node) return;
+    if (__obs) { try { __obs.disconnect(); } catch(e){}; __obs = null; }
+    __node = t;
+    if (!t) return;
+    __obs = new MutationObserver(() => { hideThenFormatReports(); });
+    __obs.observe(t, { childList: true, subtree: true, characterData: true });
+    hideThenFormatReports();
+  }
+
+  // Watch the Reports panel (or body) for table replacement
+  const container = document.getElementById('panelReports') || document.body;
+  const containerObs = new MutationObserver(rebind);
+  containerObs.observe(container, { childList: true, subtree: true });
+
+  if (document.readyState === 'loading'){
+    document.addEventListener('DOMContentLoaded', rebind);
+  } else {
+    rebind();
+  }
+  window.addEventListener('load', rebind);
+})();
+// === END PATCH ===
+</script>
+
 </body></html>';
 
       var w = window.open('', '', 'width=800,height=900');
@@ -4153,7 +4254,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const $ = s => document.querySelector(s);
     const $$ = s => Array.from(document.querySelectorAll(s));
     const toNum = v => { const n = parseFloat(String(v||'').replace(/,/g,'')); return isNaN(n)?0:n; };
-    const f2  = n => (Number(n)||0).toLocaleString('en-US',{minimumFractionDigits:2, maximumFractionDigits:2});
+    const f2  = n => { const x = Number(n)||0; return x===0 ? '-' : x.toLocaleString('en-US',{minimumFractionDigits:2, maximumFractionDigits:2}); };
     const showMsg = (t)=>{ const m=$('#r_msg'); if(m){ m.textContent=t; m.style.display=t?'block':'none'; } };
 
     const isRealProject = (p)=>{
