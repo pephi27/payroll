@@ -198,7 +198,7 @@ document.addEventListener('DOMContentLoaded', function() {
         var sssLoan = gv('.loanSSS','value');
         var piLoan = gv('.loanPI','value');
         var v = gv('.vale','value');
-        var vW = gv('.valeWed','value');
+        var vW = gv('.valeWed');
         var adj = gv('.adjAmt','textContent');
         var total = gv('.totalDed','textContent');
         var net = gv('.netPay','textContent');
@@ -383,9 +383,8 @@ document.addEventListener('DOMContentLoaded', function() {
     if (tbl) tbl.style.visibility = 'hidden';
     const out = run();
     try {
-      if (typeof formatAllNumbers === 'function') {
-        formatAllNumbers();
-      } else {
+      if (typeof formatAllNumbers === 'function') { formatAllNumbers(); }
+      else {
         const t = document.getElementById('payrollTable');
         if (t && t.tBodies && t.tBodies[0]) {
           t.tBodies[0].querySelectorAll('td').forEach(td=>{
@@ -396,7 +395,7 @@ document.addEventListener('DOMContentLoaded', function() {
           });
         }
       }
-    } catch(e){ /* noop */ }
+    } catch(e){}
     if (tbl) tbl.style.visibility = (prevVis==null? '' : prevVis);
     return out;
   }
@@ -409,70 +408,15 @@ document.addEventListener('DOMContentLoaded', function() {
 })();
 </script>
 
+
 <script>
-// === PATCH: Reports no-flash with auto-rebind on table replacement ===
 (function(){
-  let __rBusy = false, __obs = null, __node = null;
-
-  function dashZerosInReports(){
-    const t = document.getElementById('r_table');
-    if (!t) return;
-    const scan = (root) => {
-      root.querySelectorAll('td').forEach(td => {
-        if (td.querySelector('input')) return;
-        const raw = String(td.textContent || '').replace(/,/g,'').trim();
-        if (!raw) return;
-        const n = parseFloat(raw);
-        if (!isNaN(n) && isFinite(n) && n === 0) td.textContent = '-';
-      });
-    };
-    if (t.tBodies && t.tBodies[0]) scan(t.tBodies[0]);
-    if (t.tFoot) scan(t.tFoot);
-  }
-
-  function hideThenFormatReports(){
-    if (__rBusy) return;
-    const t = document.getElementById('r_table');
-    if (!t) return;
-    __rBusy = true;
-    const prev = t.style.visibility;
-    t.style.visibility = 'hidden';
-    setTimeout(function(){
-      try {
-        dashZerosInReports();
-        setTimeout(dashZerosInReports, 0);
-        if (window.requestAnimationFrame) requestAnimationFrame(dashZerosInReports);
-      } finally {
-        t.style.visibility = prev || '';
-        __rBusy = false;
-      }
-    }, 0);
-  }
-
-  function rebind(){
-    const t = document.getElementById('r_table');
-    if (t === __node) return;
-    if (__obs) { try { __obs.disconnect(); } catch(e){}; __obs = null; }
-    __node = t;
-    if (!t) return;
-    __obs = new MutationObserver(() => { hideThenFormatReports(); });
-    __obs.observe(t, { childList: true, subtree: true, characterData: true });
-    hideThenFormatReports();
-  }
-
-  // Watch the Reports panel (or body) for table replacement
-  const container = document.getElementById('panelReports') || document.body;
-  const containerObs = new MutationObserver(rebind);
-  containerObs.observe(container, { childList: true, subtree: true });
-
-  if (document.readyState === 'loading'){
-    document.addEventListener('DOMContentLoaded', rebind);
-  } else {
-    rebind();
-  }
-  window.addEventListener('load', rebind);
+  function dashReports(){ try { if (typeof applyCommas === 'function') applyCommas(); } catch(e){} }
+  const panel = document.getElementById('panelReports') || document.body;
+  const obs = new MutationObserver(dashReports);
+  obs.observe(panel, { childList:true, subtree:true, characterData:true });
+  window.addEventListener('load', dashReports);
 })();
-// === END PATCH ===
 </script>
 
 </body></html>';
@@ -1731,6 +1675,8 @@ document.addEventListener('DOMContentLoaded', function() {
         <th>
          Adjustment Hrs
         </th>
+        
+        <th>Total Hours</th>
         <th>
          Regular Pay
         </th>
@@ -2026,7 +1972,9 @@ document.addEventListener('DOMContentLoaded', function() {
         <th>Name</th>
         <th>Adjustment Amount</th>
         <th>Adjustment Hrs</th>
-       </tr>
+       
+        <th>Total Hours</th>
+        </tr>
       </thead>
       <tbody></tbody>
       <tfoot id="adjustmentsTableFoot">
@@ -2539,7 +2487,7 @@ const lSSS = Number(loanSSS[emp.id] ?? 0);
       <td><input class="cell rate" title="Non-editable in Payroll" type="number" step="0.01" value="${rate}" disabled></td>
       <td><input class="cell regHrs" title="Non-editable in Payroll" type="number" step="0.01" value="${rH}" disabled></td>
       <td><input class="cell otHrs" title="Non-editable in Payroll" type="number" step="0.01" value="${oH}" disabled></td>
-      <td class="adjHrs num">${aH ? aH.toFixed(2) : '0.00'}</td><td class="regPay num">0.00</td>
+      <td class="adjHrs num">${aH ? aH.toFixed(2) : '0.00'}</td><td class="totalHrs num">0.00</td><td class="regPay num">0.00</td>
       <td class="otPay num">0.00</td>
       <td class="grossPay num">0.00</td>
       <td class="pagibig num">0.00</td>
@@ -2548,7 +2496,7 @@ const lSSS = Number(loanSSS[emp.id] ?? 0);
       <td><input class="cell loanSSS" type="number" step="0.01" value="${lSSS}"></td>
       <td><input class="cell loanPI" type="number" step="0.01" value="${lPI}"></td>
       <td><input class="cell vale" type="number" step="0.01" value="${v}"></td>
-      <td><input class="cell valeWed" type="number" step="0.01" value="${vW}"></td>
+      <td class="valeWed num">${vW}</td>
       <td class="totalDed num">0.00</td>
       <td class="adjAmt num">0.00</td>
       <td><input class="cell bantay" type="number" step="0.01" value="${bVal}"></td>
@@ -2868,7 +2816,8 @@ function philhealthRateByMonthly(monthly){
   return Number(rows[rows.length-1].rate)||0;
 }
 
-function calculateRow(tr){
+function calculateRow(tr){  const readNum = sel => { const el = tr.querySelector(sel); if (!el) return 0; const v = (typeof el.value !== 'undefined' ? el.value : el.textContent); const n = parseFloat(String(v).replace(/,/g,'')); return isNaN(n)?0:n; };
+
   const id = tr.cells[0].textContent.trim();
   const reg = Number(tr.querySelector('.regHrs').value)||0;
   const ot = Number(tr.querySelector('.otHrs').value)||0;
@@ -2876,13 +2825,15 @@ function calculateRow(tr){
   const adjHours = Number(adjHrs[id] || 0);
   // Combined OT hours including adjustments
   const otTotal = ot + adjHours;
+  const totalHrs = reg + ot + adjHours;
   const rate = Number(tr.querySelector('.rate').value)||0;
   const lSSS = Number(tr.querySelector('.loanSSS').value)||0;
   const lPI = Number(tr.querySelector('.loanPI').value)||0;
   const v = Number(tr.querySelector('.vale').value)||0;
-  const vW = Number(tr.querySelector('.valeWed').value)||0;
+  const vW = Number(readNum('.valeWed'))||0;
 
   const regPay = +(reg * rate).toFixed(2);
+  tr.querySelector('.totalHrs').textContent = totalHrs.toFixed(2);
   const otPay = +(otTotal * rate * (Number(otMultiplier)||0)).toFixed(2);
   const gross = +(regPay + otPay).toFixed(2);
   // Compute contributions using dynamic tables (employee share).  Determine the
@@ -7462,6 +7413,8 @@ document.addEventListener('click', function(e) {
     var name = (row.cells[1]?.textContent || '').trim();
     // Helper to get value from input or text content
     function getVal(sel, prop) {
+  // patched: prop optional; read value or text
+  if (arguments.length===1) { var el=document.querySelector(sel); if(!el) return ''; var v=(typeof el.value!=='undefined')?el.value:el.textContent; return v; }
       var el = row.querySelector(sel);
       if (!el) return '';
       if (prop === 'value') return el.value || '';
