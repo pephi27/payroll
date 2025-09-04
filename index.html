@@ -230,6 +230,7 @@ document.addEventListener('DOMContentLoaded', function() {
         }
       });
       html += '</div></body></html>';
+
       var w = window.open('', '', 'width=800,height=900');
       if (!w) return;
       w.document.open();
@@ -326,6 +327,15 @@ document.addEventListener('DOMContentLoaded', function() {
   #payrollTab #payrollTable td:nth-child(15),
   #payrollTab #payrollTable th:nth-child(16),
   #payrollTab #payrollTable td:nth-child(16) { display: none; }
+/* === PATCH: column widths for Hourly Rate, Regular Hours, OT Hours === */
+#payrollTable th, #payrollTable td { white-space: nowrap; }
+#payrollTable th:nth-child(3), #payrollTable td:nth-child(3) { width: 110px; min-width: 110px; } /* Hourly Rate */
+#payrollTable th:nth-child(4), #payrollTable td:nth-child(4) { width: 120px; min-width: 120px; } /* Regular Hours */
+#payrollTable th:nth-child(5), #payrollTable td:nth-child(5) { width: 120px; min-width: 120px; } /* OT Hours */
+/* keep inputs filling their cells cleanly */
+#payrollTable td input.cell { width: 100%; box-sizing: border-box; }
+/* === END PATCH === */
+
 
   
 /* ===== Print Styles for Project Totals ===== */
@@ -370,6 +380,37 @@ document.addEventListener('DOMContentLoaded', function() {
   #panelPayroll th { background:var(--bg2);position:sticky;top:0;z-index:1 }
   #panelPayroll td.num { text-align:right }
   #panelPayroll input.cell { width:100%;padding:4px;border:1px solid var(--border);border-radius:4px;text-align:right }
+/* === PATCH: make computed hours/rate look like plain text & non-interactive === */
+#panelPayroll input.regHrs,
+#panelPayroll input.otHrs,
+#panelPayroll input.rate {
+  pointer-events: none;      /* no clicks */
+  border: none;              /* look like text */
+  background: transparent;
+  color: inherit;
+  padding: 0;
+  outline: none;
+  -webkit-appearance: none;
+  -moz-appearance: textfield;
+  text-align: right;
+}
+#panelPayroll input.regHrs[disabled],
+#panelPayroll input.otHrs[disabled],
+#panelPayroll input.rate[disabled] {
+  color: inherit;            /* avoid greyed-out disabled look */
+}
+/* hide number spinners where applicable */
+#panelPayroll input.regHrs::-webkit-outer-spin-button,
+#panelPayroll input.regHrs::-webkit-inner-spin-button,
+#panelPayroll input.otHrs::-webkit-outer-spin-button,
+#panelPayroll input.otHrs::-webkit-inner-spin-button,
+#panelPayroll input.rate::-webkit-outer-spin-button,
+#panelPayroll input.rate::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+/* === END PATCH === */
+
   #panelPayroll .note { font-size:12px;color:var(--muted) }
   #panelPayroll .section { background:var(--bg);padding:10px;border:1px solid var(--border);border-radius:10px;margin-top:8px }
   #panelPayroll .danger { color:#b91c1c }
@@ -1433,6 +1474,9 @@ document.addEventListener('DOMContentLoaded', function() {
          Name
         </th>
         <th>
+         Hourly Rate
+        </th>
+        <th>
          Regular Hours
         </th>
         <th>
@@ -1440,9 +1484,6 @@ document.addEventListener('DOMContentLoaded', function() {
         </th>
         <th>
          Adjustment Hrs
-        </th>
-        <th>
-         Hourly Rate
         </th>
         <th>
          Regular Pay
@@ -2248,11 +2289,11 @@ const lSSS = Number(loanSSS[emp.id] ?? 0);
     tr.innerHTML = `
       <td>${emp.id}</td>
       <td class="wrap">${emp.name}</td>
-      <td><input class="cell regHrs" title="Non-editable in Payroll" type="number" step="0.01" value="${rH}" readonly></td>
-      <td><input class="cell otHrs" title="Non-editable in Payroll" type="number" step="0.01" value="${oH}" readonly></td>
-      <td class="adjHrs num">${aH ? aH.toFixed(2) : '0.00'}</td>
-      <td><input class="cell rate" title="Non-editable in Payroll" type="number" step="0.01" value="${rate}" readonly></td>
-      <td class="regPay num">0.00</td>
+      
+      <td><input class="cell rate" title="Non-editable in Payroll" type="number" step="0.01" value="${rate}" disabled></td>
+      <td><input class="cell regHrs" title="Non-editable in Payroll" type="number" step="0.01" value="${rH}" disabled></td>
+      <td><input class="cell otHrs" title="Non-editable in Payroll" type="number" step="0.01" value="${oH}" disabled></td>
+      <td class="adjHrs num">${aH ? aH.toFixed(2) : '0.00'}</td><td class="regPay num">0.00</td>
       <td class="otPay num">0.00</td>
       <td class="grossPay num">0.00</td>
       <td class="pagibig num">0.00</td>
@@ -2939,7 +2980,7 @@ document.addEventListener('DOMContentLoaded', function(){
     if (!w) return;
     w.document.write('<html><head><meta charset="utf-8"><title>Payroll Report</title>');
     // Basic styles: borders and alignment
-    w.document.write('<style>body{font-family:Arial,Helvetica,sans-serif;margin:20px;} table{border-collapse:collapse;width:100%;} th,td{border:1px solid #ddd;padding:6px;} th{background:#f1f5f9;} td.num{text-align:right;} th:nth-child(1),td:nth-child(1),th:nth-child(2),td:nth-child(2){text-align:left;} tfoot td{font-weight:700;background:#fff7ed;border-top:2px solid #e2e8f0;} </style>');
+    w.document.write('<style>body{font-family:Arial,Helvetica,sans-serif;margin:20px;} table{border-collapse:collapse;width:100%;} th,td{border:1px solid #ddd;padding:6px;} th{background:#f1f5f9;} td.num{text-align:right;} th:nth-child(1),td:nth-child(1),th:nth-child(2),td:nth-child(2){text-align:left;} tfoot td{font-weight:700;background:#fff7ed;border-top:2px solid #e2e8f0;} #payrollTable th, #payrollTable td { white-space: nowrap; }#payrollTable th:nth-child(3), #payrollTable td:nth-child(3) { width:110px; min-width:110px; }#payrollTable th:nth-child(4), #payrollTable td:nth-child(4) { width:120px; min-width:120px; }#payrollTable th:nth-child(5), #payrollTable td:nth-child(5) { width:120px; min-width:120px; }</style>');
     w.document.write('</head><body>');
     // Header with date range if available
     const ws = document.getElementById('weekStart');
@@ -3140,11 +3181,18 @@ document.addEventListener('DOMContentLoaded', () => {
       data.name = (row.cells[1]?.textContent || '').trim();
       // Helper to read numeric input or fallback text
       function readNum(sel, cellIndex) {
-        const input = row.querySelector(sel);
-        if (input) return parseFloat(input.value) || 0;
+        const el = row.querySelector(sel);
+        if (el) {
+          // Prefer form control .value when available, else textContent
+          const v = (typeof el.value !== 'undefined' && el.matches('input,select,textarea')) ? el.value : el.textContent;
+          const num = parseFloat(v);
+          if (!isNaN(num)) return num;
+        }
+        // Fallback to cell index text if selector not found or not numeric
         const cellVal = row.cells[cellIndex] && row.cells[cellIndex].textContent;
-        return parseFloat(cellVal) || 0;
-      }
+        const num2 = parseFloat(cellVal);
+        return isNaN(num2) ? 0 : num2;
+    }
       data.regHrs = readNum('.regHrs', 2);
       data.otHrs = readNum('.otHrs', 3);
       data.rate = readNum('.rate', 4);
@@ -4803,7 +4851,7 @@ ids.forEach(id => {
     const tr = document.createElement('tr');
     tr.innerHTML = `<td>${id}</td>
       <td><input class="cell emp-name-input" data-id="${id}" value="${emp.name}"></td>
-      <td><input class="cell emp-rate-input" type="number" step="0.01" min="0" data-id="${id}" value="${emp.hourlyRate != null ? emp.hourlyRate : ''}"></td>
+      <td><input class="cell emp-rate-input" type="number" step="0.01" min="0" data-id="${id}" value="${emp.hourlyRate != null ? emp.hourlyRate : ''}" disabled></td>
       <td><select class="emp-sel-schedule" data-id="${id}">${scheduleOptionsHtml}</select></td>
       <td><select class="emp-sel-project" data-id="${id}">${projectOptionsHtml}</select></td>
       <td><input class="cell emp-bank-input" data-id="${id}" value="${emp.bankAccount != null ? emp.bankAccount : ''}"></td>
@@ -6786,7 +6834,7 @@ document.addEventListener('DOMContentLoaded', function(){
       }
       var w = window.open('', '_blank', 'width=900,height=700');
       w.document.write('<!DOCTYPE html><html><head><meta charset="utf-8"><title>DTR Records</title>');
-      w.document.write('<style>body{font-family:Arial,Helvetica,sans-serif;margin:16px} h2{margin:0 0 6px} .muted{color:#555;margin:0 0 12px;font-size:12px} table{width:100%;border-collapse:collapse} th,td{border:1px solid #000;padding:6px;text-align:center;font-size:12px} th{background:#eee}</style>');
+      w.document.write('<style>body{font-family:Arial,Helvetica,sans-serif;margin:16px} h2{margin:0 0 6px} .muted{color:#555;margin:0 0 12px;font-size:12px} table{width:100%;border-collapse:collapse} th,td{border:1px solid #000;padding:6px;text-align:center;font-size:12px} th{background:#eee}#payrollTable th, #payrollTable td { white-space: nowrap; }#payrollTable th:nth-child(3), #payrollTable td:nth-child(3) { width:110px; min-width:110px; }#payrollTable th:nth-child(4), #payrollTable td:nth-child(4) { width:120px; min-width:120px; }#payrollTable th:nth-child(5), #payrollTable td:nth-child(5) { width:120px; min-width:120px; }</style>');
       w.document.write('</head><body>');
       w.document.write('<h2>' + hdr.replace(/</g, '&lt;') + '</h2>');
       if(filterTxt){
@@ -7212,7 +7260,8 @@ document.addEventListener('click', function(e) {
       '<tr><td>Total Deductions</td><td>' + total + '</td></tr>' +
       '<tr><th>Net Pay</th><th>' + net + '</th></tr>' +
       '</table>' +
-      '</body></html>';
+      '
+</body></html>';
     // Open new window and write payslip content
     var w = window.open('', '', 'width=600,height=800');
     if (!w) return; // popup blocked
