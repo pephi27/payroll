@@ -4,6 +4,52 @@
  
 
 <!-- === Supabase KV Sync Adapter (no-login, auto-sync) === -->
+<script>
+  // Global KV helpers for classic scripts; Supabase-aware if available.
+  (function () {
+    if (!window.readKV) {
+      window.readKV = async function readKV(key, defaultValue = null) {
+        try {
+          if (window.supabase && window.SUPABASE_TABLE) {
+            const { data, error } = await window.supabase
+              .from(window.SUPABASE_TABLE)
+              .select('value')
+              .eq('key', key)
+              .single();
+            if (error || !data) return defaultValue;
+            return (data.value ?? defaultValue);
+          } else {
+            const raw = localStorage.getItem(key);
+            if (raw === null) return defaultValue;
+            try { return JSON.parse(raw); } catch { return raw; }
+          }
+        } catch (e) {
+          console.warn('readKV failed', e);
+          return defaultValue;
+        }
+      };
+    }
+    if (!window.writeKV) {
+      window.writeKV = async function writeKV(key, value) {
+        try {
+          if (window.supabase && window.SUPABASE_TABLE) {
+            const { error } = await window.supabase
+              .from(window.SUPABASE_TABLE)
+              .upsert({ key, value }, { onConflict: 'key' });
+            if (error) console.warn('writeKV error', error);
+          } else {
+            try { localStorage.setItem(key, JSON.stringify(value)); } catch {}
+          }
+          return true;
+        } catch (e) {
+          console.warn('writeKV failed', e);
+          try { localStorage.setItem(key, JSON.stringify(value)); } catch {}
+          return false;
+        }
+      };
+    }
+  })();
+</script>
 <script type="module">
 // Minimal, no-login cloud persistence by mirroring localStorage to Supabase.
 // 1) Create a table in Supabase named: kv_store
@@ -79,6 +125,26 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_KEY)
 // provides a simple, predictable global reference.
 window.supabase = supabase;
 window.SUPABASE_TABLE = TABLE;
+// === Supabase KV helpers (no localStorage) ===
+async function readKV(key){
+  try{
+    const { data, error } = await window.supabase
+      .from(window.SUPABASE_TABLE)
+      .select('value')
+      .eq('key', key)
+      .single();
+    if (error || !data) return null;
+    return data.value;
+  }catch(e){ console.warn('readKV failed', e); return null; }
+}
+async function writeKV(key, value){
+  try{
+    await window.supabase
+      .from(window.SUPABASE_TABLE)
+      .upsert({ key, value });
+  }catch(e){ console.warn('writeKV failed', e); }
+}
+
 
 const __origSetItem = Storage.prototype.setItem
 const __origRemoveItem = Storage.prototype.removeItem
@@ -1970,6 +2036,10 @@ const LS_PAGIBIG_TABLE='payroll_pagibig_table';
 const LS_PHILHEALTH_TABLE='payroll_philhealth_table';
 // LocalStorage key for per-employee Bantay allowance
 const LS_BANTAY='payroll_bantay';
+// Supabase-only key for per-employee Bantay→Project assignment map
+const LS_BANTAY_PROJ='payroll_bantay_proj';
+let bantayProj = {};
+;(async function(){ const v = await readKV(LS_BANTAY_PROJ); if (v && typeof v==='object') bantayProj = v; })();
 // LocalStorage key for per-employee contribution flags (Pag-IBIG, PhilHealth, SSS)
 const LS_CONTRIB_FLAGS='payroll_contrib_flags';
 
@@ -2100,7 +2170,8 @@ let vale = JSON.parse(localStorage.getItem(LS_VALE) || '{}');
 let valeWed = JSON.parse(localStorage.getItem(LS_VALE_WED) || '{}');
 
 // Bantay allowance values per employee. Defaults to empty object if not present.
-let bantay = JSON.parse(localStorage.getItem(LS_BANTAY) || '{}');
+let bantay = {};
+;(async function(){ const v = await readKV(LS_BANTAY); if (v && typeof v === 'object') bantay = v; try{ if (typeof renderSssTable==='function') renderSssTable(); }catch(e){} })();
 // Per-employee contribution deduction flags. Each entry keyed by employee ID holds booleans {pagibig, philhealth, sss}
 let contribFlags = JSON.parse(localStorage.getItem(LS_CONTRIB_FLAGS) || '{}');
 
@@ -2473,6 +2544,110 @@ const lSSS = Number(loanSSS[emp.id] ?? 0);
   calculateAll();
 }
 
+
+
+// Quick project picker for Bantay assignment (Supabase-backed) — DROPDOWN VERSION
+// Quick project picker for Bantay assignment (Supabase-backed) — DROPDOWN VERSION
+function chooseBantayProject(empId, anchorEl){
+  try{
+    // Remove any existing picker first
+    const old = document.getElementById('bantayProjPicker');
+    if (old) old.remove();
+
+    // Build overlay container
+    const box = document.createElement('div');
+    box.id = 'bantayProjPicker';
+    box.style.position = 'absolute';
+    box.style.zIndex = '99999';
+    box.style.background = '#ffffff';
+    box.style.border = '1px solid #e5e7eb';
+    box.style.borderRadius = '8px';
+    box.style.boxShadow = '0 8px 24px rgba(0,0,0,0.12)';
+    box.style.padding = '8px';
+    box.style.display = 'flex';
+    box.style.gap = '6px';
+    box.style.alignItems = 'center';
+
+    // Position near the input
+    const rect = (anchorEl && anchorEl.getBoundingClientRect) ? anchorEl.getBoundingClientRect() : {left:100, top:100, width:0, height:0};
+    const scrollX = window.scrollX || document.documentElement.scrollLeft || 0;
+    const scrollY = window.scrollY || document.documentElement.scrollTop || 0;
+    box.style.left = (rect.left + scrollX) + 'px';
+    box.style.top  = (rect.top  + scrollY + rect.height + 6) + 'px';
+
+    // Build <select> with project options
+    const sel = document.createElement('select');
+    sel.style.minWidth = '260px';
+    sel.style.padding = '4px';
+    sel.style.border = '1px solid #d1d5db';
+    sel.style.borderRadius = '6px';
+
+    // Placeholder
+    const opt0 = document.createElement('option');
+    opt0.value = '';
+    opt0.textContent = 'Select a project…';
+    sel.appendChild(opt0);
+
+    // storedProjects: { [pid]: {name, ...} }
+    const entries = Object.entries(storedProjects || {}).sort((a,b)=>{
+      const A = (a[1]?.name || a[0]).toUpperCase();
+      const B = (b[1]?.name || b[0]).toUpperCase();
+      return A.localeCompare(B);
+    });
+    entries.forEach(([pid, proj])=>{
+      const o = document.createElement('option');
+      o.value = pid;
+      o.textContent = `${pid} — ${proj?.name || pid}`;
+      sel.appendChild(o);
+    });
+
+    // Set current value if any
+    try { sel.value = (bantayProj && bantayProj[empId]) || ''; } catch(e){}
+
+    // Buttons
+    const saveBtn = document.createElement('button');
+    saveBtn.textContent = 'Assign';
+    saveBtn.type = 'button';
+    saveBtn.style.padding = '6px 10px';
+
+    const cancelBtn = document.createElement('button');
+    cancelBtn.textContent = 'Cancel';
+    cancelBtn.type = 'button';
+    cancelBtn.style.padding = '6px 10px';
+
+    box.appendChild(sel);
+    box.appendChild(saveBtn);
+    box.appendChild(cancelBtn);
+    document.body.appendChild(box);
+
+    const close = ()=>{ try{ box.remove(); }catch(e){} };
+
+    saveBtn.addEventListener('click', async ()=>{
+      const v = sel.value;
+      if (v && (storedProjects && storedProjects[v])){
+        bantayProj = bantayProj || {};
+        bantayProj[empId] = v;
+        await writeKV(LS_BANTAY_PROJ, bantayProj);
+      }
+      close();
+    });
+    cancelBtn.addEventListener('click', close);
+
+    // Close on outside click
+    setTimeout(()=>{
+      const handler = (e)=>{
+        if (!box.contains(e.target)) {
+          document.removeEventListener('mousedown', handler, true);
+          close();
+        }
+      };
+      document.addEventListener('mousedown', handler, true);
+    }, 0);
+
+  }catch(e){
+    console.warn('chooseBantayProject failed', e);
+  }
+}
 function attachRowEvents(){
   tbody.querySelectorAll('tr').forEach(row=>{
     const id = row.cells[0].textContent.trim();
@@ -2506,12 +2681,20 @@ function attachRowEvents(){
     // Add event listener for Bantay allowance input. Store in localStorage and recalc net pay.
     const bantayI = row.querySelector('.bantay');
     if (bantayI) {
-      bantayI.addEventListener('input', () => {
-        bantay[id] = bantayI.value;
-        localStorage.setItem(LS_BANTAY, JSON.stringify(bantay));
-        calculateRow(row);
-      });
-    }
+      bantayI.addEventListener('input', async () => {
+      bantay[id] = bantayI.value;
+      await writeKV(LS_BANTAY, bantay);
+      calculateRow(row);
+    });
+    // Prompt to assign project when Bantay is set
+    bantayI.addEventListener('change', () => {
+      const val = parseFloat(bantayI.value) || 0;
+      if (val > 0) chooseBantayProject(id, bantayI);
+    });
+    // Allow quick reassign on dblclick
+    bantayI.title = 'Double-click to assign Bantay to a project';
+    bantayI.addEventListener('dblclick', () => chooseBantayProject(id, bantayI));
+  }
   });
 }
 function renderSssTable(){
@@ -4373,7 +4556,32 @@ document.addEventListener('DOMContentLoaded', () => {
         });
 
         gReg += pReg; gOT += pOT; gGross += pGross;
-        rows += `<tr class="totals">
+
+// Compute per-project Bantay allowance (Supabase-backed)
+const allow = Object.keys(bantay || {}).reduce((sum, empId) => {
+  const assigned = (bantayProj || {})[empId];
+  if (!assigned) return sum;
+  const matchesById   = (assigned === proj);
+  const matchesByName = ((storedProjects && storedProjects[assigned]?.name) === proj);
+  return (matchesById || matchesByName) ? sum + (parseFloat(bantay[empId]) || 0) : sum;
+}, 0);
+
+// Render Allowance row (amount in Gross column)
+rows += `<tr class="allowance">
+  <td class="left">Allowance</td>
+  <td class="num">-</td>
+  ${dates.map(()=>`<td class="num">0.00</td><td class="num">0.00</td>`).join('')}
+  <td class="num">0.00</td>
+  <td class="num">0.00</td>
+  <td class="num">0.00</td>
+  <td class="num">${f2(allow)}</td>
+</tr>`;
+
+// Include allowance in project & grand gross
+pGross += allow;
+gGross += allow;
+
+rows += `<tr class="totals">
           <td class="left" colspan="${2 + dates.length*2}">Project Total</td>
           <td class="num">${f2(pReg)}</td>
           <td class="num">${f2(pOT)}</td>
