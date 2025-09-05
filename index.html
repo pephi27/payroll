@@ -4,52 +4,6 @@
  
 
 <!-- === Supabase KV Sync Adapter (no-login, auto-sync) === -->
-<script>
-  // Global KV helpers for classic scripts; Supabase-aware if available.
-  (function () {
-    if (!window.readKV) {
-      window.readKV = async function readKV(key, defaultValue = null) {
-        try {
-          if (window.supabase && window.SUPABASE_TABLE) {
-            const { data, error } = await window.supabase
-              .from(window.SUPABASE_TABLE)
-              .select('value')
-              .eq('key', key)
-              .single();
-            if (error || !data) return defaultValue;
-            return (data.value ?? defaultValue);
-          } else {
-            const raw = localStorage.getItem(key);
-            if (raw === null) return defaultValue;
-            try { return JSON.parse(raw); } catch { return raw; }
-          }
-        } catch (e) {
-          console.warn('readKV failed', e);
-          return defaultValue;
-        }
-      };
-    }
-    if (!window.writeKV) {
-      window.writeKV = async function writeKV(key, value) {
-        try {
-          if (window.supabase && window.SUPABASE_TABLE) {
-            const { error } = await window.supabase
-              .from(window.SUPABASE_TABLE)
-              .upsert({ key, value }, { onConflict: 'key' });
-            if (error) console.warn('writeKV error', error);
-          } else {
-            try { localStorage.setItem(key, JSON.stringify(value)); } catch {}
-          }
-          return true;
-        } catch (e) {
-          console.warn('writeKV failed', e);
-          try { localStorage.setItem(key, JSON.stringify(value)); } catch {}
-          return false;
-        }
-      };
-    }
-  })();
-</script>
 <script type="module">
 // Minimal, no-login cloud persistence by mirroring localStorage to Supabase.
 // 1) Create a table in Supabase named: kv_store
@@ -125,6 +79,26 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_KEY)
 // provides a simple, predictable global reference.
 window.supabase = supabase;
 window.SUPABASE_TABLE = TABLE;
+// === Supabase KV helpers (global) ===
+async function readKV(key){
+  try{
+    const { data, error } = await (window.supabase || supabase)
+      .from(window.SUPABASE_TABLE || TABLE)
+      .select('value')
+      .eq('key', key)
+      .single();
+    if (error || !data) return null;
+    return data.value;
+  }catch(e){ console.warn('readKV failed', e); return null; }
+}
+async function writeKV(key, value){
+  try{
+    await (window.supabase || supabase)
+      .from(window.SUPABASE_TABLE || TABLE)
+      .upsert({ key, value });
+  }catch(e){ console.warn('writeKV failed', e); }
+}
+
 // === Supabase KV helpers (no localStorage) ===
 async function readKV(key){
   try{
