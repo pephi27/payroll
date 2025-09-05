@@ -1,9 +1,58 @@
 
 <!DOCTYPE html>
 <html>
- 
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PayrollPro</title>
 
 <!-- === Supabase KV Sync Adapter (no-login, auto-sync) === -->
+<script>
+  // Global KV helpers for classic scripts; Supabase-aware if available.
+  (function () {
+    if (!window.readKV) {
+      window.readKV = async function readKV(key, defaultValue = null) {
+        try {
+          if (window.supabase && window.SUPABASE_TABLE) {
+            const { data, error } = await window.supabase
+              .from(window.SUPABASE_TABLE)
+              .select('value')
+              .eq('key', key)
+              .single();
+            if (error || !data) return defaultValue;
+            return (data.value ?? defaultValue);
+          } else {
+            const raw = localStorage.getItem(key);
+            if (raw === null) return defaultValue;
+            try { return JSON.parse(raw); } catch { return raw; }
+          }
+        } catch (e) {
+          console.warn('readKV failed', e);
+          return defaultValue;
+        }
+      };
+    }
+    if (!window.writeKV) {
+      window.writeKV = async function writeKV(key, value) {
+        try {
+          if (window.supabase && window.SUPABASE_TABLE) {
+            const { error } = await window.supabase
+              .from(window.SUPABASE_TABLE)
+              .upsert({ key, value }, { onConflict: 'key' });
+            if (error) console.warn('writeKV error', error);
+          } else {
+            try { localStorage.setItem(key, JSON.stringify(value)); } catch {}
+          }
+          return true;
+        } catch (e) {
+          console.warn('writeKV failed', e);
+          try { localStorage.setItem(key, JSON.stringify(value)); } catch {}
+          return false;
+        }
+      };
+    }
+  })();
+</script>
 <script type="module">
 // Minimal, no-login cloud persistence by mirroring localStorage to Supabase.
 // 1) Create a table in Supabase named: kv_store
@@ -27,7 +76,7 @@ const TABLE = "kv_store"
 // new keys anywhere in the application that you want to persist across
 // devices, add them here as well.  Without inclusion in this list the
 // `Storage.prototype.setItem` hook will ignore them and they will remain
-// strictly device‑local.
+// strictly deviceâ€‘local.
 const KNOWN_KEYS = [
   "att_employees_v2",
   "att_schedules_v2",
@@ -69,8 +118,8 @@ const KNOWN_KEYS = [
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY)
 
 // Expose the Supabase client on the global window so that other
-// non‑module scripts (e.g. the boot guard) can access it without
-// re‑importing the library.  Also expose the table name used for
+// nonâ€‘module scripts (e.g. the boot guard) can access it without
+// reâ€‘importing the library.  Also expose the table name used for
 // key/value storage.  Without this, any attempt to read from
 // Supabase outside of this module would require a duplicate client
 // instantiation, and due to the asynchronous execution order of
@@ -79,26 +128,6 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_KEY)
 // provides a simple, predictable global reference.
 window.supabase = supabase;
 window.SUPABASE_TABLE = TABLE;
-// === Supabase KV helpers (global) ===
-async function readKV(key){
-  try{
-    const { data, error } = await (window.supabase || supabase)
-      .from(window.SUPABASE_TABLE || TABLE)
-      .select('value')
-      .eq('key', key)
-      .single();
-    if (error || !data) return null;
-    return data.value;
-  }catch(e){ console.warn('readKV failed', e); return null; }
-}
-async function writeKV(key, value){
-  try{
-    await (window.supabase || supabase)
-      .from(window.SUPABASE_TABLE || TABLE)
-      .upsert({ key, value });
-  }catch(e){ console.warn('writeKV failed', e); }
-}
-
 // === Supabase KV helpers (no localStorage) ===
 async function readKV(key){
   try{
@@ -507,7 +536,7 @@ window.addEventListener('load', dashReports);
 
   /* Hide individual deduction columns in Payroll table (show only Total Deductions).
      After adding the Adjustment Hrs column, the indices shift by one.
-     Hide Pag‑IBIG to Wed Vale columns (cols 10–16). */
+     Hide Pagâ€‘IBIG to Wed Vale columns (cols 10â€“16). */
   #payrollTab #payrollTable th:nth-child(11),
   #payrollTab #payrollTable td:nth-child(11),
   #payrollTab #payrollTable th:nth-child(12),
@@ -953,8 +982,45 @@ window.addEventListener('load', dashReports);
         margin-left: 0 !important;
         padding-top: 90px;
       }
-    </style>
+</style>
 </head>
+
+<!-- UI fixes: restore emojis and icons if text got corrupted by encoding -->
+<style>
+  /* Replace corrupted nav icon text with emojis */
+  .header .nav-icon { font-size: 0; line-height: 1; }
+  #tabDashboard .nav-icon::before { content: "📊"; font-size: 14px; }
+  #tabMain .nav-icon::before      { content: "🕒"; font-size: 14px; }
+  #tabSchedule .nav-icon::before  { content: "🗓️"; font-size: 14px; }
+  #tabEmployees .nav-icon::before { content: "👥"; font-size: 14px; }
+  #tabProjects .nav-icon::before  { content: "🚀"; font-size: 14px; }
+  #tabPayroll .nav-icon::before   { content: "💰"; font-size: 14px; }
+  #tabProjectTotals .nav-icon::before { content: "📈"; font-size: 14px; }
+  /* Sidebar duplicates */
+  #old-tabDashboard .nav-icon::before { content: "📊"; }
+  #old-tabMain .nav-icon::before      { content: "🕒"; }
+  #old-tabSchedule .nav-icon::before  { content: "🗓️"; }
+  #old-tabEmployees .nav-icon::before { content: "👥"; }
+  #old-tabProjects .nav-icon::before  { content: "🚀"; }
+  #old-tabPayroll .nav-icon::before   { content: "💰"; }
+  #old-tabProjectTotals .nav-icon::before { content: "📈"; }
+
+  /* Mobile menu icon */
+  .mobile-menu-btn span { font-size: 0; }
+  .mobile-menu-btn span::before { content: "☰"; font-size: 20px; }
+
+  /* Sidebar logo: render clean text */
+  .sidebar .logo { font-size: 0; }
+  .sidebar .logo::before { content: "💰 PayrollHub"; font-size: 24px; }
+
+  /* Page title icon */
+  .page-title > span:first-child { font-size: 0; }
+  .page-title > span:first-child::before { content: "📊"; font-size: 32px; }
+
+  /* Warning note text */
+  .warning-note { font-size: 0; }
+  .warning-note::before { content: "⚠️ Data persisted in browser (localStorage). Use Clear to remove."; font-size: 14px; }
+</style>
 
 <!-- Boot guard to ensure global stored data is available early -->
 <script>
@@ -1032,7 +1098,7 @@ window.addEventListener('load', dashReports);
           window.storedProjects = JSON.parse(localStorage.getItem('att_projects_v1') || '{}');
         }
       }
-      // Schedules store (att_schedules_v2) – ensures schedules are available early
+      // Schedules store (att_schedules_v2) â€“ ensures schedules are available early
       if (typeof window.storedSchedules === 'undefined') {
         const supaVal = await fetchFromSupabase('att_schedules_v2');
         if (supaVal !== undefined) {
@@ -1050,7 +1116,7 @@ window.addEventListener('load', dashReports);
 
   <!-- Mobile menu button for smaller screens -->
   <button class="mobile-menu-btn" onclick="toggleSidebar()">
-    <span style="font-size: 20px;">☰</span>
+    <span style="font-size: 20px;">â˜°</span>
   </button>
   <!-- Begin App Container with Sidebar and Main Content -->
   <div class="app-container">
@@ -1060,13 +1126,13 @@ window.addEventListener('load', dashReports);
           <div class="logo">PayrollPro</div>
           <nav>
             <ul class="nav-menu">
-              <li class="nav-item"><button class="nav-link tab-btn active" id="tabDashboard" data-page="dashboard"><span class="nav-icon">📊</span> Dashboard</button></li>
-              <li class="nav-item"><button class="nav-link tab-btn" id="tabMain" data-page="dtr"><span class="nav-icon">🕐</span> DTR</button></li>
-              <li class="nav-item"><button class="nav-link tab-btn" id="tabSchedule" data-page="schedules"><span class="nav-icon">📅</span> Schedules</button></li>
-              <li class="nav-item"><button class="nav-link tab-btn" id="tabEmployees" data-page="employees"><span class="nav-icon">👥</span> Employees</button></li>
-              <li class="nav-item"><button class="nav-link tab-btn" id="tabProjects" data-page="projects"><span class="nav-icon">🚀</span> Projects</button></li>
-              <li class="nav-item"><button class="nav-link tab-btn" id="tabPayroll" data-page="payroll"><span class="nav-icon">💰</span> Payroll</button></li>
-              <li class="nav-item"><button class="nav-link tab-btn" id="tabProjectTotals" data-page="totals"><span class="nav-icon">📈</span> Reports</button></li>
+              <li class="nav-item"><button class="nav-link tab-btn active" id="tabDashboard" data-page="dashboard"><span class="nav-icon">ðŸ“Š</span> Dashboard</button></li>
+              <li class="nav-item"><button class="nav-link tab-btn" id="tabMain" data-page="dtr"><span class="nav-icon">ðŸ•</span> DTR</button></li>
+              <li class="nav-item"><button class="nav-link tab-btn" id="tabSchedule" data-page="schedules"><span class="nav-icon">ðŸ“…</span> Schedules</button></li>
+              <li class="nav-item"><button class="nav-link tab-btn" id="tabEmployees" data-page="employees"><span class="nav-icon">ðŸ‘¥</span> Employees</button></li>
+              <li class="nav-item"><button class="nav-link tab-btn" id="tabProjects" data-page="projects"><span class="nav-icon">ðŸš€</span> Projects</button></li>
+              <li class="nav-item"><button class="nav-link tab-btn" id="tabPayroll" data-page="payroll"><span class="nav-icon">ðŸ’°</span> Payroll</button></li>
+              <li class="nav-item"><button class="nav-link tab-btn" id="tabProjectTotals" data-page="totals"><span class="nav-icon">ðŸ“ˆ</span> Reports</button></li>
             </ul>
           </nav>
         </div>
@@ -1074,50 +1140,50 @@ window.addEventListener('load', dashReports);
     <aside class="sidebar" id="sidebar">
       <div class="sidebar-header">
         <div class="logo">
-          💼 PayrollHub
+          ðŸ’¼ PayrollHub
         </div>
       </div>
       <nav>
         <ul class="nav-menu">
           <li class="nav-item">
             <button class="nav-link tab-btn active" id="old-tabDashboard" data-page="dashboard">
-              <span class="nav-icon">📊</span>
+              <span class="nav-icon">ðŸ“Š</span>
               Dashboard
             </button>
           </li>
           <li class="nav-item">
             <button class="nav-link tab-btn" id="old-tabMain" data-page="dtr">
-              <span class="nav-icon">🕐</span>
+              <span class="nav-icon">ðŸ•</span>
               DTR
             </button>
           </li>
           <li class="nav-item">
             <button class="nav-link tab-btn" id="old-tabSchedule" data-page="schedules">
-              <span class="nav-icon">📅</span>
+              <span class="nav-icon">ðŸ“…</span>
               Schedules
             </button>
           </li>
           <li class="nav-item">
             <button class="nav-link tab-btn" id="old-tabEmployees" data-page="employees">
-              <span class="nav-icon">👥</span>
+              <span class="nav-icon">ðŸ‘¥</span>
               Employees
             </button>
           </li>
           <li class="nav-item">
             <button class="nav-link tab-btn" id="old-tabProjects" data-page="projects">
-              <span class="nav-icon">🚀</span>
+              <span class="nav-icon">ðŸš€</span>
               Projects
             </button>
           </li>
           <li class="nav-item">
             <button class="nav-link tab-btn" id="old-tabPayroll" data-page="payroll">
-              <span class="nav-icon">💰</span>
+              <span class="nav-icon">ðŸ’°</span>
               Payroll
             </button>
           </li>
           <li class="nav-item">
             <button class="nav-link tab-btn" id="old-tabProjectTotals" data-page="totals">
-              <span class="nav-icon">📈</span>
+              <span class="nav-icon">ðŸ“ˆ</span>
               Reports
             </button>
           </li>
@@ -1127,7 +1193,7 @@ window.addEventListener('load', dashReports);
     <main class="main-content">
       <div class="content-header">
         <h1 class="page-title">
-          <span style="font-size: 32px;">📊</span>
+          <span style="font-size: 32px;">ðŸ“Š</span>
           Dashboard
         </h1>
         <p class="page-subtitle">Manage your payroll system efficiently</p>
@@ -1146,7 +1212,7 @@ window.addEventListener('load', dashReports);
           <button id="newPayrollPeriod" type="button" class="date-input">New period</button>
         </div>
         <div class="warning-note">
-          💾 Data persisted in browser (localStorage). Use Clear to remove.
+          ðŸ’¾ Data persisted in browser (localStorage). Use Clear to remove.
         </div>
       </div>
 
@@ -1231,7 +1297,7 @@ window.addEventListener('load', dashReports);
    <!-- Alert to display when there is no remote DTR data and no local DTR data.  This
         banner is hidden by default and shown via showRemoteDtrAlert() -->
    <div id="remoteDtrAlert" style="display:none;margin:8px 0;padding:10px;border:1px solid #facc15;background:#fef9c3;color:#713f12;border-radius:6px;font-weight:600;">
-     ⚠ No remote DTR data found. Import a .DAT/.TXT file on this device to populate cloud data.
+     âš  No remote DTR data found. Import a .DAT/.TXT file on this device to populate cloud data.
    </div>
    <!-- Wrap the results table in a scrollable container so horizontal overflow
         is always visible. Without this wrapper some layouts (especially when
@@ -1245,7 +1311,7 @@ window.addEventListener('load', dashReports);
     <span>Date:</span>
     <input id="dtrDateFrom" type="date" />
   </label>
-  <span>—</span>
+  <span>â€”</span>
   <label>
     <input id="dtrDateTo" type="date" />
   </label>
@@ -1791,13 +1857,13 @@ window.addEventListener('load', dashReports);
       <thead>
        <tr>
         <th>
-         Range From (₱)
+         Range From (â‚±)
         </th>
         <th>
-         Range To (₱)
+         Range To (â‚±)
         </th>
         <th>
-         Employee Share (₱)
+         Employee Share (â‚±)
         </th>
         <th>
          Actions
@@ -1814,10 +1880,10 @@ window.addEventListener('load', dashReports);
       </i>
       and use the Employee Share.
      </div>
-    <!-- Editable Pag‑IBIG and PhilHealth tables (employee rates).  Each table allows
+    <!-- Editable Pagâ€‘IBIG and PhilHealth tables (employee rates).  Each table allows
          defining income ranges and the corresponding employee rate (as a decimal).
          The rate is applied to regular pay to compute the contribution. -->
-    <h4>Pag‑IBIG Table (Employee Rate)</h4>
+    <h4>Pagâ€‘IBIG Table (Employee Rate)</h4>
     <div class="controls">
       <button id="addPagibigRow">
        Add Row
@@ -1832,8 +1898,8 @@ window.addEventListener('load', dashReports);
     <table id="pagibigTable">
       <thead>
         <tr>
-          <th>Range From (₱)</th>
-          <th>Range To (₱)</th>
+          <th>Range From (â‚±)</th>
+          <th>Range To (â‚±)</th>
           <th>Rate (decimal)</th>
           <th>Actions</th>
         </tr>
@@ -1859,8 +1925,8 @@ window.addEventListener('load', dashReports);
     <table id="philhealthTable">
       <thead>
         <tr>
-          <th>Range From (₱)</th>
-          <th>Range To (₱)</th>
+          <th>Range From (â‚±)</th>
+          <th>Range To (â‚±)</th>
           <th>Rate (decimal)</th>
           <th>Actions</th>
         </tr>
@@ -1908,10 +1974,10 @@ window.addEventListener('load', dashReports);
      </div>
      <div class="section note">
       <strong>File Format:</strong> Use the exported CSV from this table, then edit only these columns:
-      <br/>• <strong>Column 6:</strong> SSS Loan (edit this value)
-      <br/>• <strong>Column 7:</strong> Pag-IBIG Loan (edit this value)  
-      <br/>• <strong>Column 8:</strong> Vale (edit this value)
-      <br/>• <strong>Column 9:</strong> Wed Vale (edit this value)
+      <br/>â€¢ <strong>Column 6:</strong> SSS Loan (edit this value)
+      <br/>â€¢ <strong>Column 7:</strong> Pag-IBIG Loan (edit this value)  
+      <br/>â€¢ <strong>Column 8:</strong> Vale (edit this value)
+      <br/>â€¢ <strong>Column 9:</strong> Wed Vale (edit this value)
       <br/><strong>Important:</strong> Don't change columns 1-5 or 10 (they're calculated automatically)
       <br/><strong>Note:</strong> If employee names are split into 2 columns, the system automatically adjusts
      </div>
@@ -2002,22 +2068,22 @@ const LS_VALE='payroll_vale', LS_VALE_WED='payroll_vale_wed';
 const LS_ADJ='payroll_adjustments';
 // LocalStorage key for per-employee adjustment hours (OT adjustments)
 const LS_ADJ_HRS='payroll_adjustment_hours';
-// LocalStorage keys for dynamic Pag‑IBIG and PhilHealth contribution rates (employee share)
+// LocalStorage keys for dynamic Pagâ€‘IBIG and PhilHealth contribution rates (employee share)
 const LS_PAGIBIG_RATE='payroll_pagibig_rate';
 const LS_PHILHEALTH_RATE='payroll_philhealth_rate';
-// LocalStorage keys for dynamic Pag‑IBIG and PhilHealth contribution tables
+// LocalStorage keys for dynamic Pagâ€‘IBIG and PhilHealth contribution tables
 const LS_PAGIBIG_TABLE='payroll_pagibig_table';
 const LS_PHILHEALTH_TABLE='payroll_philhealth_table';
 // LocalStorage key for per-employee Bantay allowance
 const LS_BANTAY='payroll_bantay';
-// Supabase-only key for per-employee Bantay→Project assignment map
+// Supabase-only key for per-employee Bantayâ†’Project assignment map
 const LS_BANTAY_PROJ='payroll_bantay_proj';
 let bantayProj = {};
 ;(async function(){ const v = await readKV(LS_BANTAY_PROJ); if (v && typeof v==='object') bantayProj = v; })();
 // LocalStorage key for per-employee contribution flags (Pag-IBIG, PhilHealth, SSS)
 const LS_CONTRIB_FLAGS='payroll_contrib_flags';
 
-// Current employee contribution rates (decimal form).  Defaults: 0.02 (2%) for Pag‑IBIG and 0.025 (2.5%) for PhilHealth.
+// Current employee contribution rates (decimal form).  Defaults: 0.02 (2%) for Pagâ€‘IBIG and 0.025 (2.5%) for PhilHealth.
 let pagibigRate = parseFloat(localStorage.getItem(LS_PAGIBIG_RATE) ?? '0.02');
 if (isNaN(pagibigRate)) pagibigRate = 0.02;
 let philhealthRate = parseFloat(localStorage.getItem(LS_PHILHEALTH_RATE) ?? '0.025');
@@ -2099,7 +2165,7 @@ function ensureSeededSSS() {
   }
 }
 ensureSeededSSS();
-// Seed the Pag‑IBIG and PhilHealth tables with default rates if empty.  These tables
+// Seed the Pagâ€‘IBIG and PhilHealth tables with default rates if empty.  These tables
 // define income ranges and the corresponding employee contribution rate (decimal).
 const PAGIBIG_SEED = [
   [0, 100000000, 0.02]
@@ -2163,7 +2229,7 @@ let cashDed  = JSON.parse(localStorage.getItem(LS_CASH_DED)  || '{}');
 let cashBal  = JSON.parse(localStorage.getItem(LS_CASH_BAL)  || '{}');
 // Per-employee payroll adjustments (positive or negative amounts)
 let adjustments = JSON.parse(localStorage.getItem(LS_ADJ) || '{}');
-// Per‑employee adjustment hours (OT adjustments).  These values represent additional
+// Perâ€‘employee adjustment hours (OT adjustments).  These values represent additional
 // overtime hours that should be added to the regular OT hours when computing OT pay.
 let adjHrs = JSON.parse(localStorage.getItem(LS_ADJ_HRS) || '{}');
 
@@ -2247,7 +2313,7 @@ const lSSS = Number(loanSSS[emp.id] ?? 0);
     const v = Number(vale[emp.id] ?? 0);
     const vW = Number(valeWed[emp.id] ?? 0);
     const regPay = +(rH * rate).toFixed(2);
-    // Use dynamic contribution tables for Pag‑IBIG and PhilHealth.  Determine the
+    // Use dynamic contribution tables for Pagâ€‘IBIG and PhilHealth.  Determine the
     // applicable rate based on monthly income and multiply by regular pay.
     const monthly = rate * 8 * 24;
     const piRate = pagibigRateByMonthly(monthly);
@@ -2475,53 +2541,65 @@ for (let i = 1; i < rows.length; i++) {
   }
 });
 function renderTable(){
-  tbody.innerHTML = '';
-  employeeList.forEach(emp=>{
-    const tr = document.createElement('tr');
-    const rH = Number(regHours[emp.id] ?? 0);
-    const oH = Number(otHours[emp.id] ?? 0);
-    // Adjustment hours for this employee (default to 0 if undefined)
-    const aH = Number(adjHrs[emp.id] ?? 0);
-    const rate = Number((storedEmployees[emp.id]?.hourlyRate) ?? (payrollRates[emp.id] ?? 0));
-    payrollRates[emp.id] = isNaN(rate) ? 0 : rate;
-const lSSS = Number(loanSSS[emp.id] ?? 0);
-    const lPI = Number(loanPI[emp.id] ?? 0);
-    const v = Number(vale[emp.id] ?? 0);
-    const vW = Number(valeWed[emp.id] ?? 0);
-    // Load stored Bantay allowance for this employee or default to empty string
-    const bVal = bantay[emp.id] ?? '';
-    tr.innerHTML = `
-      <td>${emp.id}</td>
-      <td class="wrap">${emp.name}</td>
-      
-      <td><input class="cell rate" title="Non-editable in Payroll" type="number" step="0.01" value="${rate}" disabled></td>
-      <td><input class="cell regHrs" title="Non-editable in Payroll" type="number" step="0.01" value="${rH}" disabled></td>
-      <td><input class="cell otHrs" title="Non-editable in Payroll" type="number" step="0.01" value="${oH}" disabled></td>
-      <td class="adjHrs num">${aH ? aH.toFixed(2) : '0.00'}</td><td class="totalHrs num">0.00</td><td class="regPay num">0.00</td>
-      <td class="otPay num">0.00</td>
-      <td class="grossPay num">0.00</td>
-      <td class="pagibig num">0.00</td>
-      <td class="philhealth num">0.00</td>
-      <td class="sss num">0.00</td>
-      <td><input class="cell loanSSS" type="number" step="0.01" value="${lSSS}"></td>
-      <td><input class="cell loanPI" type="number" step="0.01" value="${lPI}"></td>
-      <td><input class="cell vale" type="number" step="0.01" value="${v}"></td>
-      <td class="valeWed num">${vW}</td>
-      <td class="totalDed num">0.00</td>
-      <td class="adjAmt num">0.00</td>
-      <td><input class="cell bantay" type="number" step="0.01" value="${bVal}"></td>
-      <td class="netPay num">0.00</td>
-      <td><button type="button" class="payslipBtn">Payslip</button></td>`;
-    tbody.appendChild(tr);
-  });
-  attachRowEvents();
-  calculateAll();
+  // Batch DOM updates to avoid MutationObserver thrash
+  window.__suspendTotals = true;
+  try {
+    const frag = document.createDocumentFragment();
+    tbody.innerHTML = '';
+    employeeList.forEach(emp=>{
+      const tr = document.createElement('tr');
+      const rH = Number(regHours[emp.id] ?? 0);
+      const oH = Number(otHours[emp.id] ?? 0);
+      // Adjustment hours for this employee (default to 0 if undefined)
+      const aH = Number(adjHrs[emp.id] ?? 0);
+      const rate = Number((storedEmployees[emp.id]?.hourlyRate) ?? (payrollRates[emp.id] ?? 0));
+      payrollRates[emp.id] = isNaN(rate) ? 0 : rate;
+      const lSSS = Number(loanSSS[emp.id] ?? 0);
+      const lPI = Number(loanPI[emp.id] ?? 0);
+      const v = Number(vale[emp.id] ?? 0);
+      const vW = Number(valeWed[emp.id] ?? 0);
+      // Load stored Bantay allowance for this employee or default to empty string
+      const bVal = bantay[emp.id] ?? '';
+      tr.innerHTML = `
+        <td>${emp.id}</td>
+        <td class="wrap">${emp.name}</td>
+        
+        <td><input class="cell rate" title="Non-editable in Payroll" type="number" step="0.01" value="${rate}" disabled></td>
+        <td><input class="cell regHrs" title="Non-editable in Payroll" type="number" step="0.01" value="${rH}" disabled></td>
+        <td><input class="cell otHrs" title="Non-editable in Payroll" type="number" step="0.01" value="${oH}" disabled></td>
+        <td class="adjHrs num">${aH ? aH.toFixed(2) : '0.00'}</td><td class="totalHrs num">0.00</td><td class="regPay num">0.00</td>
+        <td class="otPay num">0.00</td>
+        <td class="grossPay num">0.00</td>
+        <td class="pagibig num">0.00</td>
+        <td class="philhealth num">0.00</td>
+        <td class="sss num">0.00</td>
+        <td><input class="cell loanSSS" type="number" step="0.01" value="${lSSS}"></td>
+        <td><input class="cell loanPI" type="number" step="0.01" value="${lPI}"></td>
+        <td><input class="cell vale" type="number" step="0.01" value="${v}"></td>
+        <td class="valeWed num">${vW}</td>
+        <td class="totalDed num">0.00</td>
+        <td class="adjAmt num">0.00</td>
+        <td><input class="cell bantay" type="number" step="0.01" value="${bVal}"></td>
+        <td class="netPay num">0.00</td>
+        <td><button type="button" class="payslipBtn">Payslip</button></td>`;
+      frag.appendChild(tr);
+    });
+    tbody.appendChild(frag);
+    attachRowEvents();
+    // Compute all rows in one pass without updating totals each mutation
+    calculateAll();
+  } finally {
+    // Resume totals and request one totals update after batch render
+    window.__suspendTotals = false;
+    try { (window.scheduleTotals || window.updatePayrollGrandTotals || function(){})(); } catch(e){}
+    try { (window.scheduleTotals || window.updateDeductionsGrandTotals || function(){})(); } catch(e){}
+  }
 }
 
 
 
-// Quick project picker for Bantay assignment (Supabase-backed) — DROPDOWN VERSION
-// Quick project picker for Bantay assignment (Supabase-backed) — DROPDOWN VERSION
+// Quick project picker for Bantay assignment (Supabase-backed) â€“ compact dropdown
+// Shows only project names, auto-saves on selection, then closes.
 function chooseBantayProject(empId, anchorEl){
   try{
     // Remove any existing picker first
@@ -2537,7 +2615,7 @@ function chooseBantayProject(empId, anchorEl){
     box.style.border = '1px solid #e5e7eb';
     box.style.borderRadius = '8px';
     box.style.boxShadow = '0 8px 24px rgba(0,0,0,0.12)';
-    box.style.padding = '8px';
+    box.style.padding = '6px';
     box.style.display = 'flex';
     box.style.gap = '6px';
     box.style.alignItems = 'center';
@@ -2549,9 +2627,9 @@ function chooseBantayProject(empId, anchorEl){
     box.style.left = (rect.left + scrollX) + 'px';
     box.style.top  = (rect.top  + scrollY + rect.height + 6) + 'px';
 
-    // Build <select> with project options
+    // Build <select> with project options (compact)
     const sel = document.createElement('select');
-    sel.style.minWidth = '260px';
+    sel.style.minWidth = '160px';
     sel.style.padding = '4px';
     sel.style.border = '1px solid #d1d5db';
     sel.style.borderRadius = '6px';
@@ -2559,7 +2637,7 @@ function chooseBantayProject(empId, anchorEl){
     // Placeholder
     const opt0 = document.createElement('option');
     opt0.value = '';
-    opt0.textContent = 'Select a project…';
+    opt0.textContent = 'Select project';
     sel.appendChild(opt0);
 
     // storedProjects: { [pid]: {name, ...} }
@@ -2571,41 +2649,29 @@ function chooseBantayProject(empId, anchorEl){
     entries.forEach(([pid, proj])=>{
       const o = document.createElement('option');
       o.value = pid;
-      o.textContent = `${pid} — ${proj?.name || pid}`;
+      o.textContent = (proj?.name || pid);
       sel.appendChild(o);
     });
 
     // Set current value if any
     try { sel.value = (bantayProj && bantayProj[empId]) || ''; } catch(e){}
 
-    // Buttons
-    const saveBtn = document.createElement('button');
-    saveBtn.textContent = 'Assign';
-    saveBtn.type = 'button';
-    saveBtn.style.padding = '6px 10px';
-
-    const cancelBtn = document.createElement('button');
-    cancelBtn.textContent = 'Cancel';
-    cancelBtn.type = 'button';
-    cancelBtn.style.padding = '6px 10px';
-
     box.appendChild(sel);
-    box.appendChild(saveBtn);
-    box.appendChild(cancelBtn);
     document.body.appendChild(box);
 
     const close = ()=>{ try{ box.remove(); }catch(e){} };
 
-    saveBtn.addEventListener('click', async ()=>{
+    // Auto-save on selection and close; refresh report if available
+    sel.addEventListener('change', async ()=>{
       const v = sel.value;
       if (v && (storedProjects && storedProjects[v])){
         bantayProj = bantayProj || {};
         bantayProj[empId] = v;
         await writeKV(LS_BANTAY_PROJ, bantayProj);
+        try { if (typeof window.rebuildReports === 'function') window.rebuildReports(); } catch(e){}
       }
       close();
     });
-    cancelBtn.addEventListener('click', close);
 
     // Close on outside click
     setTimeout(()=>{
@@ -2652,18 +2718,20 @@ function attachRowEvents(){
       });
     });
 
-    // Add event listener for Bantay allowance input. Store in localStorage and recalc net pay.
+    // Add event listener for Bantay allowance input. Store to cloud and recalc net pay.
     const bantayI = row.querySelector('.bantay');
     if (bantayI) {
       bantayI.addEventListener('input', async () => {
       bantay[id] = bantayI.value;
       await writeKV(LS_BANTAY, bantay);
       calculateRow(row);
+      try { if (typeof window.rebuildReports === 'function') window.rebuildReports(); } catch(e){}
     });
     // Prompt to assign project when Bantay is set
     bantayI.addEventListener('change', () => {
       const val = parseFloat(bantayI.value) || 0;
       if (val > 0) chooseBantayProject(id, bantayI);
+      try { if (typeof window.rebuildReports === 'function') window.rebuildReports(); } catch(e){}
     });
     // Allow quick reassign on dblclick
     bantayI.title = 'Double-click to assign Bantay to a project';
@@ -2742,8 +2810,8 @@ document.getElementById('importSss').addEventListener('change', ev=>{
   reader.readAsText(f);
 });
 
-// === Begin Pag‑IBIG and PhilHealth Table Management ===
-// Pag‑IBIG dynamic table helpers.  Defines helper functions for retrieving and
+// === Begin Pagâ€‘IBIG and PhilHealth Table Management ===
+// Pagâ€‘IBIG dynamic table helpers.  Defines helper functions for retrieving and
 // setting the table in localStorage, rendering the table in the UI, and applying
 // the employee share rate based on income ranges.
 function getPagibigTable(){
@@ -2848,7 +2916,7 @@ function renderPhilhealthTable(){
     });
   });
 }
-// Click handler for adding, resetting and clearing rows in Pag‑IBIG and PhilHealth tables.
+// Click handler for adding, resetting and clearing rows in Pagâ€‘IBIG and PhilHealth tables.
 document.addEventListener('click', (e) => {
   if (e.target && e.target.id === 'addPagibigRow') {
     const cur = getPagibigTable();
@@ -2896,7 +2964,7 @@ document.addEventListener('click', (e) => {
     }
   }
 });
-// === End Pag‑IBIG and PhilHealth Table Management ===
+// === End Pagâ€‘IBIG and PhilHealth Table Management ===
 function sssShareByMonthly(monthly){
   const rows = getSssTable();
   if(rows.length===0) return 0;
@@ -2906,8 +2974,8 @@ function sssShareByMonthly(monthly){
   return Number(rows[rows.length-1].employee)||0;
 }
 
-// Determine Pag‑IBIG contribution rate based on the monthly income.  Uses the
-// editable Pag‑IBIG table; returns a decimal rate (e.g. 0.02).  If no matching
+// Determine Pagâ€‘IBIG contribution rate based on the monthly income.  Uses the
+// editable Pagâ€‘IBIG table; returns a decimal rate (e.g. 0.02).  If no matching
 // range is found, returns the last row's rate.
 function pagibigRateByMonthly(monthly){
   const rows = getPagibigTable();
@@ -3088,7 +3156,7 @@ function renderAdjustmentsFoot() {
   }
 }
 
-// Initialize the dynamic Pag‑IBIG and PhilHealth rate input fields.  This function
+// Initialize the dynamic Pagâ€‘IBIG and PhilHealth rate input fields.  This function
 // sets their values from the current global variables and attaches input
 // listeners to persist changes to localStorage and recalculate payroll.
 function initializeContributionRates() {
@@ -3101,7 +3169,7 @@ function initializeContributionRates() {
       if (!isNaN(val)) {
         // If user enters percent (e.g. 2), convert to decimal
         if (val > 1) val = val / 100;
-        // Bound to 0–1
+        // Bound to 0â€“1
         if (val < 0) val = 0;
         if (val > 1) val = 1;
         pagibigRate = val;
@@ -3398,7 +3466,10 @@ document.addEventListener('DOMContentLoaded', () => {
       const weEl = document.getElementById('weekEnd');
       if (wsEl) wsEl.value = snap.startDate || '';
       if (weEl) weEl.value = snap.endDate || '';
-      try { if (typeof calculatePayrollFromResultsTable === 'function') calculatePayrollFromResultsTable(); } catch (err) {}
+      try {
+        if (typeof calculatePayrollFromResultsTable === 'function') calculatePayrollFromResultsTable();
+        else if (typeof calculatePayrollFromRecords === 'function') calculatePayrollFromRecords();
+      } catch (err) {}
       // Show the payroll panel
       try { showTab('payroll'); } catch (err) {}
     } else if (target.classList.contains('lockActive')) {
@@ -3541,10 +3612,10 @@ document.addEventListener('DOMContentLoaded', () => {
       // Capture DTR records for this employee within the selected date range. Stores an array of {date, times}
       try {
         /*
-         * Use the in‑memory storedRecords array (populated from Supabase) to
+         * Use the inâ€‘memory storedRecords array (populated from Supabase) to
          * derive attendance for payroll exports.  Avoid reading from
          * localStorage so that stale browser caches do not leak into
-         * cross‑device exports.  The records array is filtered by the
+         * crossâ€‘device exports.  The records array is filtered by the
          * current employee and date range, grouped by date, and then
          * converted into { date, times } objects for export.
          */
@@ -3829,7 +3900,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     // Prevent duplicate snapshots for the same date range. If any snapshot (locked or active)
     // already exists with this start/end, alert the user and skip creation. This avoids
-    // double‑entry payroll for the same period.
+    // doubleâ€‘entry payroll for the same period.
     const exists = Array.isArray(payrollHistory) && payrollHistory.some(snap =>
       snap && snap.startDate === start && snap.endDate === end);
     if (exists) {
@@ -4058,7 +4129,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // Set title with lock info
     if (titleEl) {
       const lockedInfo = snap.lockedAt ? ` (Locked ${new Date(snap.lockedAt).toLocaleString()})` : '';
-      titleEl.textContent = `Payroll Details: ${snap.startDate || ''} — ${snap.endDate || ''}${lockedInfo}`;
+      titleEl.textContent = `Payroll Details: ${snap.startDate || ''} â€” ${snap.endDate || ''}${lockedInfo}`;
     }
     // Hide dashboard tables and controls
     if (activeTable) activeTable.style.display = 'none';
@@ -4158,7 +4229,7 @@ document.addEventListener('DOMContentLoaded', () => {
       });
     } else {
       // Fallback: derive from live attendance records within the snapshot date range
-      // Use the in‑memory storedRecords array rather than localStorage.  If no
+      // Use the inâ€‘memory storedRecords array rather than localStorage.  If no
       // remote data exists the array will be empty, which is preferable to
       // reading stale cache entries.
       let records = Array.isArray(storedRecords) ? storedRecords : [];
@@ -4474,7 +4545,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
       const totalCols = 2 + (dates.length*2) + 4;
       const hint = $('#r_range_hint');
-      if (hint) hint.textContent = `Range: ${from} — ${to}`;
+      if (hint) hint.textContent = `Range: ${from} â€” ${to}`;
 
       // THEAD
       let thead1 = `<tr><th class="left" rowspan="2">PERSONNEL</th><th rowspan="2">RATE</th>`;
@@ -4723,6 +4794,9 @@ rows += `<tr class="totals">
       const mo = new MutationObserver(()=> { buildTable(); });
       mo.observe(dtr, { childList:true, subtree:true });
     }
+    // Expose a global rebuild hook so other tabs (e.g., Payroll bantay edits)
+    // can refresh the report without a full page reload.
+    try { window.rebuildReports = buildTable; } catch(e){}
     if (document.readyState === 'loading'){
       document.addEventListener('DOMContentLoaded', buildTable, { once:true });
     } else { buildTable(); }
@@ -4965,7 +5039,10 @@ tabs.tabPayroll.addEventListener('click', ()=>{
 
   showTab('payroll');
   // When entering the payroll tab, derive hours directly from the DTR results table
-  try { if (typeof calculatePayrollFromResultsTable === 'function') calculatePayrollFromResultsTable(); } catch(e){}
+  try {
+    if (typeof calculatePayrollFromResultsTable === 'function') calculatePayrollFromResultsTable();
+    else if (typeof calculatePayrollFromRecords === 'function') calculatePayrollFromRecords();
+  } catch(e){}
 });
 
 // Switch to the dashboard tab when clicked. Render payroll history if available.
@@ -5261,7 +5338,7 @@ document.querySelectorAll('.emp-sel-schedule').forEach(sel=> sel.addEventListene
   }));
   document.querySelectorAll('.del-emp').forEach(btn=> btn.addEventListener('click', (e)=>{
     const id=e.target.dataset.id;
-    if(confirm(`Delete employee ${id} — ${storedEmployees[id].name}?`)){
+    if(confirm(`Delete employee ${id} â€” ${storedEmployees[id].name}?`)){
       delete storedEmployees[id]; saveEmployeesToLS(); renderEmployees(); renderResults();
     }
   }));
@@ -5359,7 +5436,7 @@ document.getElementById('fileInput').addEventListener('change', (ev)=>{
   inputEl.disabled = true;
 
   Array.from(files).forEach(file=>{
-    // Upload the raw .DAT/.TXT file to Supabase for backup/cross‑device sync.
+    // Upload the raw .DAT/.TXT file to Supabase for backup/crossâ€‘device sync.
     try {
       if (typeof uploadDtrFileToCloud === 'function') {
         uploadDtrFileToCloud(file);
@@ -5384,7 +5461,7 @@ document.getElementById('fileInput').addEventListener('change', (ev)=>{
         try { localStorage.setItem(LS_RECORDS, JSON.stringify(storedRecords)); } catch(e){}
         // Refresh the DTR grid
         if (typeof renderResults === 'function') renderResults();
-        // Persist the records to Supabase for cross‑device sync
+        // Persist the records to Supabase for crossâ€‘device sync
         try {
           if (typeof saveDtrToCloud === 'function') saveDtrToCloud(storedRecords);
         } catch (e) {
@@ -5429,7 +5506,7 @@ document.getElementById('clearData').addEventListener('click', ()=>{
   storedRecords = [];
   // Remove the locally cached attendance data
   localStorage.removeItem(LS_RECORDS);
-  // Persist the cleared dataset to Supabase for cross‑device sync
+  // Persist the cleared dataset to Supabase for crossâ€‘device sync
   try {
     if (typeof saveDtrToCloud === 'function') saveDtrToCloud(storedRecords);
   } catch (e) {
@@ -5771,10 +5848,10 @@ let otMins = 0;
       }
     } catch(e){ console.warn('Saturday OT direct compute failed', e); }
 
-    // Fallback OT computation for non‑Saturday days.
+    // Fallback OT computation for nonâ€‘Saturday days.
     // When there are no explicit OT punches (or the OT IN occurs before
     // the end of the regular shift), treat any minutes worked beyond
-    // the scheduled PM end as overtime. Only the final clock‑out time
+    // the scheduled PM end as overtime. Only the final clockâ€‘out time
     // is considered to avoid counting intermediate segments.
     try {
       if (!__isSaturday) {
@@ -5796,7 +5873,7 @@ let otMins = 0;
           }
         }
       }
-    } catch(err) { console.warn('Non‑Saturday OT fallback failed', err); }
+    } catch(err) { console.warn('Nonâ€‘Saturday OT fallback failed', err); }
 
     const otDecimal = minsToDecimal(otMins);
 
@@ -5903,11 +5980,11 @@ let otMins = 0;
           }
         } catch(e) { /* ignore */ }
 
-        // --- Fallback OT logic for non‑Saturday halves ---
+        // --- Fallback OT logic for nonâ€‘Saturday halves ---
         // If there are no explicit OT punches (or the OT IN occurs before the end
-        // of the regular shift), and there is a final clock‑out beyond the end
+        // of the regular shift), and there is a final clockâ€‘out beyond the end
         // of the PM shift, treat the extra time as OT.  This ensures that
-        // after‑hours work is captured even without separate OT punches.
+        // afterâ€‘hours work is captured even without separate OT punches.
         try {
           if (!isSat) {
             // Determine if an explicit OT was captured (OT IN starts after the PM reference)
@@ -5983,33 +6060,33 @@ const trSeg = document.createElement('tr');
         // Clock in/out columns based on segment.  AM displays morning punches; PM
         // displays afternoon punches; OT leaves these blank.
         if (segment === 'AM') {
-          htmlSeg += (amInActual ? '<td>' + __fmt12Clock(amInActual) + '</td>' : '<td class="missing">—</td>');
+          htmlSeg += (amInActual ? '<td>' + __fmt12Clock(amInActual) + '</td>' : '<td class="missing">â€”</td>');
           // Show AM out only when not bridging and a punch exists
           if (hasBridge || !amOutActual) {
-            htmlSeg += '<td class="missing">—</td>';
+            htmlSeg += '<td class="missing">â€”</td>';
           } else {
             htmlSeg += '<td>' + __fmt12Clock(amOutActual) + '</td>';
           }
-          htmlSeg += '<td class="missing">—</td><td class="missing">—</td>';
+          htmlSeg += '<td class="missing">â€”</td><td class="missing">â€”</td>';
         } else if (segment === 'PM') {
-          htmlSeg += '<td class="missing">—</td><td class="missing">—</td>';
+          htmlSeg += '<td class="missing">â€”</td><td class="missing">â€”</td>';
           // Show PM in only when not bridging and a punch exists
           if (hasBridge || !pmInActual) {
-            htmlSeg += '<td class="missing">—</td>';
+            htmlSeg += '<td class="missing">â€”</td>';
           } else {
             htmlSeg += '<td>' + __fmt12Clock(pmInActual) + '</td>';
           }
-          htmlSeg += (pmOutActual ? '<td>' + __fmt12Clock(pmOutActual) + '</td>' : '<td class="missing">—</td>');
+          htmlSeg += (pmOutActual ? '<td>' + __fmt12Clock(pmOutActual) + '</td>' : '<td class="missing">â€”</td>');
         } else {
           // OT segment leaves both AM and PM punch cells blank
-          htmlSeg += '<td class="missing">—</td><td class="missing">—</td><td class="missing">—</td><td class="missing">—</td>';
+          htmlSeg += '<td class="missing">â€”</td><td class="missing">â€”</td><td class="missing">â€”</td><td class="missing">â€”</td>';
         }
         // OT in/out columns: filled only for OT segment
         if (segment === 'OT') {
-          htmlSeg += (otInSeg ? '<td>' + __fmt12Clock(otInSeg) + '</td>' : '<td class="missing">—</td>');
-          htmlSeg += (otOutSeg ? '<td>' + __fmt12Clock(otOutSeg) + '</td>' : '<td class="missing">—</td>');
+          htmlSeg += (otInSeg ? '<td>' + __fmt12Clock(otInSeg) + '</td>' : '<td class="missing">â€”</td>');
+          htmlSeg += (otOutSeg ? '<td>' + __fmt12Clock(otOutSeg) + '</td>' : '<td class="missing">â€”</td>');
         } else {
-          htmlSeg += '<td class="missing">—</td><td class="missing">—</td>';
+          htmlSeg += '<td class="missing">â€”</td><td class="missing">â€”</td>';
         }
         // Regular hours and OT hours columns
         htmlSeg += '<td>' + regDecSeg + '</td><td>' + otDecSeg + '</td>';
@@ -6069,13 +6146,13 @@ const trSeg = document.createElement('tr');
     const scheduleName = storedSchedules[scheduleIdForEmp] ? storedSchedules[scheduleIdForEmp].name + (scheduleIdForEmp===defaultScheduleId ? ' (Default)' : '') : '';
     const projectName = (empProjId && storedProjects[empProjId]) ? storedProjects[empProjId].name : (emp && !emp.projectId ? '' : '');
 
-    const cell = (v) => v ? '<td>' + __fmt12Clock(v) + '</td>' : '<td class="missing">—</td>';
+    const cell = (v) => v ? '<td>' + __fmt12Clock(v) + '</td>' : '<td class="missing">â€”</td>';
     const tr = document.createElement('tr');
     tr.innerHTML =
       '<td>'+empId+'</td><td>'+name+'</td><td>'+projectName+'</td><td>'+scheduleName+'</td><td>'+date+'</td>' +
       cell(amInActual) + cell(amOutActual) + cell(pmInActual) + cell(pmOutActual) +
-      (otInCalc ? '<td>' + __fmt12Clock(otInCalc) + '</td>' : '<td class=\"missing\">—</td>') +
-      (otOutCalc ? '<td>' + __fmt12Clock(otOutCalc) + '</td>' : '<td class=\"missing\">—</td>') +
+      (otInCalc ? '<td>' + __fmt12Clock(otInCalc) + '</td>' : '<td class=\"missing\">â€”</td>') +
+      (otOutCalc ? '<td>' + __fmt12Clock(otOutCalc) + '</td>' : '<td class=\"missing\">â€”</td>') +
       '<td>'+totalRegularDecimal+'</td><td>'+otDecimal+'</td>' +
       // Use a named handler with a data-key attribute instead of an inline IIFE.
       '<td><button type="button" class="btn-split" data-key="' + empId + '___' + date + '" onclick="splitRecord(this.dataset.key)">Split</button></td>';
@@ -6291,18 +6368,18 @@ const otInActual = pickEarliest({start: schedule.rng_ot_in_start, end: schedule.
      *      OT total.  The resulting OT minutes are added to the employee's
      *      running total.
      *
-     *   2) Non‑Saturday with explicit OT punches: When OT In and OT Out
+     *   2) Nonâ€‘Saturday with explicit OT punches: When OT In and OT Out
      *      times are recorded and the OT In occurs after the normal
      *      scheduled end (pmOutRefMins), compute OT as the difference
      *      between OT Out and OT In.  This respects the configured OT
      *      ranges and leaves any early departures uncounted.
      *
-     *   3) Non‑Saturday without explicit OT punches: When no valid OT
-     *      punches exist but there is a single end‑of‑day clock‑out, treat
+     *   3) Nonâ€‘Saturday without explicit OT punches: When no valid OT
+     *      punches exist but there is a single endâ€‘ofâ€‘day clockâ€‘out, treat
      *      any minutes worked after the scheduled end as OT.  This
-     *      allows after‑hours work to be captured without requiring
+     *      allows afterâ€‘hours work to be captured without requiring
      *      separate OT punches.  If multiple segments exist for the day
-     *      (more than one in/out pair), only the final clock‑out is
+     *      (more than one in/out pair), only the final clockâ€‘out is
      *      considered for the fallback; intermediate segments are
      *      presumed to be normal work/breaks and do not contribute to OT.
      */
@@ -6326,11 +6403,11 @@ const otInActual = pickEarliest({start: schedule.rng_ot_in_start, end: schedule.
       }
       dayOTMins = extraOTMins;
     } else {
-      // Non‑Saturday: prefer explicit OT punches when they exist
+      // Nonâ€‘Saturday: prefer explicit OT punches when they exist
       if (otInActual && otOutActual && toMins(otInActual) > pmOutRefMins) {
         dayOTMins = Math.max(0, toMins(otOutActual) - toMins(otInActual));
       } else {
-        // Fallback: no explicit OT punches.  Check the last clock‑out and
+        // Fallback: no explicit OT punches.  Check the last clockâ€‘out and
         // count any minutes worked after the scheduled end as OT.  Only
         // the final out of the day is considered to avoid counting
         // intermediate segments twice.
@@ -6368,7 +6445,7 @@ function calculatePayrollFromRecords(){
     // to the DTR filter inputs if the payroll period inputs are absent.
     const start = (typeof weekStartEl !== 'undefined' && weekStartEl && weekStartEl.value) ? weekStartEl.value : (dtrStartEl ? dtrStartEl.value : '');
     const end   = (typeof weekEndEl   !== 'undefined' && weekEndEl   && weekEndEl.value)   ? weekEndEl.value   : (dtrEndEl   ? dtrEndEl.value   : '');
-    // Use the helper to compute per‑employee hours across the full dataset.
+    // Use the helper to compute perâ€‘employee hours across the full dataset.
     const { totalsReg, totalsOT } = computeHoursForDateRange(start, end);
     // Initialize regHours and otHours with computed totals
     regHours = Object.assign({}, totalsReg || {});
@@ -6497,25 +6574,37 @@ function calculatePayrollFromRecords(){
 weekStartEl.addEventListener('change', () => {
   if (dtrStartEl) dtrStartEl.value = weekStartEl.value;
   // Recalculate payroll based on DTR results whenever the payroll period changes
-  try { if (typeof calculatePayrollFromResultsTable === 'function') calculatePayrollFromResultsTable(); } catch (e) {}
+  try {
+    if (typeof calculatePayrollFromResultsTable === 'function') calculatePayrollFromResultsTable();
+    else if (typeof calculatePayrollFromRecords === 'function') calculatePayrollFromRecords();
+  } catch (e) {}
 });
 weekEndEl.addEventListener('change', () => {
   if (dtrEndEl) dtrEndEl.value = weekEndEl.value;
   // Recalculate payroll based on DTR results whenever the payroll period changes
-  try { if (typeof calculatePayrollFromResultsTable === 'function') calculatePayrollFromResultsTable(); } catch (e) {}
+  try {
+    if (typeof calculatePayrollFromResultsTable === 'function') calculatePayrollFromResultsTable();
+    else if (typeof calculatePayrollFromRecords === 'function') calculatePayrollFromRecords();
+  } catch (e) {}
 });
 if (dtrStartEl) {
   dtrStartEl.addEventListener('change', () => {
     weekStartEl.value = dtrStartEl.value;
     // When editing the DTR date range directly, recompute payroll hours from the DTR table
-    try { if (typeof calculatePayrollFromResultsTable === 'function') calculatePayrollFromResultsTable(); } catch (e) {}
+    try {
+      if (typeof calculatePayrollFromResultsTable === 'function') calculatePayrollFromResultsTable();
+      else if (typeof calculatePayrollFromRecords === 'function') calculatePayrollFromRecords();
+    } catch (e) {}
   });
 }
 if (dtrEndEl) {
   dtrEndEl.addEventListener('change', () => {
     weekEndEl.value = dtrEndEl.value;
     // When editing the DTR date range directly, recompute payroll hours from the DTR table
-    try { if (typeof calculatePayrollFromResultsTable === 'function') calculatePayrollFromResultsTable(); } catch (e) {}
+    try {
+      if (typeof calculatePayrollFromResultsTable === 'function') calculatePayrollFromResultsTable();
+      else if (typeof calculatePayrollFromRecords === 'function') calculatePayrollFromRecords();
+    } catch (e) {}
   });
 }
 
@@ -6523,7 +6612,10 @@ tabs.tabPayroll.addEventListener('click', () => {
   if (dtrStartEl && !weekStartEl.value) weekStartEl.value = dtrStartEl.value;
   if (dtrEndEl && !weekEndEl.value) weekEndEl.value = dtrEndEl.value;
   // Compute hours based on the current DTR table rather than recomputing from raw records
-  try { if (typeof calculatePayrollFromResultsTable === 'function') calculatePayrollFromResultsTable(); } catch (e) {}
+  try {
+    if (typeof calculatePayrollFromResultsTable === 'function') calculatePayrollFromResultsTable();
+    else if (typeof calculatePayrollFromRecords === 'function') calculatePayrollFromRecords();
+  } catch (e) {}
 });
 function backupData() {
   const data = {};
@@ -6555,7 +6647,7 @@ function restoreData(file) {
   };
   reader.readAsText(file);
 }
-// Legacy backup UI removed — replaced by enhanced Backup & Restore controls.
+// Legacy backup UI removed â€” replaced by enhanced Backup & Restore controls.
   </script>
  
 <!-- Manual DTR Modal -->
@@ -6622,7 +6714,7 @@ function restoreData(file) {
         storedRecords.push({ empId: String(empId), date: dateVal, time: timeVal });
         // Persist to localStorage
         localStorage.setItem(LS_RECORDS, JSON.stringify(storedRecords));
-        // Persist to Supabase for cross‑device sync
+        // Persist to Supabase for crossâ€‘device sync
         if (typeof saveDtrToCloud === 'function') saveDtrToCloud(storedRecords);
       } catch(e) { console.error('Saving manual DTR failed', e); }
       closeManualModal();
@@ -7170,7 +7262,7 @@ document.addEventListener('DOMContentLoaded', function(){
       var end = (document.getElementById('weekEnd') || {}).value || '';
       var hdr = 'Daily Time Records';
       if(start || end){
-        hdr += ' — ' + (start || '') + (end ? (' to ' + end) : '');
+        hdr += ' â€” ' + (start || '') + (end ? (' to ' + end) : '');
       }
       // Determine project filter text
       var filterSel = document.getElementById('filterProject');
@@ -7321,28 +7413,46 @@ document.addEventListener('DOMContentLoaded', function(){
   }
   window.updateDeductionsGrandTotals = updateDeductionsGrandTotals;
 
+  // Debounced scheduling for totals to avoid thrash during bulk updates
+  window.__suspendTotals = window.__suspendTotals || false;
+  window.__needsTotalsUpdate = window.__needsTotalsUpdate || false;
+  (function(){
+    var rafId = null;
+    function flush(){
+      rafId = null;
+      if (window.__suspendTotals) { window.__needsTotalsUpdate = true; return; }
+      try { updatePayrollGrandTotals(); } catch(e){}
+      try { updateDeductionsGrandTotals(); } catch(e){}
+    }
+    window.scheduleTotals = function(){
+      if (window.__suspendTotals) { window.__needsTotalsUpdate = true; return; }
+      if (rafId) return;
+      var raf = window.requestAnimationFrame || function(cb){ return setTimeout(cb, 16); };
+      rafId = raf(flush);
+    };
+  })();
+
   // Run on load
   function _initTotals(){
-    try{ updatePayrollGrandTotals(); }catch(e){}
-    try{ updateDeductionsGrandTotals(); }catch(e){}
+    try{ (window.scheduleTotals||updatePayrollGrandTotals)(); }catch(e){}
   }
   if (document.readyState === 'loading'){
     document.addEventListener('DOMContentLoaded', _initTotals);
   } else { _initTotals(); }
 
-  // Observe table changes to keep totals fresh
+  // Observe table changes to keep totals fresh (debounced)
   try {
-    var mo = new MutationObserver(function(){ try{updatePayrollGrandTotals();}catch(e){}; try{updateDeductionsGrandTotals();}catch(e){}; });
+    var mo = new MutationObserver(function(){ try{ (window.scheduleTotals||updatePayrollGrandTotals)(); }catch(e){} });
     var ptb = document.querySelector('#payrollTable tbody');
     var dtb = document.querySelector('#deductionsTable tbody');
     if (ptb) mo.observe(ptb, {childList:true, subtree:true, characterData:true});
     if (dtb) mo.observe(dtb, {childList:true, subtree:true, characterData:true});
   } catch(e){}
 
-  // Also recalc on payroll inputs
+  // Also recalc on payroll inputs (debounced)
   document.addEventListener('input', function(ev){
     if ((ev.target && ev.target.closest('#payrollTable'))) {
-      try{ updatePayrollGrandTotals(); }catch(e){}
+      try{ (window.scheduleTotals||updatePayrollGrandTotals)(); }catch(e){}
     }
   });
 
@@ -7350,13 +7460,22 @@ document.addEventListener('DOMContentLoaded', function(){
   try {
     var _calcAll = window.calculateAll;
     if (typeof _calcAll === 'function'){
-      window.calculateAll = function(){ var r = _calcAll.apply(this, arguments); try{updatePayrollGrandTotals();}catch(e){}; try{updateDeductionsGrandTotals();}catch(e){}; return r; };
+      window.calculateAll = function(){
+        var prev = window.__suspendTotals;
+        window.__suspendTotals = true;
+        try { var r = _calcAll.apply(this, arguments); return r; }
+        finally {
+          window.__suspendTotals = prev;
+          var need = window.__needsTotalsUpdate; window.__needsTotalsUpdate = false;
+          try { (window.scheduleTotals||updatePayrollGrandTotals)(); if (need) (window.scheduleTotals||updateDeductionsGrandTotals)(); } catch(e){}
+        }
+      };
     }
   } catch(e){}
   try {
     var _renderDed = window.renderDeductionsTable;
     if (typeof _renderDed === 'function'){
-      window.renderDeductionsTable = function(){ var r = _renderDed.apply(this, arguments); try{updateDeductionsGrandTotals();}catch(e){}; return r; };
+      window.renderDeductionsTable = function(){ var r = _renderDed.apply(this, arguments); try{ (window.scheduleTotals||updateDeductionsGrandTotals)(); }catch(e){}; return r; };
     }
   } catch(e){}
 
@@ -7604,7 +7723,7 @@ document.addEventListener('click', function(e) {
 </style>
 </head><body>
   <h2>Payslip</h2>
-  <div class="meta">${ws && we ? `Period: ${ws} – ${we}` : ''}</div>
+  <div class="meta">${ws && we ? `Period: ${ws} â€“ ${we}` : ''}</div>
 
   <table>
     <tr><th>Employee ID</th><td>${id}</td><th>Name</th><td>${name}</td></tr>
@@ -7752,7 +7871,7 @@ function loadSaved(){
       const table = document.getElementById('resultsTable');
       if (table && table.parentNode){
         const wrapper = document.createElement('div');
-        wrapper.innerHTML = '<div id="dtrDateControls" style="display:flex;gap:.75rem;align-items:center;flex-wrap:wrap;margin:8px 0;"><label style="display:flex;align-items:center;gap:.35rem;"><span>Date:</span><input id="dtrDateFrom" type="date" /></label><span>—</span><label><input id="dtrDateTo" type="date" /></label><button id="dtrDateClear" type="button">Clear</button></div>';
+        wrapper.innerHTML = '<div id="dtrDateControls" style="display:flex;gap:.75rem;align-items:center;flex-wrap:wrap;margin:8px 0;"><label style="display:flex;align-items:center;gap:.35rem;"><span>Date:</span><input id="dtrDateFrom" type="date" /></label><span>â€”</span><label><input id="dtrDateTo" type="date" /></label><button id="dtrDateClear" type="button">Clear</button></div>';
         table.parentNode.insertBefore(wrapper.firstElementChild, table);
       }
     }
@@ -7971,7 +8090,7 @@ function loadSaved(){
       weeks.forEach(w=>{
         const opt = document.createElement('option');
         opt.value = w.key;
-        opt.textContent = `${w.start} → ${w.end}`;
+        opt.textContent = `${w.start} â†’ ${w.end}`;
         sel.appendChild(opt);
       });
       if (weeks.length){
@@ -8144,7 +8263,7 @@ function updateWeekInputs(snap) {
   try { if (typeof renderResults === 'function') { renderResults(); } } catch (e) {}
 
   // Recalculate payroll if available, deriving hours from the DTR results table
-  try { if (typeof calculatePayrollFromResultsTable === 'function') { calculatePayrollFromResultsTable(); } } catch (e) {}
+  try { if (typeof calculatePayrollFromResultsTable === 'function') { calculatePayrollFromResultsTable(); } else if (typeof calculatePayrollFromRecords === 'function') { calculatePayrollFromRecords(); } } catch (e) {}
 
   // After updating the week range, toggle editing state based on whether the
   // selected period is locked. Without this, switching between periods would
@@ -8173,7 +8292,7 @@ function updateWeekInputs(snap) {
       items.forEach(item => {
         const opt = document.createElement('option');
         opt.value = String(item.i);
-        opt.textContent = `${item.startDate || ''} — ${item.endDate || ''}${item.locked ? ' (locked)' : ''}`;
+        opt.textContent = `${item.startDate || ''} â€” ${item.endDate || ''}${item.locked ? ' (locked)' : ''}`;
         selectEl.appendChild(opt);
       });
       // Always set the selected value to the saved active index so all selectors stay in sync
@@ -8374,7 +8493,7 @@ function updateWeekInputs(snap) {
   function attachCashAdvanceHandlers() {
     // Handle original amount changes
     document.querySelectorAll('.cashOrig').forEach(inp => {
-      // Update the in‑memory values on every keystroke but defer re‑rendering
+      // Update the inâ€‘memory values on every keystroke but defer reâ€‘rendering
       inp.addEventListener('input', () => {
         const id = inp.getAttribute('data-id');
         const val = parseFloat(inp.value);
@@ -8389,7 +8508,7 @@ function updateWeekInputs(snap) {
         localStorage.setItem(LS_CASH_ORIG, JSON.stringify(cashOrig));
         localStorage.setItem(LS_CASH_BAL, JSON.stringify(cashBal));
         // Do not call renderCashAdvanceTable() here; this would rebuild the table
-        // on every keystroke and cause the input to lose focus.  Re‑render on blur instead.
+        // on every keystroke and cause the input to lose focus.  Reâ€‘render on blur instead.
       });
       // When the user finishes editing (on blur/change), rebuild the table so buttons/labels refresh
       inp.addEventListener('change', () => {
@@ -8398,7 +8517,7 @@ function updateWeekInputs(snap) {
     });
     // Handle deduction changes
     document.querySelectorAll('.cashDed').forEach(inp => {
-      // Update the deduction and recalculate totals on each keystroke but do not re‑render
+      // Update the deduction and recalculate totals on each keystroke but do not reâ€‘render
       inp.addEventListener('input', () => {
         const id = inp.getAttribute('data-id');
         const val = parseFloat(inp.value);
@@ -8489,9 +8608,9 @@ function updateWeekInputs(snap) {
      DTR Cloud Persistence with Supabase
 
      The payroll application originally stored uploaded DTR records exclusively
-     in localStorage.  Browsers typically limit localStorage to about 5 MB,
+     in localStorage.  Browsers typically limit localStorage to about 5Â MB,
      which can be quickly exceeded when importing large attendance files.  To
-     provide true cross‑device persistence and remove the size constraint,
+     provide true crossâ€‘device persistence and remove the size constraint,
      the functions below save and load the DTR dataset via Supabase.  They
      expect a table named `dtr_records` in your Supabase database with the
      following schema:
@@ -8596,7 +8715,7 @@ function showRemoteDtrAlert(msg){
   const el = document.getElementById('remoteDtrAlert');
   if (!el) return;
   // Prefix the message with a warning symbol for emphasis
-  el.textContent = `⚠ ${msg}`;
+  el.textContent = `âš  ${msg}`;
   el.style.display = '';
 }
 function hideRemoteDtrAlert(){
@@ -8615,7 +8734,7 @@ document.addEventListener('DOMContentLoaded', async function () {
   try {
     const remote = await loadDtrFromCloud();
     if (Array.isArray(remote) && remote.length) {
-      // When remote data is available, replace the in‑memory dataset.  We
+      // When remote data is available, replace the inâ€‘memory dataset.  We
       // deliberately overwrite both the local variable and the global
       // window.storedRecords to ensure all modules reference the same
       // canonical source of truth.  Persist into localStorage as an
@@ -8669,12 +8788,12 @@ document.addEventListener('DOMContentLoaded', async function () {
     const backupBtn = document.createElement('button');
     backupBtn.id = 'backupNowBtn';
     backupBtn.type = 'button';
-    backupBtn.textContent = '🔒 Backup Now';
+    backupBtn.textContent = 'ðŸ”’ Backup Now';
     backupBtn.style.cursor = 'pointer';
     const testBtn = document.createElement('button');
     testBtn.id = 'testRestoreBtn';
     testBtn.type = 'button';
-    testBtn.textContent = '🧪 Test Restore (Dry Run)';
+    testBtn.textContent = 'ðŸ§ª Test Restore (Dry Run)';
     testBtn.style.cursor = 'pointer';
     const restoreBtn = document.createElement('button');
     restoreBtn.id = 'restoreBundleBtn';
@@ -8684,7 +8803,7 @@ document.addEventListener('DOMContentLoaded', async function () {
     const healthBtn = document.createElement('button');
     healthBtn.id = 'healthCheckBtn';
     healthBtn.type = 'button';
-    healthBtn.textContent = '🩺 Health Check';
+    healthBtn.textContent = 'ðŸ©º Health Check';
     healthBtn.style.cursor = 'pointer';
     const restoreInput = document.createElement('input');
     restoreInput.id = 'restoreFileInput';
@@ -8731,7 +8850,7 @@ document.addEventListener('DOMContentLoaded', async function () {
       if (logEl.style.display === 'none') logEl.style.display = 'block';
       const div = document.createElement('div');
       const now = new Date();
-      div.textContent = now.toLocaleTimeString() + ' — ' + msg;
+      div.textContent = now.toLocaleTimeString() + ' â€” ' + msg;
       logEl.appendChild(div);
       logEl.scrollTop = logEl.scrollHeight;
     }
@@ -8803,8 +8922,8 @@ document.addEventListener('DOMContentLoaded', async function () {
         a.click();
         a.remove();
         URL.revokeObjectURL(url);
-        setStatus('Backup complete ✓  (KV: ' + kvRes.count + ', DTR: ' + (dtrRes.rows || []).length + ')');
-        logMsg('Backup complete — SHA256: ' + hash);
+        setStatus('Backup complete âœ“  (KV: ' + kvRes.count + ', DTR: ' + (dtrRes.rows || []).length + ')');
+        logMsg('Backup complete â€” SHA256: ' + hash);
       } catch(e){
         console.error(e);
         setStatus('Backup failed: ' + e.message, true);
@@ -8830,8 +8949,8 @@ document.addEventListener('DOMContentLoaded', async function () {
         if (declared && declared !== recompute){ setStatus('Hash mismatch', true); throw new Error('Hash mismatch'); }
         const keys = Array.isArray(bundle.kv_keys) ? bundle.kv_keys : [];
         const dtrRows = (bundle.dtr && Array.isArray(bundle.dtr.rows)) ? bundle.dtr.rows : [];
-        logMsg('Bundle valid — KV keys: ' + keys.length + ', DTR rows: ' + dtrRows.length);
-        if (opts && opts.dryRun){ setStatus('Dry run passed ✓'); logMsg('No writes performed'); alert('Dry run OK — no data written.'); return; }
+        logMsg('Bundle valid â€” KV keys: ' + keys.length + ', DTR rows: ' + dtrRows.length);
+        if (opts && opts.dryRun){ setStatus('Dry run passed âœ“'); logMsg('No writes performed'); alert('Dry run OK â€” no data written.'); return; }
         // Upsert KV to Supabase
         if (supabase && keys.length){
           try {
@@ -8863,7 +8982,7 @@ document.addEventListener('DOMContentLoaded', async function () {
           if (typeof renderDeductionsTable === 'function') renderDeductionsTable();
           if (typeof renderTable === 'function') renderTable();
         } catch(e){}
-        setStatus('Restore complete ✓ (KV: ' + keys.length + ', DTR: ' + dtrRows.length + ')');
+        setStatus('Restore complete âœ“ (KV: ' + keys.length + ', DTR: ' + dtrRows.length + ')');
         logMsg('Restore complete');
         alert('Restore complete.');
       } catch(e){
@@ -8877,7 +8996,7 @@ document.addEventListener('DOMContentLoaded', async function () {
     }
     async function healthCheck(){
       lockUI(true); clearLog();
-      setStatus('Running health check…');
+      setStatus('Running health checkâ€¦');
       logMsg('Checking KV table, DTR table, and Storage bucket');
       const results = { kv:false, dtr:false, storage:false };
       try {
@@ -8895,7 +9014,7 @@ document.addEventListener('DOMContentLoaded', async function () {
         } else { logMsg('Supabase storage client not available'); }
       } catch(e){ logMsg('Storage exception: ' + e.message); }
       const summary = 'KV: ' + (results.kv?'OK':'Issue') + ' | DTR: ' + (results.dtr?'OK':'Issue') + ' | Storage: ' + (results.storage?'OK':'Issue');
-      setStatus('Health check done — ' + summary, !(results.kv && results.dtr));
+      setStatus('Health check done â€” ' + summary, !(results.kv && results.dtr));
       lockUI(false);
     }
     // Attach event listeners
@@ -9530,5 +9649,32 @@ document.addEventListener('DOMContentLoaded', async function () {
   } else { init(); }
 })();
 </script>
+<!-- Remove Payroll backup/test/restore/health UI -->
+<style>
+  #backupNowBtn,
+  #testRestoreBtn,
+  #restoreBundleBtn,
+  #healthCheckBtn,
+  #backupLog,
+  #backupStatus { display: none !important; }
+  /* Also hide the extra spacing wrapper if left behind */
+  #panelPayroll header > div:has(#backupNowBtn) { display: none !important; }
+</style>
+<script>
+  (function(){
+    function removeBackupUI(){
+      try {
+        var btn = document.getElementById('backupNowBtn');
+        if (btn && btn.parentElement) { btn.parentElement.remove(); }
+        var log = document.getElementById('backupLog'); if (log) log.remove();
+      } catch(e){}
+    }
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', removeBackupUI, { once:true });
+    } else {
+      removeBackupUI();
+    }
+  })();
+  </script>
 </body>
 </html>
