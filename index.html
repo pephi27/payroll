@@ -177,6 +177,14 @@ function safeStringify(v){
 <!-- === / Supabase KV Sync Adapter === -->
 
 <!-- Multi payslip printing functionality -->
+
+<script>
+// Safe print helper to avoid uncaught errors like
+// "Failed to execute 'print' on 'Window': The provided callback is no longer runnable."
+function safePrint(win){
+  try { (win || window).print(); } catch(e){ console.warn('print failed', e); }
+}
+</script>
 <script>
 document.addEventListener('DOMContentLoaded', function() {
   var multiBtn = document.getElementById('printAllPayslipsBtn');
@@ -261,7 +269,7 @@ h3{margin:6px 0 8px 0;}
     var w = window.open('', '', 'width=800,height=900');
     if (!w) return;
     w.document.open(); w.document.write(html); w.document.close();
-    w.focus(); setTimeout(function(){ try { w.print(); } catch(e){} }, 0);
+    w.focus(); setTimeout(function(){ try { safePrint(w); } catch(e){} }, 0);
   });
 });
 </script>
@@ -3159,7 +3167,7 @@ document.addEventListener('DOMContentLoaded', function(){
     w.document.write('</body></html>');
     w.document.close();
     w.focus();
-    w.print();
+    safePrint(w);
     // Optionally close after printing (comment out if you don't want auto-close)
     // w.close();
   });
@@ -4527,7 +4535,7 @@ document.addEventListener('DOMContentLoaded', () => {
       });
     }
 
-    $('#r_print')?.addEventListener('click', ()=> window.print());
+    $('#r_print')?.addEventListener('click', ()=> safePrint());
     $('#r_csv')?.addEventListener('click', exportCSVAll);const dtr = document.getElementById('resultsTable');
     if (dtr && 'MutationObserver' in window){
       const mo = new MutationObserver(()=> { buildTable(); });
@@ -6917,7 +6925,7 @@ document.addEventListener('DOMContentLoaded', () => {
 <script>
 document.addEventListener('DOMContentLoaded', function(){
   var btn = document.getElementById('printProjectTotalsBtn');
-  if (btn) btn.addEventListener('click', function(){ window.print(); });
+  if (btn) btn.addEventListener('click', function(){ safePrint(); });
 });
 </script>
 
@@ -7019,7 +7027,7 @@ document.addEventListener('DOMContentLoaded', function(){
       w.document.write('</body></html>');
       w.document.close();
       w.focus();
-      w.print();
+      safePrint(w);
     }catch(err){
       alert('Unable to print DTR: ' + err);
     }
@@ -7459,7 +7467,7 @@ document.addEventListener('click', function(e) {
   try{ w.document.title = ' '; }catch(e){}
   w.document.close();
   w.focus();
-  try{ w.print(); }catch(e){}
+  try{ safePrint(w); }catch(e){}
 });
 var LS_FROM = (typeof window.LS_FROM !== 'undefined') ? window.LS_FROM : 'dtrDateFrom';
 var LS_TO   = (typeof window.LS_TO   !== 'undefined') ? window.LS_TO   : 'dtrDateTo';
@@ -9283,7 +9291,7 @@ document.addEventListener('DOMContentLoaded', async function () {
       try{ w.document.title = ' '; }catch(e){}
       w.document.close();
       w.focus();
-      setTimeout(function(){ try{ w.print(); }catch(e){} }, 0);
+      setTimeout(function(){ try{ safePrint(w); }catch(e){} }, 0);
     }catch(e){ console.warn('Clean print failed', e); }
   }
 
