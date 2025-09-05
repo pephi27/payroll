@@ -275,22 +275,30 @@ document.addEventListener('DOMContentLoaded', function() {
       var n = parseFloat((x||'').toString().replace(/,/g,''));
       return (!isNaN(n) && n === 0) ? '-' : (x||'');
     }
+    function toNum(x){ var n = parseFloat(String(x||'').replace(/,/g,'')); return isNaN(n) ? 0 : n; }
+    function fmt(x){ var n = toNum(x); return n.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2}); }
     var html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>All Payslips</title>
 <style>
-body{font-family:Arial,Helvetica,sans-serif;margin:0;padding:10px;}
-.payslip-grid{display:flex;flex-wrap:wrap;gap:10px;}
-.payslip{width:50%;box-sizing:border-box;padding:10px;border:1px solid #e2e8f0;}
-table{border-collapse:collapse;width:100%;font-size:12px;}
-th,td{border:1px solid #e2e8f0;padding:4px;text-align:left;}
+@page { size: letter portrait; margin: 0.25in; }
+html, body { width: 8.5in; height: 11in; margin: 0; }
+body{font-family:Arial,Helvetica,sans-serif;margin:0;padding:0 0.1in;}
+/* 12 per page: 3 columns x 4 rows, compact spacing */
+.payslip-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:0.03in;}
+.payslip{box-sizing:border-box;padding:0.06in;border:1px solid #e2e8f0;height:2.6in;overflow:hidden;border-radius:3px;background:#fff;}
+table{border-collapse:collapse;width:100%;font-size:8.5px;}
+th,td{border:1px solid #e2e8f0;padding:1px;text-align:left;}
 th{background:#f1f5f9;}
-.page-break{page-break-after:always;}
-h3{margin:6px 0 8px 0;}
+.page-break{page-break-after:always;break-after:page;}
+h3{margin:0 0 3px 0;font-size:10px;}
+.payslip .meta{margin:0 0 2px 0;font-size:8px;line-height:1.15;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
 </style></head><body><div class="payslip-grid">`;
     rows.forEach(function(row, idx){
       var id = (row.cells[0]?.textContent || '').trim();
       var name = (row.cells[1]?.textContent || '').trim();
       var reg = gv(row, '.regHrs','value');
       var ot = gv(row, '.otHrs','value');
+      var adjHrsTxt = gv(row, '.adjHrs','textContent');
+      var totHrs = gv(row, '.totalHrs','textContent');
       var rate = gv(row, '.rate','value');
       var regPay = gv(row, '.regPay','textContent');
       var otPay = gv(row, '.otPay','textContent');
@@ -302,35 +310,45 @@ h3{margin:6px 0 8px 0;}
       var piLoan = gv(row, '.loanPI','value');
       var v = gv(row, '.vale','value');
       var vW = gv(row, '.valeWed','value') || gv(row, '.valeWed','textContent');
+      var bantay = gv(row, '.bantay','value');
       var adj = gv(row, '.adjAmt','textContent');
       var total = gv(row, '.totalDed','textContent');
       var net = gv(row, '.netPay','textContent');
+      // Fallback compute for total hours if cell not available
+      if (!totHrs) {
+        var r = parseFloat((reg||'').toString().replace(/,/g,''))||0;
+        var o = parseFloat((ot||'').toString().replace(/,/g,''))||0;
+        var ah = parseFloat((adjHrsTxt||'').toString().replace(/,/g,''))||0;
+        totHrs = (r + o + ah).toFixed(2);
+      }
+      // Build deductions rows only when values are present (> 0)
+      var dedRows = '';
+      function addDed(label, val){ if (toNum(val) > 0) { dedRows += `<tr><td>${label}</td><td>${fmt(val)}</td></tr>`; } }
+      addDed('Pag-IBIG', pagibig);
+      addDed('PhilHealth', philhealth);
+      addDed('SSS', sss);
+      addDed('SSS Loan', sssLoan);
+      addDed('Pag-IBIG Loan', piLoan);
+      addDed('Vale', v);
+      addDed('Wed Vale', vW);
+
       html += `<div class="payslip">
         <h3>Payslip</h3>
-        <p><strong>Employee ID:</strong> ${id}</p>
-        <p><strong>Name:</strong> ${name}</p>
-        <p><strong>Period:</strong> ${ws}${we ? (' to ' + we) : ''}</p>
+        <p class="meta"><strong>Employee ID:</strong> ${id}</p>
+        <p class="meta"><strong>Name:</strong> ${name}</p>
+        <p class="meta"><strong>Period:</strong> ${ws}${we ? (' to ' + we) : ''}</p>
         <table>
-          <tr><th>Description</th><th>Value</th></tr>
-          <tr><td>Regular Hours</td><td>${d(reg)}</td></tr>
-          <tr><td>OT Hours</td><td>${d(ot)}</td></tr>
-          <tr><td>Hourly Rate</td><td>${d(rate)}</td></tr>
-          <tr><td>Regular Pay</td><td>${d(regPay)}</td></tr>
-          <tr><td>OT Pay</td><td>${d(otPay)}</td></tr>
-          <tr><td>Gross Pay</td><td>${d(gross)}</td></tr>
-          <tr><td>Pag-IBIG</td><td>${d(pagibig)}</td></tr>
-          <tr><td>PhilHealth</td><td>${d(philhealth)}</td></tr>
-          <tr><td>SSS</td><td>${d(sss)}</td></tr>
-          <tr><td>SSS Loan</td><td>${d(sssLoan)}</td></tr>
-          <tr><td>Pag-IBIG Loan</td><td>${d(piLoan)}</td></tr>
-          <tr><td>Vale</td><td>${d(v)}</td></tr>
-          <tr><td>Wed Vale</td><td>${d(vW)}</td></tr>
-          <tr><td>Adjustments</td><td>${d(adj)}</td></tr>
-          <tr><td>Total Deductions</td><td>${d(total)}</td></tr>
+          <tr><th>Description</th><th>Amount</th></tr>
+          <tr><td>Total Hours</td><td>${d(totHrs)}</td></tr>
+          ${toNum(bantay)!==0 ? `<tr><td>Bantay</td><td>${fmt(bantay)}</td></tr>` : ''}
+          ${toNum(adj)!==0 ? `<tr><td>Adjustments</td><td>${fmt(adj)}</td></tr>` : ''}
+          <tr><td>Gross Amount</td><td>${d(gross)}</td></tr>
+          ${dedRows}
+          ${toNum(total)>0 ? `<tr><td>Total Deductions</td><td>${fmt(total)}</td></tr>` : ''}
           <tr><th>Net Pay</th><th>${d(net)}</th></tr>
         </table>
       </div>`;
-      if ((idx + 1) % 4 === 0 && idx !== rows.length - 1) {
+      if ((idx + 1) % 12 === 0 && idx !== rows.length - 1) {
         html += `</div><div class="page-break"></div><div class="payslip-grid">`;
       }
     });
@@ -1014,8 +1032,7 @@ window.addEventListener('load', dashReports);
   .sidebar .logo::before { content: "💰 PayrollHub"; font-size: 24px; }
 
   /* Page title icon */
-  .page-title > span:first-child { font-size: 0; }
-  .page-title > span:first-child::before { content: "📊"; font-size: 32px; }
+  .page-title > span:first-child { font-size: 0; } .page-title > span:first-child::before { content: "📊"; font-size: 32px; } .page-title > span.icon-emoji { font-size: 32px !important; } .page-title > span.icon-emoji::before { content: none !important; }
 
   /* Warning note text */
   .warning-note { font-size: 0; }
@@ -1311,7 +1328,7 @@ window.addEventListener('load', dashReports);
     <span>Date:</span>
     <input id="dtrDateFrom" type="date" />
   </label>
-  <span>â€”</span>
+  <span>-</span>
   <label>
     <input id="dtrDateTo" type="date" />
   </label>
@@ -1652,14 +1669,6 @@ window.addEventListener('load', dashReports);
    </table>
   </section>
   <section class="panel" id="panelPayroll">
-<!-- Active Payroll selector (non-dashboard) -->
-<div class="active-week-bar" style="display:flex;gap:8px;align-items:center;margin:10px 0;">
-  <label><strong>Payroll:</strong>
-    <select class="activeWeekSelect"></select>
-  </label>
-  <button type="button" class="refreshActiveWeek">Apply</button>
-</div>
-
    <div id="payrollWrapper">
     <header>
      <h2>
@@ -4129,7 +4138,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // Set title with lock info
     if (titleEl) {
       const lockedInfo = snap.lockedAt ? ` (Locked ${new Date(snap.lockedAt).toLocaleString()})` : '';
-      titleEl.textContent = `Payroll Details: ${snap.startDate || ''} â€” ${snap.endDate || ''}${lockedInfo}`;
+      titleEl.textContent = `Payroll Details: ${snap.startDate || ''} - ${snap.endDate || ''}${lockedInfo}`;
     }
     // Hide dashboard tables and controls
     if (activeTable) activeTable.style.display = 'none';
@@ -4545,7 +4554,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
       const totalCols = 2 + (dates.length*2) + 4;
       const hint = $('#r_range_hint');
-      if (hint) hint.textContent = `Range: ${from} â€” ${to}`;
+      if (hint) hint.textContent = `Range: ${from} - ${to}`;
 
       // THEAD
       let thead1 = `<tr><th class="left" rowspan="2">PERSONNEL</th><th rowspan="2">RATE</th>`;
@@ -4807,19 +4816,37 @@ rows += `<tr class="totals">
     </div>
     <!-- Sidebar navigation behaviour -->
     <script>
-    document.querySelectorAll('.nav-link').forEach(function(link){
+    (function(){
+      const ICONS = {
+        dashboard: '📊',
+        dtr: '🕒',
+        schedules: '🗓️',
+        employees: '👥',
+        projects: '🚀',
+        payroll: '💰',
+        totals: '📈'
+      };
+      function setTitleFrom(btn){
+        try{
+          const pg = btn && (btn.dataset.page || btn.getAttribute('data-page')) || '';
+          const label = (btn.textContent || '').replace(/^[^A-Za-z0-9]+/,'').trim();
+          const icon = ICONS[pg] || '📊';
+          const title = document.querySelector('.page-title');
+          if (title){ title.innerHTML = '<span class="icon-emoji" style="font-size:32px">'+icon+'</span> ' + label; }
+        }catch(_){}
+      }
+      document.querySelectorAll('.nav-link').forEach(function(link){
         link.addEventListener('click', function(e){
-            e.preventDefault();
-            document.querySelectorAll('.nav-link').forEach(function(l){ l.classList.remove('active'); });
-            this.classList.add('active');
-            var icon = this.querySelector('.nav-icon').textContent;
-            var text = this.textContent.trim();
-            var pageTitle = document.querySelector('.page-title');
-            if(pageTitle){
-                pageTitle.innerHTML = '<span style="font-size: 32px;">' + icon + '</span> ' + text;
-            }
+          e.preventDefault();
+          document.querySelectorAll('.nav-link').forEach(function(l){ l.classList.remove('active'); });
+          this.classList.add('active');
+          setTitleFrom(this);
         });
-    });
+      });
+      // Initial set from the currently active tab
+      const active = document.querySelector('.nav-link.active');
+      if (active) setTitleFrom(active);
+    })();
     function toggleSidebar(){
         var sidebar = document.getElementById('sidebar');
         if(sidebar) sidebar.classList.toggle('active');
@@ -6146,13 +6173,13 @@ const trSeg = document.createElement('tr');
     const scheduleName = storedSchedules[scheduleIdForEmp] ? storedSchedules[scheduleIdForEmp].name + (scheduleIdForEmp===defaultScheduleId ? ' (Default)' : '') : '';
     const projectName = (empProjId && storedProjects[empProjId]) ? storedProjects[empProjId].name : (emp && !emp.projectId ? '' : '');
 
-    const cell = (v) => v ? '<td>' + __fmt12Clock(v) + '</td>' : '<td class="missing">â€”</td>';
+    const cell = (v) => v ? '<td>' + __fmt12Clock(v) + '</td>' : '<td class="missing">-</td>';
     const tr = document.createElement('tr');
     tr.innerHTML =
       '<td>'+empId+'</td><td>'+name+'</td><td>'+projectName+'</td><td>'+scheduleName+'</td><td>'+date+'</td>' +
       cell(amInActual) + cell(amOutActual) + cell(pmInActual) + cell(pmOutActual) +
-      (otInCalc ? '<td>' + __fmt12Clock(otInCalc) + '</td>' : '<td class=\"missing\">â€”</td>') +
-      (otOutCalc ? '<td>' + __fmt12Clock(otOutCalc) + '</td>' : '<td class=\"missing\">â€”</td>') +
+      (otInCalc ? '<td>' + __fmt12Clock(otInCalc) + '</td>' : '<td class=\"missing\">-</td>') +
+      (otOutCalc ? '<td>' + __fmt12Clock(otOutCalc) + '</td>' : '<td class=\"missing\">-</td>') +
       '<td>'+totalRegularDecimal+'</td><td>'+otDecimal+'</td>' +
       // Use a named handler with a data-key attribute instead of an inline IIFE.
       '<td><button type="button" class="btn-split" data-key="' + empId + '___' + date + '" onclick="splitRecord(this.dataset.key)">Split</button></td>';
@@ -7262,7 +7289,7 @@ document.addEventListener('DOMContentLoaded', function(){
       var end = (document.getElementById('weekEnd') || {}).value || '';
       var hdr = 'Daily Time Records';
       if(start || end){
-        hdr += ' â€” ' + (start || '') + (end ? (' to ' + end) : '');
+      hdr += ' - ' + (start || '') + (end ? (' to ' + end) : '');
       }
       // Determine project filter text
       var filterSel = document.getElementById('filterProject');
@@ -7723,7 +7750,7 @@ document.addEventListener('click', function(e) {
 </style>
 </head><body>
   <h2>Payslip</h2>
-  <div class="meta">${ws && we ? `Period: ${ws} â€“ ${we}` : ''}</div>
+  <div class="meta">${ws && we ? `Period: ${ws} - ${we}` : ''}</div>
 
   <table>
     <tr><th>Employee ID</th><td>${id}</td><th>Name</th><td>${name}</td></tr>
@@ -7871,7 +7898,7 @@ function loadSaved(){
       const table = document.getElementById('resultsTable');
       if (table && table.parentNode){
         const wrapper = document.createElement('div');
-        wrapper.innerHTML = '<div id="dtrDateControls" style="display:flex;gap:.75rem;align-items:center;flex-wrap:wrap;margin:8px 0;"><label style="display:flex;align-items:center;gap:.35rem;"><span>Date:</span><input id="dtrDateFrom" type="date" /></label><span>â€”</span><label><input id="dtrDateTo" type="date" /></label><button id="dtrDateClear" type="button">Clear</button></div>';
+      wrapper.innerHTML = '<div id="dtrDateControls" style="display:flex;gap:.75rem;align-items:center;flex-wrap:wrap;margin:8px 0;"><label style="display:flex;align-items:center;gap:.35rem;"><span>Date:</span><input id="dtrDateFrom" type="date" /></label><span>-</span><label><input id="dtrDateTo" type="date" /></label><button id="dtrDateClear" type="button">Clear</button></div>';
         table.parentNode.insertBefore(wrapper.firstElementChild, table);
       }
     }
@@ -8090,7 +8117,7 @@ function loadSaved(){
       weeks.forEach(w=>{
         const opt = document.createElement('option');
         opt.value = w.key;
-        opt.textContent = `${w.start} â†’ ${w.end}`;
+        opt.textContent = `${w.start} - ${w.end}`;
         sel.appendChild(opt);
       });
       if (weeks.length){
@@ -8292,7 +8319,7 @@ function updateWeekInputs(snap) {
       items.forEach(item => {
         const opt = document.createElement('option');
         opt.value = String(item.i);
-        opt.textContent = `${item.startDate || ''} â€” ${item.endDate || ''}${item.locked ? ' (locked)' : ''}`;
+        opt.textContent = `${item.startDate || ''} - ${item.endDate || ''}${item.locked ? ' (locked)' : ''}`;
         selectEl.appendChild(opt);
       });
       // Always set the selected value to the saved active index so all selectors stay in sync
@@ -9678,3 +9705,4 @@ document.addEventListener('DOMContentLoaded', async function () {
   </script>
 </body>
 </html>
+
