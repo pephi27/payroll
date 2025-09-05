@@ -111,6 +111,7 @@ const KNOWN_KEYS = [
   ,"payroll_philhealth_table"
   ,"payroll_adjustment_hours"
   ,"payroll_bantay"
+  ,"payroll_bantay_proj"
   ,"payroll_contrib_flags"
   ,"att_overrides_hours_v1"
 ]
@@ -1275,14 +1276,196 @@ window.addEventListener('load', dashReports);
    <div class="controls" style="margin-top:8px;">
      <button id="diffBtn">Diff Selected</button>
    </div>
-   <!-- Detail view for locked payroll snapshots. Hidden by default and shown when a user clicks Open/View on a history row. -->
-   <div id="snapshotDetailsScreen" style="display:none; margin-top:12px;">
+
+   <!-- Full Backup & Restore (Dashboard) -->
+   <h4 style="margin-top:18px">Full Backup & Restore</h4>
+   <div class="controls" id="dashBackupControls" style="gap:8px; align-items:center; flex-wrap:wrap;">
+     <button id="dashBackupNow" class="primary" type="button">Backup Now</button>
+     <button id="dashRestoreFile" type="button">Restore From File</button>
+     <input id="dashRestoreInput" type="file" accept=".json" style="display:none" />
+     <button id="dashListCloud" type="button">List Cloud Backups</button>
+     <select id="dashCloudList" style="min-width:260px"></select>
+     <button id="dashRestoreCloud" type="button">Restore Selected</button>
+     <span id="dashBackupStatus" style="font-size:12px;color:#334155"></span>
+   </div>
+   <div id="dashBackupLog" style="display:none;margin:8px 0;padding:10px;border:1px solid #e5e7eb;background:#fff;border-radius:8px;font-size:12px;color:#111;line-height:1.35;max-width:920px;"></div>
+  <!-- Detail view for locked payroll snapshots. Hidden by default and shown when a user clicks Open/View on a history row. -->
+  <div id="snapshotDetailsScreen" style="display:none; margin-top:12px;">
      <h4 id="snapshotDetailTitle"></h4>
      <div id="snapshotPayrollContainer" style="margin-bottom:16px;"></div>
      <div id="snapshotDTRContainer"></div>
      <button id="snapshotBackButton" type="button" style="margin-top:12px;">Back</button>
-   </div>
+  </div>
   </section>
+
+  <script>
+  // === Dashboard Full Backup & Restore ===
+  (function(){
+    const statusEl = document.getElementById('dashBackupStatus');
+    const logEl = document.getElementById('dashBackupLog');
+    const btnBackup = document.getElementById('dashBackupNow');
+    const btnRestoreFile = document.getElementById('dashRestoreFile');
+    const inputRestore = document.getElementById('dashRestoreInput');
+    const btnList = document.getElementById('dashListCloud');
+    const selCloud = document.getElementById('dashCloudList');
+    const btnRestoreCloud = document.getElementById('dashRestoreCloud');
+    if(!btnBackup || !btnRestoreFile || !inputRestore || !btnList || !selCloud || !btnRestoreCloud) return;
+
+    const supa = window.supabase || null;
+    const KV_TABLE = window.SUPABASE_TABLE || 'kv_store';
+    const DTR_TABLE = 'dtr_records';
+    const BUCKET = 'backups';
+
+    function setStatus(msg, isError){ if(statusEl){ statusEl.textContent = msg; statusEl.style.color = isError?'#b91c1c':'#334155'; } }
+    function log(msg){ try{ logEl.style.display='block'; const d=document.createElement('div'); d.textContent=msg; logEl.appendChild(d);}catch(e){} }
+    function clearLog(){ try{ logEl.innerHTML=''; logEl.style.display='none'; }catch(e){} }
+    function tryJSON(v){ try{ return JSON.parse(v); }catch{ return v; } }
+
+    async function fetchKVAll(){
+      if(!supa) return { rows:[], error:'No Supabase client' };
+      try{
+        const { data, error } = await supa.from(KV_TABLE).select('key,value');
+        return { rows: data||[], error: error? error.message : null };
+      }catch(e){ return { rows:[], error: String(e) } }
+    }
+    async function fetchDTR(){
+      if(!supa) return { rows:[], error:'No Supabase client' };
+      try{
+        const { data, error } = await supa.from(DTR_TABLE).select('*').limit(1);
+        if(error) return { rows:[], error: error.message };
+        // Support schemas {id, data} or flat arrays
+        if(Array.isArray(data) && data.length){
+          const row = data[0];
+          if(row && Array.isArray(row.data)) return { rows: row.data, error:null };
+        }
+        return { rows:[], error:null };
+      }catch(e){ return { rows:[], error:String(e) } }
+    }
+
+    function snapshotLocalStorage(){
+      const kv = {};
+      try{
+        for(let i=0;i<localStorage.length;i++){
+          const k = localStorage.key(i);
+          if(!k || k.startsWith('__') || k.startsWith('vscode')) continue;
+          kv[k] = tryJSON(localStorage.getItem(k));
+        }
+      }catch(e){}
+      return kv;
+    }
+
+    async function buildBundle(){
+      clearLog(); setStatus('Building backup...', false);
+      const ls = snapshotLocalStorage();
+      log('Collected localStorage keys: ' + Object.keys(ls).length);
+      const kvRes = await fetchKVAll(); if(kvRes.error) log('KV fetch warning: ' + kvRes.error); else log('KV rows: ' + kvRes.rows.length);
+      const dtrRes = await fetchDTR(); if(dtrRes.error) log('DTR fetch warning: ' + dtrRes.error); else log('DTR rows: ' + dtrRes.rows.length);
+      const bundle = {
+        schema: 'payrollhub.full.v1',
+        created_at: new Date().toISOString(),
+        localStorage: ls,
+        kv: kvRes.rows||[],
+        dtr: dtrRes.rows||[]
+      };
+      return bundle;
+    }
+
+    async function uploadBundleToCloud(bundle){
+      if(!supa || !supa.storage){ log('No Supabase storage client'); return null; }
+      try{
+        const json = JSON.stringify(bundle);
+        const name = 'full_backup_' + new Date().toISOString().replace(/[:.]/g,'_') + '.json';
+        const { error } = await supa.storage.from(BUCKET).upload(name, new Blob([json],{type:'application/json'}));
+        if(error){ log('Upload failed: ' + error.message); return null; }
+        log('Uploaded to storage: ' + name);
+        return name;
+      }catch(e){ log('Upload failed: ' + String(e)); return null; }
+    }
+
+    async function listCloud(){
+      if(!supa || !supa.storage){ setStatus('No Supabase storage', true); return; }
+      try{
+        const { data, error } = await supa.storage.from(BUCKET).list('', { limit: 100 });
+        if(error){ setStatus('List failed: ' + error.message, true); return; }
+        selCloud.innerHTML='';
+        (data||[]).sort((a,b)=> (b.created_at||'').localeCompare(a.created_at||''))
+          .forEach(obj=>{ const o=document.createElement('option'); o.value=obj.name; o.textContent=obj.name; selCloud.appendChild(o); });
+        setStatus('Cloud backups: ' + (data?data.length:0), false);
+      }catch(e){ setStatus('List failed: ' + String(e), true); }
+    }
+
+    function applyLocalStorage(ls){
+      try{ Object.keys(ls||{}).forEach(k=>{ try{ localStorage.setItem(k, JSON.stringify(ls[k])); }catch(_){} }); }catch(e){}
+    }
+    async function applyKV(kv){
+      if(!supa) return;
+      try{
+        for(const row of (kv||[])){
+          if(!row || !row.key) continue;
+          try{ await supa.from(KV_TABLE).upsert({ key: row.key, value: row.value }, { onConflict: 'key' }); }catch(_){}
+        }
+      }catch(e){ log('KV upsert error: ' + String(e)); }
+    }
+    async function applyDTR(rows){
+      if(!supa) return;
+      try{
+        await supa.from(DTR_TABLE).upsert({ id:'records', data: Array.isArray(rows)?rows:[] }, { onConflict:'id' });
+        window.storedRecords = Array.isArray(rows)?rows:[];
+        try{ localStorage.setItem('att_records_v2', JSON.stringify(window.storedRecords)); }catch(_){ }
+      }catch(e){ log('DTR upsert error: ' + String(e)); }
+    }
+
+    btnBackup.addEventListener('click', async ()=>{
+      btnBackup.disabled = true; setStatus('Building backup...', false); clearLog();
+      try{
+        const bundle = await buildBundle();
+        // Download locally
+        try{
+          const url = URL.createObjectURL(new Blob([JSON.stringify(bundle)],{type:'application/json'}));
+          const a=document.createElement('a'); a.href=url; a.download='payroll_full_backup_'+ new Date().toISOString().slice(0,10)+'.json'; a.click(); setTimeout(()=>URL.revokeObjectURL(url), 1500);
+          log('Downloaded local backup');
+        }catch(e){ log('Local download failed: ' + String(e)); }
+        // Upload to cloud
+        await uploadBundleToCloud(bundle);
+        setStatus('Backup complete', false);
+      }catch(e){ setStatus('Backup error: ' + String(e), true); }
+      finally{ btnBackup.disabled = false; }
+    });
+
+    btnRestoreFile.addEventListener('click', ()=> inputRestore.click());
+    inputRestore.addEventListener('change', async (ev)=>{
+      const f = ev.target.files && ev.target.files[0]; ev.target.value=''; if(!f) return;
+      setStatus('Restoring from file...', false); clearLog();
+      try{
+        const text = await f.text(); const bundle = JSON.parse(text||'{}');
+        if(!bundle || bundle.schema !== 'payrollhub.full.v1') throw new Error('Invalid bundle schema');
+        applyLocalStorage(bundle.localStorage || {}); log('Applied localStorage');
+        await applyKV(bundle.kv || []); log('Applied KV table');
+        await applyDTR(bundle.dtr || []); log('Applied DTR rows');
+        setStatus('Restore complete', false); alert('Restore complete.');
+      }catch(e){ setStatus('Restore failed: ' + String(e), true); alert('Restore failed: ' + String(e)); }
+    });
+
+    btnList.addEventListener('click', listCloud);
+    btnRestoreCloud.addEventListener('click', async ()=>{
+      const name = selCloud.value || '';
+      if(!name){ setStatus('Select a backup first', true); return; }
+      if(!supa || !supa.storage){ setStatus('No Supabase storage', true); return; }
+      setStatus('Downloading ' + name + ' ...', false); clearLog();
+      try{
+        const { data, error } = await supa.storage.from(BUCKET).download(name);
+        if(error || !data){ setStatus('Download failed: ' + (error?error.message:'No data'), true); return; }
+        const text = await data.text(); const bundle = JSON.parse(text||'{}');
+        if(!bundle || bundle.schema !== 'payrollhub.full.v1') throw new Error('Invalid bundle schema');
+        applyLocalStorage(bundle.localStorage || {}); log('Applied localStorage');
+        await applyKV(bundle.kv || []); log('Applied KV table');
+        await applyDTR(bundle.dtr || []); log('Applied DTR rows');
+        setStatus('Cloud restore complete', false); alert('Cloud restore complete.');
+      }catch(e){ setStatus('Cloud restore failed: ' + String(e), true); alert('Cloud restore failed: ' + String(e)); }
+    });
+  })();
+  // === / Dashboard Full Backup & Restore ===
+  </script>
 
   <!-- Original Main panel (DTR) no longer active by default -->
   <section class="panel" id="panelMain">
@@ -2052,8 +2235,6 @@ window.addEventListener('load', dashReports);
         <th>Name</th>
         <th>Adjustment Amount</th>
         <th>Adjustment Hrs</th>
-       
-        <th>Total Hours</th>
         </tr>
       </thead>
       <tbody></tbody>
@@ -2088,7 +2269,17 @@ const LS_BANTAY='payroll_bantay';
 // Supabase-only key for per-employee Bantayâ†’Project assignment map
 const LS_BANTAY_PROJ='payroll_bantay_proj';
 let bantayProj = {};
-;(async function(){ const v = await readKV(LS_BANTAY_PROJ); if (v && typeof v==='object') bantayProj = v; })();
+;(async function(){
+  try{
+    let v = await readKV(LS_BANTAY_PROJ);
+    if (!v) {
+      try { v = JSON.parse(localStorage.getItem(LS_BANTAY_PROJ) || '{}'); } catch(_){}
+    }
+    if (v && typeof v==='object') bantayProj = v;
+    try { localStorage.setItem(LS_BANTAY_PROJ, JSON.stringify(bantayProj)); } catch(_){ }
+    try { if (typeof window.rebuildReports === 'function') window.rebuildReports(); } catch(_){ }
+  }catch(e){}
+})();
 // LocalStorage key for per-employee contribution flags (Pag-IBIG, PhilHealth, SSS)
 const LS_CONTRIB_FLAGS='payroll_contrib_flags';
 
@@ -2220,7 +2411,18 @@ let valeWed = JSON.parse(localStorage.getItem(LS_VALE_WED) || '{}');
 
 // Bantay allowance values per employee. Defaults to empty object if not present.
 let bantay = {};
-;(async function(){ const v = await readKV(LS_BANTAY); if (v && typeof v === 'object') bantay = v; try{ if (typeof renderSssTable==='function') renderSssTable(); }catch(e){} })();
+;(async function(){
+  try{
+    let v = await readKV(LS_BANTAY);
+    if (!v) {
+      try { v = JSON.parse(localStorage.getItem(LS_BANTAY) || '{}'); } catch(_){}
+    }
+    if (v && typeof v === 'object') bantay = v;
+    try { localStorage.setItem(LS_BANTAY, JSON.stringify(bantay)); } catch(_){ }
+    try{ if (typeof renderSssTable==='function') renderSssTable(); }catch(_){ }
+    try { if (typeof window.rebuildReports === 'function') window.rebuildReports(); } catch(_){ }
+  }catch(e){}
+})();
 // Per-employee contribution deduction flags. Each entry keyed by employee ID holds booleans {pagibig, philhealth, sss}
 let contribFlags = JSON.parse(localStorage.getItem(LS_CONTRIB_FLAGS) || '{}');
 
@@ -2732,6 +2934,7 @@ function attachRowEvents(){
     if (bantayI) {
       bantayI.addEventListener('input', async () => {
       bantay[id] = bantayI.value;
+      try { localStorage.setItem(LS_BANTAY, JSON.stringify(bantay)); } catch(_){ }
       await writeKV(LS_BANTAY, bantay);
       calculateRow(row);
       try { if (typeof window.rebuildReports === 'function') window.rebuildReports(); } catch(e){}
@@ -4624,10 +4827,10 @@ const allow = Object.keys(bantay || {}).reduce((sum, empId) => {
 rows += `<tr class="allowance">
   <td class="left">Allowance</td>
   <td class="num">-</td>
-  ${dates.map(()=>`<td class="num">0.00</td><td class="num">0.00</td>`).join('')}
-  <td class="num">0.00</td>
-  <td class="num">0.00</td>
-  <td class="num">0.00</td>
+  ${dates.map(()=>`<td class="num">-</td><td class="num">-</td>`).join('')}
+  <td class="num">-</td>
+  <td class="num">-</td>
+  <td class="num">-</td>
   <td class="num">${f2(allow)}</td>
 </tr>`;
 
@@ -4797,7 +5000,8 @@ rows += `<tr class="totals">
       });
     }
 
-    $('#r_print')?.addEventListener('click', ()=> safePrint());
+  // Use the clean per-project print handler defined later; avoid double-binding here.
+  // $('#r_print')?.addEventListener('click', ()=> safePrint());
     $('#r_csv')?.addEventListener('click', exportCSVAll);const dtr = document.getElementById('resultsTable');
     if (dtr && 'MutationObserver' in window){
       const mo = new MutationObserver(()=> { buildTable(); });
@@ -7224,9 +7428,31 @@ document.addEventListener('DOMContentLoaded', () => {
 </script>
 
 <script>
+// Clean print for per-project sheet (modal) with strong grid lines
+function printProjectReportClean(){
+  try{
+    var box = document.getElementById('projectReportContent');
+    if (!box) return;
+    var css = '<style>'+
+      'html,body{margin:0;padding:10px;font-family:Arial,Helvetica,sans-serif}'+
+      '*{-webkit-print-color-adjust:exact;print-color-adjust:exact}'+
+      'h3{margin:0 0 8px 0}'+
+      'table{width:100%;border-collapse:collapse;font-size:12px}'+
+      'table,th,td{border:0.6pt solid #000 !important}'+
+      'th,td{padding:4px 6px;vertical-align:middle}'+
+      'th{background:#f1f5f9;text-align:left}'+
+      '@media print{@page{margin:10mm}}'+
+      '</style>';
+    var html = '<!doctype html><html><head><meta charset="utf-8">'+css+'</head><body>'+ box.innerHTML + '</body></html>';
+    var w = window.open('', '', 'width=1024,height=768');
+    if (!w) return;
+    w.document.open(); w.document.write(html); try{ w.document.title=' '; }catch(e){}; w.document.close();
+    w.focus(); setTimeout(function(){ try{ safePrint(w); }catch(e){} }, 0);
+  }catch(e){ console.warn('Project report clean print failed', e); }
+}
 document.addEventListener('DOMContentLoaded', function(){
   var btn = document.getElementById('printProjectTotalsBtn');
-  if (btn) btn.addEventListener('click', function(){ safePrint(); });
+  if (btn) btn.addEventListener('click', function(e){ e.preventDefault(); printProjectReportClean(); });
 });
 </script>
 
@@ -9577,40 +9803,67 @@ document.addEventListener('DOMContentLoaded', async function () {
       var css = `
         <style>
           html,body{margin:0;padding:10px;font-family:Arial,Helvetica,sans-serif}
+          *{-webkit-print-color-adjust:exact;print-color-adjust:exact}
           h3{margin:0 0 8px 0}
-          table{width:100%;border-collapse:collapse;font-size:12px}
-          th,td{border:1px solid #e5e7eb;padding:4px 6px;vertical-align:middle}
-          th{background:#f8fafc;text-align:left}
+          .proj-title{font-weight:700;font-size:14px;margin:10px 0 6px 0}
+          table{width:100%;border-collapse:collapse;font-size:12px;table-layout:fixed}
+          table, th, td{border:0.6pt solid #000 !important}
+          th,td{padding:4px 6px;vertical-align:middle}
+          th{background:#f1f5f9;text-align:left}
+          thead{display:table-header-group}
           .left{text-align:left}
           .num{text-align:right}
-          @media print{
-            @page { margin: 10mm; }
+          .proj-block{page-break-after:always}
+          /* First header row date-group cells (colspan=2 each) => 80px */
+          thead tr:first-child th:nth-child(n+3):not(:nth-last-child(-n+4)){
+            width: 80px; min-width: 80px; max-width: 80px; white-space: nowrap;
           }
+          /* Uniform date column widths (RWH/OTH pairs), exclude the last 4 total columns */
+          thead tr:nth-child(2) th:not(:nth-last-child(-n+4)){
+            width: 40px; min-width: 40px; max-width: 40px; white-space: nowrap;
+          }
+          tbody td:nth-child(n+3):not(:nth-last-child(-n+4)){
+            width: 40px; min-width: 40px; max-width: 40px; white-space: nowrap;
+          }
+          /* Totals column widths: Total Reg Hrs, Total OT Hrs, Grand Total Hours, Gross */
+          thead tr:nth-child(2) th:nth-last-child(4),
+          tbody td:nth-last-child(4){ width: 90px; min-width: 90px; max-width: 100px; white-space: nowrap; }
+          thead tr:nth-child(2) th:nth-last-child(3),
+          tbody td:nth-last-child(3){ width: 90px; min-width: 90px; max-width: 100px; white-space: nowrap; }
+          thead tr:nth-child(2) th:nth-last-child(2),
+          tbody td:nth-last-child(2){ width: 120px; min-width: 120px; max-width: 140px; white-space: nowrap; }
+          thead tr:nth-child(2) th:nth-last-child(1),
+          tbody td:nth-last-child(1){ width: 110px; min-width: 110px; max-width: 120px; white-space: nowrap; }
+          @media print{ @page { margin: 10mm; } }
         </style>`;
-      var html = `<!doctype html><html><head><meta charset="utf-8">` + css + `
-<style>
-/* === Reports: set GRAND TOTAL HOURS & GROSS widths === */
-/* GRAND TOTAL HOURS is the 2nd-from-right column */
-#r_table thead th:nth-last-child(2),
-#r_table tbody td:nth-last-child(2) {
-  width: 120px !important;
-  min-width: 120px !important;
-  max-width: 140px !important;
-  white-space: nowrap !important;
-}
-/* GROSS is the last column */
-#r_table thead th:nth-last-child(1),
-#r_table tbody td:nth-last-child(1) {
-  width: 100px !important;
-  min-width: 100px !important;
-  max-width: 110px !important;
-  white-space: nowrap !important;
-}
-</style>
-</head><body>` +
-                 `<h3>Reports</h3>` + (hint ? `<div style="font-size:12px;color:#64748b;margin:0 0 8px 0">${hint.textContent||''}</div>` : '') +
-                 `<table>` + tbl.innerHTML + `</table>` +
-                 `</body></html>`;
+
+      // Build per-project sections with clear headers (strip inline widths)
+      var headHTML = '';
+      if (tbl.tHead) {
+        try{
+          var headClone = tbl.tHead.cloneNode(true);
+          headClone.querySelectorAll('th,td').forEach(function(el){ el.removeAttribute('style'); });
+          headHTML = headClone.innerHTML;
+        }catch(e){ headHTML = tbl.tHead.innerHTML; }
+      }
+      var bodies = tbl.querySelectorAll('tbody.proj-page');
+      var blocks = '';
+      bodies.forEach(function(tb){
+        try{
+          var projName = (tb.querySelector('.proj-break td')?.textContent || 'Project').trim();
+          var clone = tb.cloneNode(true);
+          // Remove inline styles from cells to avoid overriding print CSS
+          try{ clone.querySelectorAll('th,td').forEach(function(el){ el.removeAttribute('style'); }); }catch(_){ }
+          var first = clone.querySelector('.proj-break');
+          if (first) first.parentNode.removeChild(first);
+          blocks += '<div class="proj-block">' +
+                    '<div class="proj-title">Project: ' + projName + (hint ? ' — ' + (hint.textContent||'') : '') + '</div>' +
+                    '<table><thead>' + headHTML + '</thead><tbody>' + clone.innerHTML + '</tbody></table>' +
+                   '</div>';
+        }catch(e){}
+      });
+      if (!blocks) { blocks = '<div>No project data to print.</div>'; }
+      var html = '<!doctype html><html><head><meta charset="utf-8">' + css + '</head><body>' + blocks + '</body></html>';
       var w = window.open('', '', 'width=1024,height=768');
       if (!w) return;
       w.document.open();
@@ -9705,4 +9958,6 @@ document.addEventListener('DOMContentLoaded', async function () {
   </script>
 </body>
 </html>
+
+
 
