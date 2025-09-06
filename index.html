@@ -9402,11 +9402,24 @@ document.addEventListener('DOMContentLoaded', async function () {
     const {regIdx, otIdx} = getColIndexes(table);
     if(regIdx < 0 || otIdx < 0) return;
     table.querySelectorAll('tbody tr').forEach(tr=>{
+      // Capture base values once before applying any override for this row
+      try {
+        if (!tr.dataset.baseReg || !tr.dataset.baseOt) {
+          const baseRegVal = parseFloat(tr.cells[regIdx] && tr.cells[regIdx].textContent) || 0;
+          const baseOtVal  = parseFloat(tr.cells[otIdx]  && tr.cells[otIdx].textContent)  || 0;
+          tr.dataset.baseReg = String(baseRegVal);
+          tr.dataset.baseOt  = String(baseOtVal);
+        }
+      } catch(_){}
       const k = keyForRow(tr);
       const ov = overridesHours[k];
       if(ov){
-        tr.cells[regIdx].textContent = (parseFloat(ov.reg)||0).toFixed(2);
-        tr.cells[otIdx ].textContent = (parseFloat(ov.ot )||0).toFixed(2);
+        const regVal = (parseFloat(ov.reg)||0).toFixed(2);
+        const otVal  = (parseFloat(ov.ot )||0).toFixed(2);
+        const regStar = (Object.prototype.hasOwnProperty.call(ov,'regEdited') ? !!ov.regEdited : true);
+        const otStar  = (Object.prototype.hasOwnProperty.call(ov,'otEdited')  ? !!ov.otEdited  : true);
+        tr.cells[regIdx].textContent = regVal + (regStar ? ' *' : '');
+        tr.cells[otIdx ].textContent = otVal  + (otStar  ? ' *' : '');
       }
     });
   }
@@ -9452,6 +9465,26 @@ document.addEventListener('DOMContentLoaded', async function () {
           const otVal  = parseFloat(otCell.textContent)  || 0;
           regCell.innerHTML = '<input type="number" step="0.01" class="edit-reg" value="'+regVal+'">';
           otCell .innerHTML = '<input type="number" step="0.01" class="edit-ot"  value="'+otVal+'">';
+          try {
+            tr.dataset.touchedReg = '0';
+            tr.dataset.touchedOt  = '0';
+            const regInputLive = tr.querySelector('input.edit-reg');
+            const otInputLive  = tr.querySelector('input.edit-ot');
+            if (regInputLive) regInputLive.addEventListener('input', function(){ tr.dataset.touchedReg = '1'; });
+            if (otInputLive)  otInputLive.addEventListener('input', function(){ tr.dataset.touchedOt  = '1'; });
+          } catch(_){}
+          // remember original values and previous per-column edit flags
+          try {
+            tr.dataset.origReg = String(regVal.toFixed(2));
+            tr.dataset.origOt  = String(otVal.toFixed(2));
+            const k0 = keyForRow(tr);
+            const ov0 = overridesHours && overridesHours[k0];
+            const hadAny = !!ov0;
+            const hadReg = hadAny ? (Object.prototype.hasOwnProperty.call(ov0,'regEdited') ? !!ov0.regEdited : true) : false;
+            const hadOt  = hadAny ? (Object.prototype.hasOwnProperty.call(ov0,'otEdited')  ? !!ov0.otEdited  : true) : false;
+            tr.dataset.hadRegEdited = hadReg ? '1' : '0';
+            tr.dataset.hadOtEdited  = hadOt  ? '1' : '0';
+          } catch(_){}
           btn.textContent = 'Save';
         } else {
           const regInput = tr.querySelector('input.edit-reg');
@@ -9459,15 +9492,31 @@ document.addEventListener('DOMContentLoaded', async function () {
           const regVal = parseFloat(regInput && regInput.value) || 0;
           const otVal  = parseFloat(otInput  && otInput.value)  || 0;
           const k = keyForRow(tr);
-          // Update the overridesHours object and persist locally & remotely
-          overridesHours[k] = { reg: regVal, ot: otVal };
-          saveOverridesHours();
-          // Persist to Supabase kv store so other devices pick up the change
-          if (typeof saveOverridesHoursRemote === 'function') {
-            saveOverridesHoursRemote();
+          // Determine if values actually changed from original
+          const hadPrevReg = (tr.dataset.hadRegEdited === '1');
+          const hadPrevOt  = (tr.dataset.hadOtEdited  === '1');
+          const touchedReg = (tr.dataset.touchedReg === '1');
+          const touchedOt  = (tr.dataset.touchedOt  === '1');
+          const baseR = parseFloat(tr.dataset.baseReg || 'NaN');
+          const baseO = parseFloat(tr.dataset.baseOt  || 'NaN');
+          const eqBaseReg = (isFinite(baseR) && Math.abs(regVal - baseR) <= 1e-9);
+          const eqBaseOt  = (isFinite(baseO) && Math.abs(otVal  - baseO) <= 1e-9);
+          const regEdited  = touchedReg ? (!eqBaseReg) : hadPrevReg;
+          const otEdited   = touchedOt  ? (!eqBaseOt ) : hadPrevOt;
+          if (regEdited || otEdited){
+            overridesHours[k] = { reg: regVal, ot: otVal, regEdited: !!regEdited, otEdited: !!otEdited };
+          } else {
+            // No per-column edits before or now: remove override entry
+            if (overridesHours && Object.prototype.hasOwnProperty.call(overridesHours, k)) delete overridesHours[k];
           }
-          tr.cells[regIdx].textContent = regVal.toFixed(2);
-          tr.cells[otIdx ].textContent = otVal.toFixed(2);
+          saveOverridesHours();
+          if (typeof saveOverridesHoursRemote === 'function') saveOverridesHoursRemote();
+          // Write cells, adding asterisk only to edited columns
+          const ovNow = overridesHours && overridesHours[k];
+          const starReg = ovNow ? (Object.prototype.hasOwnProperty.call(ovNow,'regEdited') ? !!ovNow.regEdited : true) : false;
+          const starOt  = ovNow ? (Object.prototype.hasOwnProperty.call(ovNow,'otEdited')  ? !!ovNow.otEdited  : true) : false;
+          tr.cells[regIdx].textContent = regVal.toFixed(2) + (starReg ? ' *' : '');
+          tr.cells[otIdx ].textContent = otVal .toFixed(2) + (starOt  ? ' *' : '');
           btn.textContent = 'Edit';
           recomputeDtrSummaryFromTable();
         }
