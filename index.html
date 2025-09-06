@@ -635,6 +635,7 @@ window.addEventListener('load', dashReports);
   outline: none;
   -webkit-appearance: none;
   -moz-appearance: textfield;
+  appearance: none;
   text-align: right;
 }
 #panelPayroll input.regHrs[disabled],
@@ -650,6 +651,7 @@ window.addEventListener('load', dashReports);
 #panelPayroll input.rate::-webkit-outer-spin-button,
 #panelPayroll input.rate::-webkit-inner-spin-button {
   -webkit-appearance: none;
+  appearance: none;
   margin: 0;
 }
 /* === END PATCH === */
@@ -1985,7 +1987,7 @@ window.addEventListener('load', dashReports);
     <td class="num" data-col="valeWed">0.00</td>
     <td class="num" data-col="totalDed">0.00</td>
     <td class="num" data-col="adjAmt">0.00</td>
-    <td></td>
+    <td class="num" data-col="bantay">0.00</td>
     <td class="num" data-col="netPay">0.00</td>
     <td></td>
   </tr>
@@ -7560,12 +7562,14 @@ document.addEventListener('DOMContentLoaded', function(){
     var tb = document.querySelector('#payrollTable tbody');
     var foot = document.querySelector('#payrollTotalsFoot');
     if (!tb || !foot) return;
-    var t = {regHrs:0, otHrs:0, adjHrs:0, rate:0, regPay:0, otPay:0, grossPay:0, pagibig:0, philhealth:0, sss:0, loanSSS:0, loanPI:0, vale:0, valeWed:0, totalDed:0, adjAmt:0, netPay:0};
+    var t = {regHrs:0, otHrs:0, adjHrs:0, totalHrs:0, rate:0, regPay:0, otPay:0, grossPay:0, pagibig:0, philhealth:0, sss:0, loanSSS:0, loanPI:0, vale:0, valeWed:0, totalDed:0, adjAmt:0, bantay:0, netPay:0};
     tb.querySelectorAll('tr').forEach(function(tr){
       t.regHrs   += _parse(tr.querySelector('.regHrs')?.value);
       t.otHrs    += _parse(tr.querySelector('.otHrs')?.value);
       // Sum adjustment hours from the adjHrs cell (displayed as text)
       t.adjHrs   += _parse(tr.querySelector('.adjHrs')?.textContent);
+      // Sum total hours from the computed totalHrs cell
+      t.totalHrs += _parse(tr.querySelector('.totalHrs')?.textContent);
       t.rate     += _parse(tr.querySelector('.rate')?.value);
       t.regPay   += _parse(tr.querySelector('.regPay')?.textContent);
       t.otPay    += _parse(tr.querySelector('.otPay')?.textContent);
@@ -7579,6 +7583,8 @@ document.addEventListener('DOMContentLoaded', function(){
       t.valeWed  += _parse(tr.querySelector('.valeWed')?.value);
       t.totalDed += _parse(tr.querySelector('.totalDed')?.textContent);
       t.adjAmt   += _parse(tr.querySelector('.adjAmt')?.textContent);
+      // Sum Bantay allowance from the bantay input
+      t.bantay  += _parse(tr.querySelector('.bantay')?.value);
       t.netPay   += _parse(tr.querySelector('.netPay')?.textContent);
     });
     Object.keys(t).forEach(function(k){
