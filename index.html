@@ -1283,9 +1283,7 @@ window.addEventListener('load', dashReports);
      <button id="dashBackupNow" class="primary" type="button">Backup Now</button>
      <button id="dashRestoreFile" type="button">Restore From File</button>
      <input id="dashRestoreInput" type="file" accept=".json" style="display:none" />
-     <button id="dashListCloud" type="button">List Cloud Backups</button>
-     <select id="dashCloudList" style="min-width:260px"></select>
-     <button id="dashRestoreCloud" type="button">Restore Selected</button>
+     <!-- Cloud listing and restore removed by request -->
      <span id="dashBackupStatus" style="font-size:12px;color:#334155"></span>
    </div>
    <div id="dashBackupLog" style="display:none;margin:8px 0;padding:10px;border:1px solid #e5e7eb;background:#fff;border-radius:8px;font-size:12px;color:#111;line-height:1.35;max-width:920px;"></div>
@@ -1306,12 +1304,11 @@ window.addEventListener('load', dashReports);
     const btnBackup = document.getElementById('dashBackupNow');
     const btnRestoreFile = document.getElementById('dashRestoreFile');
     const inputRestore = document.getElementById('dashRestoreInput');
-    const btnList = document.getElementById('dashListCloud');
-    const selCloud = document.getElementById('dashCloudList');
-    const btnRestoreCloud = document.getElementById('dashRestoreCloud');
-    if(!btnBackup || !btnRestoreFile || !inputRestore || !btnList || !selCloud || !btnRestoreCloud) return;
+    // Only keep local backup and file-restore controls
+    if(!btnBackup || !btnRestoreFile || !inputRestore) return;
 
-    const supa = window.supabase || null;
+    // Lazily resolve Supabase to avoid capturing `null` before the module loads
+    const getSupa = () => (window.supabase || null);
     const KV_TABLE = window.SUPABASE_TABLE || 'kv_store';
     const DTR_TABLE = 'dtr_records';
     const BUCKET = 'backups';
@@ -1322,6 +1319,7 @@ window.addEventListener('load', dashReports);
     function tryJSON(v){ try{ return JSON.parse(v); }catch{ return v; } }
 
     async function fetchKVAll(){
+      const supa = getSupa();
       if(!supa) return { rows:[], error:'No Supabase client' };
       try{
         const { data, error } = await supa.from(KV_TABLE).select('key,value');
@@ -1329,6 +1327,7 @@ window.addEventListener('load', dashReports);
       }catch(e){ return { rows:[], error: String(e) } }
     }
     async function fetchDTR(){
+      const supa = getSupa();
       if(!supa) return { rows:[], error:'No Supabase client' };
       try{
         const { data, error } = await supa.from(DTR_TABLE).select('*').limit(1);
@@ -1371,7 +1370,8 @@ window.addEventListener('load', dashReports);
     }
 
     async function uploadBundleToCloud(bundle){
-      if(!supa || !supa.storage){ log('No Supabase storage client'); return null; }
+      const supa = getSupa();
+      if(!supa || !supa.storage){ log('No Supabase storage client (skipping cloud upload)'); return null; }
       try{
         const json = JSON.stringify(bundle);
         const name = 'full_backup_' + new Date().toISOString().replace(/[:.]/g,'_') + '.json';
@@ -1382,22 +1382,13 @@ window.addEventListener('load', dashReports);
       }catch(e){ log('Upload failed: ' + String(e)); return null; }
     }
 
-    async function listCloud(){
-      if(!supa || !supa.storage){ setStatus('No Supabase storage', true); return; }
-      try{
-        const { data, error } = await supa.storage.from(BUCKET).list('', { limit: 100 });
-        if(error){ setStatus('List failed: ' + error.message, true); return; }
-        selCloud.innerHTML='';
-        (data||[]).sort((a,b)=> (b.created_at||'').localeCompare(a.created_at||''))
-          .forEach(obj=>{ const o=document.createElement('option'); o.value=obj.name; o.textContent=obj.name; selCloud.appendChild(o); });
-        setStatus('Cloud backups: ' + (data?data.length:0), false);
-      }catch(e){ setStatus('List failed: ' + String(e), true); }
-    }
+    // Cloud listing removed
 
     function applyLocalStorage(ls){
       try{ Object.keys(ls||{}).forEach(k=>{ try{ localStorage.setItem(k, JSON.stringify(ls[k])); }catch(_){} }); }catch(e){}
     }
     async function applyKV(kv){
+      const supa = getSupa();
       if(!supa) return;
       try{
         for(const row of (kv||[])){
@@ -1407,6 +1398,7 @@ window.addEventListener('load', dashReports);
       }catch(e){ log('KV upsert error: ' + String(e)); }
     }
     async function applyDTR(rows){
+      const supa = getSupa();
       if(!supa) return;
       try{
         await supa.from(DTR_TABLE).upsert({ id:'records', data: Array.isArray(rows)?rows:[] }, { onConflict:'id' });
@@ -1446,23 +1438,7 @@ window.addEventListener('load', dashReports);
       }catch(e){ setStatus('Restore failed: ' + String(e), true); alert('Restore failed: ' + String(e)); }
     });
 
-    btnList.addEventListener('click', listCloud);
-    btnRestoreCloud.addEventListener('click', async ()=>{
-      const name = selCloud.value || '';
-      if(!name){ setStatus('Select a backup first', true); return; }
-      if(!supa || !supa.storage){ setStatus('No Supabase storage', true); return; }
-      setStatus('Downloading ' + name + ' ...', false); clearLog();
-      try{
-        const { data, error } = await supa.storage.from(BUCKET).download(name);
-        if(error || !data){ setStatus('Download failed: ' + (error?error.message:'No data'), true); return; }
-        const text = await data.text(); const bundle = JSON.parse(text||'{}');
-        if(!bundle || bundle.schema !== 'payrollhub.full.v1') throw new Error('Invalid bundle schema');
-        applyLocalStorage(bundle.localStorage || {}); log('Applied localStorage');
-        await applyKV(bundle.kv || []); log('Applied KV table');
-        await applyDTR(bundle.dtr || []); log('Applied DTR rows');
-        setStatus('Cloud restore complete', false); alert('Cloud restore complete.');
-      }catch(e){ setStatus('Cloud restore failed: ' + String(e), true); alert('Cloud restore failed: ' + String(e)); }
-    });
+    // Cloud restore removed
   })();
   // === / Dashboard Full Backup & Restore ===
   </script>
@@ -9402,15 +9378,6 @@ document.addEventListener('DOMContentLoaded', async function () {
     const {regIdx, otIdx} = getColIndexes(table);
     if(regIdx < 0 || otIdx < 0) return;
     table.querySelectorAll('tbody tr').forEach(tr=>{
-      // Capture base values once before applying any override for this row
-      try {
-        if (!tr.dataset.baseReg || !tr.dataset.baseOt) {
-          const baseRegVal = parseFloat(tr.cells[regIdx] && tr.cells[regIdx].textContent) || 0;
-          const baseOtVal  = parseFloat(tr.cells[otIdx]  && tr.cells[otIdx].textContent)  || 0;
-          tr.dataset.baseReg = String(baseRegVal);
-          tr.dataset.baseOt  = String(baseOtVal);
-        }
-      } catch(_){}
       const k = keyForRow(tr);
       const ov = overridesHours[k];
       if(ov){
@@ -9465,14 +9432,6 @@ document.addEventListener('DOMContentLoaded', async function () {
           const otVal  = parseFloat(otCell.textContent)  || 0;
           regCell.innerHTML = '<input type="number" step="0.01" class="edit-reg" value="'+regVal+'">';
           otCell .innerHTML = '<input type="number" step="0.01" class="edit-ot"  value="'+otVal+'">';
-          try {
-            tr.dataset.touchedReg = '0';
-            tr.dataset.touchedOt  = '0';
-            const regInputLive = tr.querySelector('input.edit-reg');
-            const otInputLive  = tr.querySelector('input.edit-ot');
-            if (regInputLive) regInputLive.addEventListener('input', function(){ tr.dataset.touchedReg = '1'; });
-            if (otInputLive)  otInputLive.addEventListener('input', function(){ tr.dataset.touchedOt  = '1'; });
-          } catch(_){}
           // remember original values and previous per-column edit flags
           try {
             tr.dataset.origReg = String(regVal.toFixed(2));
@@ -9493,16 +9452,14 @@ document.addEventListener('DOMContentLoaded', async function () {
           const otVal  = parseFloat(otInput  && otInput.value)  || 0;
           const k = keyForRow(tr);
           // Determine if values actually changed from original
+          const origR = parseFloat(tr.dataset.origReg || 'NaN');
+          const origO = parseFloat(tr.dataset.origOt  || 'NaN');
           const hadPrevReg = (tr.dataset.hadRegEdited === '1');
           const hadPrevOt  = (tr.dataset.hadOtEdited  === '1');
-          const touchedReg = (tr.dataset.touchedReg === '1');
-          const touchedOt  = (tr.dataset.touchedOt  === '1');
-          const baseR = parseFloat(tr.dataset.baseReg || 'NaN');
-          const baseO = parseFloat(tr.dataset.baseOt  || 'NaN');
-          const eqBaseReg = (isFinite(baseR) && Math.abs(regVal - baseR) <= 1e-9);
-          const eqBaseOt  = (isFinite(baseO) && Math.abs(otVal  - baseO) <= 1e-9);
-          const regEdited  = touchedReg ? (!eqBaseReg) : hadPrevReg;
-          const otEdited   = touchedOt  ? (!eqBaseOt ) : hadPrevOt;
+          const changedReg = (isFinite(origR) && Math.abs(regVal - origR) > 1e-9);
+          const changedOt  = (isFinite(origO) && Math.abs(otVal  - origO) > 1e-9);
+          const regEdited  = changedReg || hadPrevReg;
+          const otEdited   = changedOt  || hadPrevOt;
           if (regEdited || otEdited){
             overridesHours[k] = { reg: regVal, ot: otVal, regEdited: !!regEdited, otEdited: !!otEdited };
           } else {
