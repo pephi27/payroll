@@ -3770,6 +3770,7 @@ document.addEventListener('DOMContentLoaded', () => {
       const actions = [];
       if (snap.locked) {
         actions.push(`<button type="button" class="openSnapshot" data-index="${index}">Open</button>`);
+        actions.push(`<button type="button" class="exportAllTabs" data-index="${index}">Excel (All Tabs)</button>`);
         actions.push(`<button type="button" class="unlockSnapshot" data-index="${index}">Unlock</button>`);
         // For locked snapshots, show a disabled delete button to indicate it cannot be removed
         actions.push(`<button type="button" class="deleteSnapshot" data-index="${index}" disabled>Delete</button>`);
@@ -3791,6 +3792,15 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   };
 
+  // Post-lock automation: print DTR, download Employees CSV, print Payroll, export Reports Excel
+  window.runPostLockOutputs = function runPostLockOutputs(){
+    // Only export one Excel workbook with all tabs (no prints or CSVs)
+    try {
+      if (typeof window.rebuildReports === 'function') window.rebuildReports();
+      setTimeout(function(){ try { if (typeof window.exportExcelAllTabs === 'function') window.exportExcelAllTabs(); } catch(e){} }, 600);
+    } catch(e){}
+  };
+
   /**
    * Build a snapshot from the current payroll table. This captures all row values
    * and totals in a structured JSON object for persistence.
@@ -3809,12 +3819,12 @@ document.addEventListener('DOMContentLoaded', () => {
         if (el) {
           // Prefer form control .value when available, else textContent
           const v = (typeof el.value !== 'undefined' && el.matches('input,select,textarea')) ? el.value : el.textContent;
-          const num = parseFloat(v);
+          const num = parseFloat(String(v).replace(/,/g,''));
           if (!isNaN(num)) return num;
         }
         // Fallback to cell index text if selector not found or not numeric
         const cellVal = row.cells[cellIndex] && row.cells[cellIndex].textContent;
-        const num2 = parseFloat(cellVal);
+        const num2 = parseFloat(String(cellVal).replace(/,/g,''));
         return isNaN(num2) ? 0 : num2;
     }
       // Column index fallbacks aligned with current payrollTable structure
@@ -4239,6 +4249,30 @@ document.addEventListener('DOMContentLoaded', () => {
         showSnapshotDetails(idx);
       }
     }
+    if (target.classList.contains('exportAllTabs')) {
+      // Export the All Tabs Excel for this snapshot's date range
+      try {
+        if (typeof window.exportExcelAllTabsForRange === 'function') {
+          window.exportExcelAllTabsForRange(snap.startDate, snap.endDate);
+        } else if (typeof window.exportExcelAllTabs === 'function') {
+          // Fallback: set range, rebuild, then export
+          const ws = document.getElementById('weekStart');
+          const we = document.getElementById('weekEnd');
+          const prevS = ws && ws.value; const prevE = we && we.value;
+          if (ws) ws.value = snap.startDate || prevS; if (we) we.value = snap.endDate || prevE;
+          try{ if (typeof calculatePayrollFromResultsTable==='function') calculatePayrollFromResultsTable(); else if (typeof calculatePayrollFromRecords==='function') calculatePayrollFromRecords(); }catch(e){}
+          try{ if (typeof window.rebuildReports === 'function') window.rebuildReports(); }catch(e){}
+          setTimeout(function(){
+            try{ window.exportExcelAllTabs(); }catch(e){}
+            // Restore previous range and rebuild
+            setTimeout(function(){
+              try{ if (ws) ws.value = prevS; if (we) we.value = prevE; if (typeof window.rebuildReports==='function') window.rebuildReports(); }catch(e){}
+            }, 0);
+          }, 300);
+        }
+      } catch(e){}
+      return;
+    }
     if (target.classList.contains('deleteSnapshot')) {
       // Delete a snapshot from history if it is not locked
       if (snap.locked) return; // Skip deletion for locked snapshots
@@ -4383,12 +4417,12 @@ document.addEventListener('DOMContentLoaded', () => {
     // column so that any manual adjustments saved in the snapshot are visible
     // when viewing a locked payroll. This keeps the summary in sync with the
     // CSV export and ensures the net pay is clearly explained.
-    // Display columns similar to the live payroll grid (including Adj/Total Hrs and Bantay)
+    // Display columns similar to the live payroll grid (omit Total Deductions per request)
     const headers = [
       'ID','Name','Hourly Rate','Regular Hrs','OT Hrs','Adjustment Hrs','Total Hours',
       'Reg Pay','OT Pay','Gross',
       'Pag-IBIG','PhilHealth','SSS','SSS Loan','Pag-IBIG Loan','Vale','Wed Vale',
-      'Total Ded','Adjustments','Bantay','Net Pay'
+      'Adjustments','Bantay','Net Pay'
     ];
     headers.forEach(h => {
       const th = document.createElement('th');
@@ -4401,25 +4435,102 @@ document.addEventListener('DOMContentLoaded', () => {
     pHead.appendChild(pRow);
     payTable.appendChild(pHead);
     const pBody = document.createElement('tbody');
+    // Running grand totals (match Payroll semantics; loans are per-period shares)
+    let GT = {
+      regHrs:0, otHrs:0, adjHrs:0, totalHrs:0,
+      regPay:0, otPay:0, gross:0,
+      pagibig:0, philhealth:0, sss:0,
+      loanSSS:0, loanPI:0, vale:0, wedVale:0,
+      adjAmt:0, bantay:0, netPay:0
+    };
     // Each employee row in the snapshot may include an adjAmt property
     // representing manual adjustments. Build the table row accordingly.
     (snap.rows || []).forEach(r => {
       const tr = document.createElement('tr');
+      const num = (x)=>{ const n = parseFloat(String(x??'').replace(/,/g,'')); return isNaN(n)?0:n; };
+      // Current divisor and OT multiplier
+      const keyDiv = (typeof LS_DIVISOR !== 'undefined' ? LS_DIVISOR : 'payroll_deduction_divisor');
+      const curDiv = (typeof window !== 'undefined' && typeof window.divisor !== 'undefined' && Number(window.divisor)) || parseInt((localStorage && localStorage.getItem(keyDiv)) || '1', 10) || 1;
+      const otMultLS = parseFloat((typeof LS_OTMULT !== 'undefined' && localStorage && localStorage.getItem(LS_OTMULT)) || '1.5') || 1.5;
+      const otMult = num(document.getElementById('otMultiplier')?.value || otMultLS) || 1.5;
+      // Raw fields from snapshot
+      const id = r.id;
+      const rate = num(r.rate);
+      const regHrs = num(r.regHrs);
+      const otHrs = num(r.otHrs);
+      const adjHrs = num(r.adjHrs);
+      const totalHrs = num(r.totalHrs) || (regHrs + otHrs + adjHrs);
+      // Recompute pays from hours/rate using current OT multiplier to match Payroll tab exactly
+      let regPay = +(regHrs * rate).toFixed(2);
+      const otTotal = otHrs + adjHrs;
+      let otPay  = +(otTotal * rate * otMult).toFixed(2);
+      let gross  = +(regPay + otPay).toFixed(2);
+      let pagibig = num(r.pagibig);
+      let philhealth = num(r.philhealth);
+      let sss = num(r.sss);
+      const loanSSSRaw = num(r.loanSSS);
+      const loanPIRaw  = num(r.loanPI);
+      const vale = num(r.vale);
+      const wedVale = num(r.valeWed);
+      const adjAmt = num(r.adjAmt);
+      const bantay = num(r.bantay);
+
+      // Heuristic: if snapshot has truncated values (e.g., 2.00 due to commas), recompute using current rules
+      // 'looksWrong' heuristic no longer needed since we recompute unconditionally
+
+      // Always recompute contributions with current tables and apply divisor
+      try{
+        const monthly = rate * 8 * 24;
+        const flags = (typeof contribFlags !== 'undefined' && contribFlags[id]) || {};
+        const piRate = (typeof pagibigRateByMonthly==='function') ? pagibigRateByMonthly(monthly) : 0;
+        const phRate = (typeof philhealthRateByMonthly==='function') ? philhealthRateByMonthly(monthly) : 0;
+        pagibig    = (flags.pagibig !== false   ? +((regPay * piRate) / curDiv).toFixed(2) : 0);
+        philhealth = (flags.philhealth !== false? +((regPay * phRate) / curDiv).toFixed(2) : 0);
+        const sssFull = (typeof sssShareByMonthly==='function') ? sssShareByMonthly(monthly) : 0;
+        sss = (flags.sss !== false ? +(sssFull / curDiv).toFixed(2) : 0);
+      }catch(e){}
+
+      // Loans in snapshot view should reflect per-period share per user request
+      const loanSSSPer = +(loanSSSRaw / curDiv).toFixed(2);
+      const loanPIPer  = +(loanPIRaw  / curDiv).toFixed(2);
+
+      // Compute net pay consistent with Payroll tab
+      const totalDeds = pagibig + philhealth + sss + loanSSSPer + loanPIPer + vale + wedVale;
+      const netPay = +(gross - totalDeds + adjAmt + bantay).toFixed(2);
+
       const vals = [
-        r.id, r.name, r.rate, r.regHrs, r.otHrs, r.adjHrs, r.totalHrs,
-        r.regPay, r.otPay, r.grossPay,
-        r.pagibig, r.philhealth, r.sss,
-        r.loanSSS, r.loanPI, r.vale, r.valeWed,
-        r.totalDed, r.adjAmt, r.bantay, r.netPay
+        id, r.name, rate, regHrs, otHrs, adjHrs, totalHrs,
+        regPay, otPay, gross,
+        pagibig, philhealth, sss,
+        loanSSSPer, loanPIPer, vale, wedVale,
+        adjAmt, bantay, netPay
       ];
+      // Accumulate grand totals
+      GT.regHrs     += regHrs;
+      GT.otHrs      += otHrs;
+      GT.adjHrs     += adjHrs;
+      GT.totalHrs   += totalHrs;
+      GT.regPay     += regPay;
+      GT.otPay      += otPay;
+      GT.gross      += gross;
+      GT.pagibig    += pagibig;
+      GT.philhealth += philhealth;
+      GT.sss        += sss;
+      GT.loanSSS    += loanSSSPer;
+      GT.loanPI     += loanPIPer;
+      GT.vale       += vale;
+      GT.wedVale    += wedVale;
+      GT.adjAmt     += adjAmt;
+      GT.bantay     += bantay;
+      GT.netPay     += netPay;
+
       vals.forEach(v => {
         const td = document.createElement('td');
         let text = '';
         if (v != null && v !== '') {
-          // Format numeric values to two decimal places; leave strings (e.g. ID, name)
-          const num = parseFloat(v);
-          if (!isNaN(num) && isFinite(num)) {
-            text = num.toFixed(2);
+          const n = parseFloat(String(v).replace(/,/g,''));
+          if (!isNaN(n) && isFinite(n)) {
+            text = n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
           } else {
             text = v;
           }
@@ -4427,17 +4538,41 @@ document.addEventListener('DOMContentLoaded', () => {
         td.textContent = text;
         td.style.border = '1px solid #e2e8f0';
         td.style.padding = '4px';
-        // Align numbers to the right and text to the left for better readability
-        if (!isNaN(parseFloat(text)) && isFinite(parseFloat(text))) {
-          td.style.textAlign = 'right';
-        } else {
-          td.style.textAlign = 'left';
-        }
+        const nTest = parseFloat(String(text).replace(/,/g,''));
+        td.style.textAlign = (!isNaN(nTest) && isFinite(nTest)) ? 'right' : 'left';
         tr.appendChild(td);
       });
       pBody.appendChild(tr);
     });
     payTable.appendChild(pBody);
+    // Add Grand Totals footer row
+    const pFoot = document.createElement('tfoot');
+    const ft = document.createElement('tr');
+    const label = document.createElement('td');
+    label.colSpan = 3; // ID + Name + Hourly Rate
+    label.textContent = 'Grand Total';
+    label.style.fontWeight = '700';
+    label.style.border = '1px solid #e2e8f0';
+    label.style.padding = '4px';
+    ft.appendChild(label);
+    const cells = [
+      GT.regHrs, GT.otHrs, GT.adjHrs, GT.totalHrs,
+      GT.regPay, GT.otPay, GT.gross,
+      GT.pagibig, GT.philhealth, GT.sss,
+      GT.loanSSS, GT.loanPI, GT.vale, GT.wedVale,
+      GT.adjAmt, GT.bantay, GT.netPay
+    ];
+    cells.forEach(n => {
+      const td = document.createElement('td');
+      const val = Number(n) || 0;
+      td.textContent = val.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+      td.style.border = '1px solid #e2e8f0';
+      td.style.padding = '4px';
+      td.style.textAlign = 'right';
+      ft.appendChild(td);
+    });
+    pFoot.appendChild(ft);
+    payTable.appendChild(pFoot);
     payrollContainer.appendChild(payTable);
     // Build DTR breakdown
     dtrContainer.innerHTML = '';
@@ -5002,6 +5137,214 @@ rows += `<tr class="totals">
       a.download=`reports_all_${from}_to_${to}.csv`;
       a.click(); URL.revokeObjectURL(a.href);
     }
+
+    // Export an Excel workbook with one sheet per project
+    function exportExcelAllSheets(){
+      try{
+        if (typeof XLSX === 'undefined' || !XLSX || !XLSX.utils) { alert('Excel library not available'); return; }
+        if (!__report) { if (typeof window.rebuildReports==='function') window.rebuildReports(); }
+        if (!__report) { alert('No report to export yet.'); return; }
+        const { data, dates, from, to } = __report;
+        const wb = XLSX.utils.book_new();
+        // Helper: build headers
+        const dayHeader = dates.map(d=>{
+          const lbl = d.toLocaleDateString(undefined,{day:'2-digit',month:'short'});
+          return [`RWH ${lbl}`, `OTH ${lbl}`];
+        }).flat();
+        const header = ['PERSONNEL','RATE'].concat(dayHeader, ['TOTAL REG HRS','TOTAL OT HRS','GRAND TOTAL HOURS','GROSS']);
+        // Build one sheet per project
+        const projects = Object.keys(data).sort();
+        let gReg=0,gOT=0,gGross=0;
+        const summaryRows = [['PROJECT'].concat(header)];
+        projects.forEach(proj=>{
+          const empMap = data[proj];
+          const rows = [header.slice()];
+          let pReg=0,pOT=0,pGross=0;
+          Object.keys(empMap).sort((a,b)=>{
+            const A = (empMap[a].name||a).toUpperCase();
+            const B = (empMap[b].name||b).toUpperCase();
+            return A.localeCompare(B);
+          }).forEach(empId=>{
+            const rec = empMap[empId];
+            const display = rec.name || empId;
+            const rate = getRate(empId, display);
+            let rReg=0,rOT=0;
+            const dayCells = [];
+            dates.forEach(d=>{
+              const key = d.setHours(0,0,0,0);
+              const v = rec.days[key] || { rwh:0, oth:0 };
+              rReg += v.rwh; rOT += v.oth;
+              dayCells.push(to2(v.rwh), to2(v.oth));
+            });
+            const otMult = toNum(document.querySelector('#otMultiplier')?.value || 1.5);
+            const gross = (rReg * rate) + (rOT * rate * otMult);
+            pReg += rReg; pOT += rOT; pGross += gross;
+            rows.push([display, to2(rate)].concat(dayCells, [to2(rReg), to2(rOT), to2(rReg+rOT), to2(gross)]));
+            summaryRows.push([proj, display, to2(rate)].concat(dayCells, [to2(rReg), to2(rOT), to2(rReg+rOT), to2(gross)]));
+          });
+          // Allowance-only row from on-screen report logic
+          try{
+            const allow = Object.keys(bantay || {}).reduce((sum, empId) => {
+              const assigned = (bantayProj || {})[empId];
+              if (!assigned) return sum;
+              const matchesById   = (assigned === proj);
+              const matchesByName = ((typeof storedProjects !== 'undefined' && storedProjects && storedProjects[assigned]?.name) === proj);
+              const amt = parseFloat((bantay && bantay[empId]) || 0) || 0;
+              return (matchesById || matchesByName) ? (sum + amt) : sum;
+            }, 0);
+            if (allow && allow > 0){
+              const zeros = new Array(dates.length*2).fill('0.00');
+              rows.push(['Allowance',''].concat(zeros, ['0.00','0.00','0.00', to2(allow)]));
+              summaryRows.push([proj, 'Allowance',''].concat(zeros, ['0.00','0.00','0.00', to2(allow)]));
+              pGross += allow; gGross += allow;
+            }
+          }catch(e){}
+          gReg += pReg; gOT += pOT; gGross += pGross;
+          rows.push(['Project Total',''].concat(new Array(dates.length*2).fill(''), [to2(pReg), to2(pOT), to2(pReg+pOT), to2(pGross)]));
+          const ws = XLSX.utils.aoa_to_sheet(rows);
+          XLSX.utils.book_append_sheet(wb, ws, (proj || 'Project').toString().substring(0,31));
+        });
+        // Summary sheet with grand totals
+        summaryRows.push(['','Grand Total',''].concat(new Array(dates.length*2).fill(''), [to2(gReg), to2(gOT), to2(gReg+gOT), to2(gGross)]));
+        const wsSummary = XLSX.utils.aoa_to_sheet(summaryRows);
+        XLSX.utils.book_append_sheet(wb, wsSummary, 'Summary');
+        const fname = `reports_all_${from}_to_${to}.xlsx`;
+        XLSX.writeFile(wb, fname);
+      }catch(e){ console.warn('Excel export failed', e); alert('Excel export failed.'); }
+    }
+
+    // Expose for external triggers (lock automation)
+    try { window.exportExcelAllSheets = exportExcelAllSheets; } catch(e){}
+
+    // Export a single workbook that includes sheets for: DTR, Employees, Payroll,
+    // and per-project Reports (plus Summary)
+    function exportExcelAllTabs(){
+      try{
+        if (typeof XLSX === 'undefined' || !XLSX || !XLSX.utils) { alert('Excel library not available'); return; }
+        if (typeof window.rebuildReports === 'function') window.rebuildReports();
+        if (!__report) { alert('No report to export yet.'); return; }
+        const { data, dates, from, to } = __report;
+        const wb = XLSX.utils.book_new();
+
+        // 1) DTR sheet from #resultsTable (excluding actions)
+        try{
+          const tbl = document.getElementById('resultsTable');
+          const head = Array.from(tbl.querySelectorAll('thead th')).map(th=> (th.textContent||'').trim()).filter(t=>t.toLowerCase()!=='actions' && t.toLowerCase()!=='split');
+          const rows = [head];
+          Array.from(tbl.querySelectorAll('tbody tr')).forEach(tr=>{
+            const tds = Array.from(tr.querySelectorAll('td')).filter(td=>!td.classList.contains('actions-cell'));
+            const row = tds.map(td=>{
+              const sel = td.querySelector && td.querySelector('select');
+              if (sel && sel.options && sel.selectedIndex>=0){ const opt=sel.options[sel.selectedIndex]; return (opt && (opt.textContent||opt.innerText||opt.value))||''; }
+              return (td.textContent||'').trim();
+            });
+            rows.push(row);
+          });
+          XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(rows), 'DTR');
+        }catch(e){}
+
+        // 2) Employees sheet from store
+        try{
+          const header = ['ID','Name','Hourly Rate','Bank Account','Schedule Name','Schedule ID','Project Name','Project ID','Deduct Pag-IBIG','Deduct PhilHealth','Deduct SSS'];
+          const rows = [header];
+          const flagsAll = (typeof contribFlags!=='undefined' && contribFlags) || {};
+          Object.keys(storedEmployees||{}).forEach(id=>{
+            const emp = (storedEmployees||{})[id]||{};
+            const schedId = emp.scheduleId || '';
+            const schedName = (storedSchedules && storedSchedules[schedId]?.name) || '';
+            const projId = emp.projectId || '';
+            const projName = (storedProjects && storedProjects[projId]?.name) || '';
+            const bank = emp.bankAccount || '';
+            const fl = flagsAll[id] || {};
+            const fPI = (fl.pagibig !== false) ? 'Yes' : 'No';
+            const fPH = (fl.philhealth !== false) ? 'Yes' : 'No';
+            const fSSS= (fl.sss !== false) ? 'Yes' : 'No';
+            rows.push([id, emp.name||'', emp.hourlyRate||'', bank, schedName, schedId, projName, projId, fPI, fPH, fSSS]);
+          });
+          XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(rows), 'Employees');
+        }catch(e){}
+
+        // 3) Payroll sheet from #payrollTable (inputs → values, drop Payslip)
+        try{
+          const src = document.getElementById('payrollTable');
+          const clone = src.cloneNode(true);
+          // Remove Payslip last column
+          const removeLastCell = row => { if (row && row.lastElementChild) row.removeChild(row.lastElementChild); };
+          clone.querySelectorAll('thead tr').forEach(removeLastCell);
+          clone.querySelectorAll('tbody tr').forEach(removeLastCell);
+          clone.querySelectorAll('tfoot tr').forEach(removeLastCell);
+          // Convert inputs to text
+          clone.querySelectorAll('input').forEach(inp=>{ const td=inp.parentElement; td.textContent = (inp.value||inp.textContent||''); });
+          const head = [Array.from(clone.querySelectorAll('thead th')).map(th=> (th.textContent||'').trim())];
+          const body = Array.from(clone.querySelectorAll('tbody tr')).map(tr=> Array.from(tr.querySelectorAll('td')).map(td=> (td.textContent||'').trim()));
+          const foot = [];
+          const tfr = clone.querySelector('tfoot tr'); if (tfr){ foot.push(Array.from(tfr.querySelectorAll('td')).map(td=> (td.textContent||'').trim())); }
+          const aoa = head.concat(body).concat(foot);
+          XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(aoa), 'Payroll');
+        }catch(e){}
+
+        // 4) Reports: reuse per-project builder to append sheets + Summary
+        try{
+          // Build using existing function by temporarily overriding writeFile
+          // but here we inline the same logic as exportExcelAllSheets to append to wb
+          const addReportSheets = (wb2)=>{
+            const dayHeader = dates.map(d=>{ const lbl=d.toLocaleDateString(undefined,{day:'2-digit',month:'short'}); return [`RWH ${lbl}`, `OTH ${lbl}`]; }).flat();
+            const header = ['PERSONNEL','RATE'].concat(dayHeader, ['TOTAL REG HRS','TOTAL OT HRS','GRAND TOTAL HOURS','GROSS']);
+            const projects = Object.keys(data).sort();
+            let gReg=0,gOT=0,gGross=0;
+            const summaryRows = [['PROJECT'].concat(header)];
+            projects.forEach(proj=>{
+              const empMap = data[proj];
+              const rows = [header.slice()];
+              let pReg=0,pOT=0,pGross=0;
+              Object.keys(empMap).sort((a,b)=>{ const A=(empMap[a].name||a).toUpperCase(); const B=(empMap[b].name||b).toUpperCase(); return A.localeCompare(B); }).forEach(empId=>{
+                const rec = empMap[empId]; const display = rec.name || empId; const rate = getRate(empId, display);
+                let rReg=0,rOT=0; const dayCells=[]; dates.forEach(d=>{ const key=d.setHours(0,0,0,0); const v=rec.days[key]||{rwh:0,oth:0}; rReg+=v.rwh; rOT+=v.oth; dayCells.push(to2(v.rwh), to2(v.oth)); });
+                const otMult = toNum(document.querySelector('#otMultiplier')?.value || 1.5);
+                const gross = (rReg*rate) + (rOT*rate*otMult); pReg+=rReg; pOT+=rOT; pGross+=gross;
+                rows.push([display, to2(rate)].concat(dayCells, [to2(rReg), to2(rOT), to2(rReg+rOT), to2(gross)]));
+                summaryRows.push([proj, display, to2(rate)].concat(dayCells, [to2(rReg), to2(rOT), to2(rReg+rOT), to2(gross)]));
+              });
+              // Allowance row
+              try{
+                const allow = Object.keys(bantay||{}).reduce((sum, empId)=>{ const assigned=(bantayProj||{})[empId]; if(!assigned) return sum; const matchesById=(assigned===proj); const matchesByName=((typeof storedProjects!=='undefined'&&storedProjects&&storedProjects[assigned]?.name)===proj); const amt=parseFloat((bantay&&bantay[empId])||0)||0; return (matchesById||matchesByName)?(sum+amt):sum; },0);
+                if(allow>0){ const zeros=new Array(dates.length*2).fill('0.00'); rows.push(['Allowance',''].concat(zeros,['0.00','0.00','0.00', to2(allow)])); summaryRows.push([proj,'Allowance',''].concat(zeros,['0.00','0.00','0.00', to2(allow)])); pGross+=allow; gGross+=allow; }
+              }catch(e){}
+              gReg+=pReg; gOT+=pOT; gGross+=pGross;
+              rows.push(['Project Total',''].concat(new Array(dates.length*2).fill(''), [to2(pReg), to2(pOT), to2(pReg+pOT), to2(pGross)]));
+              XLSX.utils.book_append_sheet(wb2, XLSX.utils.aoa_to_sheet(rows), (proj||'Project').toString().substring(0,31));
+            });
+            summaryRows.push(['','Grand Total',''].concat(new Array(dates.length*2).fill(''), [to2(gReg), to2(gOT), to2(gReg+gOT), to2(gGross)]));
+            XLSX.utils.book_append_sheet(wb2, XLSX.utils.aoa_to_sheet(summaryRows), 'Summary');
+          };
+          addReportSheets(wb);
+        }catch(e){}
+
+        const fname = `all_tabs_${from}_to_${to}.xlsx`;
+        XLSX.writeFile(wb, fname);
+      }catch(e){ console.warn('Excel export failed', e); alert('Excel export failed'); }
+    }
+
+    try { window.exportExcelAllTabs = exportExcelAllTabs; } catch(e){}
+    // Bind UI button for Excel (All Tabs)
+    try {
+      var xBtn = document.getElementById('r_xlsx');
+      if (xBtn && !xBtn.__xlsxBound){ xBtn.addEventListener('click', function(ev){ ev.preventDefault(); exportExcelAllTabs(); }); xBtn.__xlsxBound = true; }
+    } catch(e){}
+
+    // Export for a specific date range (used by Payroll History actions)
+    function exportExcelAllTabsForRange(from, to){
+      try{
+        const ws = document.getElementById('weekStart');
+        const we = document.getElementById('weekEnd');
+        const prevS = ws && ws.value; const prevE = we && we.value;
+        if (ws) ws.value = from || prevS; if (we) we.value = to || prevE;
+        try{ if (typeof calculatePayrollFromResultsTable==='function') calculatePayrollFromResultsTable(); else if (typeof calculatePayrollFromRecords==='function') calculatePayrollFromRecords(); }catch(e){}
+        try{ if (typeof window.rebuildReports==='function') window.rebuildReports(); }catch(e){}
+        setTimeout(function(){ try{ exportExcelAllTabs(); } finally { try{ if (ws) ws.value = prevS; if (we) we.value = prevE; if (typeof window.rebuildReports==='function') window.rebuildReports(); }catch(e){} } }, 300);
+      }catch(e){ console.warn('Export for range failed', e); }
+    }
+    try { window.exportExcelAllTabsForRange = exportExcelAllTabsForRange; } catch(e){}
 
     function exportCSVPerProject(){
       if (!__report){ alert('No report to export yet.'); return; }
