@@ -2507,12 +2507,13 @@ const lSSS = Number(loanSSS[emp.id] ?? 0);
     const monthly = rate * 8 * 24;
     const piRate = pagibigRateByMonthly(monthly);
     const phRate = philhealthRateByMonthly(monthly);
-    const pagibig = +(regPay * piRate).toFixed(2);
-    const philhealth = +(regPay * phRate).toFixed(2);
+    const div = Number(divisor) || 1;
+    const pagibig = +((regPay * piRate) / div).toFixed(2);
+    const philhealth = +((regPay * phRate) / div).toFixed(2);
     const sssFull = sssShareByMonthly(monthly);
-    const sss = +(sssFull / (Number(divisor)||1)).toFixed(2);
-    const sssLoan = +(lSSS / (Number(divisor)||1)).toFixed(2);
-    const piLoan = +(lPI / (Number(divisor)||1)).toFixed(2);
+    const sss = +(sssFull / div).toFixed(2);
+    const sssLoan = +(lSSS / div).toFixed(2);
+    const piLoan = +(lPI / div).toFixed(2);
     const total = +(pagibig + philhealth + sss + sssLoan + piLoan + v + vW).toFixed(2);
     const tr = document.createElement('tr');
     tr.innerHTML = `<td>${emp.id}</td><td class="wrap">${emp.name}</td>
@@ -2823,11 +2824,15 @@ function chooseBantayProject(empId, anchorEl){
     sel.style.border = '1px solid #d1d5db';
     sel.style.borderRadius = '6px';
 
-    // Placeholder
+    // Placeholder + clear option
     const opt0 = document.createElement('option');
     opt0.value = '';
     opt0.textContent = 'Select project';
     sel.appendChild(opt0);
+    const optClear = document.createElement('option');
+    optClear.value = '__clear__';
+    optClear.textContent = '— Clear assignment —';
+    sel.appendChild(optClear);
 
     // storedProjects: { [pid]: {name, ...} }
     const entries = Object.entries(storedProjects || {}).sort((a,b)=>{
@@ -2842,7 +2847,7 @@ function chooseBantayProject(empId, anchorEl){
       sel.appendChild(o);
     });
 
-    // Set current value if any
+    // Set current value if any (default to project id key)
     try { sel.value = (bantayProj && bantayProj[empId]) || ''; } catch(e){}
 
     box.appendChild(sel);
@@ -2853,10 +2858,18 @@ function chooseBantayProject(empId, anchorEl){
     // Auto-save on selection and close; refresh report if available
     sel.addEventListener('change', async ()=>{
       const v = sel.value;
-      if (v && (storedProjects && storedProjects[v])){
-        bantayProj = bantayProj || {};
+      bantayProj = bantayProj || {};
+      if (!v || v === '__clear__'){
+        // Clear assignment
+        try { delete bantayProj[empId]; } catch(e){}
+        try { await writeKV(LS_BANTAY_PROJ, bantayProj); } catch(e){}
+        try { if (typeof window.rebuildReports === 'function') window.rebuildReports(); } catch(e){}
+        close();
+        return;
+      }
+      if (storedProjects && storedProjects[v]){
         bantayProj[empId] = v;
-        await writeKV(LS_BANTAY_PROJ, bantayProj);
+        try { await writeKV(LS_BANTAY_PROJ, bantayProj); } catch(e){}
         try { if (typeof window.rebuildReports === 'function') window.rebuildReports(); } catch(e){}
       }
       close();
@@ -2911,22 +2924,34 @@ function attachRowEvents(){
     const bantayI = row.querySelector('.bantay');
     if (bantayI) {
       bantayI.addEventListener('input', async () => {
-      bantay[id] = bantayI.value;
-      try { localStorage.setItem(LS_BANTAY, JSON.stringify(bantay)); } catch(_){ }
-      await writeKV(LS_BANTAY, bantay);
-      calculateRow(row);
-      try { if (typeof window.rebuildReports === 'function') window.rebuildReports(); } catch(e){}
-    });
-    // Prompt to assign project when Bantay is set
-    bantayI.addEventListener('change', () => {
-      const val = parseFloat(bantayI.value) || 0;
-      if (val > 0) chooseBantayProject(id, bantayI);
-      try { if (typeof window.rebuildReports === 'function') window.rebuildReports(); } catch(e){}
-    });
-    // Allow quick reassign on dblclick
-    bantayI.title = 'Double-click to assign Bantay to a project';
-    bantayI.addEventListener('dblclick', () => chooseBantayProject(id, bantayI));
-  }
+        bantay[id] = bantayI.value;
+        try { localStorage.setItem(LS_BANTAY, JSON.stringify(bantay)); } catch(_){ }
+        await writeKV(LS_BANTAY, bantay);
+        calculateRow(row);
+        try { if (typeof window.rebuildReports === 'function') window.rebuildReports(); } catch(e){}
+        // Auto-open project picker when entering a positive amount and no assignment yet
+        const val = parseFloat(bantayI.value) || 0;
+        const hasPicker = !!document.getElementById('bantayProjPicker');
+        if (val > 0 && !bantayProj[id] && !hasPicker) {
+          chooseBantayProject(id, bantayI);
+        }
+        // Auto-clear assignment when reset to zero or blank
+        if (!(val > 0) && bantayProj[id]) {
+          try { delete bantayProj[id]; } catch(_){ }
+          try { await writeKV(LS_BANTAY_PROJ, bantayProj); } catch(_){ }
+          try { if (typeof window.rebuildReports === 'function') window.rebuildReports(); } catch(_){ }
+        }
+      });
+      // Also prompt on change if user typed and then blurs
+      bantayI.addEventListener('change', () => {
+        const val = parseFloat(bantayI.value) || 0;
+        if (val > 0) chooseBantayProject(id, bantayI);
+        try { if (typeof window.rebuildReports === 'function') window.rebuildReports(); } catch(e){}
+      });
+      // Allow quick reassign on dblclick
+      bantayI.title = 'Double-click to assign Bantay to a project';
+      bantayI.addEventListener('dblclick', () => chooseBantayProject(id, bantayI));
+    }
   });
 }
 function renderSssTable(){
@@ -3225,12 +3250,13 @@ function calculateRow(tr){  const readNum = sel => { const el = tr.querySelector
   const phRate = philhealthRateByMonthly(monthly);
   // Check per-employee contribution deduction flags; default to true if not set
   const flags = contribFlags[id] || {};
-  const pagibig = (flags.pagibig !== false ? +(regPay * piRate).toFixed(2) : 0);
-  const philhealth = (flags.philhealth !== false ? +(regPay * phRate).toFixed(2) : 0);
+  const div = Number(divisor) || 1;
+  const pagibig = (flags.pagibig !== false ? +((regPay * piRate) / div).toFixed(2) : 0);
+  const philhealth = (flags.philhealth !== false ? +((regPay * phRate) / div).toFixed(2) : 0);
   const sssFull = sssShareByMonthly(monthly);
-  const sss = (flags.sss !== false ? sssFull / (Number(divisor)||1) : 0);
-  const sssLoan = lSSS / (Number(divisor)||1);
-  const piLoan = lPI / (Number(divisor)||1);
+  const sss = (flags.sss !== false ? +(sssFull / div).toFixed(2) : 0);
+  const sssLoan = +(lSSS / div).toFixed(2);
+  const piLoan = +(lPI / div).toFixed(2);
   const valeAmt = v;
   const wedValeAmt = vW;
 
@@ -3548,10 +3574,19 @@ document.addEventListener('DOMContentLoaded', function(){
     clone.querySelectorAll('tbody tr').forEach(removeLastCell);
     clone.querySelectorAll('tfoot tr').forEach(removeLastCell);
     // Convert input fields to plain text within the cloned table
+    // For loan inputs, show per-period share (divided by the divisor)
     clone.querySelectorAll('input').forEach(inp => {
       const td = inp.parentElement;
-      const val = (inp.value || inp.textContent || '').toString();
-      td.textContent = val;
+      const cls = inp.classList || { contains: () => false };
+      const key = (typeof LS_DIVISOR !== 'undefined' ? LS_DIVISOR : 'payroll_deduction_divisor');
+      const div = (typeof window !== 'undefined' && typeof window.divisor !== 'undefined' && Number(window.divisor)) || parseInt((localStorage && localStorage.getItem(key)) || '1', 10) || 1;
+      if (cls.contains('loanSSS') || cls.contains('loanPI')) {
+        const raw = parseFloat((inp.value || '').toString().replace(/,/g,'')) || 0;
+        td.textContent = (raw / div).toFixed(2);
+      } else {
+        const val = (inp.value || inp.textContent || '').toString();
+        td.textContent = val;
+      }
     });
     // Replace numeric zeros with dashes in clone
     clone.querySelectorAll('td').forEach(function(td){
@@ -3782,23 +3817,29 @@ document.addEventListener('DOMContentLoaded', () => {
         const num2 = parseFloat(cellVal);
         return isNaN(num2) ? 0 : num2;
     }
-      data.regHrs = readNum('.regHrs', 2);
-      data.otHrs = readNum('.otHrs', 3);
-      data.rate = readNum('.rate', 4);
-      data.regPay = readNum('.regPay', 5);
-      data.otPay = readNum('.otPay', 6);
-      data.grossPay = readNum('.grossPay', 7);
-      data.pagibig = readNum('.pagibig', 8);
-      data.philhealth = readNum('.philhealth', 9);
-      data.sss = readNum('.sss', 10);
-      data.loanSSS = readNum('.loanSSS', 11);
-      data.loanPI = readNum('.loanPI', 12);
-      data.vale = readNum('.vale', 13);
-      data.valeWed = readNum('.valeWed', 14);
-      data.totalDed = readNum('.totalDed', 15);
-      // Capture adjustments and net pay. With the Bantay column inserted after adjustments, adjustment column index is 17 and net pay column index is 19.
-      data.adjAmt = readNum('.adjAmt', 17);
-      data.netPay = readNum('.netPay', 19);
+      // Column index fallbacks aligned with current payrollTable structure
+      // 0:ID, 1:Name, 2:Rate, 3:RegHrs, 4:OTHrs, 5:AdjHrs, 6:TotalHrs, 7:RegPay, 8:OTPay,
+      // 9:Gross, 10:Pag-IBIG, 11:PhilHealth, 12:SSS, 13:SSS Loan, 14:Pag-IBIG Loan,
+      // 15:Vale, 16:Wed Vale, 17:Total Ded, 18:Adjustments, 19:Bantay, 20:Net Pay, 21:Payslip
+      data.rate = readNum('.rate', 2);
+      data.regHrs = readNum('.regHrs', 3);
+      data.otHrs = readNum('.otHrs', 4);
+      data.adjHrs = readNum('.adjHrs', 5);
+      data.totalHrs = readNum('.totalHrs', 6);
+      data.regPay = readNum('.regPay', 7);
+      data.otPay = readNum('.otPay', 8);
+      data.grossPay = readNum('.grossPay', 9);
+      data.pagibig = readNum('.pagibig', 10);
+      data.philhealth = readNum('.philhealth', 11);
+      data.sss = readNum('.sss', 12);
+      data.loanSSS = readNum('.loanSSS', 13);
+      data.loanPI = readNum('.loanPI', 14);
+      data.vale = readNum('.vale', 15);
+      data.valeWed = readNum('.valeWed', 16);
+      data.totalDed = readNum('.totalDed', 17);
+      data.adjAmt = readNum('.adjAmt', 18);
+      data.bantay = readNum('.bantay', 19);
+      data.netPay = readNum('.netPay', 20);
       // Capture DTR records for this employee within the selected date range. Stores an array of {date, times}
       try {
         /*
@@ -4051,19 +4092,22 @@ document.addEventListener('DOMContentLoaded', () => {
    * Convert a snapshot into a CSV string. Header names correspond to payroll columns.
    */
   function snapshotToCSV(snap) {
+    // Mirror the payroll grid ordering, including adjustment/total hours and Bantay
     const header = [
-      'ID','Name','Regular Hours','OT Hours','Rate','Regular Pay','OT Pay','Gross Pay',
-      'Pag-IBIG','PhilHealth','SSS','SSS Loan','Pag-IBIG Loan','Vale','Wed Vale','Total Deductions','Adjustments','Net Pay'
+      'ID','Name','Hourly Rate','Regular Hours','OT Hours','Adjustment Hours','Total Hours',
+      'Regular Pay','OT Pay','Gross Pay',
+      'Pag-IBIG','PhilHealth','SSS','SSS Loan','Pag-IBIG Loan','Vale','Wed Vale',
+      'Total Deductions','Adjustments','Bantay','Net Pay'
     ];
     const lines = [header.join(',')];
     snap.rows.forEach(row => {
       const values = [
         row.id, row.name,
-        row.regHrs, row.otHrs, row.rate,
+        row.rate, row.regHrs, row.otHrs, row.adjHrs, row.totalHrs,
         row.regPay, row.otPay, row.grossPay,
         row.pagibig, row.philhealth, row.sss,
         row.loanSSS, row.loanPI, row.vale, row.valeWed,
-        row.totalDed, row.adjAmt, row.netPay
+        row.totalDed, row.adjAmt, row.bantay, row.netPay
       ];
       lines.push(values.map(v => {
         const s = String(v ?? '');
@@ -4339,10 +4383,12 @@ document.addEventListener('DOMContentLoaded', () => {
     // column so that any manual adjustments saved in the snapshot are visible
     // when viewing a locked payroll. This keeps the summary in sync with the
     // CSV export and ensures the net pay is clearly explained.
+    // Display columns similar to the live payroll grid (including Adj/Total Hrs and Bantay)
     const headers = [
-      'ID','Name','Regular Hrs','OT Hrs','Rate','Reg Pay','OT Pay','Gross',
+      'ID','Name','Hourly Rate','Regular Hrs','OT Hrs','Adjustment Hrs','Total Hours',
+      'Reg Pay','OT Pay','Gross',
       'Pag-IBIG','PhilHealth','SSS','SSS Loan','Pag-IBIG Loan','Vale','Wed Vale',
-      'Total Ded','Adjustments','Net Pay'
+      'Total Ded','Adjustments','Bantay','Net Pay'
     ];
     headers.forEach(h => {
       const th = document.createElement('th');
@@ -4360,11 +4406,11 @@ document.addEventListener('DOMContentLoaded', () => {
     (snap.rows || []).forEach(r => {
       const tr = document.createElement('tr');
       const vals = [
-        r.id, r.name, r.regHrs, r.otHrs, r.rate,
+        r.id, r.name, r.rate, r.regHrs, r.otHrs, r.adjHrs, r.totalHrs,
         r.regPay, r.otPay, r.grossPay,
         r.pagibig, r.philhealth, r.sss,
         r.loanSSS, r.loanPI, r.vale, r.valeWed,
-        r.totalDed, r.adjAmt, r.netPay
+        r.totalDed, r.adjAmt, r.bantay, r.netPay
       ];
       vals.forEach(v => {
         const td = document.createElement('td');
@@ -4730,7 +4776,24 @@ document.addEventListener('DOMContentLoaded', () => {
 
       const [from, to] = getPayrollRange();
       const dates = eachDate(new Date(from).setHours(0,0,0,0), new Date(to).setHours(0,0,0,0));
-      const data = collect(from, to);
+      const data = collect(from, to) || {};
+      // Ensure projects that only have Bantay allowance (no DTR rows) appear as their own blocks
+      try {
+        const bp = (typeof bantayProj !== 'undefined' && bantayProj) || {};
+        const b  = (typeof bantay !== 'undefined' && bantay) || {};
+        const sp = (typeof storedProjects !== 'undefined' && storedProjects) || {};
+        const allowByProjName = {};
+        Object.keys(b).forEach(empId => {
+          const amt = parseFloat((b[empId]) || 0) || 0;
+          if (amt <= 0) return;
+          const assigned = bp[empId];
+          if (!assigned) return;
+          const projName = (sp[assigned] && sp[assigned].name) ? sp[assigned].name : assigned;
+          if (!isRealProject(projName)) return;
+          allowByProjName[projName] = (allowByProjName[projName] || 0) + amt;
+        });
+        Object.keys(allowByProjName).forEach(pn => { if (!data[pn]) data[pn] = {}; });
+      } catch (e) { /* ignore */ }
       __report = { data, from, to, dates };
 
       const totalCols = 2 + (dates.length*2) + 4;
@@ -4903,6 +4966,23 @@ rows += `<tr class="totals">
 
           rows.push([proj, display, to2(rate)].concat(dayCells, [to2(rReg), to2(rOT), to2(rReg + rOT), to2(gross)]));
         });
+
+        // Add per-project Allowance row (amount placed in GROSS column)
+        try {
+          const allow = Object.keys(bantay || {}).reduce((sum, empId) => {
+            const assigned = (bantayProj || {})[empId];
+            if (!assigned) return sum;
+            const matchesById   = (assigned === proj);
+            const matchesByName = ((typeof storedProjects !== 'undefined' && storedProjects && storedProjects[assigned]?.name) === proj);
+            const amt = parseFloat((bantay && bantay[empId]) || 0) || 0;
+            return (matchesById || matchesByName) ? (sum + amt) : sum;
+          }, 0);
+          // Push a CSV row for Allowance with zero hours and gross = allowance
+          const zeroCells = new Array(dates.length*2).fill('0.00');
+          rows.push([proj, 'Allowance', ''].concat(zeroCells, ['0.00','0.00','0.00', to2(allow)]));
+          // Include allowance in project gross before rolling into grand totals
+          pGross += allow;
+        } catch (e) { /* no-op if allowance data missing */ }
 
         gReg += pReg; gOT += pOT; gGross += pGross;
         rows.push([proj, 'Project Total', ''].concat(
@@ -5130,12 +5210,20 @@ let storedSchedules = JSON.parse(localStorage.getItem(LS_SCHEDULES) || 'null');
 let defaultScheduleId = localStorage.getItem(LS_SCHEDULES_DEFAULT) || null;
 let storedProjects = JSON.parse(localStorage.getItem(LS_PROJECTS) || '{}');
 document.getElementById('downloadEmployeesCSV').addEventListener('click', () => {
-  const rows = [['ID','Name','Hourly Rate','Schedule','Project','Bank Account']];
+  const header = ['ID','Name','Hourly Rate','Bank Account','Schedule Name','Schedule ID','Project Name','Project ID','Deduct Pag-IBIG','Deduct PhilHealth','Deduct SSS'];
+  const rows = [header];
   Object.keys(storedEmployees).forEach(id => {
     const emp = storedEmployees[id] || {};
-    const schedName = storedSchedules[emp.scheduleId]?.name || '';
-    const projName = storedProjects[emp.projectId]?.name || '';
-    const bank = emp.bankAccount || ''; rows.push([id, emp.name || '', emp.hourlyRate || '', schedName, projName, bank]);
+    const schedId = emp.scheduleId || '';
+    const schedName = (storedSchedules && storedSchedules[schedId]?.name) || '';
+    const projId = emp.projectId || '';
+    const projName = (storedProjects && storedProjects[projId]?.name) || '';
+    const bank = emp.bankAccount || '';
+    const flags = (typeof contribFlags !== 'undefined' && contribFlags[id]) || {};
+    const fPI = (flags.pagibig !== false) ? 'Yes' : 'No';
+    const fPH = (flags.philhealth !== false) ? 'Yes' : 'No';
+    const fSSS = (flags.sss !== false) ? 'Yes' : 'No';
+    rows.push([id, emp.name || '', emp.hourlyRate || '', bank, schedName, schedId, projName, projId, fPI, fPH, fSSS]);
   });
 
   const csv = rows.map(r => r.map(v => {
@@ -6429,13 +6517,20 @@ document.addEventListener('DOMContentLoaded', function () {
   const dlBtn = document.getElementById('downloadEmployeesCSV');
   if (dlBtn) {
     dlBtn.addEventListener('click', () => {
-      const rows = [['ID','Name','Hourly Rate','Bank Account','Schedule','Project']];
+      const header = ['ID','Name','Hourly Rate','Bank Account','Schedule Name','Schedule ID','Project Name','Project ID','Deduct Pag-IBIG','Deduct PhilHealth','Deduct SSS'];
+      const rows = [header];
       Object.keys(storedEmployees).forEach(id => {
         const emp = storedEmployees[id] || {};
-        const schedName = storedSchedules[emp.scheduleId]?.name || '';
-        const projName = storedProjects[emp.projectId]?.name || '';
+        const schedId = emp.scheduleId || '';
+        const schedName = (storedSchedules && storedSchedules[schedId]?.name) || '';
+        const projId = emp.projectId || '';
+        const projName = (storedProjects && storedProjects[projId]?.name) || '';
         const bank = emp.bankAccount || '';
-      rows.push([id, emp.name || '', emp.hourlyRate || '', bank, schedName, projName]);
+        const flags = (typeof contribFlags !== 'undefined' && contribFlags[id]) || {};
+        const fPI = (flags.pagibig !== false) ? 'Yes' : 'No';
+        const fPH = (flags.philhealth !== false) ? 'Yes' : 'No';
+        const fSSS = (flags.sss !== false) ? 'Yes' : 'No';
+        rows.push([id, emp.name || '', emp.hourlyRate || '', bank, schedName, schedId, projName, projId, fPI, fPH, fSSS]);
       });
       const csv = rows.map(r => r.map(v => {
         const s = String(v ?? '');
@@ -9970,6 +10065,3 @@ document.addEventListener('DOMContentLoaded', async function () {
   </script>
 </body>
 </html>
-
-
-
