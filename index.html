@@ -6078,12 +6078,7 @@ document.getElementById('fileInput').addEventListener('change', (ev)=>{
   const total = files.length;
   inputEl.disabled = true;
 
-  
-  // Determine active payroll period from UI; require it for upload filtering
-  const s = (document.getElementById('weekStart')||{}).value || null;
-  const e = (document.getElementById('weekEnd')||{}).value || null;
-  if (!s || !e) { inputEl.disabled = false; alert('Please set Week Start and Week End before uploading.'); return; }
-Array.from(files).forEach(file=>{
+  Array.from(files).forEach(file=>{
     // Upload the raw .DAT/.TXT file to Supabase for backup/crossâ€‘device sync.
     try {
       if (typeof uploadDtrFileToCloud === 'function') {
@@ -6101,16 +6096,13 @@ Array.from(files).forEach(file=>{
         for(const ln of lines){
           const p = (typeof parseLine === 'function') ? parseLine(ln) : null;
           if(p && p.empId && p.date && p.time){
-            // Keep only records within selected payroll period [s..e]
-            if (p.date >= s && p.date <= e) {
-              storedRecords.push({ empId: String(p.empId), date: p.date, time: padHM(p.time) });
-              added++;
-            }
+            storedRecords.push({ empId: String(p.empId), date: p.date, time: padHM(p.time) });
+            added++;
           }
         }
         // Persist records locally for offline use
-        // (disabled) No localStorage write; cloud-only persistence
-// Refresh the DTR grid
+        try { localStorage.setItem(LS_RECORDS, JSON.stringify(storedRecords)); } catch(e){}
+        // Refresh the DTR grid
         if (typeof renderResults === 'function') renderResults();
         // Persist the records to Supabase for crossâ€‘device sync
         try {
@@ -6135,7 +6127,7 @@ Array.from(files).forEach(file=>{
           if (errors > 0){
             alert(`Upload finished with errors: imported ${totalAdded} record${totalAdded!==1?'s':''} from ${total} file${total>1?'s':''}. (${errors} file${errors>1?'s':''} failed)`);
           } else {
-            alert(`Upload successful for ${s} to ${e}: imported ${totalAdded} record${totalAdded!==1?'s':''} from ${total} file${total>1?'s':''}.`);
+            alert(`Upload successful: imported ${totalAdded} record${totalAdded!==1?'s':''} from ${total} file${total>1?'s':''}.`);
           }
         }
       }
@@ -6305,19 +6297,13 @@ function __fmt12Clock(hhmm){
   const nameQuery = (document.getElementById('dtrSearchName') ? document.getElementById('dtrSearchName').value.trim().toLowerCase() : '');
 const groups = {};
   const manualKeys = new Set();
-  const manualTimeMap = Object.create(null);
   for(const r of storedRecords){
-
     if(startDate && r.date < startDate) continue;
     if(endDate && r.date > endDate) continue;
     const key = r.date + '___' + r.empId;
     if(!groups[key]) groups[key]=[];
     groups[key].push(r.time);
-    if (r.manual) {
-      manualKeys.add(key);
-      if (!manualTimeMap[key]) manualTimeMap[key] = new Set();
-      manualTimeMap[key].add(r.time);
-    }
+    if (r.manual) manualKeys.add(key);
   }
 
   const keys = Object.keys(groups).sort((a,b)=>{
@@ -6753,32 +6739,20 @@ const trSeg = document.createElement('tr');
         // segments share the same splitKey.
         htmlSeg += '<td><button type="button" class="btn-unsplit" data-key="' + splitKey + '" onclick="unsplitRecord(this.dataset.key)">Unsplit</button></td>';
         trSeg.innerHTML = htmlSeg;
-        // Mark manual punches (*) on specific time cells for split rows
+        // Add manual star indicator on split rows (AM/PM/OT) when any manual entry exists for this emp/date
         try {
-          const mset = (typeof manualTimeMap !== 'undefined') ? manualTimeMap[splitKey] : null;
-          const mark = (idx, val) => {
-            if (!mset || !val) return;
-            const td = trSeg.cells[idx];
-            if (!td || td.classList.contains('missing')) return;
-            if (mset.has(val) && !td.querySelector('.manual-indicator')) {
-              const s = document.createElement('span');
-              s.className = 'manual-indicator';
-              s.textContent = '*';
-              td.appendChild(s);
+          if (typeof manualKeys !== 'undefined' && manualKeys.has(splitKey)) {
+            const nmCellSeg = trSeg.cells[1];
+            if (nmCellSeg && !nmCellSeg.querySelector('.manual-indicator')) {
+              const s2 = document.createElement('span');
+              s2.className = 'manual-indicator';
+              s2.title = 'Contains manual DTR';
+              s2.textContent = '*';
+              nmCellSeg.appendChild(s2);
             }
-          };
-          if (segment === 'AM') {
-            mark(5, amInActual);
-            if (!hasBridge) mark(6, amOutActual);
-          } else if (segment === 'PM') {
-            if (!hasBridge) mark(7, pmInActual);
-            mark(8, pmOutActual);
-          } else if (segment === 'OT') {
-            mark(9, otInSeg);
-            mark(10, otOutSeg);
           }
-        } catch(e) {}
-// Highlight if segment-specific overrides are set
+        } catch(e){}
+        // Highlight if segment-specific overrides are set
         const hasOverrideSeg = (overridesSchedules && overridesSchedules[halfKey]) || (overridesProjects && Object.prototype.hasOwnProperty.call(overridesProjects, halfKey));
         if (hasOverrideSeg) {
           trSeg.style.backgroundColor = '#fff3cd';
@@ -6843,28 +6817,20 @@ const trSeg = document.createElement('tr');
     if(overridesSchedules[overrideKey] || overridesProjects[overrideKeyProj] !== undefined){
       tr.style.backgroundColor = '#fff3cd';
     }
-    // Mark manual punches (*) on specific time cells (unsplit row)
+    // Add a star indicator next to the Name if this row contains manual DTR entries
     try {
-      const mset = (typeof manualTimeMap !== 'undefined') ? manualTimeMap[key] : null;
-      const mark = (idx, val) => {
-        if (!mset || !val) return;
-        const td = tr.cells[idx];
-        if (!td || td.classList.contains('missing')) return;
-        if (mset.has(val) && !td.querySelector('.manual-indicator')) {
+      if (typeof manualKeys !== 'undefined' && manualKeys.has(key)) {
+        const nmCell = tr.cells[1];
+        if (nmCell && !nmCell.querySelector('.manual-indicator')) {
           const s = document.createElement('span');
           s.className = 'manual-indicator';
+          s.title = 'Contains manual DTR';
           s.textContent = '*';
-          td.appendChild(s);
+          nmCell.appendChild(s);
         }
-      };
-      mark(5, amInActual);
-      mark(6, amOutActual);
-      mark(7, pmInActual);
-      mark(8, pmOutActual);
-      mark(9, otInCalc);
-      mark(10, otOutCalc);
-    } catch(e) {}
-const projCell = tr.cells[2];
+      }
+    } catch(e){}
+    const projCell = tr.cells[2];
     if(projCell){ projCell.innerHTML = ''; projCell.appendChild(buildProjectDropdown(empId, date, empProjId)); }
     const schedCell = tr.cells[3];
     if(schedCell){ schedCell.innerHTML = ''; schedCell.appendChild(buildScheduleDropdown(empId, date, scheduleIdForEmp)); }
@@ -7424,8 +7390,9 @@ function restoreData(file) {
       }
       try {
         storedRecords.push({ empId: String(empId), date: dateVal, time: timeVal, manual: true });
-        // (disabled) No localStorage write; cloud-only persistence
-        // Persist to Supabase for cross‑device sync
+        // Persist to localStorage
+        localStorage.setItem(LS_RECORDS, JSON.stringify(storedRecords));
+        // Persist to Supabase for crossâ€‘device sync
         if (typeof saveDtrToCloud === 'function') saveDtrToCloud(storedRecords);
       } catch(e) { console.error('Saving manual DTR failed', e); }
       closeManualModal();
@@ -7990,12 +7957,48 @@ document.addEventListener('DOMContentLoaded', function(){
       });
       // Remove any buttons inside the cloned table (e.g., split buttons)
       clone.querySelectorAll('button').forEach(function(btn){ btn.remove(); });
-      // Build header for print
+      
+      function fmtLong(d){
+        if(!d) return '';
+        try{
+          var dt = new Date(d);
+          if (isNaN(dt)) return d;
+          return dt.toLocaleDateString(undefined,{ year:'numeric', month:'long', day:'numeric' });
+        }catch(e){ return d; }
+      }
+      function fmtLongWithDay(d){
+        if(!d) return '';
+        try{
+          var dt = new Date(d);
+          if (isNaN(dt)) return d;
+          var dateStr = dt.toLocaleDateString(undefined,{ year:'numeric', month:'long', day:'numeric' });
+          var dayStr  = dt.toLocaleDateString(undefined,{ weekday:'long' });
+          return dateStr + ' (' + String(dayStr||'').toUpperCase() + ')';
+        }catch(e){ return d; }
+      }
+// Build header for print
+
+      function fmtLong(d){
+        if(!d) return '';
+        try{
+          var dt = new Date(d);
+          if (isNaN(dt)) return d;
+          var opts = { year: 'numeric', month: 'long', day: 'numeric' };
+          return dt.toLocaleDateString(undefined, opts);
+        }catch(e){ return d; }
+      }
+
       var start = (document.getElementById('weekStart') || {}).value || '';
       var end = (document.getElementById('weekEnd') || {}).value || '';
+      // Prefer the small Date range filter in the DTR tab
+      var smallFrom = (document.getElementById('dtrDateRangeFrom')||{}).value || (document.getElementById('dtrDateFrom')||{}).value || '';
+      var smallTo   = (document.getElementById('dtrDateRangeTo')||{}).value   || (document.getElementById('dtrDateTo')||{}).value   || '';
+      var s = smallFrom || start;
+      var e = smallTo   || end;
       var hdr = 'Daily Time Records';
       if(start || end){
-      hdr += ' - ' + (start || '') + (end ? (' to ' + end) : '');
+        var sL = fmtLong(start), eL = fmtLong(end);
+        hdr += ' - ' + (sL || '') + (eL ? (' - ' + eL) : '');
       }
       // Determine project filter text
       var filterSel = document.getElementById('filterProject');
@@ -8016,7 +8019,19 @@ document.addEventListener('DOMContentLoaded', function(){
       w.document.write('</head><body>');
       w.document.write('<h2>' + hdr.replace(/</g, '&lt;') + '</h2>');
       if(filterTxt){
-        w.document.write('<div class="muted">Project filter: ' + filterTxt.replace(/</g, '&lt;') + '</div>');
+        var __pf = (filterTxt||'').replace(/</g,'&lt;');
+      w.document.write('<div style="margin:2px 0;font-weight:700;font-size:14px;">Project filter: ' + __pf + '</div>');
+      // Date Filter line (shows weekday)
+      (function(){
+        var df = (document.getElementById('dtrDateRangeFrom')||{}).value || (document.getElementById('dtrDateFrom')||{}).value || '';
+        var dt = (document.getElementById('dtrDateRangeTo')||{}).value   || (document.getElementById('dtrDateTo')||{}).value   || '';
+        var s = df || start, e = dt || end;
+        if (s && e && s !== e){
+          w.document.write('<div style="margin:2px 0;font-weight:700;font-size:14px;">Date filter: ' + fmtLongWithDay(s) + ' - ' + fmtLongWithDay(e) + '</div>');
+        } else if (s){
+          w.document.write('<div style="margin:2px 0;font-weight:700;font-size:14px;">Date filter: ' + fmtLongWithDay(s) + '</div>');
+        }
+      })();
       }
       // Include summary of totals (Grand Total Hours, Regular, OT, Employees) if available
       try {
@@ -10470,103 +10485,5 @@ document.addEventListener('DOMContentLoaded', async function () {
     }
   })();
   </script>
-
-<script>
-// ===== Local → Cloud DTR migration (handles old LS_RECORDS backlog) =====
-(function(){
-  function padHM(hhmm){
-    if (!hhmm) return hhmm;
-    const m = String(hhmm).match(/^(\d{1,2}):(\d{2})/);
-    if (!m) return hhmm;
-    let h = m[1].padStart(2,'0'), mm = m[2];
-    return h+':'+mm;
-  }
-
-  async function migrateLocalDtrToCloud(onlyCurrentPeriod=true){
-    try{
-      const supa = window.supabase || (typeof supabase!=='undefined' ? supabase : null);
-      if (!supa) { alert('Supabase client not available.'); return; }
-      // Read local LS_RECORDS (may be large)
-      let local = [];
-      try { local = JSON.parse(localStorage.getItem(LS_RECORDS) || '[]'); } catch{ local = []; }
-      if (!Array.isArray(local) || !local.length){ alert('No local DTR found in browser.'); return; }
-
-      // Optional filter by current Week Start / End to save space
-      let s = null, e = null;
-      if (onlyCurrentPeriod){
-        s = (document.getElementById('weekStart')||{}).value || null;
-        e = (document.getElementById('weekEnd')||{}).value || null;
-        if (!s || !e) { alert('Set Week Start and Week End first.'); return; }
-        local = local.filter(r => r && r.date >= s && r.date <= e);
-        if (!local.length){ alert(`No local DTR within ${s} → ${e}.`); return; }
-      }
-
-      // Load remote dataset
-      const remote = await (typeof loadDtrFromCloud === 'function' ? loadDtrFromCloud() : null) || [];
-      const merged = [];
-      const seen = new Set();
-      const pushUnique = (rec) => {
-        if (!rec || !rec.empId || !rec.date || !rec.time) return;
-        const key = `${String(rec.empId)}|${rec.date}|${padHM(rec.time)}`;
-        if (seen.has(key)) return;
-        seen.add(key);
-        merged.push({ empId:String(rec.empId), date:rec.date, time:padHM(rec.time), manual: !!rec.manual });
-      };
-
-      // Seed with remote first so we preserve what's already there
-      if (Array.isArray(remote)) remote.forEach(pushUnique);
-      const beforeMerge = merged.length;
-      local.forEach(pushUnique);
-      const added = merged.length - beforeMerge;
-
-      if (!added){ alert('Everything in this period is already in Supabase.'); return; }
-
-      // Save merged to Supabase
-      if (typeof saveDtrToCloud === 'function'){
-        await saveDtrToCloud(merged);
-      } else {
-        // Fallback direct upsert
-        await supa.from('dtr_records').upsert({ id:'records', data: merged }, { onConflict:'id' });
-      }
-
-      // Remove migrated subset from localStorage to free space
-      try {
-        const original = JSON.parse(localStorage.getItem(LS_RECORDS) || '[]') || [];
-        const remaining = original.filter(r => !(onlyCurrentPeriod && r && r.date >= s && r.date <= e));
-        if (remaining.length) {
-          localStorage.setItem(LS_RECORDS, JSON.stringify(remaining));
-        } else {
-          localStorage.removeItem(LS_RECORDS);
-        }
-      } catch {}
-
-      alert(`Migrated ${added} record${added!==1?'s':''} to Supabase${onlyCurrentPeriod && s && e ? ` for ${s} → ${e}`:''}. Local backlog trimmed.`);
-      if (typeof renderResults === 'function') renderResults();
-      if (typeof hideRemoteDtrAlert === 'function') hideRemoteDtrAlert();
-    }catch(err){
-      console.error('Migration failed', err);
-      alert('Migration failed. Check console for details.');
-    }
-  }
-
-  // Add a small button next to the DAT/TXT upload input
-  function addMigrationButton(){
-    const upload = document.getElementById('fileInput');
-    if (!upload || document.getElementById('btnMigrateLocalDtr')) return;
-    const btn = document.createElement('button');
-    btn.id = 'btnMigrateLocalDtr';
-    btn.textContent = 'Import local DTR → Cloud (current period)';
-    btn.style.marginLeft = '8px';
-    btn.addEventListener('click', () => migrateLocalDtrToCloud(true));
-    upload.insertAdjacentElement('afterend', btn);
-  }
-
-  if (document.readyState === 'loading'){
-    document.addEventListener('DOMContentLoaded', addMigrationButton);
-  } else {
-    addMigrationButton();
-  }
-})();
-</script>
 </body>
 </html>
