@@ -243,6 +243,9 @@ function safeStringify(v){
 #projectTotalsTable th:nth-last-child(2),
 #projectTotalsTable td:nth-last-child(2) { width: 150px; min-width: 150px; max-width: 150px; }
 
+/* Manual DTR indicator */
+#resultsTable .manual-indicator { color: #ef4444; margin-left: 4px; font-weight: 700; }
+
 </style>
 <!-- === / Supabase KV Sync Adapter === -->
 
@@ -6075,7 +6078,12 @@ document.getElementById('fileInput').addEventListener('change', (ev)=>{
   const total = files.length;
   inputEl.disabled = true;
 
-  Array.from(files).forEach(file=>{
+  
+  // Determine active payroll period from UI; require it for upload filtering
+  const s = (document.getElementById('weekStart')||{}).value || null;
+  const e = (document.getElementById('weekEnd')||{}).value || null;
+  if (!s || !e) { inputEl.disabled = false; alert('Please set Week Start and Week End before uploading.'); return; }
+Array.from(files).forEach(file=>{
     // Upload the raw .DAT/.TXT file to Supabase for backup/crossâ€‘device sync.
     try {
       if (typeof uploadDtrFileToCloud === 'function') {
@@ -6093,13 +6101,16 @@ document.getElementById('fileInput').addEventListener('change', (ev)=>{
         for(const ln of lines){
           const p = (typeof parseLine === 'function') ? parseLine(ln) : null;
           if(p && p.empId && p.date && p.time){
-            storedRecords.push({ empId: String(p.empId), date: p.date, time: padHM(p.time) });
-            added++;
+            // Keep only records within selected payroll period [s..e]
+            if (p.date >= s && p.date <= e) {
+              storedRecords.push({ empId: String(p.empId), date: p.date, time: padHM(p.time) });
+              added++;
+            }
           }
         }
         // Persist records locally for offline use
-        try { localStorage.setItem(LS_RECORDS, JSON.stringify(storedRecords)); } catch(e){}
-        // Refresh the DTR grid
+        // (disabled) No localStorage write; cloud-only persistence
+// Refresh the DTR grid
         if (typeof renderResults === 'function') renderResults();
         // Persist the records to Supabase for crossâ€‘device sync
         try {
@@ -6124,7 +6135,7 @@ document.getElementById('fileInput').addEventListener('change', (ev)=>{
           if (errors > 0){
             alert(`Upload finished with errors: imported ${totalAdded} record${totalAdded!==1?'s':''} from ${total} file${total>1?'s':''}. (${errors} file${errors>1?'s':''} failed)`);
           } else {
-            alert(`Upload successful: imported ${totalAdded} record${totalAdded!==1?'s':''} from ${total} file${total>1?'s':''}.`);
+            alert(`Upload successful for ${s} to ${e}: imported ${totalAdded} record${totalAdded!==1?'s':''} from ${total} file${total>1?'s':''}.`);
           }
         }
       }
@@ -6293,12 +6304,20 @@ function __fmt12Clock(hhmm){
   
   const nameQuery = (document.getElementById('dtrSearchName') ? document.getElementById('dtrSearchName').value.trim().toLowerCase() : '');
 const groups = {};
+  const manualKeys = new Set();
+  const manualTimeMap = Object.create(null);
   for(const r of storedRecords){
+
     if(startDate && r.date < startDate) continue;
     if(endDate && r.date > endDate) continue;
     const key = r.date + '___' + r.empId;
     if(!groups[key]) groups[key]=[];
     groups[key].push(r.time);
+    if (r.manual) {
+      manualKeys.add(key);
+      if (!manualTimeMap[key]) manualTimeMap[key] = new Set();
+      manualTimeMap[key].add(r.time);
+    }
   }
 
   const keys = Object.keys(groups).sort((a,b)=>{
@@ -6734,7 +6753,32 @@ const trSeg = document.createElement('tr');
         // segments share the same splitKey.
         htmlSeg += '<td><button type="button" class="btn-unsplit" data-key="' + splitKey + '" onclick="unsplitRecord(this.dataset.key)">Unsplit</button></td>';
         trSeg.innerHTML = htmlSeg;
-        // Highlight if segment-specific overrides are set
+        // Mark manual punches (*) on specific time cells for split rows
+        try {
+          const mset = (typeof manualTimeMap !== 'undefined') ? manualTimeMap[splitKey] : null;
+          const mark = (idx, val) => {
+            if (!mset || !val) return;
+            const td = trSeg.cells[idx];
+            if (!td || td.classList.contains('missing')) return;
+            if (mset.has(val) && !td.querySelector('.manual-indicator')) {
+              const s = document.createElement('span');
+              s.className = 'manual-indicator';
+              s.textContent = '*';
+              td.appendChild(s);
+            }
+          };
+          if (segment === 'AM') {
+            mark(5, amInActual);
+            if (!hasBridge) mark(6, amOutActual);
+          } else if (segment === 'PM') {
+            if (!hasBridge) mark(7, pmInActual);
+            mark(8, pmOutActual);
+          } else if (segment === 'OT') {
+            mark(9, otInSeg);
+            mark(10, otOutSeg);
+          }
+        } catch(e) {}
+// Highlight if segment-specific overrides are set
         const hasOverrideSeg = (overridesSchedules && overridesSchedules[halfKey]) || (overridesProjects && Object.prototype.hasOwnProperty.call(overridesProjects, halfKey));
         if (hasOverrideSeg) {
           trSeg.style.backgroundColor = '#fff3cd';
@@ -6799,7 +6843,28 @@ const trSeg = document.createElement('tr');
     if(overridesSchedules[overrideKey] || overridesProjects[overrideKeyProj] !== undefined){
       tr.style.backgroundColor = '#fff3cd';
     }
-    const projCell = tr.cells[2];
+    // Mark manual punches (*) on specific time cells (unsplit row)
+    try {
+      const mset = (typeof manualTimeMap !== 'undefined') ? manualTimeMap[key] : null;
+      const mark = (idx, val) => {
+        if (!mset || !val) return;
+        const td = tr.cells[idx];
+        if (!td || td.classList.contains('missing')) return;
+        if (mset.has(val) && !td.querySelector('.manual-indicator')) {
+          const s = document.createElement('span');
+          s.className = 'manual-indicator';
+          s.textContent = '*';
+          td.appendChild(s);
+        }
+      };
+      mark(5, amInActual);
+      mark(6, amOutActual);
+      mark(7, pmInActual);
+      mark(8, pmOutActual);
+      mark(9, otInCalc);
+      mark(10, otOutCalc);
+    } catch(e) {}
+const projCell = tr.cells[2];
     if(projCell){ projCell.innerHTML = ''; projCell.appendChild(buildProjectDropdown(empId, date, empProjId)); }
     const schedCell = tr.cells[3];
     if(schedCell){ schedCell.innerHTML = ''; schedCell.appendChild(buildScheduleDropdown(empId, date, scheduleIdForEmp)); }
@@ -7358,10 +7423,9 @@ function restoreData(file) {
         return;
       }
       try {
-        storedRecords.push({ empId: String(empId), date: dateVal, time: timeVal });
-        // Persist to localStorage
-        localStorage.setItem(LS_RECORDS, JSON.stringify(storedRecords));
-        // Persist to Supabase for crossâ€‘device sync
+        storedRecords.push({ empId: String(empId), date: dateVal, time: timeVal, manual: true });
+        // (disabled) No localStorage write; cloud-only persistence
+        // Persist to Supabase for cross‑device sync
         if (typeof saveDtrToCloud === 'function') saveDtrToCloud(storedRecords);
       } catch(e) { console.error('Saving manual DTR failed', e); }
       closeManualModal();
