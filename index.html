@@ -1535,11 +1535,12 @@ window.addEventListener('load', dashReports);
        OT Out
       </th>
       <th>
-       Total Regular Hrs
+       Regular Hrs
       </th>
       <th>
        OT Hrs
       </th>
+      <th>Total Hours</th>
       <th>
        Split
       </th>
@@ -6735,6 +6736,8 @@ const trSeg = document.createElement('tr');
         }
         // Regular hours and OT hours columns
         htmlSeg += '<td>' + regDecSeg + '</td><td>' + otDecSeg + '</td>';
+        const __totSeg = ((parseFloat(regDecSeg)||0) + (parseFloat(otDecSeg)||0)).toFixed(2);
+        htmlSeg += '<td>' + __totSeg + '</td>';
         // Action: provide an Unsplit button using a named handler.  All split
         // segments share the same splitKey.
         htmlSeg += '<td><button type="button" class="btn-unsplit" data-key="' + splitKey + '" onclick="unsplitRecord(this.dataset.key)">Unsplit</button></td>';
@@ -6811,7 +6814,7 @@ const trSeg = document.createElement('tr');
       cell(amInActual) + cell(amOutActual) + cell(pmInActual) + cell(pmOutActual) +
       (otInCalc ? '<td>' + __fmt12Clock(otInCalc) + '</td>' : '<td class=\"missing\">-</td>') +
       (otOutCalc ? '<td>' + __fmt12Clock(otOutCalc) + '</td>' : '<td class=\"missing\">-</td>') +
-      '<td>'+totalRegularDecimal+'</td><td>'+otDecimal+'</td>' +
+      '<td>'+totalRegularDecimal+'</td><td>'+otDecimal+'</td><td>'+(((parseFloat(totalRegularDecimal)||0)+(parseFloat(otDecimal)||0)).toFixed(2))+'</td>' +
       // Use a named handler with a data-key attribute instead of an inline IIFE.
       '<td><button type="button" class="btn-split" data-key="' + empId + '___' + date + '" onclick="splitRecord(this.dataset.key)">Split</button></td>';
     if(overridesSchedules[overrideKey] || overridesProjects[overrideKeyProj] !== undefined){
@@ -6860,6 +6863,64 @@ const trSeg = document.createElement('tr');
     const _dtrTotalHours = _dtrTotalReg + _dtrTotalOt;
     summaryEl.textContent = `Grand Total Hours: ${_dtrTotalHours.toFixed(2)} | Regular Hours: ${_dtrTotalReg.toFixed(2)} | OT Hours: ${_dtrTotalOt.toFixed(2)} | Employees: ${_dtrEmpIds.size}`;
   })();
+
+(function(){
+  const tbl = document.getElementById('resultsTable');
+  if (!tbl) return;
+  // Create/clear tfoot
+  let foot = tbl.querySelector('tfoot#resultsFoot');
+  if (!foot) {
+    foot = document.createElement('tfoot');
+    foot.id = 'resultsFoot';
+    tbl.appendChild(foot);
+  }
+  // Locate important columns by header text
+  const ths = Array.from(tbl.querySelectorAll('thead th'));
+  const norm = s => String((s||'')).trim().toLowerCase();
+  const regIdx = ths.findIndex(th => (function(t){t=String(t||'').trim().toLowerCase();return t==='regular hrs'||t==='total regular hrs';})(th.textContent));
+  const otIdx  = ths.findIndex(th => norm(th.textContent) === 'ot hrs');
+  const totIdx = ths.findIndex(th => norm(th.textContent) === 'total hours');
+  const nameIdx = ths.findIndex(th => norm(th.textContent) === 'name');
+  const cols = ths.length;
+  // Values: prefer internal running totals if present; otherwise sum from table
+  function sumCol(idx){
+    if (idx < 0) return 0;
+    let s = 0;
+    const rows = (tbl.tBodies && tbl.tBodies[0]) ? Array.from(tbl.tBodies[0].rows) : [];
+    rows.forEach(tr => {
+      const td = tr.cells[idx]; if (!td) return;
+      const v = parseFloat(String(td.textContent||'').replace(/[^0-9.\-]/g,''));
+      if (!isNaN(v)) s += v;
+    });
+    return s;
+  }
+  const reg = (typeof _dtrTotalReg === 'number') ? _dtrTotalReg : sumCol(regIdx);
+  const ot  = (typeof _dtrTotalOt  === 'number') ? _dtrTotalOt  : sumCol(otIdx);
+  const tot = reg + ot;
+  const empCount = (typeof _dtrEmpIds === 'object' && _dtrEmpIds) ? _dtrEmpIds.size : (window.__lastEmpCount || 0);
+  // Build row with cells aligned to columns
+  const tr = document.createElement('tr');
+  tr.className = 'totals-row';
+  for (let i=0;i<cols;i++){
+    const td = document.createElement('td');
+    td.style.fontWeight = '700';
+    td.style.background = '#fafafa';
+    if (i===nameIdx) { td.textContent = 'Employees: ' + empCount; td.style.textAlign = 'left'; }
+    else if (i===regIdx) { td.textContent = reg.toFixed(2); td.style.textAlign = 'right'; }
+    else if (i===otIdx)  { td.textContent = ot.toFixed(2);  td.style.textAlign = 'right'; }
+    else if (i===totIdx) { td.textContent = tot.toFixed(2); td.style.textAlign = 'right'; }
+    else if (i===0)      { td.textContent = 'Totals:'; td.style.textAlign = 'left'; }
+    else { td.textContent = ''; }
+    const headTxt = norm(ths[i] && ths[i].textContent);
+      if (headTxt === 'split' || headTxt === 'actions') { td.style.display='none'; td.style.border='0'; }
+      tr.appendChild(td);
+  }
+  foot.innerHTML = '';
+  foot.appendChild(tr);
+  // Hide old textual summary
+  const summaryEl = document.getElementById('dtrSummary');
+  if (summaryEl){ summaryEl.textContent = ''; summaryEl.style.display = 'none'; }
+})();
 }
 
 document.getElementById('addProjectBtn').addEventListener('click', ()=>{
@@ -7928,11 +7989,11 @@ document.addEventListener('DOMContentLoaded', function(){
       });
       // Clone table
       var clone = table.cloneNode(true);
-      // Remove columns labelled 'Split' or 'Actions'
+      // Remove columns labelled 'Split', 'Actions', or 'Editor'
       var dropIdx = [];
       clone.querySelectorAll('thead th').forEach(function(th, idx){
         var t = (th.textContent || '').trim().toLowerCase();
-        if(t === 'split' || t === 'actions') dropIdx.push(idx);
+        if(t === 'split' || t === 'actions' || t === 'editor') dropIdx.push(idx);
       });
       if(dropIdx.length){
         // Remove header cells
@@ -7946,6 +8007,16 @@ document.addEventListener('DOMContentLoaded', function(){
           var sorted = dropIdx.slice().sort(function(a,b){ return b - a; });
           sorted.forEach(function(i){
             if(cells[i]) cells[i].remove();
+          });
+        });
+
+        // Remove columns from any footer rows as well
+        var footRows = clone.querySelectorAll('tfoot tr');
+        footRows.forEach(function(fr){
+          var fc = fr.children;
+          var sortedF = dropIdx.slice().sort(function(a,b){ return b - a; });
+          sortedF.forEach(function(i){
+            if(fc[i]) fc[i].remove();
           });
         });
       }
@@ -9882,7 +9953,7 @@ document.addEventListener('DOMContentLoaded', async function () {
   function getColIndexes(table){
     const heads = Array.from(table.querySelectorAll('thead th')).map(th=>th.textContent.trim());
     return {
-      regIdx: heads.findIndex(t => /Total\s+Regular\s+Hrs/i.test(t)),
+      regIdx: heads.findIndex(t => /(^(Total\s+)?Regular\s+Hrs$)/i.test(t)),
       otIdx:  heads.findIndex(t => /^OT\s*Hrs$/i.test(t))
     };
   }
@@ -10485,5 +10556,172 @@ document.addEventListener('DOMContentLoaded', async function () {
     }
   })();
   </script>
+
+<script>
+// Auto-update "Total Hours" (Reg + OT) using lightweight event hooks
+(function(){
+  function findColIdxByHeader(tbl, text){
+    if (!tbl) return -1;
+    const ths = tbl.querySelectorAll('thead th');
+    for (let i=0;i<ths.length;i++){
+      const t = (ths[i].textContent||'').trim().toLowerCase();
+      if (t === String(text||'').toLowerCase()) return i;
+    }
+    return -1;
+  }
+  function num(x){
+    const n = parseFloat(String(x==null?'':x).replace(/[^0-9.\-]/g,''));
+    return isNaN(n) ? 0 : n;
+  }
+  function computeTotalHoursForTable(){
+    const tbl = document.getElementById('resultsTable');
+    if (!tbl) return;
+    const regIdx = findColIdxByHeader(tbl, 'Regular Hrs') || findColIdxByHeader(tbl, 'Total Regular Hrs');
+    const otIdx  = findColIdxByHeader(tbl, 'OT Hrs');
+    const totIdx = findColIdxByHeader(tbl, 'Total Hours');
+    if (regIdx < 0 || otIdx < 0 || totIdx < 0) return;
+    const rows = tbl.tBodies && tbl.tBodies[0] ? Array.from(tbl.tBodies[0].rows) : [];
+    for (const tr of rows){
+      const regCell = tr.cells[regIdx];
+      const otCell  = tr.cells[otIdx];
+      const totCell = tr.cells[totIdx];
+      if (!regCell || !otCell || !totCell) continue;
+      const reg = num(regCell.textContent);
+      const ot  = num(otCell.textContent);
+      totCell.textContent = (reg + ot).toFixed(2);
+    }
+  }
+  function hookTable(){
+    const tbl = document.getElementById('resultsTable');
+    if (!tbl) return;
+    const run = () => { try{ computeTotalHoursForTable(); }catch(e){} };
+    // Also watch DOM changes (rows re-rendered after edits) and recompute
+    const tbody = tbl.tBodies && tbl.tBodies[0];
+    if (tbody) {
+      let t = null;
+      const obs = new MutationObserver(() => {
+        if (t) clearTimeout(t);
+        t = setTimeout(run, 0); // micro-debounce
+      });
+      obs.observe(tbody, { childList: true, subtree: true, characterData: true });
+      // save ref
+      window.__dtrTotalsObserver = obs;
+    }
+
+    // Recompute on typical edit signals
+    ['input','change','keyup'].forEach(evt => tbl.addEventListener(evt, run, true));
+    // Also expose a manual trigger for existing code paths
+    window.computeTotalHoursForTable = computeTotalHoursForTable;
+    // First run
+    run();
+  }
+  if (document.readyState === 'loading'){
+    document.addEventListener('DOMContentLoaded', hookTable);
+  } else {
+    hookTable();
+  }
+})();
+</script>
+
+<script>
+// ---- Unified visible-rows totals & footer sync (applied) ----
+(function(){
+  function norm(s){ return String(s||'').trim().toLowerCase(); }
+  function num(txt){
+    var v = parseFloat(String(txt==null?'':txt).replace(/[^0-9.\-]/g,''));
+    return isNaN(v) ? 0 : v;
+  }
+  function findColIndex(ths, labelOrFn){
+    for (var i=0;i<ths.length;i++){
+      var t = norm(ths[i].textContent);
+      if (typeof labelOrFn === 'function'){ if (labelOrFn(t)) return i; }
+      else if (t === norm(labelOrFn)) return i;
+    }
+    return -1;
+  }
+  function computeVisibleTotals(){
+    var tbl = document.getElementById('resultsTable');
+    if (!tbl || !tbl.tBodies || !tbl.tBodies[0]) return null;
+    var ths = tbl.querySelectorAll('thead th');
+    var idIdx  = findColIndex(ths, 'id');
+    var regIdx = findColIndex(ths, function(t){ return t==='regular hrs' || t==='total regular hrs'; });
+    var otIdx  = findColIndex(ths, 'ot hrs');
+    var totIdx = findColIndex(ths, 'total hours');
+    var rows = Array.from(tbl.tBodies[0].rows||[]);
+    var reg=0, ot=0, tot=0;
+    var seen = new Set();
+    for (var r=0; r<rows.length; r++){
+      var tr = rows[r];
+      var style = window.getComputedStyle(tr);
+      if (tr.offsetParent===null || style.display==='none' || style.visibility==='hidden') continue;
+      if (regIdx>=0) reg += num(tr.cells[regIdx] && tr.cells[regIdx].textContent);
+      if (otIdx>=0)  ot  += num(tr.cells[otIdx] && tr.cells[otIdx].textContent);
+      if (totIdx>=0) tot += num(tr.cells[totIdx] && tr.cells[totIdx].textContent);
+      if (idIdx>=0){
+        var idtxt = String(tr.cells[idIdx] && tr.cells[idIdx].textContent || '').trim();
+        if (idtxt) seen.add(idtxt);
+      }
+    }
+    if (totIdx<0) tot = reg + ot;
+    return { reg: reg, ot: ot, tot: tot, emp: seen.size, regIdx, otIdx, totIdx, idIdx, ths: ths };
+  }
+  function rebuildDtrFooter(){
+    var tbl = document.getElementById('resultsTable');
+    if (!tbl) return;
+    var res = computeVisibleTotals();
+    if (!res) return;
+    var foot = tbl.querySelector('tfoot#resultsFoot');
+    if (!foot){
+      foot = document.createElement('tfoot');
+      foot.id = 'resultsFoot';
+      tbl.appendChild(foot);
+    }
+    var cols = res.ths.length;
+    var tr = document.createElement('tr');
+    tr.className = 'totals-row';
+    for (var i=0;i<cols;i++){
+      var td = document.createElement('td');
+      td.style.fontWeight = '700';
+      td.style.background = '#fafafa';
+      var t = norm(res.ths[i].textContent);
+      if (i===0) { td.textContent = 'Totals:'; td.style.textAlign='left'; }
+      else if (t==='name') { td.textContent = 'Employees: ' + res.emp; }
+      else if (i===res.regIdx) { td.textContent = res.reg.toFixed(2); td.style.textAlign='right'; }
+      else if (i===res.otIdx)  { td.textContent = res.ot.toFixed(2);  td.style.textAlign='right'; }
+      else if (i===res.totIdx) { td.textContent = (res.tot || (res.reg+res.ot)).toFixed(2); td.style.textAlign='right'; }
+      else if (t==='split' || t==='actions') { td.style.display='none'; td.style.border='0'; }
+      else { td.textContent = ''; }
+      tr.appendChild(td);
+    }
+    foot.innerHTML = '';
+    foot.appendChild(tr);
+    var summaryEl = document.getElementById('dtrSummary');
+    if (summaryEl){ summaryEl.textContent=''; summaryEl.style.display='none'; }
+  }
+  window.computeVisibleTotals = computeVisibleTotals;
+  window.rebuildDtrFooter = rebuildDtrFooter;
+  function hook(){
+    rebuildDtrFooter();
+    var tbl = document.getElementById('resultsTable');
+    if (!tbl || !tbl.tBodies || !tbl.tBodies[0]) return;
+    var tbody = tbl.tBodies[0];
+    var run = function(){ try{ rebuildDtrFooter(); }catch(e){} };
+    ['input','change','keyup'].forEach(function(evt){ tbody.addEventListener(evt, run, true); });
+    var obs = new MutationObserver(function(){ run(); });
+    obs.observe(tbody, { childList:true, subtree:true, characterData:true });
+    window.__dtrFooterObserver = obs;
+  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', hook);
+  else hook();
+  if (typeof window.renderResults === 'function'){
+    var _origRR = window.renderResults;
+    window.renderResults = function(){ var r = _origRR.apply(this, arguments); try{ rebuildDtrFooter(); }catch(e){} return r; };
+  }
+  if (typeof window.calculateAll === 'function'){
+    var _origCA = window.calculateAll;
+    window.calculateAll = function(){ var r = _origCA.apply(this, arguments); try{ rebuildDtrFooter(); }catch(e){} return r; };
+  }
+})();
+</script>
 </body>
 </html>
