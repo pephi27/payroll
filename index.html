@@ -10470,5 +10470,103 @@ document.addEventListener('DOMContentLoaded', async function () {
     }
   })();
   </script>
+
+<script>
+// ===== Local → Cloud DTR migration (handles old LS_RECORDS backlog) =====
+(function(){
+  function padHM(hhmm){
+    if (!hhmm) return hhmm;
+    const m = String(hhmm).match(/^(\d{1,2}):(\d{2})/);
+    if (!m) return hhmm;
+    let h = m[1].padStart(2,'0'), mm = m[2];
+    return h+':'+mm;
+  }
+
+  async function migrateLocalDtrToCloud(onlyCurrentPeriod=true){
+    try{
+      const supa = window.supabase || (typeof supabase!=='undefined' ? supabase : null);
+      if (!supa) { alert('Supabase client not available.'); return; }
+      // Read local LS_RECORDS (may be large)
+      let local = [];
+      try { local = JSON.parse(localStorage.getItem(LS_RECORDS) || '[]'); } catch{ local = []; }
+      if (!Array.isArray(local) || !local.length){ alert('No local DTR found in browser.'); return; }
+
+      // Optional filter by current Week Start / End to save space
+      let s = null, e = null;
+      if (onlyCurrentPeriod){
+        s = (document.getElementById('weekStart')||{}).value || null;
+        e = (document.getElementById('weekEnd')||{}).value || null;
+        if (!s || !e) { alert('Set Week Start and Week End first.'); return; }
+        local = local.filter(r => r && r.date >= s && r.date <= e);
+        if (!local.length){ alert(`No local DTR within ${s} → ${e}.`); return; }
+      }
+
+      // Load remote dataset
+      const remote = await (typeof loadDtrFromCloud === 'function' ? loadDtrFromCloud() : null) || [];
+      const merged = [];
+      const seen = new Set();
+      const pushUnique = (rec) => {
+        if (!rec || !rec.empId || !rec.date || !rec.time) return;
+        const key = `${String(rec.empId)}|${rec.date}|${padHM(rec.time)}`;
+        if (seen.has(key)) return;
+        seen.add(key);
+        merged.push({ empId:String(rec.empId), date:rec.date, time:padHM(rec.time), manual: !!rec.manual });
+      };
+
+      // Seed with remote first so we preserve what's already there
+      if (Array.isArray(remote)) remote.forEach(pushUnique);
+      const beforeMerge = merged.length;
+      local.forEach(pushUnique);
+      const added = merged.length - beforeMerge;
+
+      if (!added){ alert('Everything in this period is already in Supabase.'); return; }
+
+      // Save merged to Supabase
+      if (typeof saveDtrToCloud === 'function'){
+        await saveDtrToCloud(merged);
+      } else {
+        // Fallback direct upsert
+        await supa.from('dtr_records').upsert({ id:'records', data: merged }, { onConflict:'id' });
+      }
+
+      // Remove migrated subset from localStorage to free space
+      try {
+        const original = JSON.parse(localStorage.getItem(LS_RECORDS) || '[]') || [];
+        const remaining = original.filter(r => !(onlyCurrentPeriod && r && r.date >= s && r.date <= e));
+        if (remaining.length) {
+          localStorage.setItem(LS_RECORDS, JSON.stringify(remaining));
+        } else {
+          localStorage.removeItem(LS_RECORDS);
+        }
+      } catch {}
+
+      alert(`Migrated ${added} record${added!==1?'s':''} to Supabase${onlyCurrentPeriod && s && e ? ` for ${s} → ${e}`:''}. Local backlog trimmed.`);
+      if (typeof renderResults === 'function') renderResults();
+      if (typeof hideRemoteDtrAlert === 'function') hideRemoteDtrAlert();
+    }catch(err){
+      console.error('Migration failed', err);
+      alert('Migration failed. Check console for details.');
+    }
+  }
+
+  // Add a small button next to the DAT/TXT upload input
+  function addMigrationButton(){
+    const upload = document.getElementById('fileInput');
+    if (!upload || document.getElementById('btnMigrateLocalDtr')) return;
+    const btn = document.createElement('button');
+    btn.id = 'btnMigrateLocalDtr';
+    btn.textContent = 'Import local DTR → Cloud (current period)';
+    btn.style.marginLeft = '8px';
+    btn.addEventListener('click', () => migrateLocalDtrToCloud(true));
+    upload.insertAdjacentElement('afterend', btn);
+  }
+
+  if (document.readyState === 'loading'){
+    document.addEventListener('DOMContentLoaded', addMigrationButton);
+  } else {
+    addMigrationButton();
+  }
+})();
+</script>
 </body>
 </html>
