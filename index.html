@@ -224,7 +224,9 @@ function safeStringify(v){
      all of its children and the panel appears dimmed. This prevents any
      interaction with DTR fields while still allowing navigation to other tabs. -->
 <style>
-  #panelMain.locked {
+  #panelMain.locked,
+  #panelPayroll.locked,
+  #panelProjectTotals.locked {
     pointer-events: none;
     opacity: 0.6;
   }
@@ -1233,6 +1235,7 @@ window.addEventListener('load', dashReports);
           <span style="font-weight:600;color:#374151;">Payroll period:</span>
           <select id="activePayrollSelect" class="date-input activeWeekSelect" style="min-width:260px;"></select>
           <button id="newPayrollPeriod" type="button" class="date-input">New period</button>
+          <button id="lockPayrollPeriod" type="button" class="date-input">Lock</button>
         </div>
         <div class="warning-note">
           ðŸ’¾ Data persisted in browser (localStorage). Use Clear to remove.
@@ -10896,6 +10899,128 @@ document.addEventListener('DOMContentLoaded', async function () {
     var _origCA = window.calculateAll;
     window.calculateAll = function(){ var r = _origCA.apply(this, arguments); try{ rebuildDtrFooter(); }catch(e){} return r; };
   }
+})();
+</script>
+<!-- === Payroll Period Snapshot + Lock === -->
+<script>
+(function(){
+  function getPeriodId(){
+    const ws = document.getElementById('weekStart')?.value;
+    const we = document.getElementById('weekEnd')?.value;
+    return (ws && we) ? ws + '_to_' + we : null;
+  }
+  async function snapshotEmployees(){
+    let emps = window.storedEmployees;
+    if(!emps || !Object.keys(emps).length){
+      emps = await readKV('att_employees_v2') || [];
+    }
+    const arr = Array.isArray(emps) ? emps : Object.values(emps);
+    return arr.map(e=>({
+      id: e.id || e.empId || e.employee_id || '',
+      name: e.name || e.employeeName || e.fullname || '',
+      rate: e.rate || e.hourly_rate || e.rate_per_hour || '',
+      project: e.project || e.projectName || e.project_name || ''
+    }));
+  }
+  async function generatePeriod(){
+    const pid = getPeriodId();
+    if(!pid) return;
+    const snap = await snapshotEmployees();
+    await writeKV('period_'+pid+'_employees', snap);
+    await writeKV('period_'+pid+'_bantay', {});
+    await writeKV('period_'+pid+'_adjustments', {});
+    try{ localStorage.setItem('payroll_bantay','{}'); }catch(e){}
+    try{ localStorage.setItem('payroll_adjustments','{}'); }catch(e){}
+    const sel = document.getElementById('activePayrollSelect');
+    if(sel){
+      let opt = Array.from(sel.options).find(o=>o.value===pid);
+      if(!opt){
+        opt = document.createElement('option');
+        opt.value = pid;
+        opt.textContent = pid.replace('_to_',' to ');
+        sel.appendChild(opt);
+      }
+      sel.value = pid;
+      sel.dispatchEvent(new Event('change'));
+    }
+  }
+  async function hydratePeriod(pid){
+    if(!pid) return;
+    const emps = await readKV('period_'+pid+'_employees');
+    if(emps){
+      window.storedEmployees = emps;
+      try{ localStorage.setItem('att_employees_v2', JSON.stringify(emps)); }catch(e){}
+    }
+    const bantay = await readKV('period_'+pid+'_bantay');
+    const adj = await readKV('period_'+pid+'_adjustments');
+    try{ localStorage.setItem('payroll_bantay', JSON.stringify(bantay||{})); }catch(e){}
+    try{ localStorage.setItem('payroll_adjustments', JSON.stringify(adj||{})); }catch(e){}
+    const locked = await readKV('period_'+pid+'_locked');
+    if(locked){
+      const bundle = await readKV('period_'+pid+'_bundle') || {};
+      if(bundle.dtr){
+        window.storedRecords = bundle.dtr;
+        try{ localStorage.setItem('att_records_v2', JSON.stringify(bundle.dtr)); }catch(e){}
+      }
+      if(bundle.payroll_html){
+        const tb = document.querySelector('#payrollTable tbody');
+        if(tb) tb.innerHTML = bundle.payroll_html;
+      }
+      if(bundle.reports_html){
+        const rpt = document.getElementById('panelProjectTotals');
+        if(rpt) rpt.innerHTML = bundle.reports_html;
+      }
+      applyLockUI(true);
+    }else{
+      applyLockUI(false);
+    }
+    try{ if(typeof calculateAll==='function') calculateAll(); }catch(e){}
+    try{ if(typeof renderTable==='function') renderTable(); }catch(e){}
+    try{ if(typeof renderReportTable==='function') renderReportTable(); }catch(e){}
+  }
+  async function lockPeriod(){
+    const pid = getPeriodId();
+    if(!pid) return;
+    const start = document.getElementById('weekStart')?.value;
+    const end = document.getElementById('weekEnd')?.value;
+    const recs = Array.isArray(window.storedRecords)?window.storedRecords:[];
+    let dtr = [];
+    if(start && end){
+      const from = new Date(start);
+      const to = new Date(end);
+      dtr = recs.filter(r=>{
+        const d = new Date(r.date);
+        return d>=from && d<=to;
+      });
+    }
+    const tb = document.querySelector('#payrollTable tbody');
+    const payroll_html = tb ? tb.innerHTML : '';
+    const rpt = document.getElementById('panelProjectTotals');
+    const reports_html = rpt ? rpt.innerHTML : '';
+    const bundle = {
+      employees: await readKV('period_'+pid+'_employees'),
+      dtr, payroll_html, reports_html,
+      meta:{ period_id:pid, start, end, locked_at:new Date().toISOString() }
+    };
+    await writeKV('period_'+pid+'_bundle', bundle);
+    await writeKV('period_'+pid+'_locked', true);
+    applyLockUI(true);
+  }
+  function applyLockUI(flag){
+    ['panelMain','panelPayroll','panelProjectTotals'].forEach(id=>{
+      const el=document.getElementById(id);
+      if(!el) return;
+      if(flag) el.classList.add('locked');
+      else el.classList.remove('locked');
+    });
+  }
+  const sel = document.getElementById('activePayrollSelect');
+  const genBtn = document.getElementById('newPayrollPeriod');
+  const lockBtn = document.getElementById('lockPayrollPeriod');
+  if(genBtn){ genBtn.addEventListener('click', function(){ setTimeout(generatePeriod,500); }); }
+  if(sel){ sel.addEventListener('change', function(){ hydratePeriod(sel.value); }); }
+  if(lockBtn){ lockBtn.addEventListener('click', lockPeriod); }
+  if(sel && sel.value) setTimeout(function(){ hydratePeriod(sel.value); }, 0);
 })();
 </script>
 </body>
