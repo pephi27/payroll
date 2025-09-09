@@ -667,10 +667,19 @@ window.addEventListener('load', dashReports);
 
   </style>
   <style id="payroll-tabs-fix">
-   #panelPayroll .tab{display:none} #panelPayroll .tab.active{display:block}
+  #panelPayroll .tab{display:none} #panelPayroll .tab.active{display:block}
   </style>
- 
-<style>
+
+ <style id="settingsScopedStyles">
+  #panelSettings { --border:#e2e8f0; --accent:#FFD700; }
+  #panelSettings .tabs { display:flex;gap:6px;flex-wrap:wrap }
+  #panelSettings .tab-btn { padding:8px 12px;border:1px solid var(--border);background:white;border-radius:8px;cursor:pointer }
+  #panelSettings .tab-btn.active { background:var(--accent);color:white;border-color:var(--accent) }
+  #panelSettings .tab { display:none }
+  #panelSettings .tab.active { display:block }
+ </style>
+
+ <style>
 /* --- Employees: Clean Add Employee UI --- */
 #panelSettingsEmployees .form-card{
   background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:16px;
@@ -1541,15 +1550,17 @@ window.addEventListener('load', dashReports);
    </div>
   </section>
   <section class="panel" id="panelSettings">
-   <h3>Settings</h3>
-   <ul class="settings-nav">
-    <li><button class="tab-btn" id="tabSettingsEmployees">Employees</button></li>
-    <li><button class="tab-btn" id="tabSettingsSchedule">Schedule</button></li>
-    <li><button class="tab-btn" id="tabSettingsProjects">Projects</button></li>
-   </ul>
+   <header>
+    <h2>Settings</h2>
+    <div class="tabs">
+     <button class="tab-btn" data-tab="employees">Employees</button>
+     <button class="tab-btn" data-tab="schedule">Schedule</button>
+     <button class="tab-btn" data-tab="projects">Projects</button>
+    </div>
+   </header>
 
-  
-  <section class="panel" id="panelSettingsSchedule">
+
+  <section class="panel tab" id="panelSettingsSchedule">
    <h3>
     Schedules
    </h3>
@@ -1730,7 +1741,7 @@ window.addEventListener('load', dashReports);
    </div>
   </section>
   
-  <section class="panel" id="panelSettingsEmployees">
+  <section class="panel tab active" id="panelSettingsEmployees">
    <h3>
     Employees
    </h3>
@@ -1796,7 +1807,7 @@ window.addEventListener('load', dashReports);
    </table>
   </section>
   
-  <section class="panel" id="panelSettingsProjects">
+  <section class="panel tab" id="panelSettingsProjects">
    <h3>
     Projects
    </h3>
@@ -5649,21 +5660,17 @@ function showTab(name){
   if(name==='payroll'){ tabs.tabPayroll && tabs.tabPayroll.classList.add('active'); tabs.panelPayroll && tabs.panelPayroll.classList.add('active'); }
 }
 function showSettingsTab(name){
-  const map = {
-    employees: { panel: tabs.panelSettingsEmployees, btn: document.getElementById('tabSettingsEmployees'), render: renderEmployees },
-    schedule: { panel: tabs.panelSettingsSchedule, btn: document.getElementById('tabSettingsSchedule'), render: renderScheduleEditor },
-    projects: { panel: tabs.panelSettingsProjects, btn: document.getElementById('tabSettingsProjects'), render: renderProjects }
+  const buttons = tabs.panelSettings.querySelectorAll('.tab-btn');
+  const panels = tabs.panelSettings.querySelectorAll('.tab');
+  buttons.forEach(btn => btn.classList.toggle('active', btn.dataset.tab === name));
+  panels.forEach(panel => panel.classList.toggle('active', panel.id === 'panelSettings' + name.charAt(0).toUpperCase() + name.slice(1)));
+  const renderMap = {
+    employees: renderEmployees,
+    schedule: renderScheduleEditor,
+    projects: renderProjects
   };
-  Object.values(map).forEach(m => {
-    if (m.panel) m.panel.classList.remove('active');
-    if (m.btn) m.btn.classList.remove('active');
-  });
-  const m = map[name];
-  if (m) {
-    if (m.panel) m.panel.classList.add('active');
-    if (m.btn) m.btn.classList.add('active');
-    if (typeof m.render === 'function') m.render();
-  }
+  const render = renderMap[name];
+  if (typeof render === 'function') render();
 }
 window.__dtrFilterBackup = null;
 // When switching to the main (DTR) tab, render results and then toggle the edit
@@ -5704,12 +5711,9 @@ tabs.tabMain.addEventListener('click', () => {
   } catch (e) {}
 });
 tabs.tabSettings && tabs.tabSettings.addEventListener('click', ()=>showTab('settings'));
-const tabSettingsEmployees = document.getElementById('tabSettingsEmployees');
-const tabSettingsSchedule = document.getElementById('tabSettingsSchedule');
-const tabSettingsProjects = document.getElementById('tabSettingsProjects');
-if (tabSettingsEmployees) tabSettingsEmployees.addEventListener('click', ()=>showSettingsTab('employees'));
-if (tabSettingsSchedule) tabSettingsSchedule.addEventListener('click', ()=>showSettingsTab('schedule'));
-if (tabSettingsProjects) tabSettingsProjects.addEventListener('click', ()=>showSettingsTab('projects'));
+tabs.panelSettings.querySelectorAll('.tab-btn').forEach(btn => {
+  btn.addEventListener('click', () => showSettingsTab(btn.dataset.tab));
+});
 
 tabs.tabPayroll.addEventListener('click', ()=>{
   try {
