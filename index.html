@@ -1286,8 +1286,16 @@ window.addEventListener('load', dashReports);
   <!-- Detail view for locked payroll snapshots. Hidden by default and shown when a user clicks Open/View on a history row. -->
   <div id="snapshotDetailsScreen" style="display:none; margin-top:12px;">
      <h4 id="snapshotDetailTitle"></h4>
-     <div id="snapshotPayrollContainer" style="margin-bottom:16px;"></div>
-     <div id="snapshotDTRContainer"></div>
+     <div class="tabs">
+       <button class="tab-btn active" data-tab="payroll">Payroll</button>
+       <button class="tab-btn" data-tab="dtr">DTR</button>
+       <button class="tab-btn" data-tab="employees">Employees</button>
+       <button class="tab-btn" data-tab="projects">Projects</button>
+     </div>
+     <div id="snapshotPayrollContainer" class="snapshot-tab" style="margin-bottom:16px;"></div>
+     <div id="snapshotDTRContainer" class="snapshot-tab" style="display:none;"></div>
+     <div id="snapshotEmployeesContainer" class="snapshot-tab" style="display:none;"></div>
+     <div id="snapshotProjectsContainer" class="snapshot-tab" style="display:none;"></div>
      <button id="snapshotBackButton" type="button" style="margin-top:12px;">Back</button>
   </div>
   </section>
@@ -4398,7 +4406,117 @@ document.addEventListener('DOMContentLoaded', () => {
     const titleEl = document.getElementById('snapshotDetailTitle');
     const payrollContainer = document.getElementById('snapshotPayrollContainer');
     const dtrContainer = document.getElementById('snapshotDTRContainer');
-    if (!detailScreen || !payrollContainer || !dtrContainer) return;
+    const empContainer = document.getElementById('snapshotEmployeesContainer');
+    const projContainer = document.getElementById('snapshotProjectsContainer');
+    if (!detailScreen || !payrollContainer || !dtrContainer || !empContainer || !projContainer) return;
+
+    function renderSnapshotEmployees() {
+      empContainer.innerHTML = '';
+      const list = snap.employees;
+      let arr = [];
+      if (Array.isArray(list)) {
+        arr = list;
+      } else if (list && typeof list === 'object') {
+        arr = Object.keys(list).map(id => ({ id, ...(list[id] || {}) }));
+      }
+      if (!arr.length) {
+        const p = document.createElement('p');
+        p.textContent = 'No employee data.';
+        empContainer.appendChild(p);
+        return;
+      }
+      const table = document.createElement('table');
+      table.style.borderCollapse = 'collapse';
+      table.style.width = '100%';
+      const head = document.createElement('thead');
+      const hr = document.createElement('tr');
+      const headers = ['ID','Name','Hourly Rate','Schedule','Project','Bank Account','Pag-IBIG','PhilHealth','SSS'];
+      headers.forEach(h => {
+        const th = document.createElement('th');
+        th.textContent = h;
+        th.style.border = '1px solid #e2e8f0';
+        th.style.background = '#f1f5f9';
+        th.style.padding = '4px';
+        hr.appendChild(th);
+      });
+      head.appendChild(hr);
+      table.appendChild(head);
+      const body = document.createElement('tbody');
+      arr.forEach(e => {
+        const tr = document.createElement('tr');
+        const vals = [
+          e.id ?? e.empId ?? '',
+          e.name || '',
+          e.hourlyRate ?? e.rate ?? '',
+          e.scheduleName || e.schedule || e.scheduleId || '',
+          e.projectName || e.project || e.projectId || '',
+          e.bankAccount || e.bank || '',
+          (e.pagibig === false ? 'No' : 'Yes'),
+          (e.philhealth === false ? 'No' : 'Yes'),
+          (e.sss === false ? 'No' : 'Yes')
+        ];
+        vals.forEach(v => {
+          const td = document.createElement('td');
+          td.textContent = String(v ?? '');
+          td.style.border = '1px solid #e2e8f0';
+          td.style.padding = '4px';
+          tr.appendChild(td);
+        });
+        body.appendChild(tr);
+      });
+      table.appendChild(body);
+      empContainer.appendChild(table);
+    }
+
+    function renderSnapshotProjects() {
+      projContainer.innerHTML = '';
+      const list = snap.projects;
+      let arr = [];
+      if (Array.isArray(list)) {
+        arr = list;
+      } else if (list && typeof list === 'object') {
+        arr = Object.keys(list).map(id => ({ id, ...(list[id] || {}) }));
+      }
+      if (!arr.length) {
+        const p = document.createElement('p');
+        p.textContent = 'No project data.';
+        projContainer.appendChild(p);
+        return;
+      }
+      const table = document.createElement('table');
+      table.style.borderCollapse = 'collapse';
+      table.style.width = '100%';
+      const head = document.createElement('thead');
+      const hr = document.createElement('tr');
+      ['ID','Project Name'].forEach(h => {
+        const th = document.createElement('th');
+        th.textContent = h;
+        th.style.border = '1px solid #e2e8f0';
+        th.style.background = '#f1f5f9';
+        th.style.padding = '4px';
+        hr.appendChild(th);
+      });
+      head.appendChild(hr);
+      table.appendChild(head);
+      const body = document.createElement('tbody');
+      arr.forEach(p => {
+        const tr = document.createElement('tr');
+        const vals = [
+          p.id ?? p.projectId ?? '',
+          p.name || p.projectName || p.project || ''
+        ];
+        vals.forEach(v => {
+          const td = document.createElement('td');
+          td.textContent = String(v ?? '');
+          td.style.border = '1px solid #e2e8f0';
+          td.style.padding = '4px';
+          tr.appendChild(td);
+        });
+        body.appendChild(tr);
+      });
+      table.appendChild(body);
+      projContainer.appendChild(table);
+    }
     // Determine headers for hiding/showing (h4 elements preceding tables)
     const activeHeader = activeTable && activeTable.previousElementSibling;
     const histHeader = historyTable && historyTable.previousElementSibling;
@@ -4682,6 +4800,22 @@ document.addEventListener('DOMContentLoaded', () => {
       p.textContent = 'No DTR records found for this period.';
       dtrContainer.appendChild(p);
     }
+
+    renderSnapshotEmployees();
+    renderSnapshotProjects();
+
+    const tabButtons = detailScreen.querySelectorAll('.tab-btn');
+    const tabMap = { payroll: payrollContainer, dtr: dtrContainer, employees: empContainer, projects: projContainer };
+    function activateTab(name){
+      tabButtons.forEach(btn => btn.classList.toggle('active', btn.dataset.tab === name));
+      Object.keys(tabMap).forEach(key => {
+        const el = tabMap[key];
+        if (el) el.style.display = key === name ? 'block' : 'none';
+      });
+    }
+    tabButtons.forEach(btn => { btn.onclick = () => activateTab(btn.dataset.tab); });
+    activateTab('payroll');
+
     // Show the detail screen
     detailScreen.style.display = 'block';
     // Disable editing across the app
@@ -4711,6 +4845,8 @@ document.addEventListener('DOMContentLoaded', () => {
         if (snapshotViewEl) snapshotViewEl.style.display = '';
         payrollContainer.innerHTML = '';
         dtrContainer.innerHTML = '';
+        empContainer.innerHTML = '';
+        projContainer.innerHTML = '';
         // Remove forced flags and re-enable date inputs
         if (wsInput) {
           delete wsInput.dataset.forced;
