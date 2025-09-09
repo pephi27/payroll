@@ -5658,13 +5658,38 @@ function showTab(name){
 
   if(name==='payroll'){ tabs.tabPayroll && tabs.tabPayroll.classList.add('active'); tabs.panelPayroll && tabs.panelPayroll.classList.add('active'); }
 }
+window.__dtrFilterBackup = null;
 // When switching to the main (DTR) tab, render results and then toggle the edit
 // state based on whether the selected period is locked. Without this call,
 // the DTR UI may remain interactive even when a locked payroll period is
 // selected. Any errors are caught to avoid breaking tab switching.
 tabs.tabMain.addEventListener('click', () => {
   showTab('main');
-  try { renderResults(); } catch (e) {}
+  try {
+    if (window.__dtrFilterBackup) {
+      const { name, project, from, to } = window.__dtrFilterBackup;
+      const nameEl = document.getElementById('dtrSearchName');
+      const projectEl = document.getElementById('filterProject');
+      const fromEl = document.getElementById('dtrDateFrom');
+      const toEl = document.getElementById('dtrDateTo');
+      if (nameEl) nameEl.value = name;
+      if (projectEl) {
+        projectEl.value = project;
+        currentProjectFilter = project || 'all';
+        try { localStorage.setItem(LS_FILTER_PROJECT, currentProjectFilter); } catch (e) {}
+      }
+      if (fromEl) fromEl.value = from;
+      if (toEl) toEl.value = to;
+      try {
+        if (from) localStorage.setItem(LS_FROM, from);
+        else localStorage.removeItem(LS_FROM);
+        if (to) localStorage.setItem(LS_TO, to);
+        else localStorage.removeItem(LS_TO);
+      } catch (e) {}
+      window.__dtrFilterBackup = null;
+    }
+    renderResults();
+  } catch (e) {}
   try {
     if (typeof checkAndToggleEditState === 'function') {
       checkAndToggleEditState();
@@ -7631,7 +7656,30 @@ function restoreData(file) {
 
   // Click to open our tab
   if (tabs && tabs.tabProjectTotals){
-    tabs.tabProjectTotals.addEventListener('click', function(){ showTab('projectTotals'); });
+    tabs.tabProjectTotals.addEventListener('click', function(){
+      var nameEl = document.getElementById('dtrSearchName');
+      var projectEl = document.getElementById('filterProject');
+      var fromEl = document.getElementById('dtrDateFrom');
+      var toEl = document.getElementById('dtrDateTo');
+      window.__dtrFilterBackup = {
+        name: nameEl ? nameEl.value : '',
+        project: projectEl ? projectEl.value : 'all',
+        from: fromEl ? fromEl.value : '',
+        to: toEl ? toEl.value : ''
+      };
+      if (nameEl) nameEl.value = '';
+      if (projectEl) projectEl.value = 'all';
+      currentProjectFilter = 'all';
+      try { localStorage.setItem(LS_FILTER_PROJECT, currentProjectFilter); } catch(e){}
+      if (fromEl) fromEl.value = '';
+      if (toEl) toEl.value = '';
+      try {
+        localStorage.removeItem(LS_FROM);
+        localStorage.removeItem(LS_TO);
+      } catch (e) {}
+      try { renderResults(); } catch (e) {}
+      showTab('projectTotals');
+    });
   }
 
   // Re-render when date range changes while active
