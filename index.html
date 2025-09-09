@@ -522,10 +522,6 @@ window.addEventListener('load', dashReports);
   input.cell{width:100%;box-sizing:border-box}
   .small{font-size:12px;color:#64748b}
   .muted{color:#64748b;font-size:12px}
-  .hidden{display:none}
-  .snapshot-table{border-collapse:collapse;width:100%}
-  .snapshot-table th,.snapshot-table td{border:1px solid #e2e8f0;padding:4px}
-  .snapshot-table th{background:#f1f5f9}
   @media (max-width:800px){th,td{font-size:12px}}
   .section-title{margin-top:12px;margin-bottom:4px;font-weight:700}
   /* Ensure DTR table columns stay visible and don't collapse in Chrome. Allow
@@ -671,49 +667,40 @@ window.addEventListener('load', dashReports);
 
   </style>
   <style id="payroll-tabs-fix">
-  #panelPayroll .tab{display:none} #panelPayroll .tab.active{display:block}
+   #panelPayroll .tab{display:none} #panelPayroll .tab.active{display:block}
   </style>
-
- <style id="settingsScopedStyles">
-  #panelSettings { --border:#e2e8f0; --accent:#FFD700; }
-  #panelSettings .tabs { display:flex !important;gap:6px;flex-wrap:wrap }
-  #panelSettings .tab-btn { padding:8px 12px;border:1px solid var(--border);background:white;border-radius:8px;cursor:pointer }
-  #panelSettings .tab-btn.active { background:var(--accent);color:white;border-color:var(--accent) }
-  #panelSettings .tab { display:none }
-  #panelSettings .tab.active { display:block }
- </style>
-
- <style>
+ 
+<style>
 /* --- Employees: Clean Add Employee UI --- */
-#panelSettingsEmployees .form-card{
+#panelEmployees .form-card{
   background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:16px;
   box-shadow:0 1px 2px rgba(0,0,0,0.04);margin-bottom:12px;
 }
-#panelSettingsEmployees form{
+#panelEmployees form{
   display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;align-items:start;
 }
-#panelSettingsEmployees label{display:block;font-size:12px;color:#334155;margin-bottom:6px;font-weight:600;}
-#panelSettingsEmployees input, #panelSettingsEmployees select, #panelSettingsEmployees textarea{
+#panelEmployees label{display:block;font-size:12px;color:#334155;margin-bottom:6px;font-weight:600;}
+#panelEmployees input, #panelEmployees select, #panelEmployees textarea{
   width:100%;padding:10px 12px;border:1px solid #cbd5e1;border-radius:10px;outline:none;
 }
-#panelSettingsEmployees input:focus, #panelSettingsEmployees select:focus, #panelSettingsEmployees textarea:focus{
+#panelEmployees input:focus, #panelEmployees select:focus, #panelEmployees textarea:focus{
   border-color:#64748b;box-shadow:0 0 0 3px rgba(100,116,139,0.15);
 }
-#panelSettingsEmployees input:invalid, #panelSettingsEmployees select:invalid, #panelSettingsEmployees textarea:invalid{
+#panelEmployees input:invalid, #panelEmployees select:invalid, #panelEmployees textarea:invalid{
   border-color:#ef4444;
 }
-#panelSettingsEmployees .form-actions{grid-column:1 / -1;display:flex;gap:10px;justify-content:flex-end;margin-top:2px;}
-#panelSettingsEmployees button, #panelSettingsEmployees input[type="submit"], #panelSettingsEmployees input[type="button"]{
+#panelEmployees .form-actions{grid-column:1 / -1;display:flex;gap:10px;justify-content:flex-end;margin-top:2px;}
+#panelEmployees button, #panelEmployees input[type="submit"], #panelEmployees input[type="button"]{
   border:1px solid #cbd5e1;border-radius:10px;padding:10px 14px;font-weight:600;cursor:pointer;background:#f8fafc;
 }
-#panelSettingsEmployees button:hover, #panelSettingsEmployees input[type="submit"]:hover, #panelSettingsEmployees input[type="button"]:hover{
+#panelEmployees button:hover, #panelEmployees input[type="submit"]:hover, #panelEmployees input[type="button"]:hover{
   filter:brightness(0.98);
 }
-#panelSettingsEmployees .btn-primary{background:#0ea5e9;border-color:#0284c7;color:#fff;}
-#panelSettingsEmployees .btn-danger{background:#fee2e2;border-color:#fecaca;color:#b91c1c;}
-#panelSettingsEmployees small.hint{display:block;color:#64748b;margin-top:4px;font-size:11px;}
+#panelEmployees .btn-primary{background:#0ea5e9;border-color:#0284c7;color:#fff;}
+#panelEmployees .btn-danger{background:#fee2e2;border-color:#fecaca;color:#b91c1c;}
+#panelEmployees small.hint{display:block;color:#64748b;margin-top:4px;font-size:11px;}
 @media (max-width:1100px){
-  #panelSettingsEmployees form{grid-template-columns:repeat(auto-fit,minmax(180px,1fr));}
+  #panelEmployees form{grid-template-columns:repeat(auto-fit,minmax(180px,1fr));}
 }
 </style>
 
@@ -1029,14 +1016,18 @@ window.addEventListener('load', dashReports);
   .header .nav-icon { font-size: 0; line-height: 1; }
   #tabDashboard .nav-icon::before { content: "📊"; font-size: 14px; }
   #tabMain .nav-icon::before      { content: "🕒"; font-size: 14px; }
+  #tabSchedule .nav-icon::before  { content: "🗓️"; font-size: 14px; }
+  #tabEmployees .nav-icon::before { content: "👥"; font-size: 14px; }
+  #tabProjects .nav-icon::before  { content: "🚀"; font-size: 14px; }
   #tabPayroll .nav-icon::before   { content: "💰"; font-size: 14px; }
-  #tabSettings .nav-icon::before  { content: "⚙️"; font-size: 14px; }
   #tabProjectTotals .nav-icon::before { content: "📈"; font-size: 14px; }
   /* Sidebar duplicates */
   #old-tabDashboard .nav-icon::before { content: "📊"; }
   #old-tabMain .nav-icon::before      { content: "🕒"; }
+  #old-tabSchedule .nav-icon::before  { content: "🗓️"; }
+  #old-tabEmployees .nav-icon::before { content: "👥"; }
+  #old-tabProjects .nav-icon::before  { content: "🚀"; }
   #old-tabPayroll .nav-icon::before   { content: "💰"; }
-  #old-tabSettings .nav-icon::before  { content: "⚙️"; }
   #old-tabProjectTotals .nav-icon::before { content: "📈"; }
 
   /* Mobile menu icon */
@@ -1160,9 +1151,11 @@ window.addEventListener('load', dashReports);
             <ul class="nav-menu">
               <li class="nav-item"><button class="nav-link tab-btn active" id="tabDashboard" data-page="dashboard"><span class="nav-icon">ðŸ“Š</span> Dashboard</button></li>
               <li class="nav-item"><button class="nav-link tab-btn" id="tabMain" data-page="dtr"><span class="nav-icon">ðŸ•</span> DTR</button></li>
+              <li class="nav-item"><button class="nav-link tab-btn" id="tabSchedule" data-page="schedules"><span class="nav-icon">ðŸ“…</span> Schedules</button></li>
+              <li class="nav-item"><button class="nav-link tab-btn" id="tabEmployees" data-page="employees"><span class="nav-icon">ðŸ‘¥</span> Employees</button></li>
+              <li class="nav-item"><button class="nav-link tab-btn" id="tabProjects" data-page="projects"><span class="nav-icon">ðŸš€</span> Projects</button></li>
               <li class="nav-item"><button class="nav-link tab-btn" id="tabPayroll" data-page="payroll"><span class="nav-icon">ðŸ’°</span> Payroll</button></li>
-                            <li class="nav-item"><button class="nav-link tab-btn" id="tabProjectTotals" data-page="totals"><span class="nav-icon">ðŸ“ˆ</span> Reports</button></li>
-              <li class="nav-item"><button class="nav-link tab-btn" id="tabSettings" data-page="settings"><span class="nav-icon">⚙️</span> Settings</button></li>
+              <li class="nav-item"><button class="nav-link tab-btn" id="tabProjectTotals" data-page="totals"><span class="nav-icon">ðŸ“ˆ</span> Reports</button></li>
             </ul>
           </nav>
         </div>
@@ -1188,21 +1181,33 @@ window.addEventListener('load', dashReports);
             </button>
           </li>
           <li class="nav-item">
+            <button class="nav-link tab-btn" id="old-tabSchedule" data-page="schedules">
+              <span class="nav-icon">ðŸ“…</span>
+              Schedules
+            </button>
+          </li>
+          <li class="nav-item">
+            <button class="nav-link tab-btn" id="old-tabEmployees" data-page="employees">
+              <span class="nav-icon">ðŸ‘¥</span>
+              Employees
+            </button>
+          </li>
+          <li class="nav-item">
+            <button class="nav-link tab-btn" id="old-tabProjects" data-page="projects">
+              <span class="nav-icon">ðŸš€</span>
+              Projects
+            </button>
+          </li>
+          <li class="nav-item">
             <button class="nav-link tab-btn" id="old-tabPayroll" data-page="payroll">
               <span class="nav-icon">ðŸ’°</span>
               Payroll
             </button>
           </li>
-                    <li class="nav-item">
+          <li class="nav-item">
             <button class="nav-link tab-btn" id="old-tabProjectTotals" data-page="totals">
               <span class="nav-icon">ðŸ“ˆ</span>
               Reports
-            </button>
-          </li>
-          <li class="nav-item">
-            <button class="nav-link tab-btn" id="old-tabSettings" data-page="settings">
-              <span class="nav-icon">⚙️</span>
-              Settings
             </button>
           </li>
         </ul>
@@ -1288,18 +1293,10 @@ window.addEventListener('load', dashReports);
    </div>
    <div id="dashBackupLog" style="display:none;margin:8px 0;padding:10px;border:1px solid #e5e7eb;background:#fff;border-radius:8px;font-size:12px;color:#111;line-height:1.35;max-width:920px;"></div>
   <!-- Detail view for locked payroll snapshots. Hidden by default and shown when a user clicks Open/View on a history row. -->
-  <div id="snapshotDetailsScreen" class="hidden" style="margin-top:12px;">
+  <div id="snapshotDetailsScreen" style="display:none; margin-top:12px;">
      <h4 id="snapshotDetailTitle"></h4>
-     <div class="tabs">
-       <button class="tab-btn active" data-tab="payroll">Payroll</button>
-       <button class="tab-btn" data-tab="dtr">DTR</button>
-       <button class="tab-btn" data-tab="employees">Employees</button>
-       <button class="tab-btn" data-tab="projects">Projects</button>
-     </div>
-    <div id="snapshotPayrollContainer" class="snapshot-tab" style="margin-bottom:16px;"></div>
-    <div id="snapshotDTRContainer" class="snapshot-tab hidden"></div>
-    <div id="snapshotEmployeesContainer" class="snapshot-tab hidden"></div>
-    <div id="snapshotProjectsContainer" class="snapshot-tab hidden"></div>
+     <div id="snapshotPayrollContainer" style="margin-bottom:16px;"></div>
+     <div id="snapshotDTRContainer"></div>
      <button id="snapshotBackButton" type="button" style="margin-top:12px;">Back</button>
   </div>
   </section>
@@ -1561,18 +1558,8 @@ window.addEventListener('load', dashReports);
    <div id="dtrSummary" style="margin-top:4px;font-weight:bold;"></div>
    </div>
   </section>
-  <section class="panel" id="panelSettings">
-   <header>
-    <h2>Settings</h2>
-    <div class="tabs">
-     <button class="tab-btn active" data-tab="employees">Employees</button>
-     <button class="tab-btn" data-tab="schedule">Schedule</button>
-     <button class="tab-btn" data-tab="projects">Projects</button>
-    </div>
-   </header>
-
-
-  <section class="panel tab" id="panelSettingsSchedule">
+  
+  <section class="panel" id="panelSchedule">
    <h3>
     Schedules
    </h3>
@@ -1753,7 +1740,7 @@ window.addEventListener('load', dashReports);
    </div>
   </section>
   
-  <section class="panel tab active" id="panelSettingsEmployees">
+  <section class="panel" id="panelEmployees">
    <h3>
     Employees
    </h3>
@@ -1819,7 +1806,7 @@ window.addEventListener('load', dashReports);
    </table>
   </section>
   
-  <section class="panel tab" id="panelSettingsProjects">
+  <section class="panel" id="panelProjects">
    <h3>
     Projects
    </h3>
@@ -1847,8 +1834,6 @@ window.addEventListener('load', dashReports);
     </tbody>
    </table>
   </section>
-</section>
-
   <section class="panel" id="panelPayroll">
    <div id="payrollWrapper">
     <header>
@@ -4410,260 +4395,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const titleEl = document.getElementById('snapshotDetailTitle');
     const payrollContainer = document.getElementById('snapshotPayrollContainer');
     const dtrContainer = document.getElementById('snapshotDTRContainer');
-    const empContainer = document.getElementById('snapshotEmployeesContainer');
-    const projContainer = document.getElementById('snapshotProjectsContainer');
-    if (!detailScreen || !payrollContainer || !dtrContainer || !empContainer || !projContainer) return;
-
-    function buildSnapshotTable(headers, rows) {
-      const table = document.createElement('table');
-      table.className = 'snapshot-table';
-      const head = document.createElement('thead');
-      const hr = document.createElement('tr');
-      headers.forEach(h => {
-        const th = document.createElement('th');
-        th.textContent = h;
-        hr.appendChild(th);
-      });
-      head.appendChild(hr);
-      table.appendChild(head);
-      const body = document.createElement('tbody');
-      rows.forEach(r => body.appendChild(r));
-      table.appendChild(body);
-      return table;
-    }
-
-    function renderSnapshotEmployees() {
-      empContainer.innerHTML = '';
-      const list = snap.employees;
-      let arr = [];
-      if (Array.isArray(list)) {
-        arr = list.map((emp, idx) => ({ key: idx, emp }));
-      } else if (list && typeof list === 'object') {
-        arr = Object.keys(list).map(id => ({ key: id, emp: list[id] || {} }));
-      }
-      if (!arr.length) {
-        const p = document.createElement('p');
-        p.textContent = 'No employee data.';
-        empContainer.appendChild(p);
-        return;
-      }
-      const schedOpts = [];
-      arr.forEach(r => {
-        const s = r.emp.scheduleName || r.emp.schedule || r.emp.scheduleId;
-        if (s && !schedOpts.includes(s)) schedOpts.push(s);
-      });
-      const projOpts = [];
-      const projList = snap.projects;
-      if (Array.isArray(projList)) {
-        projList.forEach(p => {
-          const n = p.name || p.projectName || p.project || p.id;
-          if (n && !projOpts.includes(n)) projOpts.push(n);
-        });
-      } else if (projList && typeof projList === 'object') {
-        Object.keys(projList).forEach(id => {
-          const p = projList[id] || {};
-          const n = p.name || p.projectName || p.project || id;
-          if (n && !projOpts.includes(n)) projOpts.push(n);
-        });
-      }
-      function updateEmployeeField(rec, prop, value) {
-        const emp = rec.emp;
-        const oldId = emp.id;
-        emp[prop] = value;
-        if (Array.isArray(snap.employees)) {
-          snap.employees[rec.key] = emp;
-        } else {
-          if (prop === 'id') {
-            delete snap.employees[rec.key];
-            rec.key = value;
-          }
-          snap.employees[rec.key] = emp;
-        }
-        if (prop === 'id' || prop === 'name' || prop === 'hourlyRate') {
-          (snap.rows || []).forEach(r => {
-            if (String(r.id) === String(oldId)) {
-              if (prop === 'id') r.id = value;
-              else if (prop === 'name') r.name = value;
-              else if (prop === 'hourlyRate') r.rate = parseFloat(value) || 0;
-            }
-          });
-        }
-        if (prop === 'id' && typeof contribFlags !== 'undefined') {
-          contribFlags[value] = contribFlags[oldId] || {};
-          delete contribFlags[oldId];
-          try { localStorage.setItem(LS_CONTRIB_FLAGS, JSON.stringify(contribFlags)); } catch {}
-        }
-        if (typeof saveHistory === 'function') saveHistory();
-        if (typeof renderSnapshotPayroll === 'function') renderSnapshotPayroll();
-      }
-      const rows = [];
-      arr.forEach(rec => {
-        const e = rec.emp;
-        const tr = document.createElement('tr');
-        function cell(el){ const td=document.createElement('td'); td.appendChild(el); tr.appendChild(td); }
-        const idInput = document.createElement('input');
-        idInput.value = e.id ?? e.empId ?? '';
-        idInput.style.width = '100%';
-        idInput.addEventListener('change', () => updateEmployeeField(rec, 'id', idInput.value));
-        cell(idInput);
-        const nameInput = document.createElement('input');
-        nameInput.value = e.name || '';
-        nameInput.style.width = '100%';
-        nameInput.addEventListener('change', () => updateEmployeeField(rec, 'name', nameInput.value));
-        cell(nameInput);
-        const rateInput = document.createElement('input');
-        rateInput.type = 'number';
-        rateInput.step = '0.01';
-        rateInput.value = e.hourlyRate ?? e.rate ?? '';
-        rateInput.style.width = '100%';
-        rateInput.addEventListener('change', () => updateEmployeeField(rec, 'hourlyRate', parseFloat(rateInput.value) || 0));
-        cell(rateInput);
-        const schedSelect = document.createElement('select');
-        const curSched = e.scheduleName || e.schedule || e.scheduleId || '';
-        [''].concat(schedOpts).forEach(s => {
-          const opt = document.createElement('option');
-          opt.value = s;
-          opt.textContent = s;
-          if (s === curSched) opt.selected = true;
-          schedSelect.appendChild(opt);
-        });
-        schedSelect.addEventListener('change', () => updateEmployeeField(rec, 'scheduleName', schedSelect.value));
-        cell(schedSelect);
-        const projSelect = document.createElement('select');
-        const curProj = e.projectName || e.project || e.projectId || '';
-        [''].concat(projOpts).forEach(p => {
-          const opt = document.createElement('option');
-          opt.value = p;
-          opt.textContent = p;
-          if (p === curProj) opt.selected = true;
-          projSelect.appendChild(opt);
-        });
-        projSelect.addEventListener('change', () => updateEmployeeField(rec, 'projectName', projSelect.value));
-        cell(projSelect);
-        const bankInput = document.createElement('input');
-        bankInput.value = e.bankAccount || e.bank || '';
-        bankInput.style.width = '100%';
-        bankInput.addEventListener('change', () => updateEmployeeField(rec, 'bankAccount', bankInput.value));
-        cell(bankInput);
-        const pagibigSel = document.createElement('select');
-        ['','Yes','No'].forEach(v => {
-          const opt = document.createElement('option');
-          opt.value = v;
-          opt.textContent = v || 'N/A';
-          const cur = e.pagibig === true ? 'Yes' : e.pagibig === false ? 'No' : '';
-          if (cur === v) opt.selected = true;
-          pagibigSel.appendChild(opt);
-        });
-        pagibigSel.addEventListener('change', () => {
-          const val = pagibigSel.value;
-          const enabled = val === 'Yes' ? true : val === 'No' ? false : undefined;
-          updateEmployeeField(rec, 'pagibig', enabled);
-          if (typeof contribFlags !== 'undefined') {
-            if (!contribFlags[e.id]) contribFlags[e.id] = {};
-            if (enabled === undefined) delete contribFlags[e.id].pagibig;
-            else contribFlags[e.id].pagibig = enabled;
-            try { localStorage.setItem(LS_CONTRIB_FLAGS, JSON.stringify(contribFlags)); } catch {}
-          }
-        });
-        cell(pagibigSel);
-        const philSel = document.createElement('select');
-        ['','Yes','No'].forEach(v => {
-          const opt = document.createElement('option');
-          opt.value = v;
-          opt.textContent = v || 'N/A';
-          const cur = e.philhealth === true ? 'Yes' : e.philhealth === false ? 'No' : '';
-          if (cur === v) opt.selected = true;
-          philSel.appendChild(opt);
-        });
-        philSel.addEventListener('change', () => {
-          const val = philSel.value;
-          const enabled = val === 'Yes' ? true : val === 'No' ? false : undefined;
-          updateEmployeeField(rec, 'philhealth', enabled);
-          if (typeof contribFlags !== 'undefined') {
-            if (!contribFlags[e.id]) contribFlags[e.id] = {};
-            if (enabled === undefined) delete contribFlags[e.id].philhealth;
-            else contribFlags[e.id].philhealth = enabled;
-            try { localStorage.setItem(LS_CONTRIB_FLAGS, JSON.stringify(contribFlags)); } catch {}
-          }
-        });
-        cell(philSel);
-        const sssSel = document.createElement('select');
-        ['','Yes','No'].forEach(v => {
-          const opt = document.createElement('option');
-          opt.value = v;
-          opt.textContent = v || 'N/A';
-          const cur = e.sss === true ? 'Yes' : e.sss === false ? 'No' : '';
-          if (cur === v) opt.selected = true;
-          sssSel.appendChild(opt);
-        });
-        sssSel.addEventListener('change', () => {
-          const val = sssSel.value;
-          const enabled = val === 'Yes' ? true : val === 'No' ? false : undefined;
-          updateEmployeeField(rec, 'sss', enabled);
-          if (typeof contribFlags !== 'undefined') {
-            if (!contribFlags[e.id]) contribFlags[e.id] = {};
-            if (enabled === undefined) delete contribFlags[e.id].sss;
-            else contribFlags[e.id].sss = enabled;
-            try { localStorage.setItem(LS_CONTRIB_FLAGS, JSON.stringify(contribFlags)); } catch {}
-          }
-        });
-        cell(sssSel);
-        rows.push(tr);
-      });
-      const headers = ['ID','Name','Hourly Rate','Schedule','Project','Bank Account','Pag-IBIG','PhilHealth','SSS'];
-      empContainer.appendChild(buildSnapshotTable(headers, rows));
-    }
-
-    function renderSnapshotProjects() {
-      projContainer.innerHTML = '';
-      const list = snap.projects;
-      let arr = [];
-      if (Array.isArray(list)) {
-        arr = list.map((proj, idx) => ({ key: idx, proj }));
-      } else if (list && typeof list === 'object') {
-        arr = Object.keys(list).map(id => ({ key: id, proj: list[id] || {} }));
-      }
-      if (!arr.length) {
-        const p = document.createElement('p');
-        p.textContent = 'No project data.';
-        projContainer.appendChild(p);
-        return;
-      }
-      function updateProjectField(rec, prop, value) {
-        const proj = rec.proj;
-        proj[prop] = value;
-        if (Array.isArray(snap.projects)) {
-          snap.projects[rec.key] = proj;
-        } else {
-          if (prop === 'id') {
-            delete snap.projects[rec.key];
-            rec.key = value;
-          }
-          snap.projects[rec.key] = proj;
-        }
-        if (typeof saveHistory === 'function') saveHistory();
-        renderSnapshotProjects();
-        if (typeof renderSnapshotEmployees === 'function') renderSnapshotEmployees();
-      }
-      const rows = [];
-      arr.forEach(rec => {
-        const p = rec.proj;
-        const tr = document.createElement('tr');
-        function cell(el){ const td=document.createElement('td'); td.appendChild(el); tr.appendChild(td); }
-        const idInput = document.createElement('input');
-        idInput.value = p.id ?? p.projectId ?? rec.key ?? '';
-        idInput.style.width = '100%';
-        idInput.addEventListener('change', () => updateProjectField(rec, 'id', idInput.value));
-        cell(idInput);
-        const nameInput = document.createElement('input');
-        nameInput.value = p.name || p.projectName || p.project || '';
-        nameInput.style.width = '100%';
-        nameInput.addEventListener('change', () => updateProjectField(rec, 'name', nameInput.value));
-        cell(nameInput);
-        rows.push(tr);
-      });
-      projContainer.appendChild(buildSnapshotTable(['ID','Project Name'], rows));
-    }
+    if (!detailScreen || !payrollContainer || !dtrContainer) return;
     // Determine headers for hiding/showing (h4 elements preceding tables)
     const activeHeader = activeTable && activeTable.previousElementSibling;
     const histHeader = historyTable && historyTable.previousElementSibling;
@@ -4673,159 +4405,180 @@ document.addEventListener('DOMContentLoaded', () => {
       titleEl.textContent = `Payroll Details: ${snap.startDate || ''} - ${snap.endDate || ''}${lockedInfo}`;
     }
     // Hide dashboard tables and controls
-    if (activeTable) activeTable.classList.add('hidden');
-    if (activeHeader && activeHeader.tagName === 'H4') activeHeader.classList.add('hidden');
-    if (historyTable) historyTable.classList.add('hidden');
-    if (histHeader && histHeader.tagName === 'H4') histHeader.classList.add('hidden');
-    if (diffButton) diffButton.classList.add('hidden');
-    if (snapshotViewEl) snapshotViewEl.classList.add('hidden');
+    if (activeTable) activeTable.style.display = 'none';
+    if (activeHeader && activeHeader.tagName === 'H4') activeHeader.style.display = 'none';
+    if (historyTable) historyTable.style.display = 'none';
+    if (histHeader && histHeader.tagName === 'H4') histHeader.style.display = 'none';
+    if (diffButton) diffButton.style.display = 'none';
+    if (snapshotViewEl) snapshotViewEl.style.display = 'none';
     // Build payroll summary table
-    function renderSnapshotPayroll() {
-      payrollContainer.innerHTML = '';
-      const payTable = document.createElement('table');
-      payTable.style.borderCollapse = 'collapse';
-      payTable.style.width = '100%';
-      const pHead = document.createElement('thead');
-      const pRow = document.createElement('tr');
-      const headers = [
-        'ID','Name','Hourly Rate','Regular Hrs','OT Hrs','Adjustment Hrs','Total Hours',
-        'Reg Pay','OT Pay','Gross',
-        'Pag-IBIG','PhilHealth','SSS','SSS Loan','Pag-IBIG Loan','Vale','Wed Vale',
-        'Adjustments','Bantay','Net Pay'
+    payrollContainer.innerHTML = '';
+    const payTable = document.createElement('table');
+    payTable.style.borderCollapse = 'collapse';
+    payTable.style.width = '100%';
+    const pHead = document.createElement('thead');
+    const pRow = document.createElement('tr');
+    // Define the headers for the payroll summary table. Include an Adjustments
+    // column so that any manual adjustments saved in the snapshot are visible
+    // when viewing a locked payroll. This keeps the summary in sync with the
+    // CSV export and ensures the net pay is clearly explained.
+    // Display columns similar to the live payroll grid (omit Total Deductions per request)
+    const headers = [
+      'ID','Name','Hourly Rate','Regular Hrs','OT Hrs','Adjustment Hrs','Total Hours',
+      'Reg Pay','OT Pay','Gross',
+      'Pag-IBIG','PhilHealth','SSS','SSS Loan','Pag-IBIG Loan','Vale','Wed Vale',
+      'Adjustments','Bantay','Net Pay'
+    ];
+    headers.forEach(h => {
+      const th = document.createElement('th');
+      th.textContent = h;
+      th.style.border = '1px solid #e2e8f0';
+      th.style.background = '#f1f5f9';
+      th.style.padding = '4px';
+      pRow.appendChild(th);
+    });
+    pHead.appendChild(pRow);
+    payTable.appendChild(pHead);
+    const pBody = document.createElement('tbody');
+    // Running grand totals (match Payroll semantics; loans are per-period shares)
+    let GT = {
+      regHrs:0, otHrs:0, adjHrs:0, totalHrs:0,
+      regPay:0, otPay:0, gross:0,
+      pagibig:0, philhealth:0, sss:0,
+      loanSSS:0, loanPI:0, vale:0, wedVale:0,
+      adjAmt:0, bantay:0, netPay:0
+    };
+    // Each employee row in the snapshot may include an adjAmt property
+    // representing manual adjustments. Build the table row accordingly.
+    (snap.rows || []).forEach(r => {
+      const tr = document.createElement('tr');
+      const num = (x)=>{ const n = parseFloat(String(x??'').replace(/,/g,'')); return isNaN(n)?0:n; };
+      // Current divisor and OT multiplier
+      const keyDiv = (typeof LS_DIVISOR !== 'undefined' ? LS_DIVISOR : 'payroll_deduction_divisor');
+      const curDiv = (typeof window !== 'undefined' && typeof window.divisor !== 'undefined' && Number(window.divisor)) || parseInt((localStorage && localStorage.getItem(keyDiv)) || '1', 10) || 1;
+      const otMultLS = parseFloat((typeof LS_OTMULT !== 'undefined' && localStorage && localStorage.getItem(LS_OTMULT)) || '1.5') || 1.5;
+      const otMult = num(document.getElementById('otMultiplier')?.value || otMultLS) || 1.5;
+      // Raw fields from snapshot
+      const id = r.id;
+      const rate = num(r.rate);
+      const regHrs = num(r.regHrs);
+      const otHrs = num(r.otHrs);
+      const adjHrs = num(r.adjHrs);
+      const totalHrs = num(r.totalHrs) || (regHrs + otHrs + adjHrs);
+      // Recompute pays from hours/rate using current OT multiplier to match Payroll tab exactly
+      let regPay = +(regHrs * rate).toFixed(2);
+      const otTotal = otHrs + adjHrs;
+      let otPay  = +(otTotal * rate * otMult).toFixed(2);
+      let gross  = +(regPay + otPay).toFixed(2);
+      let pagibig = num(r.pagibig);
+      let philhealth = num(r.philhealth);
+      let sss = num(r.sss);
+      const loanSSSRaw = num(r.loanSSS);
+      const loanPIRaw  = num(r.loanPI);
+      const vale = num(r.vale);
+      const wedVale = num(r.valeWed);
+      const adjAmt = num(r.adjAmt);
+      const bantay = num(r.bantay);
+
+      // Heuristic: if snapshot has truncated values (e.g., 2.00 due to commas), recompute using current rules
+      // 'looksWrong' heuristic no longer needed since we recompute unconditionally
+
+      // Always recompute contributions with current tables and apply divisor
+      try{
+        const monthly = rate * 8 * 24;
+        const flags = (typeof contribFlags !== 'undefined' && contribFlags[id]) || {};
+        const piRate = (typeof pagibigRateByMonthly==='function') ? pagibigRateByMonthly(monthly) : 0;
+        const phRate = (typeof philhealthRateByMonthly==='function') ? philhealthRateByMonthly(monthly) : 0;
+        pagibig    = (flags.pagibig !== false   ? +((regPay * piRate) / curDiv).toFixed(2) : 0);
+        philhealth = (flags.philhealth !== false? +((regPay * phRate) / curDiv).toFixed(2) : 0);
+        const sssFull = (typeof sssShareByMonthly==='function') ? sssShareByMonthly(monthly) : 0;
+        sss = (flags.sss !== false ? +(sssFull / curDiv).toFixed(2) : 0);
+      }catch(e){}
+
+      // Loans in snapshot view should reflect per-period share per user request
+      const loanSSSPer = +(loanSSSRaw / curDiv).toFixed(2);
+      const loanPIPer  = +(loanPIRaw  / curDiv).toFixed(2);
+
+      // Compute net pay consistent with Payroll tab
+      const totalDeds = pagibig + philhealth + sss + loanSSSPer + loanPIPer + vale + wedVale;
+      const netPay = +(gross - totalDeds + adjAmt + bantay).toFixed(2);
+
+      const vals = [
+        id, r.name, rate, regHrs, otHrs, adjHrs, totalHrs,
+        regPay, otPay, gross,
+        pagibig, philhealth, sss,
+        loanSSSPer, loanPIPer, vale, wedVale,
+        adjAmt, bantay, netPay
       ];
-      headers.forEach(h => {
-        const th = document.createElement('th');
-        th.textContent = h;
-        th.style.border = '1px solid #e2e8f0';
-        th.style.background = '#f1f5f9';
-        th.style.padding = '4px';
-        pRow.appendChild(th);
-      });
-      pHead.appendChild(pRow);
-      payTable.appendChild(pHead);
-      const pBody = document.createElement('tbody');
-      let GT = {
-        regHrs:0, otHrs:0, adjHrs:0, totalHrs:0,
-        regPay:0, otPay:0, gross:0,
-        pagibig:0, philhealth:0, sss:0,
-        loanSSS:0, loanPI:0, vale:0, wedVale:0,
-        adjAmt:0, bantay:0, netPay:0
-      };
-      (snap.rows || []).forEach(r => {
-        const tr = document.createElement('tr');
-        const num = (x)=>{ const n = parseFloat(String(x??'').replace(/,/g,'')); return isNaN(n)?0:n; };
-        const keyDiv = (typeof LS_DIVISOR !== 'undefined' ? LS_DIVISOR : 'payroll_deduction_divisor');
-        const curDiv = (typeof window !== 'undefined' && typeof window.divisor !== 'undefined' && Number(window.divisor)) || parseInt((localStorage && localStorage.getItem(keyDiv)) || '1', 10) || 1;
-        const otMultLS = parseFloat((typeof LS_OTMULT !== 'undefined' && localStorage && localStorage.getItem(LS_OTMULT)) || '1.5') || 1.5;
-        const otMult = num(document.getElementById('otMultiplier')?.value || otMultLS) || 1.5;
-        const id = r.id;
-        const rate = num(r.rate);
-        const regHrs = num(r.regHrs);
-        const otHrs = num(r.otHrs);
-        const adjHrs = num(r.adjHrs);
-        const totalHrs = num(r.totalHrs) || (regHrs + otHrs + adjHrs);
-        let regPay = +(regHrs * rate).toFixed(2);
-        const otTotal = otHrs + adjHrs;
-        let otPay  = +(otTotal * rate * otMult).toFixed(2);
-        let gross  = +(regPay + otPay).toFixed(2);
-        let pagibig = num(r.pagibig);
-        let philhealth = num(r.philhealth);
-        let sss = num(r.sss);
-        const loanSSSRaw = num(r.loanSSS);
-        const loanPIRaw  = num(r.loanPI);
-        const vale = num(r.vale);
-        const wedVale = num(r.valeWed);
-        const adjAmt = num(r.adjAmt);
-        const bantay = num(r.bantay);
-        try{
-          const monthly = rate * 8 * 24;
-          const flags = (typeof contribFlags !== 'undefined' && contribFlags[id]) || {};
-          const piRate = (typeof pagibigRateByMonthly==='function') ? pagibigRateByMonthly(monthly) : 0;
-          const phRate = (typeof philhealthRateByMonthly==='function') ? philhealthRateByMonthly(monthly) : 0;
-          pagibig    = (flags.pagibig !== false   ? +((regPay * piRate) / curDiv).toFixed(2) : 0);
-          philhealth = (flags.philhealth !== false? +((regPay * phRate) / curDiv).toFixed(2) : 0);
-          const sssFull = (typeof sssShareByMonthly==='function') ? sssShareByMonthly(monthly) : 0;
-          sss = (flags.sss !== false ? +(sssFull / curDiv).toFixed(2) : 0);
-        }catch(e){}
-        const loanSSSPer = +(loanSSSRaw / curDiv).toFixed(2);
-        const loanPIPer  = +(loanPIRaw  / curDiv).toFixed(2);
-        const totalDeds = pagibig + philhealth + sss + loanSSSPer + loanPIPer + vale + wedVale;
-        const netPay = +(gross - totalDeds + adjAmt + bantay).toFixed(2);
-        const vals = [
-          id, r.name, rate, regHrs, otHrs, adjHrs, totalHrs,
-          regPay, otPay, gross,
-          pagibig, philhealth, sss,
-          loanSSSPer, loanPIPer, vale, wedVale,
-          adjAmt, bantay, netPay
-        ];
-        GT.regHrs     += regHrs;
-        GT.otHrs      += otHrs;
-        GT.adjHrs     += adjHrs;
-        GT.totalHrs   += totalHrs;
-        GT.regPay     += regPay;
-        GT.otPay      += otPay;
-        GT.gross      += gross;
-        GT.pagibig    += pagibig;
-        GT.philhealth += philhealth;
-        GT.sss        += sss;
-        GT.loanSSS    += loanSSSPer;
-        GT.loanPI     += loanPIPer;
-        GT.vale       += vale;
-        GT.wedVale    += wedVale;
-        GT.adjAmt     += adjAmt;
-        GT.bantay     += bantay;
-        GT.netPay     += netPay;
-        vals.forEach(v => {
-          const td = document.createElement('td');
-          let text = '';
-          if (v != null && v !== '') {
-            const n = parseFloat(String(v).replace(/,/g,''));
-            if (!isNaN(n) && isFinite(n)) {
-              text = n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-            } else {
-              text = v;
-            }
-          }
-          td.textContent = text;
-          td.style.border = '1px solid #e2e8f0';
-          td.style.padding = '4px';
-          const nTest = parseFloat(String(text).replace(/,/g,''));
-          td.style.textAlign = (!isNaN(nTest) && isFinite(nTest)) ? 'right' : 'left';
-          tr.appendChild(td);
-        });
-        pBody.appendChild(tr);
-      });
-      payTable.appendChild(pBody);
-      const pFoot = document.createElement('tfoot');
-      const ft = document.createElement('tr');
-      const label = document.createElement('td');
-      label.colSpan = 3;
-      label.textContent = 'Grand Total';
-      label.style.fontWeight = '700';
-      label.style.border = '1px solid #e2e8f0';
-      label.style.padding = '4px';
-      ft.appendChild(label);
-      const cells = [
-        GT.regHrs, GT.otHrs, GT.adjHrs, GT.totalHrs,
-        GT.regPay, GT.otPay, GT.gross,
-        GT.pagibig, GT.philhealth, GT.sss,
-        GT.loanSSS, GT.loanPI, GT.vale, GT.wedVale,
-        GT.adjAmt, GT.bantay, GT.netPay
-      ];
-      cells.forEach(n => {
+      // Accumulate grand totals
+      GT.regHrs     += regHrs;
+      GT.otHrs      += otHrs;
+      GT.adjHrs     += adjHrs;
+      GT.totalHrs   += totalHrs;
+      GT.regPay     += regPay;
+      GT.otPay      += otPay;
+      GT.gross      += gross;
+      GT.pagibig    += pagibig;
+      GT.philhealth += philhealth;
+      GT.sss        += sss;
+      GT.loanSSS    += loanSSSPer;
+      GT.loanPI     += loanPIPer;
+      GT.vale       += vale;
+      GT.wedVale    += wedVale;
+      GT.adjAmt     += adjAmt;
+      GT.bantay     += bantay;
+      GT.netPay     += netPay;
+
+      vals.forEach(v => {
         const td = document.createElement('td');
-        const val = Number(n) || 0;
-        td.textContent = val.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        let text = '';
+        if (v != null && v !== '') {
+          const n = parseFloat(String(v).replace(/,/g,''));
+          if (!isNaN(n) && isFinite(n)) {
+            text = n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+          } else {
+            text = v;
+          }
+        }
+        td.textContent = text;
         td.style.border = '1px solid #e2e8f0';
         td.style.padding = '4px';
-        td.style.textAlign = 'right';
-        ft.appendChild(td);
+        const nTest = parseFloat(String(text).replace(/,/g,''));
+        td.style.textAlign = (!isNaN(nTest) && isFinite(nTest)) ? 'right' : 'left';
+        tr.appendChild(td);
       });
-      pFoot.appendChild(ft);
-      payTable.appendChild(pFoot);
-      payrollContainer.appendChild(payTable);
-    }
-    renderSnapshotPayroll();
+      pBody.appendChild(tr);
+    });
+    payTable.appendChild(pBody);
+    // Add Grand Totals footer row
+    const pFoot = document.createElement('tfoot');
+    const ft = document.createElement('tr');
+    const label = document.createElement('td');
+    label.colSpan = 3; // ID + Name + Hourly Rate
+    label.textContent = 'Grand Total';
+    label.style.fontWeight = '700';
+    label.style.border = '1px solid #e2e8f0';
+    label.style.padding = '4px';
+    ft.appendChild(label);
+    const cells = [
+      GT.regHrs, GT.otHrs, GT.adjHrs, GT.totalHrs,
+      GT.regPay, GT.otPay, GT.gross,
+      GT.pagibig, GT.philhealth, GT.sss,
+      GT.loanSSS, GT.loanPI, GT.vale, GT.wedVale,
+      GT.adjAmt, GT.bantay, GT.netPay
+    ];
+    cells.forEach(n => {
+      const td = document.createElement('td');
+      const val = Number(n) || 0;
+      td.textContent = val.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+      td.style.border = '1px solid #e2e8f0';
+      td.style.padding = '4px';
+      td.style.textAlign = 'right';
+      ft.appendChild(td);
+    });
+    pFoot.appendChild(ft);
+    payTable.appendChild(pFoot);
+    payrollContainer.appendChild(payTable);
     // Build DTR breakdown
     dtrContainer.innerHTML = '';
     // Build DTR data for display. If the snapshot rows include a dtrs array
@@ -4926,24 +4679,8 @@ document.addEventListener('DOMContentLoaded', () => {
       p.textContent = 'No DTR records found for this period.';
       dtrContainer.appendChild(p);
     }
-
-    renderSnapshotEmployees();
-    renderSnapshotProjects();
-
-    const tabButtons = detailScreen.querySelectorAll('.tab-btn');
-    const tabMap = { payroll: payrollContainer, dtr: dtrContainer, employees: empContainer, projects: projContainer };
-    function activateTab(name){
-      tabButtons.forEach(btn => btn.classList.toggle('active', btn.dataset.tab === name));
-      Object.keys(tabMap).forEach(key => {
-        const el = tabMap[key];
-        if (el) el.classList.toggle('hidden', key !== name);
-      });
-    }
-    tabButtons.forEach(btn => { btn.addEventListener('click', () => activateTab(btn.dataset.tab)); });
-    activateTab('payroll');
-
     // Show the detail screen
-    detailScreen.classList.remove('hidden');
+    detailScreen.style.display = 'block';
     // Disable editing across the app
     if (typeof disablePayrollInputs === 'function') {
       disablePayrollInputs();
@@ -4961,18 +4698,16 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     // Back button: restore previous view
     if (backBtn) {
-      backBtn.addEventListener('click', () => {
-        detailScreen.classList.add('hidden');
-        if (activeTable) activeTable.classList.remove('hidden');
-        if (activeHeader && activeHeader.tagName === 'H4') activeHeader.classList.remove('hidden');
-        if (historyTable) historyTable.classList.remove('hidden');
-        if (histHeader && histHeader.tagName === 'H4') histHeader.classList.remove('hidden');
-        if (diffButton) diffButton.classList.remove('hidden');
-        if (snapshotViewEl) snapshotViewEl.classList.remove('hidden');
+      backBtn.onclick = () => {
+        detailScreen.style.display = 'none';
+        if (activeTable) activeTable.style.display = '';
+        if (activeHeader && activeHeader.tagName === 'H4') activeHeader.style.display = '';
+        if (historyTable) historyTable.style.display = '';
+        if (histHeader && histHeader.tagName === 'H4') histHeader.style.display = '';
+        if (diffButton) diffButton.style.display = '';
+        if (snapshotViewEl) snapshotViewEl.style.display = '';
         payrollContainer.innerHTML = '';
         dtrContainer.innerHTML = '';
-        empContainer.innerHTML = '';
-        projContainer.innerHTML = '';
         // Remove forced flags and re-enable date inputs
         if (wsInput) {
           delete wsInput.dataset.forced;
@@ -4992,7 +4727,7 @@ document.addEventListener('DOMContentLoaded', () => {
             checkAndToggleEditState();
           }
         } catch (_) {}
-      });
+      };
     }
   };
 });
@@ -5526,9 +5261,9 @@ rows += `<tr class="totals">
             const projName = (storedProjects && storedProjects[projId]?.name) || '';
             const bank = emp.bankAccount || '';
             const fl = flagsAll[id] || {};
-            const fPI = fl.pagibig === true ? 'Yes' : fl.pagibig === false ? 'No' : 'N/A';
-            const fPH = fl.philhealth === true ? 'Yes' : fl.philhealth === false ? 'No' : 'N/A';
-            const fSSS= fl.sss === true ? 'Yes' : fl.sss === false ? 'No' : 'N/A';
+            const fPI = (fl.pagibig !== false) ? 'Yes' : 'No';
+            const fPH = (fl.philhealth !== false) ? 'Yes' : 'No';
+            const fSSS= (fl.sss !== false) ? 'Yes' : 'No';
             rows.push([id, emp.name||'', emp.hourlyRate||'', bank, schedName, schedId, projName, projId, fPI, fPH, fSSS]);
           });
           XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(rows), 'Employees');
@@ -5833,9 +5568,9 @@ document.getElementById('downloadEmployeesCSV').addEventListener('click', () => 
     const projName = (storedProjects && storedProjects[projId]?.name) || '';
     const bank = emp.bankAccount || '';
     const flags = (typeof contribFlags !== 'undefined' && contribFlags[id]) || {};
-    const fPI = flags.pagibig === true ? 'Yes' : flags.pagibig === false ? 'No' : 'N/A';
-    const fPH = flags.philhealth === true ? 'Yes' : flags.philhealth === false ? 'No' : 'N/A';
-    const fSSS = flags.sss === true ? 'Yes' : flags.sss === false ? 'No' : 'N/A';
+    const fPI = (flags.pagibig !== false) ? 'Yes' : 'No';
+    const fPH = (flags.philhealth !== false) ? 'Yes' : 'No';
+    const fSSS = (flags.sss !== false) ? 'Yes' : 'No';
     rows.push([id, emp.name || '', emp.hourlyRate || '', bank, schedName, schedId, projName, projId, fPI, fPH, fSSS]);
   });
 
@@ -5886,14 +5621,15 @@ const tabs = {
   tabMain: document.getElementById('tabMain'),
   // Dashboard tab/button for high-level summary and payroll history
   tabDashboard: document.getElementById('tabDashboard'),
-  tabSettings: document.getElementById('tabSettings'),
+  tabSchedule: document.getElementById('tabSchedule'),
+  tabEmployees: document.getElementById('tabEmployees'),
+  tabProjects: document.getElementById('tabProjects'),
   panelMain: document.getElementById('panelMain'),
   // Corresponding Dashboard panel
   panelDashboard: document.getElementById('panelDashboard'),
-  panelSettings: document.getElementById('panelSettings'),
-  panelSettingsSchedule: document.getElementById('panelSettingsSchedule'),
-  panelSettingsEmployees: document.getElementById('panelSettingsEmployees'),
-  panelSettingsProjects: document.getElementById('panelSettingsProjects'),
+  panelSchedule: document.getElementById('panelSchedule'),
+  panelEmployees: document.getElementById('panelEmployees'),
+  panelProjects: document.getElementById('panelProjects'),
   tabPayroll: document.getElementById('tabPayroll'),
   panelPayroll: document.getElementById('panelPayroll')
 };
@@ -5917,22 +5653,11 @@ function showTab(name){
   if(name==='main'){ tabs.tabMain.classList.add('active'); tabs.panelMain.classList.add('active'); }
   // When the dashboard is selected, activate its tab and panel
   if(name==='dashboard'){ tabs.tabDashboard && tabs.tabDashboard.classList.add('active'); tabs.panelDashboard && tabs.panelDashboard.classList.add('active'); }
-  if(name==='settings'){ tabs.tabSettings && tabs.tabSettings.classList.add('active'); tabs.panelSettings && tabs.panelSettings.classList.add('active'); showSettingsTab('employees'); }
+  if(name==='schedule'){ tabs.tabSchedule.classList.add('active'); tabs.panelSchedule.classList.add('active'); renderScheduleEditor(); }
+  if(name==='employees'){ tabs.tabEmployees.classList.add('active'); tabs.panelEmployees.classList.add('active'); renderEmployees(); }
+  if(name==='projects'){ tabs.tabProjects.classList.add('active'); tabs.panelProjects.classList.add('active'); renderProjects(); }
 
   if(name==='payroll'){ tabs.tabPayroll && tabs.tabPayroll.classList.add('active'); tabs.panelPayroll && tabs.panelPayroll.classList.add('active'); }
-}
-function showSettingsTab(name){
-  const buttons = tabs.panelSettings.querySelectorAll('.tab-btn');
-  const panels = tabs.panelSettings.querySelectorAll('.tab');
-  buttons.forEach(btn => btn.classList.toggle('active', btn.dataset.tab === name));
-  panels.forEach(panel => panel.classList.toggle('active', panel.id === 'panelSettings' + name.charAt(0).toUpperCase() + name.slice(1)));
-  const renderMap = {
-    employees: renderEmployees,
-    schedule: renderScheduleEditor,
-    projects: renderProjects
-  };
-  const render = renderMap[name];
-  if (typeof render === 'function') render();
 }
 window.__dtrFilterBackup = null;
 // When switching to the main (DTR) tab, render results and then toggle the edit
@@ -5972,10 +5697,9 @@ tabs.tabMain.addEventListener('click', () => {
     }
   } catch (e) {}
 });
-tabs.tabSettings && tabs.tabSettings.addEventListener('click', ()=>showTab('settings'));
-tabs.panelSettings.querySelectorAll('.tab-btn').forEach(btn => {
-  btn.addEventListener('click', () => showSettingsTab(btn.dataset.tab));
-});
+tabs.tabSchedule.addEventListener('click', ()=>showTab('schedule'));
+tabs.tabEmployees.addEventListener('click', ()=>showTab('employees'));
+tabs.tabProjects.addEventListener('click', ()=>showTab('projects'));
 
 tabs.tabPayroll.addEventListener('click', ()=>{
   try {
@@ -7284,9 +7008,9 @@ document.addEventListener('DOMContentLoaded', function () {
         const projName = (storedProjects && storedProjects[projId]?.name) || '';
         const bank = emp.bankAccount || '';
         const flags = (typeof contribFlags !== 'undefined' && contribFlags[id]) || {};
-        const fPI = flags.pagibig === true ? 'Yes' : flags.pagibig === false ? 'No' : 'N/A';
-        const fPH = flags.philhealth === true ? 'Yes' : flags.philhealth === false ? 'No' : 'N/A';
-        const fSSS = flags.sss === true ? 'Yes' : flags.sss === false ? 'No' : 'N/A';
+        const fPI = (flags.pagibig !== false) ? 'Yes' : 'No';
+        const fPH = (flags.philhealth !== false) ? 'Yes' : 'No';
+        const fSSS = (flags.sss !== false) ? 'Yes' : 'No';
         rows.push([id, emp.name || '', emp.hourlyRate || '', bank, schedName, schedId, projName, projId, fPI, fPH, fSSS]);
       });
       const csv = rows.map(r => r.map(v => {
@@ -8234,7 +7958,7 @@ var csv = rows.map(function(r){
 <script>
 // --- Employees: small UX helpers ---
 document.addEventListener('DOMContentLoaded', () => {
-  const panel = document.querySelector('#panelSettingsEmployees');
+  const panel = document.querySelector('#panelEmployees');
   if (!panel) return;
   const form = panel.querySelector('form');
   if (!form) return;
