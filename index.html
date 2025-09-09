@@ -3799,7 +3799,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
   /**
    * Build a snapshot from the current payroll table. This captures all row values
-   * and totals in a structured JSON object for persistence.
+   * and totals in a structured JSON object for persistence. Master lists for
+   * employees, schedules, and projects are included so the snapshot fully
+   * reflects the state of the system at generation time.
    */
   async function buildSnapshot(startDate, endDate) {
     const table = document.getElementById('payrollTable');
@@ -3887,7 +3889,18 @@ document.addEventListener('DOMContentLoaded', () => {
         totals[key] = parseFloat(td.textContent.trim()) || 0;
       });
     }
-    return { startDate, endDate, rows, totals };
+    const snap = { startDate, endDate, rows, totals };
+    try {
+      const employees = JSON.parse(localStorage.getItem('att_employees_v2') || '[]');
+      const schedules = JSON.parse(localStorage.getItem('att_schedules_v2') || '[]');
+      const projects = JSON.parse(localStorage.getItem('att_projects_v1') || '[]');
+      snap.employees = JSON.parse(JSON.stringify(employees));
+      snap.schedules = JSON.parse(JSON.stringify(schedules));
+      snap.projects = JSON.parse(JSON.stringify(projects));
+    } catch (e) {
+      // ignore parse errors
+    }
+    return snap;
   }
   // Expose buildSnapshot globally so it can be called from other scripts
   window.buildSnapshot = buildSnapshot;
@@ -4125,6 +4138,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Persist payrollHistory to localStorage
   function saveHistory() {
+    // Store full snapshots (including master lists) without altering their content
     localStorage.setItem(PAYROLL_HIST_KEY, JSON.stringify(payrollHistory));
   }
   // Expose saveHistory globally so it can be called from other scripts
