@@ -614,8 +614,6 @@ window.addEventListener('load', dashReports);
   #panelPayroll .tab-btn.active { background:var(--accent);color:white;border-color:var(--accent) }
   #panelPayroll .tab { display:none }
   #panelPayroll .tab.active { display:block }
-  #panelSettings .tab { display:none }
-  #panelSettings .tab.active { display:block }
   #panelPayroll .controls { display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:10px 0 }
   #panelPayroll label { font-size:12px;color:var(--muted) }
   #panelPayroll input[type=date], 
@@ -1018,13 +1016,17 @@ window.addEventListener('load', dashReports);
   .header .nav-icon { font-size: 0; line-height: 1; }
   #tabDashboard .nav-icon::before { content: "📊"; font-size: 14px; }
   #tabMain .nav-icon::before      { content: "🕒"; font-size: 14px; }
-  #tabSettings .nav-icon::before  { content: "⚙️"; font-size: 14px; }
+  #tabSchedule .nav-icon::before  { content: "🗓️"; font-size: 14px; }
+  #tabEmployees .nav-icon::before { content: "👥"; font-size: 14px; }
+  #tabProjects .nav-icon::before  { content: "🚀"; font-size: 14px; }
   #tabPayroll .nav-icon::before   { content: "💰"; font-size: 14px; }
   #tabProjectTotals .nav-icon::before { content: "📈"; font-size: 14px; }
   /* Sidebar duplicates */
   #old-tabDashboard .nav-icon::before { content: "📊"; }
   #old-tabMain .nav-icon::before      { content: "🕒"; }
-  #old-tabSettings .nav-icon::before  { content: "⚙️"; }
+  #old-tabSchedule .nav-icon::before  { content: "🗓️"; }
+  #old-tabEmployees .nav-icon::before { content: "👥"; }
+  #old-tabProjects .nav-icon::before  { content: "🚀"; }
   #old-tabPayroll .nav-icon::before   { content: "💰"; }
   #old-tabProjectTotals .nav-icon::before { content: "📈"; }
 
@@ -1149,7 +1151,9 @@ window.addEventListener('load', dashReports);
             <ul class="nav-menu">
               <li class="nav-item"><button class="nav-link tab-btn active" id="tabDashboard" data-page="dashboard"><span class="nav-icon">ðŸ“Š</span> Dashboard</button></li>
               <li class="nav-item"><button class="nav-link tab-btn" id="tabMain" data-page="dtr"><span class="nav-icon">ðŸ•</span> DTR</button></li>
-              <li class="nav-item"><button class="nav-link tab-btn" id="tabSettings" data-page="settings"><span class="nav-icon">ðŸ”§</span> Settings</button></li>
+              <li class="nav-item"><button class="nav-link tab-btn" id="tabSchedule" data-page="schedules"><span class="nav-icon">ðŸ“…</span> Schedules</button></li>
+              <li class="nav-item"><button class="nav-link tab-btn" id="tabEmployees" data-page="employees"><span class="nav-icon">ðŸ‘¥</span> Employees</button></li>
+              <li class="nav-item"><button class="nav-link tab-btn" id="tabProjects" data-page="projects"><span class="nav-icon">ðŸš€</span> Projects</button></li>
               <li class="nav-item"><button class="nav-link tab-btn" id="tabPayroll" data-page="payroll"><span class="nav-icon">ðŸ’°</span> Payroll</button></li>
               <li class="nav-item"><button class="nav-link tab-btn" id="tabProjectTotals" data-page="totals"><span class="nav-icon">ðŸ“ˆ</span> Reports</button></li>
             </ul>
@@ -1177,9 +1181,21 @@ window.addEventListener('load', dashReports);
             </button>
           </li>
           <li class="nav-item">
-            <button class="nav-link tab-btn" id="old-tabSettings" data-page="settings">
-              <span class="nav-icon">ðŸ”§</span>
-              Settings
+            <button class="nav-link tab-btn" id="old-tabSchedule" data-page="schedules">
+              <span class="nav-icon">ðŸ“…</span>
+              Schedules
+            </button>
+          </li>
+          <li class="nav-item">
+            <button class="nav-link tab-btn" id="old-tabEmployees" data-page="employees">
+              <span class="nav-icon">ðŸ‘¥</span>
+              Employees
+            </button>
+          </li>
+          <li class="nav-item">
+            <button class="nav-link tab-btn" id="old-tabProjects" data-page="projects">
+              <span class="nav-icon">ðŸš€</span>
+              Projects
             </button>
           </li>
           <li class="nav-item">
@@ -1543,36 +1559,30 @@ window.addEventListener('load', dashReports);
    </div>
   </section>
   
-  <section class="panel" id="panelSettings">
-   <div class="tabs">
-    <button class="tab-btn active" data-tab="employees"><span class="nav-icon">ðŸ‘¥</span> Employees</button>
-    <button class="tab-btn" data-tab="schedule"><span class="nav-icon">ðŸ“…</span> Schedules</button>
-    <button class="tab-btn" data-tab="projects"><span class="nav-icon">ðŸš€</span> Projects</button>
+  <section class="panel" id="panelSchedule">
+   <h3>
+    Schedules
+   </h3>
+   <div class="controls">
+    <label>
+     Choose schedule:
+     <select id="scheduleSelect">
+     </select>
+    </label>
+    <button id="addScheduleBtn">
+     Add
+    </button>
+    <button id="deleteScheduleBtn">
+     Delete
+    </button>
+    <button id="setDefaultScheduleBtn">
+     Set Default
+    </button>
    </div>
-   <section class="tab" id="panelSchedule">
-    <h3>
-     Schedules
-    </h3>
-    <div class="controls">
-     <label>
-      Choose schedule:
-      <select id="scheduleSelect">
-      </select>
-     </label>
-     <button id="addScheduleBtn">
-      Add
-     </button>
-     <button id="deleteScheduleBtn">
-      Delete
-     </button>
-     <button id="setDefaultScheduleBtn">
-      Set Default
-     </button>
-    </div>
-    <div class="section-title">
-     Schedule segments
-    </div>
-    <table id="scheduleTable">
+   <div class="section-title">
+    Schedule segments
+   </div>
+   <table id="scheduleTable">
     <thead>
      <tr>
       <th>
@@ -1729,8 +1739,8 @@ window.addEventListener('load', dashReports);
     </button>
    </div>
   </section>
-
-  <section class="tab active" id="panelEmployees">
+  
+  <section class="panel" id="panelEmployees">
    <h3>
     Employees
    </h3>
@@ -1795,8 +1805,8 @@ window.addEventListener('load', dashReports);
     </tbody>
    </table>
   </section>
-
-  <section class="tab" id="panelProjects">
+  
+  <section class="panel" id="panelProjects">
    <h3>
     Projects
    </h3>
@@ -1822,9 +1832,8 @@ window.addEventListener('load', dashReports);
     </thead>
     <tbody>
     </tbody>
-  </table>
+   </table>
   </section>
- </section>
   <section class="panel" id="panelPayroll">
    <div id="payrollWrapper">
     <header>
@@ -3713,13 +3722,6 @@ document.addEventListener('DOMContentLoaded', () => {
       const now = new Date().toISOString();
       snap.rows = newSnap.rows;
       snap.totals = newSnap.totals;
-      snap.employees = newSnap.employees;
-      snap.schedules = newSnap.schedules;
-      snap.projects = newSnap.projects;
-      snap.bantay = newSnap.bantay;
-      snap.bantayProj = newSnap.bantayProj;
-      snap.adjustments = newSnap.adjustments;
-      snap.adjustmentHours = newSnap.adjustmentHours;
       snap.hash = hashHex;
       snap.lockedAt = now;
       snap.locked = true;
@@ -3806,9 +3808,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   /**
    * Build a snapshot from the current payroll table. This captures all row values
-   * and totals in a structured JSON object for persistence. Master lists for
-   * employees, schedules, and projects are included so the snapshot fully
-   * reflects the state of the system at generation time.
+   * and totals in a structured JSON object for persistence.
    */
   async function buildSnapshot(startDate, endDate) {
     const table = document.getElementById('payrollTable');
@@ -3896,26 +3896,7 @@ document.addEventListener('DOMContentLoaded', () => {
         totals[key] = parseFloat(td.textContent.trim()) || 0;
       });
     }
-    const snap = { startDate, endDate, rows, totals };
-    try {
-      const employees = JSON.parse(localStorage.getItem('att_employees_v2') || '[]');
-      const schedules = JSON.parse(localStorage.getItem('att_schedules_v2') || '[]');
-      const projects = JSON.parse(localStorage.getItem('att_projects_v1') || '[]');
-      const bantay = JSON.parse(localStorage.getItem(LS_BANTAY) || '{}');
-      const bantayProj = JSON.parse(localStorage.getItem(LS_BANTAY_PROJ) || '{}');
-      const adjustments = JSON.parse(localStorage.getItem(LS_ADJ) || '{}');
-      const adjustmentHours = JSON.parse(localStorage.getItem(LS_ADJ_HRS) || '{}');
-      snap.employees = JSON.parse(JSON.stringify(employees));
-      snap.schedules = JSON.parse(JSON.stringify(schedules));
-      snap.projects = JSON.parse(JSON.stringify(projects));
-      snap.bantay = JSON.parse(JSON.stringify(bantay));
-      snap.bantayProj = JSON.parse(JSON.stringify(bantayProj));
-      snap.adjustments = JSON.parse(JSON.stringify(adjustments));
-      snap.adjustmentHours = JSON.parse(JSON.stringify(adjustmentHours));
-    } catch (e) {
-      // ignore parse errors
-    }
-    return snap;
+    return { startDate, endDate, rows, totals };
   }
   // Expose buildSnapshot globally so it can be called from other scripts
   window.buildSnapshot = buildSnapshot;
@@ -4153,7 +4134,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Persist payrollHistory to localStorage
   function saveHistory() {
-    // Store full snapshots (including master lists) without altering their content
     localStorage.setItem(PAYROLL_HIST_KEY, JSON.stringify(payrollHistory));
   }
   // Expose saveHistory globally so it can be called from other scripts
@@ -4194,7 +4174,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const hashArray = Array.from(new Uint8Array(hashBuffer));
     const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
     const now = new Date().toISOString();
-    payrollHistory.push({ ...snap, startDate: start, endDate: end, hash: hashHex, lockedAt: now, locked: false });
+    payrollHistory.push({ startDate: start, endDate: end, rows: snap.rows, totals: snap.totals, hash: hashHex, lockedAt: now, locked: false });
     saveHistory();
     // Update both history and active payroll tables after creating a new snapshot
     renderHistory();
@@ -4231,7 +4211,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const hashArray = Array.from(new Uint8Array(hashBuffer));
     const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
     const now = new Date().toISOString();
-    payrollHistory.push({ ...snap, startDate: start, endDate: end, hash: hashHex, lockedAt: now, locked: true });
+    payrollHistory.push({ startDate: start, endDate: end, rows: snap.rows, totals: snap.totals, hash: hashHex, lockedAt: now, locked: true });
     saveHistory();
     renderHistory();
     // Disable payroll and DTR editing via helper until date range changes
@@ -5641,15 +5621,19 @@ const tabs = {
   tabMain: document.getElementById('tabMain'),
   // Dashboard tab/button for high-level summary and payroll history
   tabDashboard: document.getElementById('tabDashboard'),
-  tabSettings: document.getElementById('tabSettings'),
+  tabSchedule: document.getElementById('tabSchedule'),
+  tabEmployees: document.getElementById('tabEmployees'),
+  tabProjects: document.getElementById('tabProjects'),
   panelMain: document.getElementById('panelMain'),
   // Corresponding Dashboard panel
   panelDashboard: document.getElementById('panelDashboard'),
-  panelSettings: document.getElementById('panelSettings'),
+  panelSchedule: document.getElementById('panelSchedule'),
+  panelEmployees: document.getElementById('panelEmployees'),
+  panelProjects: document.getElementById('panelProjects'),
   tabPayroll: document.getElementById('tabPayroll'),
   panelPayroll: document.getElementById('panelPayroll')
 };
-function showTab(name, sub){
+function showTab(name){
   Object.values(tabs).forEach(el => el && el.classList && el.classList.remove('active'));
 
   // Manage date range controls: disable on non-dashboard tabs, enable on dashboard unless forced
@@ -5666,32 +5650,14 @@ function showTab(name, sub){
       }
     }
   })();
-  if(name==='main'){ tabs.tabMain && tabs.tabMain.classList.add('active'); tabs.panelMain && tabs.panelMain.classList.add('active'); }
+  if(name==='main'){ tabs.tabMain.classList.add('active'); tabs.panelMain.classList.add('active'); }
   // When the dashboard is selected, activate its tab and panel
   if(name==='dashboard'){ tabs.tabDashboard && tabs.tabDashboard.classList.add('active'); tabs.panelDashboard && tabs.panelDashboard.classList.add('active'); }
-  if(name==='settings'){
-    tabs.tabSettings && tabs.tabSettings.classList.add('active');
-    tabs.panelSettings && tabs.panelSettings.classList.add('active');
-    showSettingsTab(sub);
-  }
+  if(name==='schedule'){ tabs.tabSchedule.classList.add('active'); tabs.panelSchedule.classList.add('active'); renderScheduleEditor(); }
+  if(name==='employees'){ tabs.tabEmployees.classList.add('active'); tabs.panelEmployees.classList.add('active'); renderEmployees(); }
+  if(name==='projects'){ tabs.tabProjects.classList.add('active'); tabs.panelProjects.classList.add('active'); renderProjects(); }
+
   if(name==='payroll'){ tabs.tabPayroll && tabs.tabPayroll.classList.add('active'); tabs.panelPayroll && tabs.panelPayroll.classList.add('active'); }
-}
-function showSettingsTab(sub){
-  const name = sub || 'employees';
-  const panels = {
-    employees: document.getElementById('panelEmployees'),
-    schedule: document.getElementById('panelSchedule'),
-    projects: document.getElementById('panelProjects')
-  };
-  document.querySelectorAll('#panelSettings .tabs .tab-btn').forEach(btn => {
-    btn.classList.toggle('active', btn.dataset.tab === name);
-  });
-  Object.entries(panels).forEach(([key, panel]) => {
-    if(panel) panel.classList.toggle('active', key === name);
-  });
-  if(name==='schedule') renderScheduleEditor();
-  if(name==='employees') renderEmployees();
-  if(name==='projects') renderProjects();
 }
 window.__dtrFilterBackup = null;
 // When switching to the main (DTR) tab, render results and then toggle the edit
@@ -5731,12 +5697,9 @@ tabs.tabMain.addEventListener('click', () => {
     }
   } catch (e) {}
 });
-tabs.tabSettings.addEventListener('click', ()=>showTab('settings'));
-const oldTabSettings = document.getElementById('old-tabSettings');
-if(oldTabSettings) oldTabSettings.addEventListener('click', ()=>showTab('settings'));
-document.querySelectorAll('#panelSettings .tabs .tab-btn').forEach(btn=>{
-  btn.addEventListener('click', ()=>showTab('settings', btn.dataset.tab));
-});
+tabs.tabSchedule.addEventListener('click', ()=>showTab('schedule'));
+tabs.tabEmployees.addEventListener('click', ()=>showTab('employees'));
+tabs.tabProjects.addEventListener('click', ()=>showTab('projects'));
 
 tabs.tabPayroll.addEventListener('click', ()=>{
   try {
@@ -9279,7 +9242,7 @@ function updateWeekInputs(snap) {
         const hashArray = Array.from(new Uint8Array(hashBuffer));
         const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
         const now = new Date().toISOString();
-        const newSnap = { ...snap, startDate: start, endDate: end, hash: hashHex, lockedAt: now, locked: false };
+        const newSnap = { startDate: start, endDate: end, rows: snap.rows, totals: snap.totals, hash: hashHex, lockedAt: now, locked: false };
         // Push into global payrollHistory if it exists; else push into local history
         if (Array.isArray(window.payrollHistory)) {
           window.payrollHistory.push(newSnap);
