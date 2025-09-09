@@ -9689,6 +9689,22 @@ document.addEventListener('DOMContentLoaded', async function () {
     restoreBtn.type = 'button';
     restoreBtn.textContent = 'Restore Bundle';
     restoreBtn.style.cursor = 'pointer';
+    const listCloudBtn = document.createElement('button');
+    listCloudBtn.id = 'listCloudBackups';
+    listCloudBtn.type = 'button';
+    listCloudBtn.textContent = 'List Backups';
+    listCloudBtn.style.cursor = 'pointer';
+    listCloudBtn.title = 'Fetch available backups from Supabase storage';
+    const cloudSelect = document.createElement('select');
+    cloudSelect.id = 'cloudBackupSelect';
+    cloudSelect.style.display = 'none';
+    const restoreCloudBtn = document.createElement('button');
+    restoreCloudBtn.id = 'restoreCloudBtn';
+    restoreCloudBtn.type = 'button';
+    restoreCloudBtn.textContent = 'Restore Selected';
+    restoreCloudBtn.style.cursor = 'pointer';
+    restoreCloudBtn.style.display = 'none';
+    restoreCloudBtn.title = 'Download the selected backup from Supabase and restore';
     const healthBtn = document.createElement('button');
     healthBtn.id = 'healthCheckBtn';
     healthBtn.type = 'button';
@@ -9716,6 +9732,9 @@ document.addEventListener('DOMContentLoaded', async function () {
     wrap.appendChild(backupBtn);
     wrap.appendChild(testBtn);
     wrap.appendChild(restoreBtn);
+    wrap.appendChild(listCloudBtn);
+    wrap.appendChild(cloudSelect);
+    wrap.appendChild(restoreCloudBtn);
     wrap.appendChild(healthBtn);
     wrap.appendChild(logDiv);
     wrap.appendChild(restoreInput);
@@ -9726,6 +9745,9 @@ document.addEventListener('DOMContentLoaded', async function () {
     const btnBackup = backupBtn;
     const btnDry = testBtn;
     const btnRestore = restoreBtn;
+    const btnList = listCloudBtn;
+    const selectCloud = cloudSelect;
+    const btnRestoreCloud = restoreCloudBtn;
     const btnHealth = healthBtn;
     const inputRestore = restoreInput;
     // Utility functions
@@ -9747,7 +9769,46 @@ document.addEventListener('DOMContentLoaded', async function () {
       if (logEl){ logEl.innerHTML = ''; logEl.style.display = 'none'; }
     }
     function lockUI(lock){
-      [btnBackup, btnDry, btnRestore, btnHealth, inputRestore].forEach(function(el){ if (el){ el.disabled = lock; el.style.opacity = lock ? '0.7' : '1'; }});
+      [btnBackup, btnDry, btnRestore, btnHealth, inputRestore, btnList, btnRestoreCloud, selectCloud].forEach(function(el){ if (el){ el.disabled = lock; el.style.opacity = lock ? '0.7' : '1'; }});
+    }
+    async function listBackups(){
+      if(!supabase || !supabase.storage){ setStatus('Supabase storage unavailable', true); return; }
+      try {
+        setStatus('Fetching backups...');
+        const { data, error } = await supabase.storage.from(BUCKET).list('');
+        if (error){ setStatus('List failed: ' + error.message, true); return; }
+        selectCloud.innerHTML = '';
+        (data || []).filter(o=>o.name && o.name.endsWith('.json')).sort((a,b)=> b.name.localeCompare(a.name)).forEach(function(obj){
+          const opt = document.createElement('option');
+          opt.value = obj.name;
+          opt.textContent = obj.name;
+          selectCloud.appendChild(opt);
+        });
+        if (selectCloud.options.length){
+          selectCloud.style.display = '';
+          btnRestoreCloud.style.display = '';
+          setStatus('Select a backup to restore');
+        } else {
+          selectCloud.style.display = 'none';
+          btnRestoreCloud.style.display = 'none';
+          setStatus('No backups found');
+        }
+      } catch(e){ setStatus('List failed: ' + e.message, true); }
+    }
+    async function restoreFromCloud(){
+      const name = selectCloud && selectCloud.value;
+      if(!name){ alert('Select a backup first'); return; }
+      if(!supabase || !supabase.storage){ setStatus('Supabase storage unavailable', true); return; }
+      try {
+        setStatus('Downloading ' + name + '...');
+        const { data, error } = await supabase.storage.from(BUCKET).download(name);
+        if (error) throw error;
+        const file = new File([data], name, { type: 'application/json' });
+        await restoreFile(file, { dryRun: false });
+      } catch(e){
+        setStatus('Cloud restore failed: ' + e.message, true);
+        logMsg('Cloud restore failed: ' + e.message);
+      }
     }
     function nowStamp(){
       const d = new Date();
@@ -9901,10 +9962,10 @@ document.addEventListener('DOMContentLoaded', async function () {
           const r3 = await supabase.storage.from(BUCKET).list('', { limit: 1 });
           if (!r3.error){ results.storage = true; logMsg('Storage bucket OK'); } else { logMsg('Storage bucket issue: ' + r3.error.message); }
         } else { logMsg('Supabase storage client not available'); }
-      } catch(e){ logMsg('Storage exception: ' + e.message); }
-      const summary = 'KV: ' + (results.kv?'OK':'Issue') + ' | DTR: ' + (results.dtr?'OK':'Issue') + ' | Storage: ' + (results.storage?'OK':'Issue');
-      setStatus('Health check done - ' + summary, !(results.kv && results.dtr));
-      lockUI(false);
+    } catch(e){ logMsg('Storage exception: ' + e.message); }
+    const summary = 'KV: ' + (results.kv?'OK':'Issue') + ' | DTR: ' + (results.dtr?'OK':'Issue') + ' | Storage: ' + (results.storage?'OK':'Issue');
+    setStatus('Health check done - ' + summary, !(results.kv && results.dtr));
+    lockUI(false);
     }
     // Attach event listeners
     backupBtn.addEventListener('click', backupNow);
@@ -9927,6 +9988,8 @@ document.addEventListener('DOMContentLoaded', async function () {
       e.target.value = '';
     });
     healthBtn.addEventListener('click', healthCheck);
+    listCloudBtn.addEventListener('click', listBackups);
+    restoreCloudBtn.addEventListener('click', restoreFromCloud);
   });
 })();
 </script>
