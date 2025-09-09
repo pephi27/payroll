@@ -5651,27 +5651,32 @@ function showTab(name, sub){
       }
     }
   })();
-  if(name==='main'){ tabs.tabMain.classList.add('active'); tabs.panelMain.classList.add('active'); }
+  if(name==='main'){ tabs.tabMain && tabs.tabMain.classList.add('active'); tabs.panelMain && tabs.panelMain.classList.add('active'); }
   // When the dashboard is selected, activate its tab and panel
   if(name==='dashboard'){ tabs.tabDashboard && tabs.tabDashboard.classList.add('active'); tabs.panelDashboard && tabs.panelDashboard.classList.add('active'); }
-  if(name==='settings'){ tabs.tabSettings.classList.add('active'); tabs.panelSettings.classList.add('active'); showSettingsTab(sub || 'employees'); }
+  if(name==='settings'){
+    tabs.tabSettings && tabs.tabSettings.classList.add('active');
+    tabs.panelSettings && tabs.panelSettings.classList.add('active');
+    showSettingsTab(sub);
+  }
   if(name==='payroll'){ tabs.tabPayroll && tabs.tabPayroll.classList.add('active'); tabs.panelPayroll && tabs.panelPayroll.classList.add('active'); }
 }
 function showSettingsTab(sub){
+  const name = sub || 'employees';
   const panels = {
     employees: document.getElementById('panelEmployees'),
     schedule: document.getElementById('panelSchedule'),
     projects: document.getElementById('panelProjects')
   };
-  document.querySelectorAll('#panelSettings .tabs .tab-btn').forEach(b=>b.classList.remove('active'));
-  document.querySelectorAll('#panelSettings .tab').forEach(t=>t.classList.remove('active'));
-  const btn = document.querySelector(`#panelSettings .tabs .tab-btn[data-tab="${sub}"]`);
-  const panel = panels[sub];
-  if(btn) btn.classList.add('active');
-  if(panel) panel.classList.add('active');
-  if(sub==='schedule') renderScheduleEditor();
-  if(sub==='employees') renderEmployees();
-  if(sub==='projects') renderProjects();
+  document.querySelectorAll('#panelSettings .tabs .tab-btn').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.tab === name);
+  });
+  Object.entries(panels).forEach(([key, panel]) => {
+    if(panel) panel.classList.toggle('active', key === name);
+  });
+  if(name==='schedule') renderScheduleEditor();
+  if(name==='employees') renderEmployees();
+  if(name==='projects') renderProjects();
 }
 window.__dtrFilterBackup = null;
 // When switching to the main (DTR) tab, render results and then toggle the edit
@@ -5711,9 +5716,9 @@ tabs.tabMain.addEventListener('click', () => {
     }
   } catch (e) {}
 });
-tabs.tabSettings.addEventListener('click', ()=>showTab('settings','employees'));
+tabs.tabSettings.addEventListener('click', ()=>showTab('settings'));
 const oldTabSettings = document.getElementById('old-tabSettings');
-if(oldTabSettings) oldTabSettings.addEventListener('click', ()=>showTab('settings','employees'));
+if(oldTabSettings) oldTabSettings.addEventListener('click', ()=>showTab('settings'));
 document.querySelectorAll('#panelSettings .tabs .tab-btn').forEach(btn=>{
   btn.addEventListener('click', ()=>showTab('settings', btn.dataset.tab));
 });
