@@ -522,6 +522,9 @@ window.addEventListener('load', dashReports);
   input.cell{width:100%;box-sizing:border-box}
   .small{font-size:12px;color:#64748b}
   .muted{color:#64748b;font-size:12px}
+  .snapshot-table{border-collapse:collapse;width:100%}
+  .snapshot-table th,.snapshot-table td{border:1px solid #e2e8f0;padding:4px}
+  .snapshot-table th{background:#f1f5f9}
   @media (max-width:800px){th,td{font-size:12px}}
   .section-title{margin-top:12px;margin-bottom:4px;font-weight:700}
   /* Ensure DTR table columns stay visible and don't collapse in Chrome. Allow
@@ -4410,6 +4413,24 @@ document.addEventListener('DOMContentLoaded', () => {
     const projContainer = document.getElementById('snapshotProjectsContainer');
     if (!detailScreen || !payrollContainer || !dtrContainer || !empContainer || !projContainer) return;
 
+    function buildSnapshotTable(headers, rows) {
+      const table = document.createElement('table');
+      table.className = 'snapshot-table';
+      const head = document.createElement('thead');
+      const hr = document.createElement('tr');
+      headers.forEach(h => {
+        const th = document.createElement('th');
+        th.textContent = h;
+        hr.appendChild(th);
+      });
+      head.appendChild(hr);
+      table.appendChild(head);
+      const body = document.createElement('tbody');
+      rows.forEach(r => body.appendChild(r));
+      table.appendChild(body);
+      return table;
+    }
+
     function renderSnapshotEmployees() {
       empContainer.innerHTML = '';
       const list = snap.employees;
@@ -4474,27 +4495,11 @@ document.addEventListener('DOMContentLoaded', () => {
         if (typeof saveHistory === 'function') saveHistory();
         if (typeof renderSnapshotPayroll === 'function') renderSnapshotPayroll();
       }
-      const table = document.createElement('table');
-      table.style.borderCollapse = 'collapse';
-      table.style.width = '100%';
-      const head = document.createElement('thead');
-      const hr = document.createElement('tr');
-      const headers = ['ID','Name','Hourly Rate','Schedule','Project','Bank Account','Pag-IBIG','PhilHealth','SSS'];
-      headers.forEach(h => {
-        const th = document.createElement('th');
-        th.textContent = h;
-        th.style.border = '1px solid #e2e8f0';
-        th.style.background = '#f1f5f9';
-        th.style.padding = '4px';
-        hr.appendChild(th);
-      });
-      head.appendChild(hr);
-      table.appendChild(head);
-      const body = document.createElement('tbody');
+      const rows = [];
       arr.forEach(rec => {
         const e = rec.emp;
         const tr = document.createElement('tr');
-        function cell(el){ const td=document.createElement('td'); td.style.border='1px solid #e2e8f0'; td.style.padding='4px'; td.appendChild(el); tr.appendChild(td); }
+        function cell(el){ const td=document.createElement('td'); td.appendChild(el); tr.appendChild(td); }
         const idInput = document.createElement('input');
         idInput.value = e.id ?? e.empId ?? '';
         idInput.style.width = '100%';
@@ -4593,10 +4598,10 @@ document.addEventListener('DOMContentLoaded', () => {
           }
         });
         cell(sssSel);
-        body.appendChild(tr);
+        rows.push(tr);
       });
-      table.appendChild(body);
-      empContainer.appendChild(table);
+      const headers = ['ID','Name','Hourly Rate','Schedule','Project','Bank Account','Pag-IBIG','PhilHealth','SSS'];
+      empContainer.appendChild(buildSnapshotTable(headers, rows));
     }
 
     function renderSnapshotProjects() {
@@ -4630,26 +4635,11 @@ document.addEventListener('DOMContentLoaded', () => {
         renderSnapshotProjects();
         if (typeof renderSnapshotEmployees === 'function') renderSnapshotEmployees();
       }
-      const table = document.createElement('table');
-      table.style.borderCollapse = 'collapse';
-      table.style.width = '100%';
-      const head = document.createElement('thead');
-      const hr = document.createElement('tr');
-      ['ID','Project Name'].forEach(h => {
-        const th = document.createElement('th');
-        th.textContent = h;
-        th.style.border = '1px solid #e2e8f0';
-        th.style.background = '#f1f5f9';
-        th.style.padding = '4px';
-        hr.appendChild(th);
-      });
-      head.appendChild(hr);
-      table.appendChild(head);
-      const body = document.createElement('tbody');
+      const rows = [];
       arr.forEach(rec => {
         const p = rec.proj;
         const tr = document.createElement('tr');
-        function cell(el){ const td=document.createElement('td'); td.style.border='1px solid #e2e8f0'; td.style.padding='4px'; td.appendChild(el); tr.appendChild(td); }
+        function cell(el){ const td=document.createElement('td'); td.appendChild(el); tr.appendChild(td); }
         const idInput = document.createElement('input');
         idInput.value = p.id ?? p.projectId ?? rec.key || '';
         idInput.style.width = '100%';
@@ -4660,10 +4650,9 @@ document.addEventListener('DOMContentLoaded', () => {
         nameInput.style.width = '100%';
         nameInput.addEventListener('change', () => updateProjectField(rec, 'name', nameInput.value));
         cell(nameInput);
-        body.appendChild(tr);
+        rows.push(tr);
       });
-      table.appendChild(body);
-      projContainer.appendChild(table);
+      projContainer.appendChild(buildSnapshotTable(['ID','Project Name'], rows));
     }
     // Determine headers for hiding/showing (h4 elements preceding tables)
     const activeHeader = activeTable && activeTable.previousElementSibling;
