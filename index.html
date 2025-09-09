@@ -10761,7 +10761,14 @@ document.addEventListener('DOMContentLoaded', async function () {
     foot.innerHTML = '';
     foot.appendChild(tr);
     var summaryEl = document.getElementById('dtrSummary');
-    if (summaryEl){ summaryEl.textContent=''; summaryEl.style.display='none'; }
+    if (summaryEl){
+      var grand = res.tot || (res.reg + res.ot);
+      summaryEl.textContent = 'Grand Total Hours: ' + formatHours(grand) +
+        ' | Regular Hours: ' + formatHours(res.reg) +
+        ' | OT Hours: ' + formatHours(res.ot) +
+        ' | Employees: ' + res.emp;
+      summaryEl.style.display = '';
+    }
   }
   window.computeVisibleTotals = computeVisibleTotals;
   window.rebuildDtrFooter = rebuildDtrFooter;
