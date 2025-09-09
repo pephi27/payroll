@@ -1380,7 +1380,8 @@ window.addEventListener('load', dashReports);
       try{
         const json = JSON.stringify(bundle);
         const name = 'full_backup_' + new Date().toISOString().replace(/[:.]/g,'_') + '.json';
-        const { error } = await supa.storage.from(BUCKET).upload(name, new Blob([json],{type:'application/json'}));
+        const blob = new Blob([json], { type: 'application/json' });
+        const { error } = await supa.storage.from(BUCKET).upload(name, blob, { upsert: true, contentType: 'application/json' });
         if(error){ log('Upload failed: ' + error.message); return null; }
         log('Uploaded to storage: ' + name);
         return name;
@@ -9758,37 +9759,40 @@ document.addEventListener('DOMContentLoaded', async function () {
       const buf = await crypto.subtle.digest('SHA-256', enc);
       return Array.from(new Uint8Array(buf)).map(b=>b.toString(16).padStart(2,'0')).join('');
     }
-    async function fetchKV(keys){
-      if (!supabase) throw new Error('Supabase client not available');
-      const { data, error } = await supabase.from(KV_TABLE).select('key,value').in('key', keys);
-      if (error) throw new Error('KV fetch failed: ' + error.message);
-      const out = {};
-      (data || []).forEach(function(r){ out[r.key] = r.value; });
-      return { map: out, count: (data || []).length };
-    }
-    async function fetchDTR(){
-      if (!supabase) throw new Error('Supabase client not available');
-      const { data, error } = await supabase.from(DTR_TABLE).select('*').limit(200000);
-      if (error){ return { rows: [], error: error.message }; }
-      return { rows: data || [], error: null };
-    }
     async function backupNow(){
       try {
         lockUI(true); clearLog(); setStatus('Running backup...');
         logMsg('Starting backup');
-        const keys = Array.isArray(window.KNOWN_KEYS) ? window.KNOWN_KEYS.slice() : [];
-        if (!keys.includes('payroll_hist')) keys.push('payroll_hist');
-        logMsg('KV keys to include: ' + keys.length);
-        const [kvRes, dtrRes] = await Promise.all([ fetchKV(keys), fetchDTR() ]);
-        logMsg('KV fetched: ' + kvRes.count + ' rows');
-        if (dtrRes.error){ logMsg('DTR fetch warning: ' + dtrRes.error); }
-        logMsg('DTR rows: ' + (dtrRes.rows || []).length);
+        const local = {};
+        const lsKeys = Object.keys(localStorage);
+        lsKeys.forEach(function(k){
+          try { local[k] = localStorage.getItem(k); } catch(e){}
+        });
+        logMsg('LocalStorage keys: ' + lsKeys.length);
+        const TABLES = window.DB_TABLES || [KV_TABLE, DTR_TABLE];
+        const db = {};
+        let totalRows = 0;
+        for (const t of TABLES){
+          try {
+            const { data, error } = await supabase.from(t).select('*');
+            if (error){
+              logMsg(t + ' fetch warning: ' + error.message);
+              db[t] = [];
+            } else {
+              db[t] = data || [];
+              totalRows += db[t].length;
+              logMsg(t + ' rows: ' + db[t].length);
+            }
+          } catch(e){
+            logMsg(t + ' fetch failed: ' + e.message);
+            db[t] = [];
+          }
+        }
         const bundle = {
           schema: 'payrollhub.backup.v1',
           createdAt: new Date().toISOString(),
-          kv_keys: keys,
-          kv: kvRes.map,
-          dtr: { rows: dtrRes.rows || [], __warning: dtrRes.error || null }
+          local: local,
+          db: db
         };
         const withoutHash = JSON.stringify(bundle);
         const hash = await sha256Hex(withoutHash);
@@ -9810,7 +9814,7 @@ document.addEventListener('DOMContentLoaded', async function () {
         a.click();
         a.remove();
         URL.revokeObjectURL(url);
-        setStatus('Backup complete âœ“  (KV: ' + kvRes.count + ', DTR: ' + (dtrRes.rows || []).length + ')');
+        setStatus('Backup complete âœ“  (Local: ' + lsKeys.length + ', Tables: ' + TABLES.length + ', Rows: ' + totalRows + ')');
         logMsg('Backup complete - SHA256: ' + hash);
       } catch(e){
         console.error(e);
@@ -9835,42 +9839,39 @@ document.addEventListener('DOMContentLoaded', async function () {
         const declared = clone.hash; delete clone.hash;
         const recompute = await sha256Hex(JSON.stringify(clone));
         if (declared && declared !== recompute){ setStatus('Hash mismatch', true); throw new Error('Hash mismatch'); }
-        const keys = Array.isArray(bundle.kv_keys) ? bundle.kv_keys : [];
-        const dtrRows = (bundle.dtr && Array.isArray(bundle.dtr.rows)) ? bundle.dtr.rows : [];
-        logMsg('Bundle valid - KV keys: ' + keys.length + ', DTR rows: ' + dtrRows.length);
+        const local = isObject(bundle.local) ? bundle.local : {};
+        const db = isObject(bundle.db) ? bundle.db : {};
+        const lsKeys = Object.keys(local);
+        const tableNames = Object.keys(db);
+        logMsg('Bundle valid - Local keys: ' + lsKeys.length + ', Tables: ' + tableNames.length);
         if (opts && opts.dryRun){ setStatus('Dry run passed âœ“'); logMsg('No writes performed'); alert('Dry run OK - no data written.'); return; }
-        // Upsert KV to Supabase
-        if (supabase && keys.length){
-          try {
-            const kvRows = keys.map(function(k){ return { key: k, value: bundle.kv[k] }; });
-            const { error } = await supabase.from(KV_TABLE).upsert(kvRows, { onConflict: 'key' });
-            if (error) logMsg('KV upsert warning: ' + error.message);
-            else logMsg('KV upserted: ' + kvRows.length);
-          } catch(e){ logMsg('KV upsert failed: ' + e.message); }
+        // Upsert tables
+        if (supabase){
+          for (const t of tableNames){
+            const rows = Array.isArray(db[t]) ? db[t] : [];
+            if (!rows.length) continue;
+            try {
+              const { error } = await supabase.from(t).upsert(rows);
+              if (error) logMsg(t + ' upsert warning: ' + error.message);
+              else logMsg(t + ' upserted: ' + rows.length);
+            } catch(e){ logMsg(t + ' upsert failed: ' + e.message); }
+          }
         }
         // Hydrate localStorage
         try {
-          keys.forEach(function(k){
-            const v = bundle.kv[k];
+          lsKeys.forEach(function(k){
+            const v = local[k];
             const str = typeof v === 'string' ? v : JSON.stringify(v);
             localStorage.setItem(k, str);
           });
-          logMsg('LocalStorage hydrated: ' + keys.length + ' keys');
+          logMsg('LocalStorage hydrated: ' + lsKeys.length + ' keys');
         } catch(e){ logMsg('LocalStorage hydrate warning: ' + e.message); }
-        // Upsert DTR
-        if (supabase && dtrRows.length){
-          try {
-            const { error } = await supabase.from(DTR_TABLE).upsert(dtrRows);
-            if (error) logMsg('DTR upsert warning: ' + error.message);
-            else logMsg('DTR upserted: ' + dtrRows.length);
-          } catch(e){ logMsg('DTR upsert failed: ' + e.message); }
-        }
         try {
           if (typeof calculateAll === 'function') calculateAll();
           if (typeof renderDeductionsTable === 'function') renderDeductionsTable();
           if (typeof renderTable === 'function') renderTable();
         } catch(e){}
-        setStatus('Restore complete âœ“ (KV: ' + keys.length + ', DTR: ' + dtrRows.length + ')');
+        setStatus('Restore complete âœ“ (Local: ' + lsKeys.length + ', Tables: ' + tableNames.length + ')');
         logMsg('Restore complete');
         alert('Restore complete.');
       } catch(e){
