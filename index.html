@@ -6007,7 +6007,7 @@ document.querySelectorAll('.emp-sel-schedule').forEach(sel=> sel.addEventListene
   }));
   document.querySelectorAll('.del-emp').forEach(btn=> btn.addEventListener('click', (e)=>{
     const id=e.target.dataset.id;
-    if(confirm(`Delete employee ${id} â€” ${storedEmployees[id].name}?`)){
+    if(confirm(`Delete employee ${id} - ${storedEmployees[id].name}?`)){
       delete storedEmployees[id]; saveEmployeesToLS(); renderEmployees(); renderResults();
     }
   }));
@@ -6750,33 +6750,33 @@ const trSeg = document.createElement('tr');
         // Clock in/out columns based on segment.  AM displays morning punches; PM
         // displays afternoon punches; OT leaves these blank.
         if (segment === 'AM') {
-          htmlSeg += (amInActual ? '<td>' + __fmt12Clock(amInActual) + '</td>' : '<td class="missing">â€”</td>');
+          htmlSeg += (amInActual ? '<td>' + __fmt12Clock(amInActual) + '</td>' : '<td class="missing">-</td>');
           // Show AM out only when not bridging and a punch exists
           if (hasBridge || !amOutActual) {
-            htmlSeg += '<td class="missing">â€”</td>';
+            htmlSeg += '<td class="missing">-</td>';
           } else {
             htmlSeg += '<td>' + __fmt12Clock(amOutActual) + '</td>';
           }
-          htmlSeg += '<td class="missing">â€”</td><td class="missing">â€”</td>';
+          htmlSeg += '<td class="missing">-</td><td class="missing">-</td>';
         } else if (segment === 'PM') {
-          htmlSeg += '<td class="missing">â€”</td><td class="missing">â€”</td>';
+          htmlSeg += '<td class="missing">-</td><td class="missing">-</td>';
           // Show PM in only when not bridging and a punch exists
           if (hasBridge || !pmInActual) {
-            htmlSeg += '<td class="missing">â€”</td>';
+            htmlSeg += '<td class="missing">-</td>';
           } else {
             htmlSeg += '<td>' + __fmt12Clock(pmInActual) + '</td>';
           }
-          htmlSeg += (pmOutActual ? '<td>' + __fmt12Clock(pmOutActual) + '</td>' : '<td class="missing">â€”</td>');
+          htmlSeg += (pmOutActual ? '<td>' + __fmt12Clock(pmOutActual) + '</td>' : '<td class="missing">-</td>');
         } else {
           // OT segment leaves both AM and PM punch cells blank
-          htmlSeg += '<td class="missing">â€”</td><td class="missing">â€”</td><td class="missing">â€”</td><td class="missing">â€”</td>';
+          htmlSeg += '<td class="missing">-</td><td class="missing">-</td><td class="missing">-</td><td class="missing">-</td>';
         }
         // OT in/out columns: filled only for OT segment
         if (segment === 'OT') {
-          htmlSeg += (otInSeg ? '<td>' + __fmt12Clock(otInSeg) + '</td>' : '<td class="missing">â€”</td>');
-          htmlSeg += (otOutSeg ? '<td>' + __fmt12Clock(otOutSeg) + '</td>' : '<td class="missing">â€”</td>');
+          htmlSeg += (otInSeg ? '<td>' + __fmt12Clock(otInSeg) + '</td>' : '<td class="missing">-</td>');
+          htmlSeg += (otOutSeg ? '<td>' + __fmt12Clock(otOutSeg) + '</td>' : '<td class="missing">-</td>');
         } else {
-          htmlSeg += '<td class="missing">â€”</td><td class="missing">â€”</td>';
+          htmlSeg += '<td class="missing">-</td><td class="missing">-</td>';
         }
         // Regular hours and OT hours columns
         htmlSeg += '<td>' + formatHours(regDecSeg) + '</td><td>' + formatHours(otDecSeg) + '</td>';
@@ -7431,7 +7431,7 @@ function restoreData(file) {
   };
   reader.readAsText(file);
 }
-// Legacy backup UI removed â€” replaced by enhanced Backup & Restore controls.
+// Legacy backup UI removed - replaced by enhanced Backup & Restore controls.
   </script>
  
 <!-- Manual DTR Modal -->
@@ -9738,7 +9738,7 @@ document.addEventListener('DOMContentLoaded', async function () {
       if (logEl.style.display === 'none') logEl.style.display = 'block';
       const div = document.createElement('div');
       const now = new Date();
-      div.textContent = now.toLocaleTimeString() + ' â€” ' + msg;
+      div.textContent = now.toLocaleTimeString() + ' - ' + msg;
       logEl.appendChild(div);
       logEl.scrollTop = logEl.scrollHeight;
     }
@@ -9811,7 +9811,7 @@ document.addEventListener('DOMContentLoaded', async function () {
         a.remove();
         URL.revokeObjectURL(url);
         setStatus('Backup complete âœ“  (KV: ' + kvRes.count + ', DTR: ' + (dtrRes.rows || []).length + ')');
-        logMsg('Backup complete â€” SHA256: ' + hash);
+        logMsg('Backup complete - SHA256: ' + hash);
       } catch(e){
         console.error(e);
         setStatus('Backup failed: ' + e.message, true);
@@ -9837,8 +9837,8 @@ document.addEventListener('DOMContentLoaded', async function () {
         if (declared && declared !== recompute){ setStatus('Hash mismatch', true); throw new Error('Hash mismatch'); }
         const keys = Array.isArray(bundle.kv_keys) ? bundle.kv_keys : [];
         const dtrRows = (bundle.dtr && Array.isArray(bundle.dtr.rows)) ? bundle.dtr.rows : [];
-        logMsg('Bundle valid â€” KV keys: ' + keys.length + ', DTR rows: ' + dtrRows.length);
-        if (opts && opts.dryRun){ setStatus('Dry run passed âœ“'); logMsg('No writes performed'); alert('Dry run OK â€” no data written.'); return; }
+        logMsg('Bundle valid - KV keys: ' + keys.length + ', DTR rows: ' + dtrRows.length);
+        if (opts && opts.dryRun){ setStatus('Dry run passed âœ“'); logMsg('No writes performed'); alert('Dry run OK - no data written.'); return; }
         // Upsert KV to Supabase
         if (supabase && keys.length){
           try {
@@ -9902,7 +9902,7 @@ document.addEventListener('DOMContentLoaded', async function () {
         } else { logMsg('Supabase storage client not available'); }
       } catch(e){ logMsg('Storage exception: ' + e.message); }
       const summary = 'KV: ' + (results.kv?'OK':'Issue') + ' | DTR: ' + (results.dtr?'OK':'Issue') + ' | Storage: ' + (results.storage?'OK':'Issue');
-      setStatus('Health check done â€” ' + summary, !(results.kv && results.dtr));
+      setStatus('Health check done - ' + summary, !(results.kv && results.dtr));
       lockUI(false);
     }
     // Attach event listeners
