@@ -1380,7 +1380,8 @@ window.addEventListener('load', dashReports);
       try{
         const json = JSON.stringify(bundle);
         const name = 'full_backup_' + new Date().toISOString().replace(/[:.]/g,'_') + '.json';
-        const { error } = await supa.storage.from(BUCKET).upload(name, new Blob([json],{type:'application/json'}));
+        const blob = new Blob([json], { type: 'application/json' });
+        const { error } = await supa.storage.from(BUCKET).upload(name, blob, { upsert: true, contentType: 'application/json' });
         if(error){ log('Upload failed: ' + error.message); return null; }
         log('Uploaded to storage: ' + name);
         return name;
