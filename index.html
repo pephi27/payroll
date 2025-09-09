@@ -672,35 +672,35 @@ window.addEventListener('load', dashReports);
  
 <style>
 /* --- Employees: Clean Add Employee UI --- */
-#panelEmployees .form-card{
+#panelSettingsEmployees .form-card{
   background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:16px;
   box-shadow:0 1px 2px rgba(0,0,0,0.04);margin-bottom:12px;
 }
-#panelEmployees form{
+#panelSettingsEmployees form{
   display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;align-items:start;
 }
-#panelEmployees label{display:block;font-size:12px;color:#334155;margin-bottom:6px;font-weight:600;}
-#panelEmployees input, #panelEmployees select, #panelEmployees textarea{
+#panelSettingsEmployees label{display:block;font-size:12px;color:#334155;margin-bottom:6px;font-weight:600;}
+#panelSettingsEmployees input, #panelSettingsEmployees select, #panelSettingsEmployees textarea{
   width:100%;padding:10px 12px;border:1px solid #cbd5e1;border-radius:10px;outline:none;
 }
-#panelEmployees input:focus, #panelEmployees select:focus, #panelEmployees textarea:focus{
+#panelSettingsEmployees input:focus, #panelSettingsEmployees select:focus, #panelSettingsEmployees textarea:focus{
   border-color:#64748b;box-shadow:0 0 0 3px rgba(100,116,139,0.15);
 }
-#panelEmployees input:invalid, #panelEmployees select:invalid, #panelEmployees textarea:invalid{
+#panelSettingsEmployees input:invalid, #panelSettingsEmployees select:invalid, #panelSettingsEmployees textarea:invalid{
   border-color:#ef4444;
 }
-#panelEmployees .form-actions{grid-column:1 / -1;display:flex;gap:10px;justify-content:flex-end;margin-top:2px;}
-#panelEmployees button, #panelEmployees input[type="submit"], #panelEmployees input[type="button"]{
+#panelSettingsEmployees .form-actions{grid-column:1 / -1;display:flex;gap:10px;justify-content:flex-end;margin-top:2px;}
+#panelSettingsEmployees button, #panelSettingsEmployees input[type="submit"], #panelSettingsEmployees input[type="button"]{
   border:1px solid #cbd5e1;border-radius:10px;padding:10px 14px;font-weight:600;cursor:pointer;background:#f8fafc;
 }
-#panelEmployees button:hover, #panelEmployees input[type="submit"]:hover, #panelEmployees input[type="button"]:hover{
+#panelSettingsEmployees button:hover, #panelSettingsEmployees input[type="submit"]:hover, #panelSettingsEmployees input[type="button"]:hover{
   filter:brightness(0.98);
 }
-#panelEmployees .btn-primary{background:#0ea5e9;border-color:#0284c7;color:#fff;}
-#panelEmployees .btn-danger{background:#fee2e2;border-color:#fecaca;color:#b91c1c;}
-#panelEmployees small.hint{display:block;color:#64748b;margin-top:4px;font-size:11px;}
+#panelSettingsEmployees .btn-primary{background:#0ea5e9;border-color:#0284c7;color:#fff;}
+#panelSettingsEmployees .btn-danger{background:#fee2e2;border-color:#fecaca;color:#b91c1c;}
+#panelSettingsEmployees small.hint{display:block;color:#64748b;margin-top:4px;font-size:11px;}
 @media (max-width:1100px){
-  #panelEmployees form{grid-template-columns:repeat(auto-fit,minmax(180px,1fr));}
+  #panelSettingsEmployees form{grid-template-columns:repeat(auto-fit,minmax(180px,1fr));}
 }
 </style>
 
@@ -1016,18 +1016,14 @@ window.addEventListener('load', dashReports);
   .header .nav-icon { font-size: 0; line-height: 1; }
   #tabDashboard .nav-icon::before { content: "📊"; font-size: 14px; }
   #tabMain .nav-icon::before      { content: "🕒"; font-size: 14px; }
-  #tabSchedule .nav-icon::before  { content: "🗓️"; font-size: 14px; }
-  #tabEmployees .nav-icon::before { content: "👥"; font-size: 14px; }
-  #tabProjects .nav-icon::before  { content: "🚀"; font-size: 14px; }
   #tabPayroll .nav-icon::before   { content: "💰"; font-size: 14px; }
+  #tabSettings .nav-icon::before  { content: "⚙️"; font-size: 14px; }
   #tabProjectTotals .nav-icon::before { content: "📈"; font-size: 14px; }
   /* Sidebar duplicates */
   #old-tabDashboard .nav-icon::before { content: "📊"; }
   #old-tabMain .nav-icon::before      { content: "🕒"; }
-  #old-tabSchedule .nav-icon::before  { content: "🗓️"; }
-  #old-tabEmployees .nav-icon::before { content: "👥"; }
-  #old-tabProjects .nav-icon::before  { content: "🚀"; }
   #old-tabPayroll .nav-icon::before   { content: "💰"; }
+  #old-tabSettings .nav-icon::before  { content: "⚙️"; }
   #old-tabProjectTotals .nav-icon::before { content: "📈"; }
 
   /* Mobile menu icon */
@@ -1151,11 +1147,9 @@ window.addEventListener('load', dashReports);
             <ul class="nav-menu">
               <li class="nav-item"><button class="nav-link tab-btn active" id="tabDashboard" data-page="dashboard"><span class="nav-icon">ðŸ“Š</span> Dashboard</button></li>
               <li class="nav-item"><button class="nav-link tab-btn" id="tabMain" data-page="dtr"><span class="nav-icon">ðŸ•</span> DTR</button></li>
-              <li class="nav-item"><button class="nav-link tab-btn" id="tabSchedule" data-page="schedules"><span class="nav-icon">ðŸ“…</span> Schedules</button></li>
-              <li class="nav-item"><button class="nav-link tab-btn" id="tabEmployees" data-page="employees"><span class="nav-icon">ðŸ‘¥</span> Employees</button></li>
-              <li class="nav-item"><button class="nav-link tab-btn" id="tabProjects" data-page="projects"><span class="nav-icon">ðŸš€</span> Projects</button></li>
               <li class="nav-item"><button class="nav-link tab-btn" id="tabPayroll" data-page="payroll"><span class="nav-icon">ðŸ’°</span> Payroll</button></li>
-              <li class="nav-item"><button class="nav-link tab-btn" id="tabProjectTotals" data-page="totals"><span class="nav-icon">ðŸ“ˆ</span> Reports</button></li>
+                            <li class="nav-item"><button class="nav-link tab-btn" id="tabProjectTotals" data-page="totals"><span class="nav-icon">ðŸ“ˆ</span> Reports</button></li>
+              <li class="nav-item"><button class="nav-link tab-btn" id="tabSettings" data-page="settings"><span class="nav-icon">⚙️</span> Settings</button></li>
             </ul>
           </nav>
         </div>
@@ -1181,33 +1175,21 @@ window.addEventListener('load', dashReports);
             </button>
           </li>
           <li class="nav-item">
-            <button class="nav-link tab-btn" id="old-tabSchedule" data-page="schedules">
-              <span class="nav-icon">ðŸ“…</span>
-              Schedules
-            </button>
-          </li>
-          <li class="nav-item">
-            <button class="nav-link tab-btn" id="old-tabEmployees" data-page="employees">
-              <span class="nav-icon">ðŸ‘¥</span>
-              Employees
-            </button>
-          </li>
-          <li class="nav-item">
-            <button class="nav-link tab-btn" id="old-tabProjects" data-page="projects">
-              <span class="nav-icon">ðŸš€</span>
-              Projects
-            </button>
-          </li>
-          <li class="nav-item">
             <button class="nav-link tab-btn" id="old-tabPayroll" data-page="payroll">
               <span class="nav-icon">ðŸ’°</span>
               Payroll
             </button>
           </li>
-          <li class="nav-item">
+                    <li class="nav-item">
             <button class="nav-link tab-btn" id="old-tabProjectTotals" data-page="totals">
               <span class="nav-icon">ðŸ“ˆ</span>
               Reports
+            </button>
+          </li>
+          <li class="nav-item">
+            <button class="nav-link tab-btn" id="old-tabSettings" data-page="settings">
+              <span class="nav-icon">⚙️</span>
+              Settings
             </button>
           </li>
         </ul>
@@ -1558,8 +1540,16 @@ window.addEventListener('load', dashReports);
    <div id="dtrSummary" style="margin-top:4px;font-weight:bold;"></div>
    </div>
   </section>
+  <section class="panel" id="panelSettings">
+   <h3>Settings</h3>
+   <ul class="settings-nav">
+    <li><button class="tab-btn" id="tabSettingsEmployees">Employees</button></li>
+    <li><button class="tab-btn" id="tabSettingsSchedule">Schedule</button></li>
+    <li><button class="tab-btn" id="tabSettingsProjects">Projects</button></li>
+   </ul>
+
   
-  <section class="panel" id="panelSchedule">
+  <section class="panel" id="panelSettingsSchedule">
    <h3>
     Schedules
    </h3>
@@ -1740,7 +1730,7 @@ window.addEventListener('load', dashReports);
    </div>
   </section>
   
-  <section class="panel" id="panelEmployees">
+  <section class="panel" id="panelSettingsEmployees">
    <h3>
     Employees
    </h3>
@@ -1806,7 +1796,7 @@ window.addEventListener('load', dashReports);
    </table>
   </section>
   
-  <section class="panel" id="panelProjects">
+  <section class="panel" id="panelSettingsProjects">
    <h3>
     Projects
    </h3>
@@ -1834,6 +1824,8 @@ window.addEventListener('load', dashReports);
     </tbody>
    </table>
   </section>
+</section>
+
   <section class="panel" id="panelPayroll">
    <div id="payrollWrapper">
     <header>
@@ -5621,15 +5613,14 @@ const tabs = {
   tabMain: document.getElementById('tabMain'),
   // Dashboard tab/button for high-level summary and payroll history
   tabDashboard: document.getElementById('tabDashboard'),
-  tabSchedule: document.getElementById('tabSchedule'),
-  tabEmployees: document.getElementById('tabEmployees'),
-  tabProjects: document.getElementById('tabProjects'),
+  tabSettings: document.getElementById('tabSettings'),
   panelMain: document.getElementById('panelMain'),
   // Corresponding Dashboard panel
   panelDashboard: document.getElementById('panelDashboard'),
-  panelSchedule: document.getElementById('panelSchedule'),
-  panelEmployees: document.getElementById('panelEmployees'),
-  panelProjects: document.getElementById('panelProjects'),
+  panelSettings: document.getElementById('panelSettings'),
+  panelSettingsSchedule: document.getElementById('panelSettingsSchedule'),
+  panelSettingsEmployees: document.getElementById('panelSettingsEmployees'),
+  panelSettingsProjects: document.getElementById('panelSettingsProjects'),
   tabPayroll: document.getElementById('tabPayroll'),
   panelPayroll: document.getElementById('panelPayroll')
 };
@@ -5653,11 +5644,26 @@ function showTab(name){
   if(name==='main'){ tabs.tabMain.classList.add('active'); tabs.panelMain.classList.add('active'); }
   // When the dashboard is selected, activate its tab and panel
   if(name==='dashboard'){ tabs.tabDashboard && tabs.tabDashboard.classList.add('active'); tabs.panelDashboard && tabs.panelDashboard.classList.add('active'); }
-  if(name==='schedule'){ tabs.tabSchedule.classList.add('active'); tabs.panelSchedule.classList.add('active'); renderScheduleEditor(); }
-  if(name==='employees'){ tabs.tabEmployees.classList.add('active'); tabs.panelEmployees.classList.add('active'); renderEmployees(); }
-  if(name==='projects'){ tabs.tabProjects.classList.add('active'); tabs.panelProjects.classList.add('active'); renderProjects(); }
+  if(name==='settings'){ tabs.tabSettings && tabs.tabSettings.classList.add('active'); tabs.panelSettings && tabs.panelSettings.classList.add('active'); showSettingsTab('employees'); }
 
   if(name==='payroll'){ tabs.tabPayroll && tabs.tabPayroll.classList.add('active'); tabs.panelPayroll && tabs.panelPayroll.classList.add('active'); }
+}
+function showSettingsTab(name){
+  const map = {
+    employees: { panel: tabs.panelSettingsEmployees, btn: document.getElementById('tabSettingsEmployees'), render: renderEmployees },
+    schedule: { panel: tabs.panelSettingsSchedule, btn: document.getElementById('tabSettingsSchedule'), render: renderScheduleEditor },
+    projects: { panel: tabs.panelSettingsProjects, btn: document.getElementById('tabSettingsProjects'), render: renderProjects }
+  };
+  Object.values(map).forEach(m => {
+    if (m.panel) m.panel.classList.remove('active');
+    if (m.btn) m.btn.classList.remove('active');
+  });
+  const m = map[name];
+  if (m) {
+    if (m.panel) m.panel.classList.add('active');
+    if (m.btn) m.btn.classList.add('active');
+    if (typeof m.render === 'function') m.render();
+  }
 }
 window.__dtrFilterBackup = null;
 // When switching to the main (DTR) tab, render results and then toggle the edit
@@ -5697,9 +5703,13 @@ tabs.tabMain.addEventListener('click', () => {
     }
   } catch (e) {}
 });
-tabs.tabSchedule.addEventListener('click', ()=>showTab('schedule'));
-tabs.tabEmployees.addEventListener('click', ()=>showTab('employees'));
-tabs.tabProjects.addEventListener('click', ()=>showTab('projects'));
+tabs.tabSettings && tabs.tabSettings.addEventListener('click', ()=>showTab('settings'));
+const tabSettingsEmployees = document.getElementById('tabSettingsEmployees');
+const tabSettingsSchedule = document.getElementById('tabSettingsSchedule');
+const tabSettingsProjects = document.getElementById('tabSettingsProjects');
+if (tabSettingsEmployees) tabSettingsEmployees.addEventListener('click', ()=>showSettingsTab('employees'));
+if (tabSettingsSchedule) tabSettingsSchedule.addEventListener('click', ()=>showSettingsTab('schedule'));
+if (tabSettingsProjects) tabSettingsProjects.addEventListener('click', ()=>showSettingsTab('projects'));
 
 tabs.tabPayroll.addEventListener('click', ()=>{
   try {
@@ -7958,7 +7968,7 @@ var csv = rows.map(function(r){
 <script>
 // --- Employees: small UX helpers ---
 document.addEventListener('DOMContentLoaded', () => {
-  const panel = document.querySelector('#panelEmployees');
+  const panel = document.querySelector('#panelSettingsEmployees');
   if (!panel) return;
   const form = panel.querySelector('form');
   if (!form) return;
