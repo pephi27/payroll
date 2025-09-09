@@ -4415,15 +4415,64 @@ document.addEventListener('DOMContentLoaded', () => {
       const list = snap.employees;
       let arr = [];
       if (Array.isArray(list)) {
-        arr = list;
+        arr = list.map((emp, idx) => ({ key: idx, emp }));
       } else if (list && typeof list === 'object') {
-        arr = Object.keys(list).map(id => ({ id, ...(list[id] || {}) }));
+        arr = Object.keys(list).map(id => ({ key: id, emp: list[id] || {} }));
       }
       if (!arr.length) {
         const p = document.createElement('p');
         p.textContent = 'No employee data.';
         empContainer.appendChild(p);
         return;
+      }
+      const schedOpts = [];
+      arr.forEach(r => {
+        const s = r.emp.scheduleName || r.emp.schedule || r.emp.scheduleId;
+        if (s && !schedOpts.includes(s)) schedOpts.push(s);
+      });
+      const projOpts = [];
+      const projList = snap.projects;
+      if (Array.isArray(projList)) {
+        projList.forEach(p => {
+          const n = p.name || p.projectName || p.project || p.id;
+          if (n && !projOpts.includes(n)) projOpts.push(n);
+        });
+      } else if (projList && typeof projList === 'object') {
+        Object.keys(projList).forEach(id => {
+          const p = projList[id] || {};
+          const n = p.name || p.projectName || p.project || id;
+          if (n && !projOpts.includes(n)) projOpts.push(n);
+        });
+      }
+      function updateEmployeeField(rec, prop, value) {
+        const emp = rec.emp;
+        const oldId = emp.id;
+        emp[prop] = value;
+        if (Array.isArray(snap.employees)) {
+          snap.employees[rec.key] = emp;
+        } else {
+          if (prop === 'id') {
+            delete snap.employees[rec.key];
+            rec.key = value;
+          }
+          snap.employees[rec.key] = emp;
+        }
+        if (prop === 'id' || prop === 'name' || prop === 'hourlyRate') {
+          (snap.rows || []).forEach(r => {
+            if (String(r.id) === String(oldId)) {
+              if (prop === 'id') r.id = value;
+              else if (prop === 'name') r.name = value;
+              else if (prop === 'hourlyRate') r.rate = parseFloat(value) || 0;
+            }
+          });
+        }
+        if (prop === 'id' && typeof contribFlags !== 'undefined') {
+          contribFlags[value] = contribFlags[oldId] || {};
+          delete contribFlags[oldId];
+          try { localStorage.setItem(LS_CONTRIB_FLAGS, JSON.stringify(contribFlags)); } catch {}
+        }
+        if (typeof saveHistory === 'function') saveHistory();
+        if (typeof renderSnapshotPayroll === 'function') renderSnapshotPayroll();
       }
       const table = document.createElement('table');
       table.style.borderCollapse = 'collapse';
@@ -4442,26 +4491,108 @@ document.addEventListener('DOMContentLoaded', () => {
       head.appendChild(hr);
       table.appendChild(head);
       const body = document.createElement('tbody');
-      arr.forEach(e => {
+      arr.forEach(rec => {
+        const e = rec.emp;
         const tr = document.createElement('tr');
-        const vals = [
-          e.id ?? e.empId ?? '',
-          e.name || '',
-          e.hourlyRate ?? e.rate ?? '',
-          e.scheduleName || e.schedule || e.scheduleId || '',
-          e.projectName || e.project || e.projectId || '',
-          e.bankAccount || e.bank || '',
-          (e.pagibig === false ? 'No' : 'Yes'),
-          (e.philhealth === false ? 'No' : 'Yes'),
-          (e.sss === false ? 'No' : 'Yes')
-        ];
-        vals.forEach(v => {
-          const td = document.createElement('td');
-          td.textContent = String(v ?? '');
-          td.style.border = '1px solid #e2e8f0';
-          td.style.padding = '4px';
-          tr.appendChild(td);
+        function cell(el){ const td=document.createElement('td'); td.style.border='1px solid #e2e8f0'; td.style.padding='4px'; td.appendChild(el); tr.appendChild(td); }
+        const idInput = document.createElement('input');
+        idInput.value = e.id ?? e.empId ?? '';
+        idInput.style.width = '100%';
+        idInput.addEventListener('change', () => updateEmployeeField(rec, 'id', idInput.value));
+        cell(idInput);
+        const nameInput = document.createElement('input');
+        nameInput.value = e.name || '';
+        nameInput.style.width = '100%';
+        nameInput.addEventListener('change', () => updateEmployeeField(rec, 'name', nameInput.value));
+        cell(nameInput);
+        const rateInput = document.createElement('input');
+        rateInput.type = 'number';
+        rateInput.step = '0.01';
+        rateInput.value = e.hourlyRate ?? e.rate ?? '';
+        rateInput.style.width = '100%';
+        rateInput.addEventListener('change', () => updateEmployeeField(rec, 'hourlyRate', parseFloat(rateInput.value) || 0));
+        cell(rateInput);
+        const schedSelect = document.createElement('select');
+        const curSched = e.scheduleName || e.schedule || e.scheduleId || '';
+        [''].concat(schedOpts).forEach(s => {
+          const opt = document.createElement('option');
+          opt.value = s;
+          opt.textContent = s;
+          if (s === curSched) opt.selected = true;
+          schedSelect.appendChild(opt);
         });
+        schedSelect.addEventListener('change', () => updateEmployeeField(rec, 'scheduleName', schedSelect.value));
+        cell(schedSelect);
+        const projSelect = document.createElement('select');
+        const curProj = e.projectName || e.project || e.projectId || '';
+        [''].concat(projOpts).forEach(p => {
+          const opt = document.createElement('option');
+          opt.value = p;
+          opt.textContent = p;
+          if (p === curProj) opt.selected = true;
+          projSelect.appendChild(opt);
+        });
+        projSelect.addEventListener('change', () => updateEmployeeField(rec, 'projectName', projSelect.value));
+        cell(projSelect);
+        const bankInput = document.createElement('input');
+        bankInput.value = e.bankAccount || e.bank || '';
+        bankInput.style.width = '100%';
+        bankInput.addEventListener('change', () => updateEmployeeField(rec, 'bankAccount', bankInput.value));
+        cell(bankInput);
+        const pagibigSel = document.createElement('select');
+        ['Yes','No'].forEach(v => {
+          const opt = document.createElement('option');
+          opt.value = v;
+          opt.textContent = v;
+          if ((e.pagibig === false ? 'No' : 'Yes') === v) opt.selected = true;
+          pagibigSel.appendChild(opt);
+        });
+        pagibigSel.addEventListener('change', () => {
+          const enabled = pagibigSel.value === 'Yes';
+          updateEmployeeField(rec, 'pagibig', enabled);
+          if (typeof contribFlags !== 'undefined') {
+            if (!contribFlags[e.id]) contribFlags[e.id] = {};
+            contribFlags[e.id].pagibig = enabled;
+            try { localStorage.setItem(LS_CONTRIB_FLAGS, JSON.stringify(contribFlags)); } catch {}
+          }
+        });
+        cell(pagibigSel);
+        const philSel = document.createElement('select');
+        ['Yes','No'].forEach(v => {
+          const opt = document.createElement('option');
+          opt.value = v;
+          opt.textContent = v;
+          if ((e.philhealth === false ? 'No' : 'Yes') === v) opt.selected = true;
+          philSel.appendChild(opt);
+        });
+        philSel.addEventListener('change', () => {
+          const enabled = philSel.value === 'Yes';
+          updateEmployeeField(rec, 'philhealth', enabled);
+          if (typeof contribFlags !== 'undefined') {
+            if (!contribFlags[e.id]) contribFlags[e.id] = {};
+            contribFlags[e.id].philhealth = enabled;
+            try { localStorage.setItem(LS_CONTRIB_FLAGS, JSON.stringify(contribFlags)); } catch {}
+          }
+        });
+        cell(philSel);
+        const sssSel = document.createElement('select');
+        ['Yes','No'].forEach(v => {
+          const opt = document.createElement('option');
+          opt.value = v;
+          opt.textContent = v;
+          if ((e.sss === false ? 'No' : 'Yes') === v) opt.selected = true;
+          sssSel.appendChild(opt);
+        });
+        sssSel.addEventListener('change', () => {
+          const enabled = sssSel.value === 'Yes';
+          updateEmployeeField(rec, 'sss', enabled);
+          if (typeof contribFlags !== 'undefined') {
+            if (!contribFlags[e.id]) contribFlags[e.id] = {};
+            contribFlags[e.id].sss = enabled;
+            try { localStorage.setItem(LS_CONTRIB_FLAGS, JSON.stringify(contribFlags)); } catch {}
+          }
+        });
+        cell(sssSel);
         body.appendChild(tr);
       });
       table.appendChild(body);
@@ -4533,173 +4664,152 @@ document.addEventListener('DOMContentLoaded', () => {
     if (diffButton) diffButton.style.display = 'none';
     if (snapshotViewEl) snapshotViewEl.style.display = 'none';
     // Build payroll summary table
-    payrollContainer.innerHTML = '';
-    const payTable = document.createElement('table');
-    payTable.style.borderCollapse = 'collapse';
-    payTable.style.width = '100%';
-    const pHead = document.createElement('thead');
-    const pRow = document.createElement('tr');
-    // Define the headers for the payroll summary table. Include an Adjustments
-    // column so that any manual adjustments saved in the snapshot are visible
-    // when viewing a locked payroll. This keeps the summary in sync with the
-    // CSV export and ensures the net pay is clearly explained.
-    // Display columns similar to the live payroll grid (omit Total Deductions per request)
-    const headers = [
-      'ID','Name','Hourly Rate','Regular Hrs','OT Hrs','Adjustment Hrs','Total Hours',
-      'Reg Pay','OT Pay','Gross',
-      'Pag-IBIG','PhilHealth','SSS','SSS Loan','Pag-IBIG Loan','Vale','Wed Vale',
-      'Adjustments','Bantay','Net Pay'
-    ];
-    headers.forEach(h => {
-      const th = document.createElement('th');
-      th.textContent = h;
-      th.style.border = '1px solid #e2e8f0';
-      th.style.background = '#f1f5f9';
-      th.style.padding = '4px';
-      pRow.appendChild(th);
-    });
-    pHead.appendChild(pRow);
-    payTable.appendChild(pHead);
-    const pBody = document.createElement('tbody');
-    // Running grand totals (match Payroll semantics; loans are per-period shares)
-    let GT = {
-      regHrs:0, otHrs:0, adjHrs:0, totalHrs:0,
-      regPay:0, otPay:0, gross:0,
-      pagibig:0, philhealth:0, sss:0,
-      loanSSS:0, loanPI:0, vale:0, wedVale:0,
-      adjAmt:0, bantay:0, netPay:0
-    };
-    // Each employee row in the snapshot may include an adjAmt property
-    // representing manual adjustments. Build the table row accordingly.
-    (snap.rows || []).forEach(r => {
-      const tr = document.createElement('tr');
-      const num = (x)=>{ const n = parseFloat(String(x??'').replace(/,/g,'')); return isNaN(n)?0:n; };
-      // Current divisor and OT multiplier
-      const keyDiv = (typeof LS_DIVISOR !== 'undefined' ? LS_DIVISOR : 'payroll_deduction_divisor');
-      const curDiv = (typeof window !== 'undefined' && typeof window.divisor !== 'undefined' && Number(window.divisor)) || parseInt((localStorage && localStorage.getItem(keyDiv)) || '1', 10) || 1;
-      const otMultLS = parseFloat((typeof LS_OTMULT !== 'undefined' && localStorage && localStorage.getItem(LS_OTMULT)) || '1.5') || 1.5;
-      const otMult = num(document.getElementById('otMultiplier')?.value || otMultLS) || 1.5;
-      // Raw fields from snapshot
-      const id = r.id;
-      const rate = num(r.rate);
-      const regHrs = num(r.regHrs);
-      const otHrs = num(r.otHrs);
-      const adjHrs = num(r.adjHrs);
-      const totalHrs = num(r.totalHrs) || (regHrs + otHrs + adjHrs);
-      // Recompute pays from hours/rate using current OT multiplier to match Payroll tab exactly
-      let regPay = +(regHrs * rate).toFixed(2);
-      const otTotal = otHrs + adjHrs;
-      let otPay  = +(otTotal * rate * otMult).toFixed(2);
-      let gross  = +(regPay + otPay).toFixed(2);
-      let pagibig = num(r.pagibig);
-      let philhealth = num(r.philhealth);
-      let sss = num(r.sss);
-      const loanSSSRaw = num(r.loanSSS);
-      const loanPIRaw  = num(r.loanPI);
-      const vale = num(r.vale);
-      const wedVale = num(r.valeWed);
-      const adjAmt = num(r.adjAmt);
-      const bantay = num(r.bantay);
-
-      // Heuristic: if snapshot has truncated values (e.g., 2.00 due to commas), recompute using current rules
-      // 'looksWrong' heuristic no longer needed since we recompute unconditionally
-
-      // Always recompute contributions with current tables and apply divisor
-      try{
-        const monthly = rate * 8 * 24;
-        const flags = (typeof contribFlags !== 'undefined' && contribFlags[id]) || {};
-        const piRate = (typeof pagibigRateByMonthly==='function') ? pagibigRateByMonthly(monthly) : 0;
-        const phRate = (typeof philhealthRateByMonthly==='function') ? philhealthRateByMonthly(monthly) : 0;
-        pagibig    = (flags.pagibig !== false   ? +((regPay * piRate) / curDiv).toFixed(2) : 0);
-        philhealth = (flags.philhealth !== false? +((regPay * phRate) / curDiv).toFixed(2) : 0);
-        const sssFull = (typeof sssShareByMonthly==='function') ? sssShareByMonthly(monthly) : 0;
-        sss = (flags.sss !== false ? +(sssFull / curDiv).toFixed(2) : 0);
-      }catch(e){}
-
-      // Loans in snapshot view should reflect per-period share per user request
-      const loanSSSPer = +(loanSSSRaw / curDiv).toFixed(2);
-      const loanPIPer  = +(loanPIRaw  / curDiv).toFixed(2);
-
-      // Compute net pay consistent with Payroll tab
-      const totalDeds = pagibig + philhealth + sss + loanSSSPer + loanPIPer + vale + wedVale;
-      const netPay = +(gross - totalDeds + adjAmt + bantay).toFixed(2);
-
-      const vals = [
-        id, r.name, rate, regHrs, otHrs, adjHrs, totalHrs,
-        regPay, otPay, gross,
-        pagibig, philhealth, sss,
-        loanSSSPer, loanPIPer, vale, wedVale,
-        adjAmt, bantay, netPay
+    function renderSnapshotPayroll() {
+      payrollContainer.innerHTML = '';
+      const payTable = document.createElement('table');
+      payTable.style.borderCollapse = 'collapse';
+      payTable.style.width = '100%';
+      const pHead = document.createElement('thead');
+      const pRow = document.createElement('tr');
+      const headers = [
+        'ID','Name','Hourly Rate','Regular Hrs','OT Hrs','Adjustment Hrs','Total Hours',
+        'Reg Pay','OT Pay','Gross',
+        'Pag-IBIG','PhilHealth','SSS','SSS Loan','Pag-IBIG Loan','Vale','Wed Vale',
+        'Adjustments','Bantay','Net Pay'
       ];
-      // Accumulate grand totals
-      GT.regHrs     += regHrs;
-      GT.otHrs      += otHrs;
-      GT.adjHrs     += adjHrs;
-      GT.totalHrs   += totalHrs;
-      GT.regPay     += regPay;
-      GT.otPay      += otPay;
-      GT.gross      += gross;
-      GT.pagibig    += pagibig;
-      GT.philhealth += philhealth;
-      GT.sss        += sss;
-      GT.loanSSS    += loanSSSPer;
-      GT.loanPI     += loanPIPer;
-      GT.vale       += vale;
-      GT.wedVale    += wedVale;
-      GT.adjAmt     += adjAmt;
-      GT.bantay     += bantay;
-      GT.netPay     += netPay;
-
-      vals.forEach(v => {
-        const td = document.createElement('td');
-        let text = '';
-        if (v != null && v !== '') {
-          const n = parseFloat(String(v).replace(/,/g,''));
-          if (!isNaN(n) && isFinite(n)) {
-            text = n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-          } else {
-            text = v;
+      headers.forEach(h => {
+        const th = document.createElement('th');
+        th.textContent = h;
+        th.style.border = '1px solid #e2e8f0';
+        th.style.background = '#f1f5f9';
+        th.style.padding = '4px';
+        pRow.appendChild(th);
+      });
+      pHead.appendChild(pRow);
+      payTable.appendChild(pHead);
+      const pBody = document.createElement('tbody');
+      let GT = {
+        regHrs:0, otHrs:0, adjHrs:0, totalHrs:0,
+        regPay:0, otPay:0, gross:0,
+        pagibig:0, philhealth:0, sss:0,
+        loanSSS:0, loanPI:0, vale:0, wedVale:0,
+        adjAmt:0, bantay:0, netPay:0
+      };
+      (snap.rows || []).forEach(r => {
+        const tr = document.createElement('tr');
+        const num = (x)=>{ const n = parseFloat(String(x??'').replace(/,/g,'')); return isNaN(n)?0:n; };
+        const keyDiv = (typeof LS_DIVISOR !== 'undefined' ? LS_DIVISOR : 'payroll_deduction_divisor');
+        const curDiv = (typeof window !== 'undefined' && typeof window.divisor !== 'undefined' && Number(window.divisor)) || parseInt((localStorage && localStorage.getItem(keyDiv)) || '1', 10) || 1;
+        const otMultLS = parseFloat((typeof LS_OTMULT !== 'undefined' && localStorage && localStorage.getItem(LS_OTMULT)) || '1.5') || 1.5;
+        const otMult = num(document.getElementById('otMultiplier')?.value || otMultLS) || 1.5;
+        const id = r.id;
+        const rate = num(r.rate);
+        const regHrs = num(r.regHrs);
+        const otHrs = num(r.otHrs);
+        const adjHrs = num(r.adjHrs);
+        const totalHrs = num(r.totalHrs) || (regHrs + otHrs + adjHrs);
+        let regPay = +(regHrs * rate).toFixed(2);
+        const otTotal = otHrs + adjHrs;
+        let otPay  = +(otTotal * rate * otMult).toFixed(2);
+        let gross  = +(regPay + otPay).toFixed(2);
+        let pagibig = num(r.pagibig);
+        let philhealth = num(r.philhealth);
+        let sss = num(r.sss);
+        const loanSSSRaw = num(r.loanSSS);
+        const loanPIRaw  = num(r.loanPI);
+        const vale = num(r.vale);
+        const wedVale = num(r.valeWed);
+        const adjAmt = num(r.adjAmt);
+        const bantay = num(r.bantay);
+        try{
+          const monthly = rate * 8 * 24;
+          const flags = (typeof contribFlags !== 'undefined' && contribFlags[id]) || {};
+          const piRate = (typeof pagibigRateByMonthly==='function') ? pagibigRateByMonthly(monthly) : 0;
+          const phRate = (typeof philhealthRateByMonthly==='function') ? philhealthRateByMonthly(monthly) : 0;
+          pagibig    = (flags.pagibig !== false   ? +((regPay * piRate) / curDiv).toFixed(2) : 0);
+          philhealth = (flags.philhealth !== false? +((regPay * phRate) / curDiv).toFixed(2) : 0);
+          const sssFull = (typeof sssShareByMonthly==='function') ? sssShareByMonthly(monthly) : 0;
+          sss = (flags.sss !== false ? +(sssFull / curDiv).toFixed(2) : 0);
+        }catch(e){}
+        const loanSSSPer = +(loanSSSRaw / curDiv).toFixed(2);
+        const loanPIPer  = +(loanPIRaw  / curDiv).toFixed(2);
+        const totalDeds = pagibig + philhealth + sss + loanSSSPer + loanPIPer + vale + wedVale;
+        const netPay = +(gross - totalDeds + adjAmt + bantay).toFixed(2);
+        const vals = [
+          id, r.name, rate, regHrs, otHrs, adjHrs, totalHrs,
+          regPay, otPay, gross,
+          pagibig, philhealth, sss,
+          loanSSSPer, loanPIPer, vale, wedVale,
+          adjAmt, bantay, netPay
+        ];
+        GT.regHrs     += regHrs;
+        GT.otHrs      += otHrs;
+        GT.adjHrs     += adjHrs;
+        GT.totalHrs   += totalHrs;
+        GT.regPay     += regPay;
+        GT.otPay      += otPay;
+        GT.gross      += gross;
+        GT.pagibig    += pagibig;
+        GT.philhealth += philhealth;
+        GT.sss        += sss;
+        GT.loanSSS    += loanSSSPer;
+        GT.loanPI     += loanPIPer;
+        GT.vale       += vale;
+        GT.wedVale    += wedVale;
+        GT.adjAmt     += adjAmt;
+        GT.bantay     += bantay;
+        GT.netPay     += netPay;
+        vals.forEach(v => {
+          const td = document.createElement('td');
+          let text = '';
+          if (v != null && v !== '') {
+            const n = parseFloat(String(v).replace(/,/g,''));
+            if (!isNaN(n) && isFinite(n)) {
+              text = n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+            } else {
+              text = v;
+            }
           }
-        }
-        td.textContent = text;
+          td.textContent = text;
+          td.style.border = '1px solid #e2e8f0';
+          td.style.padding = '4px';
+          const nTest = parseFloat(String(text).replace(/,/g,''));
+          td.style.textAlign = (!isNaN(nTest) && isFinite(nTest)) ? 'right' : 'left';
+          tr.appendChild(td);
+        });
+        pBody.appendChild(tr);
+      });
+      payTable.appendChild(pBody);
+      const pFoot = document.createElement('tfoot');
+      const ft = document.createElement('tr');
+      const label = document.createElement('td');
+      label.colSpan = 3;
+      label.textContent = 'Grand Total';
+      label.style.fontWeight = '700';
+      label.style.border = '1px solid #e2e8f0';
+      label.style.padding = '4px';
+      ft.appendChild(label);
+      const cells = [
+        GT.regHrs, GT.otHrs, GT.adjHrs, GT.totalHrs,
+        GT.regPay, GT.otPay, GT.gross,
+        GT.pagibig, GT.philhealth, GT.sss,
+        GT.loanSSS, GT.loanPI, GT.vale, GT.wedVale,
+        GT.adjAmt, GT.bantay, GT.netPay
+      ];
+      cells.forEach(n => {
+        const td = document.createElement('td');
+        const val = Number(n) || 0;
+        td.textContent = val.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
         td.style.border = '1px solid #e2e8f0';
         td.style.padding = '4px';
-        const nTest = parseFloat(String(text).replace(/,/g,''));
-        td.style.textAlign = (!isNaN(nTest) && isFinite(nTest)) ? 'right' : 'left';
-        tr.appendChild(td);
+        td.style.textAlign = 'right';
+        ft.appendChild(td);
       });
-      pBody.appendChild(tr);
-    });
-    payTable.appendChild(pBody);
-    // Add Grand Totals footer row
-    const pFoot = document.createElement('tfoot');
-    const ft = document.createElement('tr');
-    const label = document.createElement('td');
-    label.colSpan = 3; // ID + Name + Hourly Rate
-    label.textContent = 'Grand Total';
-    label.style.fontWeight = '700';
-    label.style.border = '1px solid #e2e8f0';
-    label.style.padding = '4px';
-    ft.appendChild(label);
-    const cells = [
-      GT.regHrs, GT.otHrs, GT.adjHrs, GT.totalHrs,
-      GT.regPay, GT.otPay, GT.gross,
-      GT.pagibig, GT.philhealth, GT.sss,
-      GT.loanSSS, GT.loanPI, GT.vale, GT.wedVale,
-      GT.adjAmt, GT.bantay, GT.netPay
-    ];
-    cells.forEach(n => {
-      const td = document.createElement('td');
-      const val = Number(n) || 0;
-      td.textContent = val.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-      td.style.border = '1px solid #e2e8f0';
-      td.style.padding = '4px';
-      td.style.textAlign = 'right';
-      ft.appendChild(td);
-    });
-    pFoot.appendChild(ft);
-    payTable.appendChild(pFoot);
-    payrollContainer.appendChild(payTable);
+      pFoot.appendChild(ft);
+      payTable.appendChild(pFoot);
+      payrollContainer.appendChild(payTable);
+    }
+    renderSnapshotPayroll();
     // Build DTR breakdown
     dtrContainer.innerHTML = '';
     // Build DTR data for display. If the snapshot rows include a dtrs array
