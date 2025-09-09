@@ -4903,12 +4903,51 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function buildTable(){
+      // Capture existing DTR filters so they can be restored later
+      const nameInput  = document.getElementById('dtrSearchName');
+      const projSelect = document.getElementById('filterProject');
+      const startInput = document.getElementById('filterStart') || document.getElementById('dtrDateFrom');
+      const endInput   = document.getElementById('filterEnd')   || document.getElementById('dtrDateTo');
+      const saved = {
+        name:  nameInput  ? nameInput.value  : '',
+        proj:  projSelect ? projSelect.value : 'all',
+        start: startInput ? startInput.value : '',
+        end:   endInput   ? endInput.value   : ''
+      };
+      const canRenderAll = (typeof renderResults === 'function' && typeof LS_FILTER_PROJECT !== 'undefined');
+      const restoreFilters = () => {
+        if (!canRenderAll) return;
+        if (nameInput)  nameInput.value  = saved.name;
+        if (projSelect) projSelect.value = saved.proj;
+        if (startInput) startInput.value = saved.start;
+        if (endInput)   endInput.value   = saved.end;
+        try {
+          if (typeof currentProjectFilter !== 'undefined') currentProjectFilter = saved.proj || 'all';
+          localStorage.setItem(LS_FILTER_PROJECT, currentProjectFilter);
+        } catch (e) {}
+        try { renderResults(); } catch (e) {}
+      };
+
+      if (canRenderAll){
+        if (nameInput)  nameInput.value  = '';
+        if (projSelect) projSelect.value = 'all';
+        if (startInput) startInput.value = '';
+        if (endInput)   endInput.value   = '';
+        try {
+          if (typeof currentProjectFilter !== 'undefined') currentProjectFilter = 'all';
+          localStorage.setItem(LS_FILTER_PROJECT, 'all');
+        } catch (e) {}
+        try { renderResults(); } catch (e) {}
+      }
+
       const dtrRows = $$('#resultsTable tbody tr');
-      const table = $('#r_table'); if(!table) return;
+      const table = $('#r_table');
+      if(!table){ restoreFilters(); return; }
       if (dtrRows.length === 0){
         showMsg('No DTR rows found. Import DTR or open a period first.');
         table.innerHTML='';
         __report = null;
+        restoreFilters();
         return;
       }
       showMsg('');
@@ -5049,6 +5088,7 @@ rows += `<tr class="totals">
         const cells = Array.from(document.querySelectorAll('#r_table td.num, #r_table tfoot td.num'));
         cells.forEach(td=>{ td.textContent = fmt(td.textContent); });
       })();
+      restoreFilters();
     }
 
     function csvEscape(s){
