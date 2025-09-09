@@ -3713,6 +3713,13 @@ document.addEventListener('DOMContentLoaded', () => {
       const now = new Date().toISOString();
       snap.rows = newSnap.rows;
       snap.totals = newSnap.totals;
+      snap.employees = newSnap.employees;
+      snap.schedules = newSnap.schedules;
+      snap.projects = newSnap.projects;
+      snap.bantay = newSnap.bantay;
+      snap.bantayProj = newSnap.bantayProj;
+      snap.adjustments = newSnap.adjustments;
+      snap.adjustmentHours = newSnap.adjustmentHours;
       snap.hash = hashHex;
       snap.lockedAt = now;
       snap.locked = true;
@@ -3894,9 +3901,17 @@ document.addEventListener('DOMContentLoaded', () => {
       const employees = JSON.parse(localStorage.getItem('att_employees_v2') || '[]');
       const schedules = JSON.parse(localStorage.getItem('att_schedules_v2') || '[]');
       const projects = JSON.parse(localStorage.getItem('att_projects_v1') || '[]');
+      const bantay = JSON.parse(localStorage.getItem(LS_BANTAY) || '{}');
+      const bantayProj = JSON.parse(localStorage.getItem(LS_BANTAY_PROJ) || '{}');
+      const adjustments = JSON.parse(localStorage.getItem(LS_ADJ) || '{}');
+      const adjustmentHours = JSON.parse(localStorage.getItem(LS_ADJ_HRS) || '{}');
       snap.employees = JSON.parse(JSON.stringify(employees));
       snap.schedules = JSON.parse(JSON.stringify(schedules));
       snap.projects = JSON.parse(JSON.stringify(projects));
+      snap.bantay = JSON.parse(JSON.stringify(bantay));
+      snap.bantayProj = JSON.parse(JSON.stringify(bantayProj));
+      snap.adjustments = JSON.parse(JSON.stringify(adjustments));
+      snap.adjustmentHours = JSON.parse(JSON.stringify(adjustmentHours));
     } catch (e) {
       // ignore parse errors
     }
@@ -4179,7 +4194,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const hashArray = Array.from(new Uint8Array(hashBuffer));
     const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
     const now = new Date().toISOString();
-    payrollHistory.push({ startDate: start, endDate: end, rows: snap.rows, totals: snap.totals, hash: hashHex, lockedAt: now, locked: false });
+    payrollHistory.push({ ...snap, startDate: start, endDate: end, hash: hashHex, lockedAt: now, locked: false });
     saveHistory();
     // Update both history and active payroll tables after creating a new snapshot
     renderHistory();
@@ -4216,7 +4231,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const hashArray = Array.from(new Uint8Array(hashBuffer));
     const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
     const now = new Date().toISOString();
-    payrollHistory.push({ startDate: start, endDate: end, rows: snap.rows, totals: snap.totals, hash: hashHex, lockedAt: now, locked: true });
+    payrollHistory.push({ ...snap, startDate: start, endDate: end, hash: hashHex, lockedAt: now, locked: true });
     saveHistory();
     renderHistory();
     // Disable payroll and DTR editing via helper until date range changes
@@ -9264,7 +9279,7 @@ function updateWeekInputs(snap) {
         const hashArray = Array.from(new Uint8Array(hashBuffer));
         const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
         const now = new Date().toISOString();
-        const newSnap = { startDate: start, endDate: end, rows: snap.rows, totals: snap.totals, hash: hashHex, lockedAt: now, locked: false };
+        const newSnap = { ...snap, startDate: start, endDate: end, hash: hashHex, lockedAt: now, locked: false };
         // Push into global payrollHistory if it exists; else push into local history
         if (Array.isArray(window.payrollHistory)) {
           window.payrollHistory.push(newSnap);
