@@ -522,6 +522,7 @@ window.addEventListener('load', dashReports);
   input.cell{width:100%;box-sizing:border-box}
   .small{font-size:12px;color:#64748b}
   .muted{color:#64748b;font-size:12px}
+  .hidden{display:none}
   .snapshot-table{border-collapse:collapse;width:100%}
   .snapshot-table th,.snapshot-table td{border:1px solid #e2e8f0;padding:4px}
   .snapshot-table th{background:#f1f5f9}
@@ -1287,7 +1288,7 @@ window.addEventListener('load', dashReports);
    </div>
    <div id="dashBackupLog" style="display:none;margin:8px 0;padding:10px;border:1px solid #e5e7eb;background:#fff;border-radius:8px;font-size:12px;color:#111;line-height:1.35;max-width:920px;"></div>
   <!-- Detail view for locked payroll snapshots. Hidden by default and shown when a user clicks Open/View on a history row. -->
-  <div id="snapshotDetailsScreen" style="display:none; margin-top:12px;">
+  <div id="snapshotDetailsScreen" class="hidden" style="margin-top:12px;">
      <h4 id="snapshotDetailTitle"></h4>
      <div class="tabs">
        <button class="tab-btn active" data-tab="payroll">Payroll</button>
@@ -1295,10 +1296,10 @@ window.addEventListener('load', dashReports);
        <button class="tab-btn" data-tab="employees">Employees</button>
        <button class="tab-btn" data-tab="projects">Projects</button>
      </div>
-     <div id="snapshotPayrollContainer" class="snapshot-tab" style="margin-bottom:16px;"></div>
-     <div id="snapshotDTRContainer" class="snapshot-tab" style="display:none;"></div>
-     <div id="snapshotEmployeesContainer" class="snapshot-tab" style="display:none;"></div>
-     <div id="snapshotProjectsContainer" class="snapshot-tab" style="display:none;"></div>
+    <div id="snapshotPayrollContainer" class="snapshot-tab" style="margin-bottom:16px;"></div>
+    <div id="snapshotDTRContainer" class="snapshot-tab hidden"></div>
+    <div id="snapshotEmployeesContainer" class="snapshot-tab hidden"></div>
+    <div id="snapshotProjectsContainer" class="snapshot-tab hidden"></div>
      <button id="snapshotBackButton" type="button" style="margin-top:12px;">Back</button>
   </div>
   </section>
@@ -4672,12 +4673,12 @@ document.addEventListener('DOMContentLoaded', () => {
       titleEl.textContent = `Payroll Details: ${snap.startDate || ''} - ${snap.endDate || ''}${lockedInfo}`;
     }
     // Hide dashboard tables and controls
-    if (activeTable) activeTable.style.display = 'none';
-    if (activeHeader && activeHeader.tagName === 'H4') activeHeader.style.display = 'none';
-    if (historyTable) historyTable.style.display = 'none';
-    if (histHeader && histHeader.tagName === 'H4') histHeader.style.display = 'none';
-    if (diffButton) diffButton.style.display = 'none';
-    if (snapshotViewEl) snapshotViewEl.style.display = 'none';
+    if (activeTable) activeTable.classList.add('hidden');
+    if (activeHeader && activeHeader.tagName === 'H4') activeHeader.classList.add('hidden');
+    if (historyTable) historyTable.classList.add('hidden');
+    if (histHeader && histHeader.tagName === 'H4') histHeader.classList.add('hidden');
+    if (diffButton) diffButton.classList.add('hidden');
+    if (snapshotViewEl) snapshotViewEl.classList.add('hidden');
     // Build payroll summary table
     function renderSnapshotPayroll() {
       payrollContainer.innerHTML = '';
@@ -4935,14 +4936,14 @@ document.addEventListener('DOMContentLoaded', () => {
       tabButtons.forEach(btn => btn.classList.toggle('active', btn.dataset.tab === name));
       Object.keys(tabMap).forEach(key => {
         const el = tabMap[key];
-        if (el) el.style.display = key === name ? 'block' : 'none';
+        if (el) el.classList.toggle('hidden', key !== name);
       });
     }
-    tabButtons.forEach(btn => { btn.onclick = () => activateTab(btn.dataset.tab); });
+    tabButtons.forEach(btn => { btn.addEventListener('click', () => activateTab(btn.dataset.tab)); });
     activateTab('payroll');
 
     // Show the detail screen
-    detailScreen.style.display = 'block';
+    detailScreen.classList.remove('hidden');
     // Disable editing across the app
     if (typeof disablePayrollInputs === 'function') {
       disablePayrollInputs();
@@ -4960,14 +4961,14 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     // Back button: restore previous view
     if (backBtn) {
-      backBtn.onclick = () => {
-        detailScreen.style.display = 'none';
-        if (activeTable) activeTable.style.display = '';
-        if (activeHeader && activeHeader.tagName === 'H4') activeHeader.style.display = '';
-        if (historyTable) historyTable.style.display = '';
-        if (histHeader && histHeader.tagName === 'H4') histHeader.style.display = '';
-        if (diffButton) diffButton.style.display = '';
-        if (snapshotViewEl) snapshotViewEl.style.display = '';
+      backBtn.addEventListener('click', () => {
+        detailScreen.classList.add('hidden');
+        if (activeTable) activeTable.classList.remove('hidden');
+        if (activeHeader && activeHeader.tagName === 'H4') activeHeader.classList.remove('hidden');
+        if (historyTable) historyTable.classList.remove('hidden');
+        if (histHeader && histHeader.tagName === 'H4') histHeader.classList.remove('hidden');
+        if (diffButton) diffButton.classList.remove('hidden');
+        if (snapshotViewEl) snapshotViewEl.classList.remove('hidden');
         payrollContainer.innerHTML = '';
         dtrContainer.innerHTML = '';
         empContainer.innerHTML = '';
@@ -4991,7 +4992,7 @@ document.addEventListener('DOMContentLoaded', () => {
             checkAndToggleEditState();
           }
         } catch (_) {}
-      };
+      });
     }
   };
 });
