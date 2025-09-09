@@ -3935,6 +3935,17 @@ document.addEventListener('DOMContentLoaded', () => {
       btn.disabled = true;
     });
 
+    // Disable form controls within Employees, Schedule, and Projects sub-tabs
+    document.querySelectorAll('#panelEmployees input, #panelEmployees button, #panelEmployees select, #panelEmployees textarea').forEach(el => {
+      el.disabled = true;
+    });
+    document.querySelectorAll('#panelSchedule input, #panelSchedule button, #panelSchedule select, #panelSchedule textarea').forEach(el => {
+      el.disabled = true;
+    });
+    document.querySelectorAll('#panelProjects input, #panelProjects button, #panelProjects select, #panelProjects textarea').forEach(el => {
+      el.disabled = true;
+    });
+
     // Add a locked class to the DTR panel to disable pointer events. This is a
     // visual and functional safeguard for cases where individual inputs might
     // get re-enabled by other scripts. The CSS defined above ensures
@@ -3989,6 +4000,17 @@ document.addEventListener('DOMContentLoaded', () => {
     // Re-enable any DTR delete buttons
     document.querySelectorAll('.dtr-del-btn').forEach(btn => {
       btn.disabled = false;
+    });
+
+    // Re-enable form controls within Employees, Schedule, and Projects sub-tabs
+    document.querySelectorAll('#panelEmployees input, #panelEmployees button, #panelEmployees select, #panelEmployees textarea').forEach(el => {
+      el.disabled = false;
+    });
+    document.querySelectorAll('#panelSchedule input, #panelSchedule button, #panelSchedule select, #panelSchedule textarea').forEach(el => {
+      el.disabled = false;
+    });
+    document.querySelectorAll('#panelProjects input, #panelProjects button, #panelProjects select, #panelProjects textarea').forEach(el => {
+      el.disabled = false;
     });
 
     // Remove the locked class from the DTR panel so pointer events and
@@ -5697,9 +5719,24 @@ tabs.tabMain.addEventListener('click', () => {
     }
   } catch (e) {}
 });
-tabs.tabSchedule.addEventListener('click', ()=>showTab('schedule'));
-tabs.tabEmployees.addEventListener('click', ()=>showTab('employees'));
-tabs.tabProjects.addEventListener('click', ()=>showTab('projects'));
+tabs.tabSchedule.addEventListener('click', () => {
+  showTab('schedule');
+  try {
+    if (typeof checkAndToggleEditState === 'function') checkAndToggleEditState();
+  } catch (e) {}
+});
+tabs.tabEmployees.addEventListener('click', () => {
+  showTab('employees');
+  try {
+    if (typeof checkAndToggleEditState === 'function') checkAndToggleEditState();
+  } catch (e) {}
+});
+tabs.tabProjects.addEventListener('click', () => {
+  showTab('projects');
+  try {
+    if (typeof checkAndToggleEditState === 'function') checkAndToggleEditState();
+  } catch (e) {}
+});
 
 tabs.tabPayroll.addEventListener('click', ()=>{
   try {
