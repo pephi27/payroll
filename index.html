@@ -7455,7 +7455,10 @@ function restoreData(file) {
     const saveBtn = document.getElementById('saveManualDtr');
     if(btn) btn.addEventListener('click', openManualModal);
     if(cancelBtn) cancelBtn.addEventListener('click', closeManualModal);
-    if(saveBtn) saveBtn.addEventListener('click', function(){
+    if(saveBtn) saveBtn.addEventListener('click', async function(){
+      if (window.dtrHydrationReady) {
+        try { await window.dtrHydrationReady; } catch(e) {}
+      }
       const empId = (document.getElementById('manualEmpSelect')||{}).value;
       const dateVal = (document.getElementById('manualDate')||{}).value;
       const timeVal = (document.getElementById('manualTime')||{}).value;
@@ -9561,30 +9564,35 @@ function hideRemoteDtrAlert(){
   el.style.display = 'none';
 }
 
-// On initial load, attempt to hydrate storedRecords from Supabase.  If
-// remote data exists it will overwrite the current storedRecords array
-// and localStorage.  This ensures that the latest DTR data is available
-// across devices while preserving offline capability.  The call is
-// performed after DOMContentLoaded to ensure that other scripts have
-// defined storedRecords and renderResults() before we modify them.
+// Promise used to delay manual DTR actions until remote hydration completes.
+window.dtrHydrationReady = new Promise(res => { window.__resolveDtrHydration = res; });
+
+// On initial load, attempt to hydrate storedRecords from Supabase. If remote
+// data exists, merge it with the current storedRecords array and persist the
+// result. This ensures that the latest DTR data is available across devices
+// while preserving any local manual entries. The call is performed after
+// DOMContentLoaded to ensure that other scripts have defined storedRecords
+// and renderResults() before we modify them.
 document.addEventListener('DOMContentLoaded', async function () {
   try {
     const remote = await loadDtrFromCloud();
     if (Array.isArray(remote) && remote.length) {
-      // When remote data is available, replace the inâ€‘memory dataset.  We
-      // deliberately overwrite both the local variable and the global
-      // window.storedRecords to ensure all modules reference the same
-      // canonical source of truth.  Persist into localStorage as an
-      // offline fallback, but always prefer Supabase on subsequent loads.
-      storedRecords = remote;
-      window.storedRecords = remote;
-      try { localStorage.setItem(LS_RECORDS, JSON.stringify(remote)); } catch (e) {}
+      const existing = Array.isArray(storedRecords) ? storedRecords : [];
+      const merged = existing.slice();
+      for (const rec of remote) {
+        if (!merged.some(r => r.empId === rec.empId && r.date === rec.date && r.time === rec.time)) {
+          merged.push(rec);
+        }
+      }
+      storedRecords = merged;
+      window.storedRecords = merged;
+      try { localStorage.setItem(LS_RECORDS, JSON.stringify(merged)); } catch (e) {}
       if (typeof renderResults === 'function') {
         try { renderResults(); } catch (e) {}
       }
       if (typeof hideRemoteDtrAlert === 'function') hideRemoteDtrAlert();
     } else {
-      // No remote data: clear any existing local dataset and inform the user. window. try { localStorage.removeItem(LS_RECORDS); } catch (e) {}
+      // No remote data: keep existing local dataset and inform the user.
       if (typeof renderResults === 'function') {
         try { renderResults(); } catch (e) {}
       }
@@ -9594,6 +9602,8 @@ document.addEventListener('DOMContentLoaded', async function () {
     }
   } catch (e) {
     console.error('Error hydrating DTR from Supabase', e);
+  } finally {
+    if (typeof window.__resolveDtrHydration === 'function') window.__resolveDtrHydration();
   }
 });
 </script>
