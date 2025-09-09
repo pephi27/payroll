@@ -39,6 +39,7 @@
             const { error } = await window.supabase
               .from(window.SUPABASE_TABLE)
               .upsert({ key, value }, { onConflict: 'key' });
+            try { localStorage.setItem(key, JSON.stringify(value)); } catch {}
             if (error) console.warn('writeKV error', error);
           } else {
             try { localStorage.setItem(key, JSON.stringify(value)); } catch {}
