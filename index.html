@@ -614,6 +614,8 @@ window.addEventListener('load', dashReports);
   #panelPayroll .tab-btn.active { background:var(--accent);color:white;border-color:var(--accent) }
   #panelPayroll .tab { display:none }
   #panelPayroll .tab.active { display:block }
+  #panelSettings .tab { display:none }
+  #panelSettings .tab.active { display:block }
   #panelPayroll .controls { display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:10px 0 }
   #panelPayroll label { font-size:12px;color:var(--muted) }
   #panelPayroll input[type=date], 
@@ -1016,17 +1018,13 @@ window.addEventListener('load', dashReports);
   .header .nav-icon { font-size: 0; line-height: 1; }
   #tabDashboard .nav-icon::before { content: "📊"; font-size: 14px; }
   #tabMain .nav-icon::before      { content: "🕒"; font-size: 14px; }
-  #tabSchedule .nav-icon::before  { content: "🗓️"; font-size: 14px; }
-  #tabEmployees .nav-icon::before { content: "👥"; font-size: 14px; }
-  #tabProjects .nav-icon::before  { content: "🚀"; font-size: 14px; }
+  #tabSettings .nav-icon::before  { content: "⚙️"; font-size: 14px; }
   #tabPayroll .nav-icon::before   { content: "💰"; font-size: 14px; }
   #tabProjectTotals .nav-icon::before { content: "📈"; font-size: 14px; }
   /* Sidebar duplicates */
   #old-tabDashboard .nav-icon::before { content: "📊"; }
   #old-tabMain .nav-icon::before      { content: "🕒"; }
-  #old-tabSchedule .nav-icon::before  { content: "🗓️"; }
-  #old-tabEmployees .nav-icon::before { content: "👥"; }
-  #old-tabProjects .nav-icon::before  { content: "🚀"; }
+  #old-tabSettings .nav-icon::before  { content: "⚙️"; }
   #old-tabPayroll .nav-icon::before   { content: "💰"; }
   #old-tabProjectTotals .nav-icon::before { content: "📈"; }
 
@@ -1151,9 +1149,7 @@ window.addEventListener('load', dashReports);
             <ul class="nav-menu">
               <li class="nav-item"><button class="nav-link tab-btn active" id="tabDashboard" data-page="dashboard"><span class="nav-icon">ðŸ“Š</span> Dashboard</button></li>
               <li class="nav-item"><button class="nav-link tab-btn" id="tabMain" data-page="dtr"><span class="nav-icon">ðŸ•</span> DTR</button></li>
-              <li class="nav-item"><button class="nav-link tab-btn" id="tabSchedule" data-page="schedules"><span class="nav-icon">ðŸ“…</span> Schedules</button></li>
-              <li class="nav-item"><button class="nav-link tab-btn" id="tabEmployees" data-page="employees"><span class="nav-icon">ðŸ‘¥</span> Employees</button></li>
-              <li class="nav-item"><button class="nav-link tab-btn" id="tabProjects" data-page="projects"><span class="nav-icon">ðŸš€</span> Projects</button></li>
+              <li class="nav-item"><button class="nav-link tab-btn" id="tabSettings" data-page="settings"><span class="nav-icon">ðŸ”§</span> Settings</button></li>
               <li class="nav-item"><button class="nav-link tab-btn" id="tabPayroll" data-page="payroll"><span class="nav-icon">ðŸ’°</span> Payroll</button></li>
               <li class="nav-item"><button class="nav-link tab-btn" id="tabProjectTotals" data-page="totals"><span class="nav-icon">ðŸ“ˆ</span> Reports</button></li>
             </ul>
@@ -1181,21 +1177,9 @@ window.addEventListener('load', dashReports);
             </button>
           </li>
           <li class="nav-item">
-            <button class="nav-link tab-btn" id="old-tabSchedule" data-page="schedules">
-              <span class="nav-icon">ðŸ“…</span>
-              Schedules
-            </button>
-          </li>
-          <li class="nav-item">
-            <button class="nav-link tab-btn" id="old-tabEmployees" data-page="employees">
-              <span class="nav-icon">ðŸ‘¥</span>
-              Employees
-            </button>
-          </li>
-          <li class="nav-item">
-            <button class="nav-link tab-btn" id="old-tabProjects" data-page="projects">
-              <span class="nav-icon">ðŸš€</span>
-              Projects
+            <button class="nav-link tab-btn" id="old-tabSettings" data-page="settings">
+              <span class="nav-icon">ðŸ”§</span>
+              Settings
             </button>
           </li>
           <li class="nav-item">
@@ -1559,30 +1543,36 @@ window.addEventListener('load', dashReports);
    </div>
   </section>
   
-  <section class="panel" id="panelSchedule">
-   <h3>
-    Schedules
-   </h3>
-   <div class="controls">
-    <label>
-     Choose schedule:
-     <select id="scheduleSelect">
-     </select>
-    </label>
-    <button id="addScheduleBtn">
-     Add
-    </button>
-    <button id="deleteScheduleBtn">
-     Delete
-    </button>
-    <button id="setDefaultScheduleBtn">
-     Set Default
-    </button>
+  <section class="panel" id="panelSettings">
+   <div class="tabs">
+    <button class="tab-btn active" data-tab="employees"><span class="nav-icon">ðŸ‘¥</span> Employees</button>
+    <button class="tab-btn" data-tab="schedule"><span class="nav-icon">ðŸ“…</span> Schedules</button>
+    <button class="tab-btn" data-tab="projects"><span class="nav-icon">ðŸš€</span> Projects</button>
    </div>
-   <div class="section-title">
-    Schedule segments
-   </div>
-   <table id="scheduleTable">
+   <section class="tab" id="panelSchedule">
+    <h3>
+     Schedules
+    </h3>
+    <div class="controls">
+     <label>
+      Choose schedule:
+      <select id="scheduleSelect">
+      </select>
+     </label>
+     <button id="addScheduleBtn">
+      Add
+     </button>
+     <button id="deleteScheduleBtn">
+      Delete
+     </button>
+     <button id="setDefaultScheduleBtn">
+      Set Default
+     </button>
+    </div>
+    <div class="section-title">
+     Schedule segments
+    </div>
+    <table id="scheduleTable">
     <thead>
      <tr>
       <th>
@@ -1739,8 +1729,8 @@ window.addEventListener('load', dashReports);
     </button>
    </div>
   </section>
-  
-  <section class="panel" id="panelEmployees">
+
+  <section class="tab active" id="panelEmployees">
    <h3>
     Employees
    </h3>
@@ -1805,8 +1795,8 @@ window.addEventListener('load', dashReports);
     </tbody>
    </table>
   </section>
-  
-  <section class="panel" id="panelProjects">
+
+  <section class="tab" id="panelProjects">
    <h3>
     Projects
    </h3>
@@ -1832,8 +1822,9 @@ window.addEventListener('load', dashReports);
     </thead>
     <tbody>
     </tbody>
-   </table>
+  </table>
   </section>
+ </section>
   <section class="panel" id="panelPayroll">
    <div id="payrollWrapper">
     <header>
@@ -5621,19 +5612,15 @@ const tabs = {
   tabMain: document.getElementById('tabMain'),
   // Dashboard tab/button for high-level summary and payroll history
   tabDashboard: document.getElementById('tabDashboard'),
-  tabSchedule: document.getElementById('tabSchedule'),
-  tabEmployees: document.getElementById('tabEmployees'),
-  tabProjects: document.getElementById('tabProjects'),
+  tabSettings: document.getElementById('tabSettings'),
   panelMain: document.getElementById('panelMain'),
   // Corresponding Dashboard panel
   panelDashboard: document.getElementById('panelDashboard'),
-  panelSchedule: document.getElementById('panelSchedule'),
-  panelEmployees: document.getElementById('panelEmployees'),
-  panelProjects: document.getElementById('panelProjects'),
+  panelSettings: document.getElementById('panelSettings'),
   tabPayroll: document.getElementById('tabPayroll'),
   panelPayroll: document.getElementById('panelPayroll')
 };
-function showTab(name){
+function showTab(name, sub){
   Object.values(tabs).forEach(el => el && el.classList && el.classList.remove('active'));
 
   // Manage date range controls: disable on non-dashboard tabs, enable on dashboard unless forced
@@ -5653,11 +5640,24 @@ function showTab(name){
   if(name==='main'){ tabs.tabMain.classList.add('active'); tabs.panelMain.classList.add('active'); }
   // When the dashboard is selected, activate its tab and panel
   if(name==='dashboard'){ tabs.tabDashboard && tabs.tabDashboard.classList.add('active'); tabs.panelDashboard && tabs.panelDashboard.classList.add('active'); }
-  if(name==='schedule'){ tabs.tabSchedule.classList.add('active'); tabs.panelSchedule.classList.add('active'); renderScheduleEditor(); }
-  if(name==='employees'){ tabs.tabEmployees.classList.add('active'); tabs.panelEmployees.classList.add('active'); renderEmployees(); }
-  if(name==='projects'){ tabs.tabProjects.classList.add('active'); tabs.panelProjects.classList.add('active'); renderProjects(); }
-
+  if(name==='settings'){ tabs.tabSettings.classList.add('active'); tabs.panelSettings.classList.add('active'); showSettingsTab(sub || 'employees'); }
   if(name==='payroll'){ tabs.tabPayroll && tabs.tabPayroll.classList.add('active'); tabs.panelPayroll && tabs.panelPayroll.classList.add('active'); }
+}
+function showSettingsTab(sub){
+  const panels = {
+    employees: document.getElementById('panelEmployees'),
+    schedule: document.getElementById('panelSchedule'),
+    projects: document.getElementById('panelProjects')
+  };
+  document.querySelectorAll('#panelSettings .tabs .tab-btn').forEach(b=>b.classList.remove('active'));
+  document.querySelectorAll('#panelSettings .tab').forEach(t=>t.classList.remove('active'));
+  const btn = document.querySelector(`#panelSettings .tabs .tab-btn[data-tab="${sub}"]`);
+  const panel = panels[sub];
+  if(btn) btn.classList.add('active');
+  if(panel) panel.classList.add('active');
+  if(sub==='schedule') renderScheduleEditor();
+  if(sub==='employees') renderEmployees();
+  if(sub==='projects') renderProjects();
 }
 window.__dtrFilterBackup = null;
 // When switching to the main (DTR) tab, render results and then toggle the edit
@@ -5697,9 +5697,12 @@ tabs.tabMain.addEventListener('click', () => {
     }
   } catch (e) {}
 });
-tabs.tabSchedule.addEventListener('click', ()=>showTab('schedule'));
-tabs.tabEmployees.addEventListener('click', ()=>showTab('employees'));
-tabs.tabProjects.addEventListener('click', ()=>showTab('projects'));
+tabs.tabSettings.addEventListener('click', ()=>showTab('settings','employees'));
+const oldTabSettings = document.getElementById('old-tabSettings');
+if(oldTabSettings) oldTabSettings.addEventListener('click', ()=>showTab('settings','employees'));
+document.querySelectorAll('#panelSettings .tabs .tab-btn').forEach(btn=>{
+  btn.addEventListener('click', ()=>showTab('settings', btn.dataset.tab));
+});
 
 tabs.tabPayroll.addEventListener('click', ()=>{
   try {
