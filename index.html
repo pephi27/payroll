@@ -4604,15 +4604,31 @@ document.addEventListener('DOMContentLoaded', () => {
       const list = snap.projects;
       let arr = [];
       if (Array.isArray(list)) {
-        arr = list;
+        arr = list.map((proj, idx) => ({ key: idx, proj }));
       } else if (list && typeof list === 'object') {
-        arr = Object.keys(list).map(id => ({ id, ...(list[id] || {}) }));
+        arr = Object.keys(list).map(id => ({ key: id, proj: list[id] || {} }));
       }
       if (!arr.length) {
         const p = document.createElement('p');
         p.textContent = 'No project data.';
         projContainer.appendChild(p);
         return;
+      }
+      function updateProjectField(rec, prop, value) {
+        const proj = rec.proj;
+        proj[prop] = value;
+        if (Array.isArray(snap.projects)) {
+          snap.projects[rec.key] = proj;
+        } else {
+          if (prop === 'id') {
+            delete snap.projects[rec.key];
+            rec.key = value;
+          }
+          snap.projects[rec.key] = proj;
+        }
+        if (typeof saveHistory === 'function') saveHistory();
+        renderSnapshotProjects();
+        if (typeof renderSnapshotEmployees === 'function') renderSnapshotEmployees();
       }
       const table = document.createElement('table');
       table.style.borderCollapse = 'collapse';
@@ -4630,19 +4646,20 @@ document.addEventListener('DOMContentLoaded', () => {
       head.appendChild(hr);
       table.appendChild(head);
       const body = document.createElement('tbody');
-      arr.forEach(p => {
+      arr.forEach(rec => {
+        const p = rec.proj;
         const tr = document.createElement('tr');
-        const vals = [
-          p.id ?? p.projectId ?? '',
-          p.name || p.projectName || p.project || ''
-        ];
-        vals.forEach(v => {
-          const td = document.createElement('td');
-          td.textContent = String(v ?? '');
-          td.style.border = '1px solid #e2e8f0';
-          td.style.padding = '4px';
-          tr.appendChild(td);
-        });
+        function cell(el){ const td=document.createElement('td'); td.style.border='1px solid #e2e8f0'; td.style.padding='4px'; td.appendChild(el); tr.appendChild(td); }
+        const idInput = document.createElement('input');
+        idInput.value = p.id ?? p.projectId ?? rec.key || '';
+        idInput.style.width = '100%';
+        idInput.addEventListener('change', () => updateProjectField(rec, 'id', idInput.value));
+        cell(idInput);
+        const nameInput = document.createElement('input');
+        nameInput.value = p.name || p.projectName || p.project || '';
+        nameInput.style.width = '100%';
+        nameInput.addEventListener('change', () => updateProjectField(rec, 'name', nameInput.value));
+        cell(nameInput);
         body.appendChild(tr);
       });
       table.appendChild(body);
