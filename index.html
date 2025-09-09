@@ -4545,55 +4545,64 @@ document.addEventListener('DOMContentLoaded', () => {
         bankInput.addEventListener('change', () => updateEmployeeField(rec, 'bankAccount', bankInput.value));
         cell(bankInput);
         const pagibigSel = document.createElement('select');
-        ['Yes','No'].forEach(v => {
+        ['','Yes','No'].forEach(v => {
           const opt = document.createElement('option');
           opt.value = v;
-          opt.textContent = v;
-          if ((e.pagibig === false ? 'No' : 'Yes') === v) opt.selected = true;
+          opt.textContent = v || 'N/A';
+          const cur = e.pagibig === true ? 'Yes' : e.pagibig === false ? 'No' : '';
+          if (cur === v) opt.selected = true;
           pagibigSel.appendChild(opt);
         });
         pagibigSel.addEventListener('change', () => {
-          const enabled = pagibigSel.value === 'Yes';
+          const val = pagibigSel.value;
+          const enabled = val === 'Yes' ? true : val === 'No' ? false : undefined;
           updateEmployeeField(rec, 'pagibig', enabled);
           if (typeof contribFlags !== 'undefined') {
             if (!contribFlags[e.id]) contribFlags[e.id] = {};
-            contribFlags[e.id].pagibig = enabled;
+            if (enabled === undefined) delete contribFlags[e.id].pagibig;
+            else contribFlags[e.id].pagibig = enabled;
             try { localStorage.setItem(LS_CONTRIB_FLAGS, JSON.stringify(contribFlags)); } catch {}
           }
         });
         cell(pagibigSel);
         const philSel = document.createElement('select');
-        ['Yes','No'].forEach(v => {
+        ['','Yes','No'].forEach(v => {
           const opt = document.createElement('option');
           opt.value = v;
-          opt.textContent = v;
-          if ((e.philhealth === false ? 'No' : 'Yes') === v) opt.selected = true;
+          opt.textContent = v || 'N/A';
+          const cur = e.philhealth === true ? 'Yes' : e.philhealth === false ? 'No' : '';
+          if (cur === v) opt.selected = true;
           philSel.appendChild(opt);
         });
         philSel.addEventListener('change', () => {
-          const enabled = philSel.value === 'Yes';
+          const val = philSel.value;
+          const enabled = val === 'Yes' ? true : val === 'No' ? false : undefined;
           updateEmployeeField(rec, 'philhealth', enabled);
           if (typeof contribFlags !== 'undefined') {
             if (!contribFlags[e.id]) contribFlags[e.id] = {};
-            contribFlags[e.id].philhealth = enabled;
+            if (enabled === undefined) delete contribFlags[e.id].philhealth;
+            else contribFlags[e.id].philhealth = enabled;
             try { localStorage.setItem(LS_CONTRIB_FLAGS, JSON.stringify(contribFlags)); } catch {}
           }
         });
         cell(philSel);
         const sssSel = document.createElement('select');
-        ['Yes','No'].forEach(v => {
+        ['','Yes','No'].forEach(v => {
           const opt = document.createElement('option');
           opt.value = v;
-          opt.textContent = v;
-          if ((e.sss === false ? 'No' : 'Yes') === v) opt.selected = true;
+          opt.textContent = v || 'N/A';
+          const cur = e.sss === true ? 'Yes' : e.sss === false ? 'No' : '';
+          if (cur === v) opt.selected = true;
           sssSel.appendChild(opt);
         });
         sssSel.addEventListener('change', () => {
-          const enabled = sssSel.value === 'Yes';
+          const val = sssSel.value;
+          const enabled = val === 'Yes' ? true : val === 'No' ? false : undefined;
           updateEmployeeField(rec, 'sss', enabled);
           if (typeof contribFlags !== 'undefined') {
             if (!contribFlags[e.id]) contribFlags[e.id] = {};
-            contribFlags[e.id].sss = enabled;
+            if (enabled === undefined) delete contribFlags[e.id].sss;
+            else contribFlags[e.id].sss = enabled;
             try { localStorage.setItem(LS_CONTRIB_FLAGS, JSON.stringify(contribFlags)); } catch {}
           }
         });
@@ -5516,9 +5525,9 @@ rows += `<tr class="totals">
             const projName = (storedProjects && storedProjects[projId]?.name) || '';
             const bank = emp.bankAccount || '';
             const fl = flagsAll[id] || {};
-            const fPI = (fl.pagibig !== false) ? 'Yes' : 'No';
-            const fPH = (fl.philhealth !== false) ? 'Yes' : 'No';
-            const fSSS= (fl.sss !== false) ? 'Yes' : 'No';
+            const fPI = fl.pagibig === true ? 'Yes' : fl.pagibig === false ? 'No' : 'N/A';
+            const fPH = fl.philhealth === true ? 'Yes' : fl.philhealth === false ? 'No' : 'N/A';
+            const fSSS= fl.sss === true ? 'Yes' : fl.sss === false ? 'No' : 'N/A';
             rows.push([id, emp.name||'', emp.hourlyRate||'', bank, schedName, schedId, projName, projId, fPI, fPH, fSSS]);
           });
           XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(rows), 'Employees');
@@ -5823,9 +5832,9 @@ document.getElementById('downloadEmployeesCSV').addEventListener('click', () => 
     const projName = (storedProjects && storedProjects[projId]?.name) || '';
     const bank = emp.bankAccount || '';
     const flags = (typeof contribFlags !== 'undefined' && contribFlags[id]) || {};
-    const fPI = (flags.pagibig !== false) ? 'Yes' : 'No';
-    const fPH = (flags.philhealth !== false) ? 'Yes' : 'No';
-    const fSSS = (flags.sss !== false) ? 'Yes' : 'No';
+    const fPI = flags.pagibig === true ? 'Yes' : flags.pagibig === false ? 'No' : 'N/A';
+    const fPH = flags.philhealth === true ? 'Yes' : flags.philhealth === false ? 'No' : 'N/A';
+    const fSSS = flags.sss === true ? 'Yes' : flags.sss === false ? 'No' : 'N/A';
     rows.push([id, emp.name || '', emp.hourlyRate || '', bank, schedName, schedId, projName, projId, fPI, fPH, fSSS]);
   });
 
@@ -7274,9 +7283,9 @@ document.addEventListener('DOMContentLoaded', function () {
         const projName = (storedProjects && storedProjects[projId]?.name) || '';
         const bank = emp.bankAccount || '';
         const flags = (typeof contribFlags !== 'undefined' && contribFlags[id]) || {};
-        const fPI = (flags.pagibig !== false) ? 'Yes' : 'No';
-        const fPH = (flags.philhealth !== false) ? 'Yes' : 'No';
-        const fSSS = (flags.sss !== false) ? 'Yes' : 'No';
+        const fPI = flags.pagibig === true ? 'Yes' : flags.pagibig === false ? 'No' : 'N/A';
+        const fPH = flags.philhealth === true ? 'Yes' : flags.philhealth === false ? 'No' : 'N/A';
+        const fSSS = flags.sss === true ? 'Yes' : flags.sss === false ? 'No' : 'N/A';
         rows.push([id, emp.name || '', emp.hourlyRate || '', bank, schedName, schedId, projName, projId, fPI, fPH, fSSS]);
       });
       const csv = rows.map(r => r.map(v => {
