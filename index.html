@@ -9887,6 +9887,39 @@ document.addEventListener('DOMContentLoaded', async function () {
       }
     }
     function isObject(o){ return o && typeof o === 'object' && !Array.isArray(o); }
+    async function verifyBackup(bundle){
+      const local = isObject(bundle.local) ? bundle.local : {};
+      const db = isObject(bundle.db) ? bundle.db : {};
+      const lsKeys = Object.keys(local);
+      const tableNames = Object.keys(db);
+      let tablesOk = 0;
+      let localOk = 0;
+      const tableIssues = [];
+      const localIssues = [];
+      if (supabase){
+        for (const t of tableNames){
+          const expected = Array.isArray(db[t]) ? db[t].length : 0;
+          try {
+            const { count, error } = await supabase.from(t).select('*', { count: 'exact', head: true });
+            if (!error && count === expected) tablesOk++;
+            else tableIssues.push(t + ': expected ' + expected + ', got ' + (error ? ('error ' + error.message) : count));
+          } catch(e){ tableIssues.push(t + ': verify failed - ' + e.message); }
+        }
+      }
+      lsKeys.forEach(function(k){
+        try {
+          const expected = typeof local[k] === 'string' ? local[k] : JSON.stringify(local[k]);
+          const actual = localStorage.getItem(k);
+          if (String(actual) === String(expected)) localOk++;
+          else localIssues.push(k);
+        } catch(e){ localIssues.push(k + ' (' + e.message + ')'); }
+      });
+      if (tableIssues.length) tableIssues.forEach(function(m){ logMsg('Table mismatch: ' + m); });
+      if (localIssues.length) localIssues.forEach(function(m){ logMsg('LocalStorage mismatch: ' + m); });
+      logMsg('Verification result - tables: ' + tablesOk + '/' + tableNames.length + ', local: ' + localOk + '/' + lsKeys.length);
+      return { tables: { ok: tablesOk, total: tableNames.length }, local: { ok: localOk, total: lsKeys.length } };
+    }
+    window.verifyBackup = verifyBackup;
     async function restoreFile(file, opts){
       lockUI(true); clearLog();
       try {
@@ -9932,9 +9965,15 @@ document.addEventListener('DOMContentLoaded', async function () {
           if (typeof renderDeductionsTable === 'function') renderDeductionsTable();
           if (typeof renderTable === 'function') renderTable();
         } catch(e){}
-        setStatus('Restore complete âœ“ (Local: ' + lsKeys.length + ', Tables: ' + tableNames.length + ')');
-        logMsg('Restore complete');
-        alert('Restore complete.');
+        const verify = await verifyBackup(bundle);
+        const localSummary = verify.local.ok + '/' + verify.local.total;
+        const tableSummary = verify.tables.ok + '/' + verify.tables.total;
+        const allOk = verify.local.ok === verify.local.total && verify.tables.ok === verify.tables.total;
+        const msg = (allOk ? 'Restore complete âœ“ ' : 'Restore completed with discrepancies') +
+          ' (Local: ' + localSummary + ', Tables: ' + tableSummary + ')';
+        setStatus(msg, !allOk);
+        logMsg(msg);
+        alert(allOk ? 'Restore complete.' : 'Restore completed with discrepancies. See log.');
       } catch(e){
         console.error(e);
         setStatus('Restore failed: ' + e.message, true);
