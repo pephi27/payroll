@@ -4903,51 +4903,12 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function buildTable(){
-      // Capture existing DTR filters so they can be restored later
-      const nameInput  = document.getElementById('dtrSearchName');
-      const projSelect = document.getElementById('filterProject');
-      const startInput = document.getElementById('filterStart') || document.getElementById('dtrDateFrom');
-      const endInput   = document.getElementById('filterEnd')   || document.getElementById('dtrDateTo');
-      const saved = {
-        name:  nameInput  ? nameInput.value  : '',
-        proj:  projSelect ? projSelect.value : 'all',
-        start: startInput ? startInput.value : '',
-        end:   endInput   ? endInput.value   : ''
-      };
-      const canRenderAll = (typeof renderResults === 'function' && typeof LS_FILTER_PROJECT !== 'undefined');
-      const restoreFilters = () => {
-        if (!canRenderAll) return;
-        if (nameInput)  nameInput.value  = saved.name;
-        if (projSelect) projSelect.value = saved.proj;
-        if (startInput) startInput.value = saved.start;
-        if (endInput)   endInput.value   = saved.end;
-        try {
-          if (typeof currentProjectFilter !== 'undefined') currentProjectFilter = saved.proj || 'all';
-          localStorage.setItem(LS_FILTER_PROJECT, currentProjectFilter);
-        } catch (e) {}
-        try { renderResults(); } catch (e) {}
-      };
-
-      if (canRenderAll){
-        if (nameInput)  nameInput.value  = '';
-        if (projSelect) projSelect.value = 'all';
-        if (startInput) startInput.value = '';
-        if (endInput)   endInput.value   = '';
-        try {
-          if (typeof currentProjectFilter !== 'undefined') currentProjectFilter = 'all';
-          localStorage.setItem(LS_FILTER_PROJECT, 'all');
-        } catch (e) {}
-        try { renderResults(); } catch (e) {}
-      }
-
       const dtrRows = $$('#resultsTable tbody tr');
-      const table = $('#r_table');
-      if(!table){ restoreFilters(); return; }
+      const table = $('#r_table'); if(!table) return;
       if (dtrRows.length === 0){
         showMsg('No DTR rows found. Import DTR or open a period first.');
         table.innerHTML='';
         __report = null;
-        restoreFilters();
         return;
       }
       showMsg('');
@@ -5088,7 +5049,6 @@ rows += `<tr class="totals">
         const cells = Array.from(document.querySelectorAll('#r_table td.num, #r_table tfoot td.num'));
         cells.forEach(td=>{ td.textContent = fmt(td.textContent); });
       })();
-      restoreFilters();
     }
 
     function csvEscape(s){
@@ -7495,10 +7455,7 @@ function restoreData(file) {
     const saveBtn = document.getElementById('saveManualDtr');
     if(btn) btn.addEventListener('click', openManualModal);
     if(cancelBtn) cancelBtn.addEventListener('click', closeManualModal);
-    if(saveBtn) saveBtn.addEventListener('click', async function(){
-      if (window.dtrHydrationReady) {
-        try { await window.dtrHydrationReady; } catch(e) {}
-      }
+    if(saveBtn) saveBtn.addEventListener('click', function(){
       const empId = (document.getElementById('manualEmpSelect')||{}).value;
       const dateVal = (document.getElementById('manualDate')||{}).value;
       const timeVal = (document.getElementById('manualTime')||{}).value;
@@ -9604,35 +9561,30 @@ function hideRemoteDtrAlert(){
   el.style.display = 'none';
 }
 
-// Promise used to delay manual DTR actions until remote hydration completes.
-window.dtrHydrationReady = new Promise(res => { window.__resolveDtrHydration = res; });
-
-// On initial load, attempt to hydrate storedRecords from Supabase. If remote
-// data exists, merge it with the current storedRecords array and persist the
-// result. This ensures that the latest DTR data is available across devices
-// while preserving any local manual entries. The call is performed after
-// DOMContentLoaded to ensure that other scripts have defined storedRecords
-// and renderResults() before we modify them.
+// On initial load, attempt to hydrate storedRecords from Supabase.  If
+// remote data exists it will overwrite the current storedRecords array
+// and localStorage.  This ensures that the latest DTR data is available
+// across devices while preserving offline capability.  The call is
+// performed after DOMContentLoaded to ensure that other scripts have
+// defined storedRecords and renderResults() before we modify them.
 document.addEventListener('DOMContentLoaded', async function () {
   try {
     const remote = await loadDtrFromCloud();
     if (Array.isArray(remote) && remote.length) {
-      const existing = Array.isArray(storedRecords) ? storedRecords : [];
-      const merged = existing.slice();
-      for (const rec of remote) {
-        if (!merged.some(r => r.empId === rec.empId && r.date === rec.date && r.time === rec.time)) {
-          merged.push(rec);
-        }
-      }
-      storedRecords = merged;
-      window.storedRecords = merged;
-      try { localStorage.setItem(LS_RECORDS, JSON.stringify(merged)); } catch (e) {}
+      // When remote data is available, replace the inâ€‘memory dataset.  We
+      // deliberately overwrite both the local variable and the global
+      // window.storedRecords to ensure all modules reference the same
+      // canonical source of truth.  Persist into localStorage as an
+      // offline fallback, but always prefer Supabase on subsequent loads.
+      storedRecords = remote;
+      window.storedRecords = remote;
+      try { localStorage.setItem(LS_RECORDS, JSON.stringify(remote)); } catch (e) {}
       if (typeof renderResults === 'function') {
         try { renderResults(); } catch (e) {}
       }
       if (typeof hideRemoteDtrAlert === 'function') hideRemoteDtrAlert();
     } else {
-      // No remote data: keep existing local dataset and inform the user.
+      // No remote data: clear any existing local dataset and inform the user. window. try { localStorage.removeItem(LS_RECORDS); } catch (e) {}
       if (typeof renderResults === 'function') {
         try { renderResults(); } catch (e) {}
       }
@@ -9642,8 +9594,6 @@ document.addEventListener('DOMContentLoaded', async function () {
     }
   } catch (e) {
     console.error('Error hydrating DTR from Supabase', e);
-  } finally {
-    if (typeof window.__resolveDtrHydration === 'function') window.__resolveDtrHydration();
   }
 });
 </script>
