@@ -6308,6 +6308,11 @@ function buildScheduleDropdownHalf(empId, date, half, currentScheduleId){
   return sel;
 }
 
+function formatHours(value){
+  const num = parseFloat(value);
+  return (!isFinite(num) || num === 0) ? '-' : num.toFixed(2);
+}
+
 function renderResults(){
 
 // 12-hour clock formatter for display only (keeps underlying logic 24h)
@@ -6774,9 +6779,9 @@ const trSeg = document.createElement('tr');
           htmlSeg += '<td class="missing">â€”</td><td class="missing">â€”</td>';
         }
         // Regular hours and OT hours columns
-        htmlSeg += '<td>' + regDecSeg + '</td><td>' + otDecSeg + '</td>';
-        const __totSeg = ((parseFloat(regDecSeg)||0) + (parseFloat(otDecSeg)||0)).toFixed(2);
-        htmlSeg += '<td>' + __totSeg + '</td>';
+        htmlSeg += '<td>' + formatHours(regDecSeg) + '</td><td>' + formatHours(otDecSeg) + '</td>';
+        const __totSeg = ((parseFloat(regDecSeg)||0) + (parseFloat(otDecSeg)||0));
+        htmlSeg += '<td>' + formatHours(__totSeg) + '</td>';
         // Action: provide an Unsplit button using a named handler.  All split
         // segments share the same splitKey.
         htmlSeg += '<td><button type="button" class="btn-unsplit" data-key="' + splitKey + '" onclick="unsplitRecord(this.dataset.key)">Unsplit</button></td>';
@@ -6848,12 +6853,13 @@ const trSeg = document.createElement('tr');
 
     const cell = (v) => v ? '<td>' + __fmt12Clock(v) + '</td>' : '<td class="missing">-</td>';
     const tr = document.createElement('tr');
+    const __tot = ((parseFloat(totalRegularDecimal)||0)+(parseFloat(otDecimal)||0));
     tr.innerHTML =
       '<td>'+empId+'</td><td>'+name+'</td><td>'+projectName+'</td><td>'+scheduleName+'</td><td>'+date+'</td>' +
       cell(amInActual) + cell(amOutActual) + cell(pmInActual) + cell(pmOutActual) +
       (otInCalc ? '<td>' + __fmt12Clock(otInCalc) + '</td>' : '<td class=\"missing\">-</td>') +
       (otOutCalc ? '<td>' + __fmt12Clock(otOutCalc) + '</td>' : '<td class=\"missing\">-</td>') +
-      '<td>'+totalRegularDecimal+'</td><td>'+otDecimal+'</td><td>'+(((parseFloat(totalRegularDecimal)||0)+(parseFloat(otDecimal)||0)).toFixed(2))+'</td>' +
+      '<td>'+formatHours(totalRegularDecimal)+'</td><td>'+formatHours(otDecimal)+'</td><td>'+formatHours(__tot)+'</td>' +
       // Use a named handler with a data-key attribute instead of an inline IIFE.
       '<td><button type="button" class="btn-split" data-key="' + empId + '___' + date + '" onclick="splitRecord(this.dataset.key)">Split</button></td>';
     if(overridesSchedules[overrideKey] || overridesProjects[overrideKeyProj] !== undefined){
@@ -6900,7 +6906,7 @@ const trSeg = document.createElement('tr');
     }
     // Compute combined total hours (regular + OT)
     const _dtrTotalHours = _dtrTotalReg + _dtrTotalOt;
-    summaryEl.textContent = `Grand Total Hours: ${_dtrTotalHours.toFixed(2)} | Regular Hours: ${_dtrTotalReg.toFixed(2)} | OT Hours: ${_dtrTotalOt.toFixed(2)} | Employees: ${_dtrEmpIds.size}`;
+    summaryEl.textContent = `Grand Total Hours: ${formatHours(_dtrTotalHours)} | Regular Hours: ${formatHours(_dtrTotalReg)} | OT Hours: ${formatHours(_dtrTotalOt)} | Employees: ${_dtrEmpIds.size}`;
   })();
 
 (function(){
@@ -6945,9 +6951,9 @@ const trSeg = document.createElement('tr');
     td.style.fontWeight = '700';
     td.style.background = '#fafafa';
     if (i===nameIdx) { td.textContent = 'Employees: ' + empCount; td.style.textAlign = 'left'; }
-    else if (i===regIdx) { td.textContent = reg.toFixed(2); td.style.textAlign = 'right'; }
-    else if (i===otIdx)  { td.textContent = ot.toFixed(2);  td.style.textAlign = 'right'; }
-    else if (i===totIdx) { td.textContent = tot.toFixed(2); td.style.textAlign = 'right'; }
+    else if (i===regIdx) { td.textContent = formatHours(reg); td.style.textAlign = 'right'; }
+    else if (i===otIdx)  { td.textContent = formatHours(ot);  td.style.textAlign = 'right'; }
+    else if (i===totIdx) { td.textContent = formatHours(tot); td.style.textAlign = 'right'; }
     else if (i===0)      { td.textContent = 'Totals:'; td.style.textAlign = 'left'; }
     else { td.textContent = ''; }
     const headTxt = norm(ths[i] && ths[i].textContent);
@@ -8718,7 +8724,7 @@ function loadSaved(){
       // If there are visible rows, update the summary text; otherwise clear it
       if (visibleCount > 0) {
         const totalHours = regSum + otSum;
-        summaryEl.textContent = `Grand Total Hours: ${totalHours.toFixed(2)} | Regular Hours: ${regSum.toFixed(2)} | OT Hours: ${otSum.toFixed(2)} | Employees: ${empSet.size}`;
+        summaryEl.textContent = `Grand Total Hours: ${formatHours(totalHours)} | Regular Hours: ${formatHours(regSum)} | OT Hours: ${formatHours(otSum)} | Employees: ${empSet.size}`;
       } else {
         summaryEl.textContent = '';
       }
@@ -10059,8 +10065,8 @@ document.addEventListener('DOMContentLoaded', async function () {
     });
     const summaryEl = document.getElementById('dtrSummary');
     if(summaryEl){
-      const total = +(sumReg + sumOt).toFixed(2);
-      summaryEl.textContent = 'Grand Total Hours: ' + total.toFixed(2) + ' | Regular: ' + sumReg.toFixed(2) + ' | OT Hours: ' + sumOt.toFixed(2) + ' | Employees: ' + empSet.size;
+      const total = sumReg + sumOt;
+      summaryEl.textContent = 'Grand Total Hours: ' + formatHours(total) + ' | Regular: ' + formatHours(sumReg) + ' | OT Hours: ' + formatHours(sumOt) + ' | Employees: ' + empSet.size;
     }
   }
 
@@ -10745,9 +10751,9 @@ document.addEventListener('DOMContentLoaded', async function () {
       var t = norm(res.ths[i].textContent);
       if (i===0) { td.textContent = 'Totals:'; td.style.textAlign='left'; }
       else if (t==='name') { td.textContent = 'Employees: ' + res.emp; }
-      else if (i===res.regIdx) { td.textContent = res.reg.toFixed(2); td.style.textAlign='right'; }
-      else if (i===res.otIdx)  { td.textContent = res.ot.toFixed(2);  td.style.textAlign='right'; }
-      else if (i===res.totIdx) { td.textContent = (res.tot || (res.reg+res.ot)).toFixed(2); td.style.textAlign='right'; }
+      else if (i===res.regIdx) { td.textContent = formatHours(res.reg); td.style.textAlign='right'; }
+      else if (i===res.otIdx)  { td.textContent = formatHours(res.ot);  td.style.textAlign='right'; }
+      else if (i===res.totIdx) { td.textContent = formatHours(res.tot || (res.reg+res.ot)); td.style.textAlign='right'; }
       else if (t==='split' || t==='actions') { td.style.display='none'; td.style.border='0'; }
       else { td.textContent = ''; }
       tr.appendChild(td);
@@ -10755,7 +10761,14 @@ document.addEventListener('DOMContentLoaded', async function () {
     foot.innerHTML = '';
     foot.appendChild(tr);
     var summaryEl = document.getElementById('dtrSummary');
-    if (summaryEl){ summaryEl.textContent=''; summaryEl.style.display='none'; }
+    if (summaryEl){
+      var grand = res.tot || (res.reg + res.ot);
+      summaryEl.textContent = 'Grand Total Hours: ' + formatHours(grand) +
+        ' | Regular Hours: ' + formatHours(res.reg) +
+        ' | OT Hours: ' + formatHours(res.ot) +
+        ' | Employees: ' + res.emp;
+      summaryEl.style.display = '';
+    }
   }
   window.computeVisibleTotals = computeVisibleTotals;
   window.rebuildDtrFooter = rebuildDtrFooter;
