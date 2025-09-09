@@ -4174,7 +4174,19 @@ document.addEventListener('DOMContentLoaded', () => {
     const hashArray = Array.from(new Uint8Array(hashBuffer));
     const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
     const now = new Date().toISOString();
-    payrollHistory.push({ startDate: start, endDate: end, rows: snap.rows, totals: snap.totals, hash: hashHex, lockedAt: now, locked: false });
+    payrollHistory.push({
+      startDate: start,
+      endDate: end,
+      rows: snap.rows,
+      totals: snap.totals,
+      employees: JSON.parse(JSON.stringify(storedEmployees)),
+      schedules: JSON.parse(JSON.stringify(storedSchedules)),
+      projects: JSON.parse(JSON.stringify(storedProjects)),
+      defaultScheduleId: defaultScheduleId,
+      hash: hashHex,
+      lockedAt: now,
+      locked: false
+    });
     saveHistory();
     // Update both history and active payroll tables after creating a new snapshot
     renderHistory();
@@ -4211,7 +4223,19 @@ document.addEventListener('DOMContentLoaded', () => {
     const hashArray = Array.from(new Uint8Array(hashBuffer));
     const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
     const now = new Date().toISOString();
-    payrollHistory.push({ startDate: start, endDate: end, rows: snap.rows, totals: snap.totals, hash: hashHex, lockedAt: now, locked: true });
+    payrollHistory.push({
+      startDate: start,
+      endDate: end,
+      rows: snap.rows,
+      totals: snap.totals,
+      employees: JSON.parse(JSON.stringify(storedEmployees)),
+      schedules: JSON.parse(JSON.stringify(storedSchedules)),
+      projects: JSON.parse(JSON.stringify(storedProjects)),
+      defaultScheduleId: defaultScheduleId,
+      hash: hashHex,
+      lockedAt: now,
+      locked: true
+    });
     saveHistory();
     renderHistory();
     // Disable payroll and DTR editing via helper until date range changes
@@ -5553,10 +5577,16 @@ const DEFAULT_SCHEDULE = {
 let storedRecords = (typeof window !== 'undefined' && Array.isArray(window.storedRecords))
   ? window.storedRecords
   : [];
-let storedEmployees = JSON.parse(localStorage.getItem(LS_EMPLOYEES) || '{}');
-let storedSchedules = JSON.parse(localStorage.getItem(LS_SCHEDULES) || 'null');
-let defaultScheduleId = localStorage.getItem(LS_SCHEDULES_DEFAULT) || null;
-let storedProjects = JSON.parse(localStorage.getItem(LS_PROJECTS) || '{}');
+let masterEmployees = JSON.parse(localStorage.getItem(LS_EMPLOYEES) || '{}');
+let masterSchedules = JSON.parse(localStorage.getItem(LS_SCHEDULES) || 'null');
+let masterDefaultScheduleId = localStorage.getItem(LS_SCHEDULES_DEFAULT) || null;
+let defaultScheduleId = masterDefaultScheduleId;
+let masterProjects = JSON.parse(localStorage.getItem(LS_PROJECTS) || '{}');
+
+// Active references that may point to the master lists or to a payroll period snapshot
+let storedEmployees = masterEmployees;
+let storedSchedules = masterSchedules;
+let storedProjects = masterProjects;
 document.getElementById('downloadEmployeesCSV').addEventListener('click', () => {
   const header = ['ID','Name','Hourly Rate','Bank Account','Schedule Name','Schedule ID','Project Name','Project ID','Deduct Pag-IBIG','Deduct PhilHealth','Deduct SSS'];
   const rows = [header];
@@ -5613,8 +5643,17 @@ function ensureSchedules(){
   }
 }
 function saveSchedulesToLS(){
-  localStorage.setItem(LS_SCHEDULES, JSON.stringify(storedSchedules));
-  localStorage.setItem(LS_SCHEDULES_DEFAULT, defaultScheduleId);
+  const idx = getActiveIndex();
+  if (idx >= 0 && Array.isArray(window.payrollHistory) && window.payrollHistory[idx]) {
+    window.payrollHistory[idx].schedules = JSON.parse(JSON.stringify(storedSchedules));
+    window.payrollHistory[idx].defaultScheduleId = defaultScheduleId;
+    saveHistory();
+  } else {
+    masterSchedules = storedSchedules;
+    masterDefaultScheduleId = defaultScheduleId;
+    localStorage.setItem(LS_SCHEDULES, JSON.stringify(masterSchedules));
+    localStorage.setItem(LS_SCHEDULES_DEFAULT, masterDefaultScheduleId);
+  }
 }
 
 const tabs = {
@@ -5624,12 +5663,14 @@ const tabs = {
   tabSchedule: document.getElementById('tabSchedule'),
   tabEmployees: document.getElementById('tabEmployees'),
   tabProjects: document.getElementById('tabProjects'),
+  tabSettings: document.getElementById('tabSettings'),
   panelMain: document.getElementById('panelMain'),
   // Corresponding Dashboard panel
   panelDashboard: document.getElementById('panelDashboard'),
   panelSchedule: document.getElementById('panelSchedule'),
   panelEmployees: document.getElementById('panelEmployees'),
   panelProjects: document.getElementById('panelProjects'),
+  panelSettings: document.getElementById('panelSettings'),
   tabPayroll: document.getElementById('tabPayroll'),
   panelPayroll: document.getElementById('panelPayroll')
 };
@@ -5656,6 +5697,11 @@ function showTab(name){
   if(name==='schedule'){ tabs.tabSchedule.classList.add('active'); tabs.panelSchedule.classList.add('active'); renderScheduleEditor(); }
   if(name==='employees'){ tabs.tabEmployees.classList.add('active'); tabs.panelEmployees.classList.add('active'); renderEmployees(); }
   if(name==='projects'){ tabs.tabProjects.classList.add('active'); tabs.panelProjects.classList.add('active'); renderProjects(); }
+  if(name==='settings'){
+    tabs.tabSettings && tabs.tabSettings.classList.add('active');
+    tabs.panelSettings && tabs.panelSettings.classList.add('active');
+    if (typeof applySnapshotLists === 'function') applySnapshotLists(-1);
+  }
 
   if(name==='payroll'){ tabs.tabPayroll && tabs.tabPayroll.classList.add('active'); tabs.panelPayroll && tabs.panelPayroll.classList.add('active'); }
 }
@@ -5831,7 +5877,16 @@ function resetRanges(){
 document.getElementById('saveRangesBtn').addEventListener('click', saveRangesFromUI);
 document.getElementById('resetRangesBtn').addEventListener('click', resetRanges);
 
-function saveEmployeesToLS(){ localStorage.setItem(LS_EMPLOYEES, JSON.stringify(storedEmployees)); }
+function saveEmployeesToLS(){
+  const idx = getActiveIndex();
+  if (idx >= 0 && Array.isArray(window.payrollHistory) && window.payrollHistory[idx]) {
+    window.payrollHistory[idx].employees = JSON.parse(JSON.stringify(storedEmployees));
+    saveHistory();
+  } else {
+    masterEmployees = storedEmployees;
+    localStorage.setItem(LS_EMPLOYEES, JSON.stringify(masterEmployees));
+  }
+}
 function renderEmpScheduleDropdowns(){
   const sel = document.getElementById('empScheduleSelect'); if(!sel) return;
   sel.innerHTML = '';
@@ -5855,7 +5910,17 @@ function renderEmpScheduleDropdownsInTable(){
   });
 }
 
-function saveProjectsToLS(){ localStorage.setItem(LS_PROJECTS, JSON.stringify(storedProjects)); renderProjects(); renderProjectDropdowns(); renderProjectFilterOptions(); renderResults(); }
+function saveProjectsToLS(){
+  const idx = getActiveIndex();
+  if (idx >= 0 && Array.isArray(window.payrollHistory) && window.payrollHistory[idx]) {
+    window.payrollHistory[idx].projects = JSON.parse(JSON.stringify(storedProjects));
+    saveHistory();
+  } else {
+    masterProjects = storedProjects;
+    localStorage.setItem(LS_PROJECTS, JSON.stringify(masterProjects));
+  }
+  renderProjects(); renderProjectDropdowns(); renderProjectFilterOptions(); renderResults();
+}
 function renderProjects(){
   const tbody = document.querySelector('#projectsTable tbody'); tbody.innerHTML = '';
   Object.keys(storedProjects).forEach(pid=>{
@@ -9167,6 +9232,29 @@ function updateWeekInputs(snap) {
   } catch (e) {}
 }
 
+  function applySnapshotLists(idx) {
+    const hist = Array.isArray(window.payrollHistory) ? window.payrollHistory : loadHistory();
+    const snap = Number.isFinite(idx) && hist[idx] ? hist[idx] : null;
+    if (!snap) {
+      storedEmployees = masterEmployees;
+      storedSchedules = masterSchedules;
+      storedProjects = masterProjects;
+      defaultScheduleId = masterDefaultScheduleId;
+    } else {
+      storedEmployees = JSON.parse(JSON.stringify(snap.employees || {}));
+      storedSchedules = JSON.parse(JSON.stringify(snap.schedules || {}));
+      storedProjects = JSON.parse(JSON.stringify(snap.projects || {}));
+      defaultScheduleId = snap.defaultScheduleId || masterDefaultScheduleId;
+    }
+    try { renderEmployees(); } catch (_) {}
+    try { renderScheduleSelector(); } catch (_) {}
+    try { renderProjects(); } catch (_) {}
+    try { renderProjectDropdowns(); } catch (_) {}
+    try { renderProjectFilterOptions(); } catch (_) {}
+    try { renderResults(); } catch (_) {}
+  }
+  window.applySnapshotLists = applySnapshotLists;
+
   function populateDropdowns() {
     // Prefer the global payrollHistory array if available, else fall back to localStorage
     const hist = Array.isArray(window.payrollHistory) ? window.payrollHistory : loadHistory();
@@ -9206,15 +9294,16 @@ function updateWeekInputs(snap) {
       saveActiveIndex(idxVal);
       updateWeekInputs(snap);
     }
+    applySnapshotLists(snap ? idxVal : -1);
   }
 
   function onSelectChange(e) {
     const idx = parseInt(e.target.value, 10);
     if (!Number.isFinite(idx)) return;
     const history = loadHistory();
-    if (!history[idx]) return;
+    if (idx >= 0 && !history[idx]) return;
     saveActiveIndex(idx);
-    updateWeekInputs(history[idx]);
+    updateWeekInputs(history[idx] || null);
     // Keep all selects in sync
     populateDropdowns();
   }
@@ -9242,7 +9331,19 @@ function updateWeekInputs(snap) {
         const hashArray = Array.from(new Uint8Array(hashBuffer));
         const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
         const now = new Date().toISOString();
-        const newSnap = { startDate: start, endDate: end, rows: snap.rows, totals: snap.totals, hash: hashHex, lockedAt: now, locked: false };
+        const newSnap = {
+          startDate: start,
+          endDate: end,
+          rows: snap.rows,
+          totals: snap.totals,
+          employees: JSON.parse(JSON.stringify(storedEmployees)),
+          schedules: JSON.parse(JSON.stringify(storedSchedules)),
+          projects: JSON.parse(JSON.stringify(storedProjects)),
+          defaultScheduleId: defaultScheduleId,
+          hash: hashHex,
+          lockedAt: now,
+          locked: false
+        };
         // Push into global payrollHistory if it exists; else push into local history
         if (Array.isArray(window.payrollHistory)) {
           window.payrollHistory.push(newSnap);
