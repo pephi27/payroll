@@ -1110,8 +1110,7 @@ window.addEventListener('load', dashReports);
          * starting with an empty array here, the application ensures that any
          * locally cached data is ignored until the remote dataset is loaded.
          */
-        window.storedRecords = [];
-      }
+        window.storedRecords = window.storedRecords || []; }
       // Projects store (att_projects_v1)
       if (typeof window.storedProjects === 'undefined') {
         const supaVal = await fetchFromSupabase('att_projects_v1');
@@ -6093,10 +6092,26 @@ document.getElementById('fileInput').addEventListener('change', (ev)=>{
       try {
         const content = String(e.target.result || '');
         const lines = content.split(/\r?\n/);
+// === MIN PATCH: Only keep records inside the current payroll period (From/To) ===
+let __from = '', __to = '';
+try {
+  const fEl = document.getElementById('dtrDateFrom');
+  const tEl = document.getElementById('dtrDateTo');
+  __from = (fEl && fEl.value) ? fEl.value : (localStorage.getItem('dtr_filter_from') || '');
+  __to   = (tEl && tEl.value) ? tEl.value : (localStorage.getItem('dtr_filter_to')   || '');
+} catch(_) {}
+function __inRange(d){
+  if (!d) return false;
+  if (__from && d < __from) return false;
+  if (__to   && d > __to)   return false;
+  return true;
+}
+// === /MIN PATCH ===
+
         let added = 0;
         for(const ln of lines){
           const p = (typeof parseLine === 'function') ? parseLine(ln) : null;
-          if(p && p.empId && p.date && p.time){
+          if (p && p.empId && p.date && p.time && __inRange(p.date)){
             storedRecords.push({ empId: String(p.empId), date: p.date, time: padHM(p.time) });
             added++;
           }
@@ -6146,9 +6161,7 @@ document.getElementById('fileInput').addEventListener('change', (ev)=>{
 
 
 document.getElementById('clearData').addEventListener('click', ()=>{
-  if(!confirm('Clear all saved attendance data?')) return;
-  storedRecords = [];
-  // Remove the locally cached attendance data
+  if(!confirm('Clear all saved attendance data?')) return; // Remove the locally cached attendance data
   localStorage.removeItem(LS_RECORDS);
   // Persist the cleared dataset to Supabase for crossâ€‘device sync
   try {
@@ -9570,10 +9583,7 @@ document.addEventListener('DOMContentLoaded', async function () {
       }
       if (typeof hideRemoteDtrAlert === 'function') hideRemoteDtrAlert();
     } else {
-      // No remote data: clear any existing local dataset and inform the user.
-      storedRecords = [];
-      window.storedRecords = [];
-      try { localStorage.removeItem(LS_RECORDS); } catch (e) {}
+      // No remote data: clear any existing local dataset and inform the user. window. try { localStorage.removeItem(LS_RECORDS); } catch (e) {}
       if (typeof renderResults === 'function') {
         try { renderResults(); } catch (e) {}
       }
