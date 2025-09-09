@@ -4651,7 +4651,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const tr = document.createElement('tr');
         function cell(el){ const td=document.createElement('td'); td.appendChild(el); tr.appendChild(td); }
         const idInput = document.createElement('input');
-        idInput.value = p.id ?? p.projectId ?? rec.key || '';
+        idInput.value = p.id ?? p.projectId ?? rec.key ?? '';
         idInput.style.width = '100%';
         idInput.addEventListener('change', () => updateProjectField(rec, 'id', idInput.value));
         cell(idInput);
