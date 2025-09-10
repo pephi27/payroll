@@ -943,6 +943,98 @@ window.addEventListener('load', dashReports);
         color: #000;
       }
 </style>
+<!-- === PERIOD HELPERS v1 (scoped + lock guard) === -->
+<script>
+(function(){
+  // Which keys must be per-period when we flip the switch later
+  window.__PERIOD_BASE_KEYS = [
+    'att_employees_v2','att_projects_v1','att_schedules_v2','att_schedules_default',
+    'att_overrides_schedules','att_overrides_projects','att_overrides_hours_v1',
+    'att_splits_v1',
+    'payroll_rates','payroll_reg_hours','payroll_ot_hours','payroll_ot_multiplier',
+    'payroll_deduction_divisor',
+    'payroll_sss_table','payroll_philhealth_table','payroll_pagibig_table',
+    'payroll_philhealth_rate','payroll_pagibig_rate',
+    'payroll_loan_sss','payroll_loan_pagibig','payroll_vale','payroll_vale_wed',
+    'payroll_contrib_flags',
+    'payroll_adjustments','payroll_adjustment_hours',
+    'payroll_bantay','payroll_bantay_proj',
+    'payroll_week_start','payroll_week_end'
+  ];
+
+  function getActivePeriodId(){
+    const sel = document.getElementById('activePayrollSelect');
+    if (sel && sel.value) return sel.value;
+    try{
+      const hist = JSON.parse(localStorage.getItem('payroll_hist')||'[]');
+      const idx = JSON.parse(localStorage.getItem('payroll_active_index')||'0')|0;
+      if (hist[idx] && hist[idx].periodId) return hist[idx].periodId;
+    }catch(_){ }
+    const ws = document.getElementById('weekStart')?.value || '';
+    const we = document.getElementById('weekEnd')?.value || '';
+    return (ws && we) ? `${ws}_to_${we}` : 'UNSCOPED';
+  }
+  function isPeriodLocked(pid){
+    try{
+      const hist = JSON.parse(localStorage.getItem('payroll_hist')||'[]');
+      return !!hist.find(h => h && h.periodId===pid && h.lockedAt);
+    }catch(_){ return false; }
+  }
+  function periodizeKey(base, pid){ return `${base}__${pid}`; }
+
+  // Cloud helpers (if available)
+  const KV_TABLE = (window.SUPABASE_TABLE || 'kv_store');
+  const DTR_TABLE = 'dtr_records';
+  const supa = () => (window.supabase || null);
+
+  // Public scoped helpers
+  window.readKVScoped = async function(baseKey, defaultValue=null, pid=getActivePeriodId()){
+    const k = periodizeKey(baseKey, pid);
+    try{
+      if (supa()){
+        const { data, error } = await supa().from(KV_TABLE).select('value').eq('key', k).single();
+        if (!error && data && typeof data.value!=='undefined') return data.value;
+      }
+    }catch(_){ }
+    try{
+      const raw = localStorage.getItem(k);
+      if (raw===null) return defaultValue;
+      try{ return JSON.parse(raw); }catch{ return raw; }
+    }catch(_){ }
+    return defaultValue;
+  };
+  window.writeKVScoped = async function(baseKey, value, pid=getActivePeriodId()){
+    const k = periodizeKey(baseKey, pid);
+    if (isPeriodLocked(pid)){ console.warn('Locked period write blocked', pid, k); return false; }
+    try{ localStorage.setItem(k, JSON.stringify(value)); }catch(_){ }
+    try{
+      if (supa()){
+        await supa().from(KV_TABLE).upsert({ key:k, value }, { onConflict:'key' });
+      }
+    }catch(_){ }
+    return true;
+  };
+  window.getActivePeriodId = getActivePeriodId;
+  window.isPeriodLocked = isPeriodLocked;
+
+  // Lock-aware guard for direct localStorage usage on namespaced keys
+  (function(){
+    const orig = Storage.prototype.setItem;
+    Storage.prototype.setItem = function(k,v){
+      try{
+        const m = String(k).match(/__(\d{4}-\d{2}-\d{2})_to_(\d{4}-\d{2}-\d{2})$/);
+        if (m && isPeriodLocked(`${m[1]}_to_${m[2]}`)){ 
+          console.warn('Blocked setItem to locked period', k); 
+          return; 
+        }
+      }catch(_){ }
+      return orig.apply(this, arguments);
+    };
+  })();
+})();
+</script>
+<!-- === / PERIOD HELPERS v1 === -->
+
 </head>
 
 <!-- UI fixes: restore emojis and icons if text got corrupted by encoding -->
