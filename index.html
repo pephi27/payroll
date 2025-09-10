@@ -1114,6 +1114,63 @@ window.addEventListener('load', dashReports);
 </script>
 <!-- === / PERIOD SNAPSHOT & SWITCH v1 === -->
 
+<!-- === DTR & PAYSLIP PERIOD OVERRIDES v1 === -->
+<script>
+(function(){
+  const supa = () => (window.supabase || null);
+  if (!supa()) return;
+
+  const DTR_TABLE = 'dtr_records';
+  function currentPid(){ return (typeof window.getActivePeriodId==='function') ? window.getActivePeriodId() : 'UNSCOPED'; }
+
+  // Minimal wrappers that many code paths can call
+  window.saveDTRForCurrentPeriod = async function(rows){
+    try{
+      await supa().from(DTR_TABLE).upsert({ id: currentPid(), data: Array.isArray(rows)?rows:[] }, { onConflict:'id' });
+      window.storedRecords = Array.isArray(rows)?rows:[];
+      try{ localStorage.setItem('att_records_v2', JSON.stringify(window.storedRecords)); }catch(_){ }
+      return true;
+    }catch(e){ console.warn('Per-period DTR save failed', e); return false; }
+  };
+  window.loadDTRForCurrentPeriod = async function(){
+    try{
+      const { data, error } = await supa().from(DTR_TABLE).select('*').eq('id', currentPid()).single();
+      if (!error && data && Array.isArray(data.data)){ return data.data; }
+    }catch(_){ }
+    return [];
+  };
+
+  // Try to hook obvious places (optional/no-op if they don't exist)
+  if (typeof window.fetchDTR === 'function'){
+    const orig = window.fetchDTR;
+    window.fetchDTR = async function(){
+      const rows = await window.loadDTRForCurrentPeriod();
+      return { rows, error: null };
+    };
+  }
+  if (typeof window.applyDTR === 'function'){
+    const orig2 = window.applyDTR;
+    window.applyDTR = async function(rows){ await window.saveDTRForCurrentPeriod(rows); return true; };
+  }
+
+  // Payslip: use periodId dates by seeding hidden date inputs just before print
+  document.addEventListener('DOMContentLoaded', ()=>{
+    const btn = document.getElementById('printAllPayslipsBtn');
+    if (!btn || btn.__periodDates) return;
+    btn.addEventListener('click', function(){
+      const pid = currentPid();
+      const m = String(pid).match(/^(\d{4}-\d{2}-\d{2})_to_(\d{4}-\d{2}-\d{2})/);
+      const start = m ? m[1] : ''; const end = m ? m[2] : '';
+      const wsEl = document.getElementById('weekStart');
+      const weEl = document.getElementById('weekEnd');
+      if (wsEl) wsEl.value = start || wsEl.value;
+      if (weEl) weEl.value = end || weEl.value;
+    }, { capture:true });
+    btn.__periodDates = true;
+  });
+})();
+</script>
+<!-- === / DTR & PAYSLIP PERIOD OVERRIDES v1 === -->
 
 </head>
 
