@@ -229,6 +229,9 @@ function safeStringify(v){
 /* Manual DTR indicator */
 #resultsTable .manual-indicator { color: #ef4444; margin-left: 4px; font-weight: 700; }
 
+/* Combined halves indicator */
+#resultsTable .merge-indicator { color: #0ea5e9; margin-left: 4px; cursor: help; }
+
 </style>
 <!-- === / Supabase KV Sync Adapter === -->
 
@@ -6530,6 +6533,23 @@ let otMins = 0;
               }
             }
           } catch(e){}
+          if (unsplitSegments.length > 1) {
+            const nmCell = trComb.cells[1];
+            if (nmCell && !nmCell.querySelector('.merge-indicator')) {
+              const m = document.createElement('span');
+              m.className = 'merge-indicator';
+              const projName = (storedProjects && storedProjects[projIdComb] && storedProjects[projIdComb].name) ? storedProjects[projIdComb].name : projIdComb;
+              const combinedText = unsplitSegments.join(' & ');
+              let sepText = '';
+              if (splitSegments.length) {
+                const sepSegs = splitSegments.join(' & ');
+                sepText = '; ' + sepSegs + (splitSegments.length > 1 ? ' remain' : ' remains') + ' separate';
+              }
+              m.title = combinedText + ' combined (' + projName + ')' + sepText + '.';
+              m.textContent = 'ⓘ';
+              nmCell.appendChild(m);
+            }
+          }
           const pcComb = trComb.cells[2];
           if (pcComb) { pcComb.innerHTML = ''; pcComb.appendChild(buildProjectDropdown(empId, date, projIdComb)); }
           const scComb = trComb.cells[3];
