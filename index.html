@@ -3235,59 +3235,6 @@ function renderAdjustmentsFoot() {
   }
 }
 
-// Initialize the dynamic Pagâ€‘IBIG and PhilHealth rate input fields.  This function
-// sets their values from the current global variables and attaches input
-// listeners to persist changes to localStorage and recalculate payroll.
-function initializeContributionRates() {
-  const pagibigInput = document.getElementById('pagibigRateInput');
-  if (pagibigInput) {
-    // Set current value; show as decimal with 3 decimals
-    pagibigInput.value = typeof pagibigRate === 'number' ? pagibigRate.toFixed(3) : '';
-    pagibigInput.addEventListener('change', function() {
-      let val = parseFloat(pagibigInput.value);
-      if (!isNaN(val)) {
-        // If user enters percent (e.g. 2), convert to decimal
-        if (val > 1) val = val / 100;
-        // Bound to 0â€“1
-        if (val < 0) val = 0;
-        if (val > 1) val = 1;
-        pagibigRate = val;
-        localStorage.setItem(LS_PAGIBIG_RATE, String(val));
-        calculateAll();
-        updateContributionNote();
-      }
-    });
-  }
-  const philInput = document.getElementById('philhealthRateInput');
-  if (philInput) {
-    philInput.value = typeof philhealthRate === 'number' ? philhealthRate.toFixed(3) : '';
-    philInput.addEventListener('change', function() {
-      let val = parseFloat(philInput.value);
-      if (!isNaN(val)) {
-        if (val > 1) val = val / 100;
-        if (val < 0) val = 0;
-        if (val > 1) val = 1;
-        philhealthRate = val;
-        localStorage.setItem(LS_PHILHEALTH_RATE, String(val));
-        calculateAll();
-        updateContributionNote();
-      }
-    });
-  }
-}
-
-// Update the contribution note in the payroll tab to reflect current rates.  It
-// calculates percentages and updates the HTML of the element with id
-// 'contribNote'.  Called after rate changes and on initial load.
-function updateContributionNote() {
-  const noteEl = document.getElementById('contribNote');
-  if (!noteEl) return;
-  const piPct = (pagibigRate * 100).toFixed(2);
-  const phPct = (philhealthRate * 100).toFixed(2);
-  noteEl.innerHTML = 'Pag-IBIG = Regular Pay &times; ' + piPct + '% &divide; Divisor, ' +
-    'PhilHealth = Regular Pay &times; ' + phPct + '% &divide; Divisor, ' +
-    'SSS = (Employee Share by Monthly Income) &divide; Divisor. Loans &amp; Vales are manual (not divided).';
-}
 document.getElementById('downloadPayrollCSV').addEventListener('click', ()=>{
   // Include Adjustments column in payroll CSV export
   const header = ['Week Start','Week End','OT Multiplier','Divisor','ID','Name','Regular Hours','OT Hours','Hourly Rate','Regular Pay','OT Pay','Gross Pay','Pag-IBIG','PhilHealth','SSS','SSS Loan','Pag-IBIG Loan','Vale','Wed Vale','Total Deductions','Adjustments','Net Pay'];
@@ -3321,10 +3268,9 @@ document.getElementById('downloadPayrollCSV').addEventListener('click', ()=>{
 renderTable();
 renderSssTable();
 renderAdjustmentsTable();
-// Render new contribution tables and update the note
+// Render new contribution tables
 renderPagibigTable();
 renderPhilhealthTable();
-updateContributionNote();
     
   // Wire Project Totals CSV download button (global)
   if (document.getElementById('downloadProjectTotalsCSV')) {
