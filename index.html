@@ -5155,61 +5155,6 @@ rows += `<tr class="totals">
     }
     try { window.exportExcelAllTabsForRange = exportExcelAllTabsForRange; } catch(e){}
 
-    function exportCSVPerProject(){
-      if (!__report){ alert('No report to export yet.'); return; }
-      const { data, dates, from, to } = __report;
-
-      const dayHeader = dates.map(d=>{
-        const lbl = d.toLocaleDateString(undefined,{day:'2-digit',month:'short'});
-        return [`RWH ${lbl}`, `OTH ${lbl}`];
-      }).flat();
-      const header = ['PERSONNEL','RATE'].concat(dayHeader, ['TOTAL REG HRS','TOTAL OT HRS','GRAND TOTAL HOURS','GROSS']);
-
-      const projects = Object.keys(data).sort();
-      projects.forEach(proj=>{
-        const empMap = data[proj];
-        const rows = [header];
-        let pReg=0,pOT=0,pGross=0;
-
-        Object.keys(empMap).sort((a,b)=>{
-          const A = (empMap[a].name||a).toUpperCase();
-          const B = (empMap[b].name||b).toUpperCase();
-          return A.localeCompare(B);
-        }).forEach(empId=>{
-          const rec = empMap[empId];
-          const display = rec.name || empId;
-          const rate = getRate(empId, display);
-
-          let rReg=0,rOT=0;
-          const dayCells = [];
-          dates.forEach(d=>{
-            const key = d.setHours(0,0,0,0);
-            const v = rec.days[key] || { rwh:0, oth:0 };
-            rReg += v.rwh; rOT += v.oth;
-            dayCells.push(to2(v.rwh), to2(v.oth));
-          });
-
-          const otMult = toNum(document.querySelector('#otMultiplier')?.value || 1.5);
-          const gross = (rReg * rate) + (rOT * rate * otMult);
-          pReg += rReg; pOT += rOT; pGross += gross;
-
-          rows.push([display, to2(rate)].concat(dayCells, [to2(rReg), to2(rOT), to2(rReg + rOT), to2(gross)]));
-        });
-
-        rows.push(['Project Total', ''].concat(
-          new Array(dates.length*2).fill(''),
-          [to2(pReg), to2(pOT), to2(pReg+pOT), to2(pGross)]
-        ));
-
-        const csv = rows.map(r=>r.map(csvEscape).join(',')).join('\n');
-        const a=document.createElement('a');
-        const safeProj = proj.replace(/[^a-z0-9_\-]+/gi,'_');
-        a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'}));
-        a.download=`report_${safeProj}_${from}_to_${to}.csv`;
-        a.click(); URL.revokeObjectURL(a.href);
-      });
-    }
-
   // Use the clean per-project print handler defined later; avoid double-binding here.
   // $('#r_print')?.addEventListener('click', ()=> safePrint());
     $('#r_csv')?.addEventListener('click', exportCSVAll);const dtr = document.getElementById('resultsTable');
