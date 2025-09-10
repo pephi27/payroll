@@ -1050,6 +1050,9 @@ window.addEventListener('load', dashReports);
       }catch(_){ }
       await window.writeKVScoped(base, val, pid);
     }
+    // Force-reset Bantay maps each new period
+    await window.writeKVScoped('payroll_bantay', {}, pid);
+    await window.writeKVScoped('payroll_bantay_proj', {}, pid);
   }
   async function hydratePeriodKV(pid){
     if (!supa()) return; // local snapshots already in LS
