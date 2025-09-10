@@ -3108,7 +3108,6 @@ function calculateRow(tr){  const readNum = sel => { const el = tr.querySelector
   const regPay = +(reg * rate).toFixed(2);
   tr.querySelector('.totalHrs').textContent = totalHrs.toFixed(2);
   const otPay = +(otTotal * rate * (Number(otMultiplier)||0)).toFixed(2);
-  const gross = +(regPay + otPay).toFixed(2);
   // Compute contributions using dynamic tables (employee share).  Determine the
   // appropriate rate based on the monthly income and multiply by regular pay.
   const monthly = rate * 8 * 24;
@@ -3131,7 +3130,8 @@ function calculateRow(tr){  const readNum = sel => { const el = tr.querySelector
   const adj = Number(adjustments[id] || 0);
   // Bantay allowance (treated as positive allowance).  Parse numeric value from bantay input.
   const bVal = parseFloat((tr.querySelector('.bantay')?.value || '').trim()) || 0;
-  const net = gross - total + adj + bVal;
+  const gross = +(regPay + otPay + bVal).toFixed(2);
+  const net = gross - total + adj;
 
   w('.regPay', regPay);
   w('.otPay', otPay);
@@ -4276,7 +4276,6 @@ document.addEventListener('DOMContentLoaded', () => {
       let regPay = +(regHrs * rate).toFixed(2);
       const otTotal = otHrs + adjHrs;
       let otPay  = +(otTotal * rate * otMult).toFixed(2);
-      let gross  = +(regPay + otPay).toFixed(2);
       let pagibig = num(r.pagibig);
       let philhealth = num(r.philhealth);
       let sss = num(r.sss);
@@ -4286,6 +4285,7 @@ document.addEventListener('DOMContentLoaded', () => {
       const wedVale = num(r.valeWed);
       const adjAmt = num(r.adjAmt);
       const bantay = num(r.bantay);
+      let gross  = +(regPay + otPay + bantay).toFixed(2);
 
       // Heuristic: if snapshot has truncated values (e.g., 2.00 due to commas), recompute using current rules
       // 'looksWrong' heuristic no longer needed since we recompute unconditionally
@@ -4308,7 +4308,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
       // Compute net pay consistent with Payroll tab
       const totalDeds = pagibig + philhealth + sss + loanSSSPer + loanPIPer + vale + wedVale;
-      const netPay = +(gross - totalDeds + adjAmt + bantay).toFixed(2);
+      const netPay = +(gross - totalDeds + adjAmt).toFixed(2);
 
       const vals = [
         id, r.name, rate, regHrs, otHrs, adjHrs, totalHrs,
