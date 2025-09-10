@@ -5296,6 +5296,12 @@ function unsplitRecord(key) {
       }
     });
   }
+  halves.forEach(h => {
+    const hk = dayKey + '___' + h;
+    if (!splitState[h] && overridesProjects && Object.prototype.hasOwnProperty.call(overridesProjects, hk)) {
+      delete overridesProjects[hk];
+    }
+  });
   if (splitState && Object.keys(splitState).length > 0) {
     splits[dayKey] = splitState;
   } else {
