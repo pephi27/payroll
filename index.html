@@ -131,24 +131,6 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_KEY)
 window.supabase = supabase;
 window.SUPABASE_TABLE = TABLE;
 // === Supabase KV helpers (no localStorage) ===
-async function readKV(key){
-  try{
-    const { data, error } = await window.supabase
-      .from(window.SUPABASE_TABLE)
-      .select('value')
-      .eq('key', key)
-      .single();
-    if (error || !data) return null;
-    return data.value;
-  }catch(e){ console.warn('readKV failed', e); return null; }
-}
-async function writeKV(key, value){
-  try{
-    await window.supabase
-      .from(window.SUPABASE_TABLE)
-      .upsert({ key, value });
-  }catch(e){ console.warn('writeKV failed', e); }
-}
 
 
 const __origSetItem = Storage.prototype.setItem
