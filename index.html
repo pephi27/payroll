@@ -6518,7 +6518,7 @@ let otMins = 0;
           htmlComb += '<td>' + formatHours(__totComb) + '</td>';
           htmlComb += '<td><button type="button" class="btn-split" data-key="' + splitKey + '" onclick="splitRecord(this.dataset.key)">Split</button></td>';
           trComb.innerHTML = htmlComb;
-          if (overridesSchedules[dayKey] || overridesProjects[dayKey] !== undefined) {
+          if (overridesSchedules[splitKey] || overridesProjects[splitKey] !== undefined) {
             trComb.style.backgroundColor = '#fff3cd';
           }
           try {
