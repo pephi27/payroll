@@ -7407,11 +7407,21 @@ tabs.tabPayroll.addEventListener('click', () => {
   }
   function init(){
     wireManualDTR();
+    const callRender = () => {
+      try {
+        if (typeof renderResults === 'function') renderResults();
+      } catch(e){}
+    };
     if(!patchRenderResults()){
       const iv = setInterval(() => {
-        if(patchRenderResults()) clearInterval(iv);
+        if(patchRenderResults()){
+          clearInterval(iv);
+          callRender();
+        }
       }, 200);
       setTimeout(() => clearInterval(iv), 6000);
+    } else {
+      callRender();
     }
   }
   if(document.readyState === 'loading'){
@@ -10037,6 +10047,7 @@ document.addEventListener('DOMContentLoaded', async function () {
   function afterRender(){
     applyOverridesToTable();
     addDtrEditorButtons();
+    addDtrDeleteButtons();
     recomputeDtrSummaryFromTable();
   }
 
