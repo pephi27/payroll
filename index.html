@@ -5757,18 +5757,6 @@ document.getElementById('addEmployeeBtn').addEventListener('click', ()=>{
   const name = document.getElementById('empNameInput').value.trim();
   const rate = parseFloat(document.getElementById('empRateInput').value) || 0;
   const scheduleId = document.getElementById('empScheduleSelect').value || defaultScheduleId;
-  const projectId = document.getElementById('empProjectSelect').value || null;
-  const bank = document.getElementById('empBankInput').value.trim();
-  if(!id){ alert('Enter ID'); return; } if(!name){ alert('Enter Name'); return; }
-  storedEmployees[id] = { name: name, hourlyRate: rate, bankAccount: bank, scheduleId: scheduleId, projectId: projectId };
-  // Initialize default contribution deduction flags for new employee if not already set
-  if (!contribFlags[id]) {
-    contribFlags[id] = { pagibig: true, philhealth: true, sss: true };
-    localStorage.setItem(LS_CONTRIB_FLAGS, JSON.stringify(contribFlags));
-  }
-  saveEmployeesToLS();
-  document.getElementById('empIdInput').value=''; document.getElementById('empNameInput').value=''; document.getElementById('empRateInput').value=''; document.getElementById('empBankInput').value='';
-  renderEmployees(); renderResults();
 });
 document.getElementById('clearEmployeesBtn').addEventListener('click', ()=>{
   if(!confirm('Clear all employees?')) return;
