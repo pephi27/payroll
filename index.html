@@ -5250,6 +5250,34 @@ function splitRecord(key) {
   renderResults();
 }
 function unsplitRecord(key) {
+  const [empId, date] = key.split('___');
+  const halves = ['AM', 'PM', 'OT'];
+  const dayKey = empId + '___' + date;
+  const emp = (typeof storedEmployees !== 'undefined' && storedEmployees[empId]) ? storedEmployees[empId] : {};
+  const baseProj = (overridesProjects && Object.prototype.hasOwnProperty.call(overridesProjects, dayKey))
+    ? overridesProjects[dayKey]
+    : (emp.projectId || '');
+  const projIds = halves.map(h => {
+    const hk = empId + '___' + date + '___' + h;
+    if (overridesProjects && Object.prototype.hasOwnProperty.call(overridesProjects, hk)) {
+      return overridesProjects[hk];
+    }
+    return baseProj;
+  });
+  const firstProj = projIds[0];
+  const allSame = projIds.every(pid => pid === firstProj);
+  if (!allSame) {
+    alert('Cannot unsplit: segments must have the same project before they can be merged.');
+    return;
+  }
+  halves.forEach(h => {
+    const hk = empId + '___' + date + '___' + h;
+    if (overridesProjects && Object.prototype.hasOwnProperty.call(overridesProjects, hk)) {
+      delete overridesProjects[hk];
+    }
+  });
+  overridesProjects[dayKey] = firstProj;
+  saveOverrides();
   splits[key] = false;
   saveSplits();
   renderResults();
