@@ -5267,7 +5267,7 @@ function unsplitRecord(key) {
   const firstProj = projIds[0];
   const allSame = projIds.every(pid => pid === firstProj);
   if (!allSame) {
-    alert('Cannot unsplit: segments must have the same project before they can be merged.');
+    alert('Cannot unsplit because AM/PM/OT segments are assigned to different projects. Please align project selections to proceed. Adjust the project dropdowns for each segment.');
     return;
   }
   halves.forEach(h => {
@@ -6557,7 +6557,7 @@ const trSeg = document.createElement('tr');
         htmlSeg += '<td>' + formatHours(__totSeg) + '</td>';
         // Action: provide an Unsplit button using a named handler.  All split
         // segments share the same splitKey.
-        htmlSeg += '<td><button type="button" class="btn-unsplit" data-key="' + splitKey + '" onclick="unsplitRecord(this.dataset.key)">Unsplit</button></td>';
+        htmlSeg += '<td><button type="button" class="btn-unsplit" data-key="' + splitKey + '" onclick="unsplitRecord(this.dataset.key)" title="Adjust project dropdowns for each segment so their projects match before unsplitting.">Unsplit</button></td>';
         trSeg.innerHTML = htmlSeg;
         // Add manual star indicator on split rows (AM/PM/OT) when any manual entry exists for this emp/date
         try {
