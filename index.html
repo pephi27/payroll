@@ -1417,44 +1417,21 @@ window.addEventListener('load', dashReports);
     try {
       // Employees store (att_employees_v2)
       if (typeof window.storedEmployees === 'undefined') {
-        let localVal = {};
-        let localTs = 0;
-        try { localVal = JSON.parse(localStorage.getItem('att_employees_v2') || '{}'); } catch {}
-        try { localTs = parseInt(localStorage.getItem('att_employees_v2_ts') || '0', 10) || 0; } catch {}
-
-        let remoteVal;
-        let remoteTs = 0;
+        let remoteVal = {};
         const supa = window.supabase;
         if (supa) {
           try {
             const { data, error } = await supa
               .from('att_employees_v2')
-              .select('data, updated_at')
+              .select('data')
               .eq('id','employees')
               .maybeSingle();
             if (!error && data) {
               remoteVal = data.data || {};
-              remoteTs = data.updated_at ? Date.parse(data.updated_at) : 0;
             }
           } catch (e) { console.warn('Employees fetch failed', e); }
         }
-
-        if (remoteVal && remoteTs > localTs) {
-          window.storedEmployees = remoteVal;
-          try {
-            localStorage.setItem('att_employees_v2', JSON.stringify(remoteVal));
-            localStorage.setItem('att_employees_v2_ts', String(remoteTs));
-          } catch(e){}
-        } else {
-          window.storedEmployees = localVal;
-          if (supa && localTs > remoteTs) {
-            try {
-              await supa
-                .from('att_employees_v2')
-                .upsert({ id: 'employees', data: localVal }, { onConflict: 'id' });
-            } catch (e) { console.warn('Employees sync failed', e); }
-          }
-        }
+        window.storedEmployees = remoteVal;
       }
       // Attendance records store (att_records_v2)
       if (typeof window.storedRecords === 'undefined') {
@@ -2295,13 +2272,13 @@ window.addEventListener('load', dashReports);
 </tfoot>
 
      </table>
-     <div class="section note">
-      Reads employees from localStorage key
-      <code>
-       att_employees_v2
-      </code>
-      (id&rarr;{name}). If none found, shows a sample row.
-     </div>
+       <div class="section note">
+        Reads employees from Supabase table
+        <code>
+         att_employees_v2
+        </code>
+        (id&rarr;{name}). If none found, shows a sample row.
+       </div>
     </div>
     <!-- Renamed SSS tab to Contributions for clarity -->
     <div class="tab" id="contributionsTab">
@@ -2769,14 +2746,14 @@ divisorEl.addEventListener('change', () => {
   }
   calculateAll();
 });
-function loadEmployees() {
-  const stored = JSON.parse(localStorage.getItem('att_employees_v2') || '{}');
-  let list = Object.keys(stored).map(id=>({id, name: stored[id]?.name || ''}));
-  if (list.length === 0) list = [{id:'001', name:'Sample Employee'}];
-  list.sort((a,b)=> (a.name||'').localeCompare(b.name||''));
-  return list;
-}
-const employeeList = loadEmployees();
+  function loadEmployees() {
+    const stored = (typeof window !== 'undefined' && window.storedEmployees) ? window.storedEmployees : {};
+    let list = Object.keys(stored).map(id=>({id, name: stored[id]?.name || ''}));
+    if (list.length === 0) list = [{id:'001', name:'Sample Employee'}];
+    list.sort((a,b)=> (a.name||'').localeCompare(b.name||''));
+    return list;
+  }
+  const employeeList = loadEmployees();
 function getSssTable(){
   let arr = [];
   try { arr = JSON.parse(localStorage.getItem(LS_SSS_TABLE) || '[]'); }
@@ -5652,8 +5629,6 @@ const LS_RECORDS = 'att_records_v2';
 
 const LS_SCHEDULES = 'att_schedules_v2';
 const LS_SCHEDULES_DEFAULT = 'att_schedules_default';
-const LS_EMPLOYEES = 'att_employees_v2';
-const LS_EMPLOYEES_TS = 'att_employees_v2_ts';
 const LS_PROJECTS = 'att_projects_v1';
 const LS_FILTER_PROJECT = 'att_filter_project_v1';
 const LS_OVERRIDES_SCHEDULES = 'att_overrides_schedules';
@@ -5793,7 +5768,9 @@ const DEFAULT_SCHEDULE = {
 let storedRecords = (typeof window !== 'undefined' && Array.isArray(window.storedRecords))
   ? window.storedRecords
   : [];
-let storedEmployees = JSON.parse(localStorage.getItem(LS_EMPLOYEES) || '{}');
+let storedEmployees = (typeof window !== 'undefined' && window.storedEmployees)
+  ? window.storedEmployees
+  : {};
 let storedSchedules = JSON.parse(localStorage.getItem(LS_SCHEDULES) || 'null');
 let defaultScheduleId = localStorage.getItem(LS_SCHEDULES_DEFAULT) || null;
 let storedProjects = JSON.parse(localStorage.getItem(LS_PROJECTS) || '{}');
@@ -6032,7 +6009,7 @@ document.getElementById('deleteScheduleBtn').addEventListener('click', ()=>{
   Object.keys(storedEmployees).forEach(eid=>{
     if(storedEmployees[eid].scheduleId === sel) storedEmployees[eid].scheduleId = defaultScheduleId;
   });
-  saveSchedulesToLS(); saveEmployeesToLS(); renderScheduleSelector(); renderEmployees(); renderResults();
+  saveSchedulesToLS(); saveEmployees(); renderScheduleSelector(); renderEmployees(); renderResults();
 });
 document.getElementById('setDefaultScheduleBtn').addEventListener('click', ()=>{
   const sel = scheduleSelect.value; if(!sel) return; defaultScheduleId = sel; saveSchedulesToLS(); renderScheduleSelector();
@@ -6071,11 +6048,7 @@ function resetRanges(){
 document.getElementById('saveRangesBtn').addEventListener('click', saveRangesFromUI);
 document.getElementById('resetRangesBtn').addEventListener('click', resetRanges);
 
-function saveEmployeesToLS(){
-  try {
-    localStorage.setItem(LS_EMPLOYEES, JSON.stringify(storedEmployees));
-    localStorage.setItem(LS_EMPLOYEES_TS, String(Date.now()));
-  } catch(e){}
+function saveEmployees(){
   const supa = window.supabase || (typeof supabase !== 'undefined' ? supabase : null);
   if (supa) {
     supa
@@ -6123,7 +6096,7 @@ function renderProjects(){
       if(confirm('Delete project "' + storedProjects[id].name + '"?')){
         delete storedProjects[id];
         Object.keys(storedEmployees).forEach(eid=>{ if(storedEmployees[eid].projectId === id) storedEmployees[eid].projectId = null; });
-        saveProjectsToLS(); saveEmployeesToLS(); renderEmployees(); renderResults();
+        saveProjectsToLS(); saveEmployees(); renderEmployees(); renderResults();
       }
     });
   });
@@ -6244,25 +6217,25 @@ ids.forEach(id => {
   });
 
   document.querySelectorAll('.emp-name-input').forEach(inp=> inp.addEventListener('change', (e)=>{
-    storedEmployees[e.target.dataset.id].name = e.target.value; saveEmployeesToLS(); renderResults();
+    storedEmployees[e.target.dataset.id].name = e.target.value; saveEmployees(); renderResults();
   }));
   document.querySelectorAll('.emp-rate-input').forEach(inp=> inp.addEventListener('change', (e)=>{
     const id = e.target.dataset.id;
     const val = parseFloat(e.target.value) || 0;
-    storedEmployees[id].hourlyRate = val; saveEmployeesToLS();
+    storedEmployees[id].hourlyRate = val; saveEmployees();
     try { payrollRates[id] = val; localStorage.setItem(LS_RATES, JSON.stringify(payrollRates)); } catch(err) {}
     renderResults();
   }));
 document.querySelectorAll('.emp-sel-schedule').forEach(sel=> sel.addEventListener('change', (e)=>{
-    storedEmployees[e.target.dataset.id].scheduleId = e.target.value; saveEmployeesToLS(); renderResults();
+    storedEmployees[e.target.dataset.id].scheduleId = e.target.value; saveEmployees(); renderResults();
   }));
   document.querySelectorAll('.emp-sel-project').forEach(sel=> sel.addEventListener('change', (e)=>{
-    storedEmployees[e.target.dataset.id].projectId = e.target.value || null; saveEmployeesToLS(); renderResults();
+    storedEmployees[e.target.dataset.id].projectId = e.target.value || null; saveEmployees(); renderResults();
   }));
   document.querySelectorAll('.del-emp').forEach(btn=> btn.addEventListener('click', (e)=>{
     const id=e.target.dataset.id;
     if(confirm(`Delete employee ${id} - ${storedEmployees[id].name}?`)){
-      delete storedEmployees[id]; saveEmployeesToLS(); renderEmployees(); renderResults();
+      delete storedEmployees[id]; saveEmployees(); renderEmployees(); renderResults();
     }
   }));
 }
@@ -6275,7 +6248,7 @@ document.getElementById('addEmployeeBtn').addEventListener('click', ()=>{
 });
 document.getElementById('clearEmployeesBtn').addEventListener('click', ()=>{
   if(!confirm('Clear all employees?')) return;
-  storedEmployees = {}; saveEmployeesToLS(); renderEmployees(); renderResults();
+  storedEmployees = {}; saveEmployees(); renderEmployees(); renderResults();
 });
 
 document.getElementById('empFileInput').addEventListener('change', (evt) => {
@@ -6307,7 +6280,7 @@ rows.slice(1).forEach(row => {
     }
   }
 });
-saveEmployeesToLS();
+saveEmployees();
 renderEmployees();
 renderResults();
 if (added || updated) alert(`Imported: ${added}, Updated: ${updated}`);
