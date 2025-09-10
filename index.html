@@ -1266,6 +1266,46 @@ window.addEventListener('load', dashReports);
 </script>
 <!-- === / PERIOD HELPERS v2 === -->
 
+<!-- === PERIOD HYDRATE ON SWITCH v1 === -->
+<script>
+(function(){
+  const supa = () => (window.supabase || null);
+  const KV_TABLE = (window.SUPABASE_TABLE || 'kv_store');
+
+  async function hydratePeriodKV(pid){
+    if (!supa()) return;
+    const bases = (window.__PERIOD_BASE_KEYS||[]);
+    if (!bases.length) return;
+    const filters = bases.map(b => `key.like.${b}__${pid}`);
+    const { data, error } = await supa().from(KV_TABLE).select('key,value').or(filters.join(','));
+    if (!error && Array.isArray(data)){
+      data.forEach(row=>{
+        try{ localStorage.setItem(row.key, JSON.stringify(row.value)); }catch(_){ }
+      });
+    }
+  }
+
+  async function onActivePeriodChanged(){
+    const pid = (typeof window.getActivePeriodId==='function') ? window.getActivePeriodId() : 'UNSCOPED';
+    await hydratePeriodKV(pid);
+    // trigger existing UI renderers if present
+    ['renderTable','calculateAll','renderDeductionsTable','renderReportTable'].forEach(fn=>{
+      try{ if (typeof window[fn]==='function') window[fn](); }catch(_){ }
+    });
+  }
+
+  document.addEventListener('DOMContentLoaded', ()=>{
+    const sel = document.getElementById('activePayrollSelect');
+    if (sel && !sel.__period_onchange){
+      sel.addEventListener('change', onActivePeriodChanged);
+      sel.__period_onchange = true;
+    }
+    onActivePeriodChanged();
+  });
+})();
+</script>
+<!-- === / PERIOD HYDRATE ON SWITCH v1 === -->
+
 </head>
 
 <!-- UI fixes: restore emojis and icons if text got corrupted by encoding -->
