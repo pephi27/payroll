@@ -7128,36 +7128,6 @@ tabs.tabPayroll.addEventListener('click', () => {
     else if (typeof calculatePayrollFromRecords === 'function') calculatePayrollFromRecords();
   } catch (e) {}
 });
-function backupData() {
-  const data = {};
-  for (let i = 0; i < localStorage.length; i++) {
-    const key = localStorage.key(i);
-    data[key] = localStorage.getItem(key);
-  }
-  const blob = new Blob([JSON.stringify(data, null, 2)], {type: 'application/json'});
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = 'payroll_backup.json';
-  a.click();
-}
-
-function restoreData(file) {
-  const reader = new FileReader();
-  reader.onload = e => {
-    try {
-      const data = JSON.parse(e.target.result);
-      for (const key in data) {
-        localStorage.setItem(key, data[key]);
-      }
-      alert('Data restored! Reloading...');
-      location.reload();
-    } catch (err) {
-      alert('Invalid backup file.');
-    }
-  };
-  reader.readAsText(file);
-}
 // Legacy backup UI removed - replaced by enhanced Backup & Restore controls.
   </script>
  
