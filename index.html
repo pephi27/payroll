@@ -5250,6 +5250,8 @@ function splitRecord(key) {
   renderResults();
 }
 function unsplitRecord(key) {
+  const btn = document.querySelector('button.btn-unsplit[data-key="' + key + '"]');
+  if (btn) btn.disabled = true;
   const [empId, date] = key.split('___');
   const halves = ['AM', 'PM', 'OT'];
   const dayKey = empId + '___' + date;
@@ -5258,7 +5260,7 @@ function unsplitRecord(key) {
     ? overridesProjects[dayKey]
     : (emp.projectId || '');
   const projIds = halves.map(h => {
-    const hk = empId + '___' + date + '___' + h;
+    const hk = dayKey + '___' + h;
     if (overridesProjects && Object.prototype.hasOwnProperty.call(overridesProjects, hk)) {
       return overridesProjects[hk];
     }
@@ -5268,37 +5270,32 @@ function unsplitRecord(key) {
   const allSame = projIds.every(pid => pid === firstProj);
   if (!allSame) {
     alert('Cannot unsplit because AM/PM/OT segments are assigned to different projects. Please align project selections to proceed. Adjust the project dropdowns for each segment.');
+    if (btn) btn.disabled = false;
     return;
   }
   halves.forEach(h => {
-    const hk = empId + '___' + date + '___' + h;
+    const hk = dayKey + '___' + h;
     if (overridesProjects && Object.prototype.hasOwnProperty.call(overridesProjects, hk)) {
       delete overridesProjects[hk];
     }
   });
+  // Consolidate project override at the day level
   overridesProjects[dayKey] = firstProj;
-  saveOverrides();
-  splits[key] = false;
-  saveSplits();
-
-  // Consolidate project overrides when unsplitting a record.  If AM/PM/OT
-  // segments all share the same project, migrate that assignment to the
-  // day-level key and drop any half-specific entries so future lookups use a
-  // single consolidated override.
-  const [empId, date] = key.split('___');
-  const dayKey = empId + '___' + date;
   const halfPrefix = dayKey + '___';
   const halfKeys = Object.keys(overridesProjects || {}).filter(k => k.startsWith(halfPrefix));
   if (halfKeys.length > 0) {
-    const firstProj = overridesProjects[halfKeys[0]];
-    const allSame = halfKeys.every(k => overridesProjects[k] === firstProj);
-    if (allSame) {
-      overridesProjects[dayKey] = firstProj;
+    const firstHalfProj = overridesProjects[halfKeys[0]];
+    const halvesAllSame = halfKeys.every(k => overridesProjects[k] === firstHalfProj);
+    if (halvesAllSame) {
+      overridesProjects[dayKey] = firstHalfProj;
       halfKeys.forEach(k => delete overridesProjects[k]);
     }
   }
   saveOverrides();
+  splits[key] = false;
+  saveSplits();
   renderResults();
+  if (btn) btn.disabled = false;
 }
 function saveOverrides(){
   localStorage.setItem(LS_OVERRIDES_SCHEDULES, JSON.stringify(overridesSchedules));
