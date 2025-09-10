@@ -1034,6 +1034,86 @@ window.addEventListener('load', dashReports);
 })();
 </script>
 <!-- === / PERIOD HELPERS v1 === -->
+<!-- === PERIOD SNAPSHOT & SWITCH v1 === -->
+<script>
+(function(){
+  const supa = () => (window.supabase || null);
+  const KV_TABLE = (window.SUPABASE_TABLE || 'kv_store');
+
+  async function cloneGlobalsToPeriod(pid){
+    const keys = (window.__PERIOD_BASE_KEYS || []);
+    for (const base of keys){
+      let val = null;
+      try{
+        const raw = localStorage.getItem(base);
+        val = raw ? JSON.parse(raw) : null;
+      }catch(_){ }
+      await window.writeKVScoped(base, val, pid);
+    }
+  }
+  async function hydratePeriodKV(pid){
+    if (!supa()) return; // local snapshots already in LS
+    try{
+      const likes = (window.__PERIOD_BASE_KEYS||[]).map(b => `key.like.${b}__${pid}`);
+      const { data } = await supa().from(KV_TABLE).select('key,value').or(likes.join(','));
+      (data||[]).forEach(row=>{
+        try{ localStorage.setItem(row.key, JSON.stringify(row.value)); }catch(_){ }
+      });
+    }catch(_){ }
+  }
+  function pickDates(){
+    let ws = document.getElementById('weekStart')?.value;
+    let we = document.getElementById('weekEnd')?.value;
+    if (!ws || !we){
+      const d = new Date(), pad=n=>String(n).padStart(2,'0');
+      const t = `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
+      const d2 = new Date(+d + 6*24*3600*1000);
+      const e = `${d2.getFullYear()}-${pad(d2.getMonth()+1)}-${pad(d2.getDate())}`;
+      ws = ws || t; we = we || e;
+    }
+    return { ws, we, pid: `${ws}_to_${we}` };
+  }
+
+  async function onNewPeriod(){
+    const { ws, we, pid } = pickDates();
+    await cloneGlobalsToPeriod(pid);
+    // register in history
+    let hist = [];
+    try{ hist = JSON.parse(localStorage.getItem('payroll_hist')||'[]'); }catch(_){ }
+    if (!hist.find(h=>h && h.periodId===pid)){
+      hist.push({ periodId:pid, start:ws, end:we, lockedAt:null, hash:null });
+      try{ localStorage.setItem('payroll_hist', JSON.stringify(hist)); }catch(_){ }
+      if (supa()){ try{ await supa().from(KV_TABLE).upsert({ key:'payroll_hist', value:hist }, { onConflict:'key' }); }catch(_){ } }
+    }
+    const sel = document.getElementById('activePayrollSelect');
+    if (sel){
+      if (!Array.from(sel.options).find(o=>o.value===pid)){ sel.add(new Option(pid, pid)); }
+      sel.value = pid; sel.dispatchEvent(new Event('change'));
+    }
+    alert('New period created: ' + pid);
+  }
+
+  async function onActivePeriodChanged(){
+    const pid = window.getActivePeriodId();
+    await hydratePeriodKV(pid);
+    // trigger existing renderers if present
+    ['renderTable','calculateAll','renderDeductionsTable','renderReportTable'].forEach(fn=>{
+      try{ if (typeof window[fn]==='function') window[fn](); }catch(_){ }
+    });
+  }
+
+  document.addEventListener('DOMContentLoaded', ()=>{
+    const btn = document.getElementById('newPayrollPeriod');
+    if (btn && !btn.__wired){ btn.addEventListener('click', onNewPeriod); btn.__wired = true; }
+    const sel = document.getElementById('activePayrollSelect');
+    if (sel && !sel.__wired){ sel.addEventListener('change', onActivePeriodChanged); sel.__wired = true; }
+    // initial hydrate on load (no-op if no periods yet)
+    onActivePeriodChanged();
+  });
+})();
+</script>
+<!-- === / PERIOD SNAPSHOT & SWITCH v1 === -->
+
 
 </head>
 
