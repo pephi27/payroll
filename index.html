@@ -7386,6 +7386,8 @@ tabs.tabPayroll.addEventListener('click', () => {
       tr.appendChild(td);
     });
   }
+  // Expose deletion utility globally so other scripts can invoke it
+  window.addDtrDeleteButtons = addDtrDeleteButtons;
   function patchRenderResults(){
     if(typeof renderResults !== 'function') return false;
     const original = renderResults;
