@@ -6479,7 +6479,15 @@ let otMins = 0;
       // Use schedule-defined midday boundaries when splitting through a bridge
       const middayStart = schedule.sch_am_end || '12:00';
       const middayEnd   = schedule.sch_pm_start || '13:00';
-      ['AM','PM','OT'].forEach(function(segment) {
+      const segments = ['AM','PM','OT'];
+      const disableUnsplit = (() => {
+        const pids = segments.map(seg => {
+          const hk = empId + '___' + date + '___' + seg;
+          return (overridesProjects && Object.prototype.hasOwnProperty.call(overridesProjects, hk)) ? overridesProjects[hk] : empProjId;
+        });
+        return !pids.every(pid => pid === pids[0]);
+      })();
+      segments.forEach(function(segment) {
         const halfKey = empId + '___' + date + '___' + segment;
         const schedIdHalf = (overridesSchedules && overridesSchedules[halfKey]) ? overridesSchedules[halfKey] : scheduleIdForEmp;
         const schedHalf = storedSchedules[schedIdHalf] || DEFAULT_SCHEDULE;
@@ -6557,7 +6565,7 @@ const trSeg = document.createElement('tr');
         htmlSeg += '<td>' + formatHours(__totSeg) + '</td>';
         // Action: provide an Unsplit button using a named handler.  All split
         // segments share the same splitKey.
-        htmlSeg += '<td><button type="button" class="btn-unsplit" data-key="' + splitKey + '" onclick="unsplitRecord(this.dataset.key)" title="Adjust project dropdowns for each segment so their projects match before unsplitting.">Unsplit</button></td>';
+        htmlSeg += '<td><button type="button" class="btn-unsplit" data-key="' + splitKey + '" onclick="unsplitRecord(this.dataset.key)"' + (disableUnsplit ? ' disabled title="Adjust project dropdowns for each segment so their projects match before unsplitting."' : '') + '>Unsplit</button></td>';
         trSeg.innerHTML = htmlSeg;
         // Add manual star indicator on split rows (AM/PM/OT) when any manual entry exists for this emp/date
         try {
