@@ -759,21 +759,6 @@ window.addEventListener('load', dashReports);
             display: flex;
             min-height: 100vh;
         }
-        .sidebar {
-            width: 280px;
-            background: rgba(255, 255, 255, 0.95);
-            backdrop-filter: blur(15px);
-            padding: 30px 0;
-            box-shadow: 4px 0 20px rgba(0, 0, 0, 0.1);
-            position: fixed;
-            height: 100vh;
-            overflow-y: auto;
-        }
-        .sidebar-header {
-            padding: 0 30px 30px;
-            border-bottom: 1px solid #e5e7eb;
-            margin-bottom: 20px;
-        }
         .logo {
             font-size: 24px;
             font-weight: 800;
@@ -833,8 +818,8 @@ window.addEventListener('load', dashReports);
         }
         .main-content {
             flex: 1;
-            margin-left: 280px;
-            padding: 30px;
+            margin-left: 0;
+            padding: 90px 30px 30px;
             /*
              * Permit horizontal scrolling within the main content area. The
              * original style hid any overflow on the x-axis, which meant
@@ -896,33 +881,8 @@ window.addEventListener('load', dashReports);
             margin-top: 15px;
             border-left: 4px solid #f59e0b;
         }
-        .mobile-menu-btn {
-            display: none;
-            position: fixed;
-            top: 20px;
-            left: 20px;
-            z-index: 1000;
-            background: rgba(255, 255, 255, 0.9);
-            border: none;
-            border-radius: 12px;
-            padding: 12px;
-            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
-            cursor: pointer;
-        }
         @media (max-width: 768px) {
-            .mobile-menu-btn {
-                display: block;
-            }
-            .sidebar {
-                transform: translateX(-100%);
-                transition: transform 0.3s ease;
-                z-index: 999;
-            }
-            .sidebar.active {
-                transform: translateX(0);
-            }
             .main-content {
-                margin-left: 0;
                 padding: 80px 20px 20px;
             }
             .date-range {
@@ -997,16 +957,6 @@ window.addEventListener('load', dashReports);
         background-color: #FFD700;
         color: #000;
       }
-      .sidebar {
-        display: none !important;
-      }
-      .mobile-menu-btn {
-        display: none !important;
-      }
-      .main-content {
-        margin-left: 0 !important;
-        padding-top: 90px;
-      }
 </style>
 </head>
 
@@ -1021,22 +971,6 @@ window.addEventListener('load', dashReports);
   #tabProjects .nav-icon::before  { content: "🚀"; font-size: 14px; }
   #tabPayroll .nav-icon::before   { content: "💰"; font-size: 14px; }
   #tabProjectTotals .nav-icon::before { content: "📈"; font-size: 14px; }
-  /* Sidebar duplicates */
-  #old-tabDashboard .nav-icon::before { content: "📊"; }
-  #old-tabMain .nav-icon::before      { content: "🕒"; }
-  #old-tabSchedule .nav-icon::before  { content: "🗓️"; }
-  #old-tabEmployees .nav-icon::before { content: "👥"; }
-  #old-tabProjects .nav-icon::before  { content: "🚀"; }
-  #old-tabPayroll .nav-icon::before   { content: "💰"; }
-  #old-tabProjectTotals .nav-icon::before { content: "📈"; }
-
-  /* Mobile menu icon */
-  .mobile-menu-btn span { font-size: 0; }
-  .mobile-menu-btn span::before { content: "☰"; font-size: 20px; }
-
-  /* Sidebar logo: render clean text */
-  .sidebar .logo { font-size: 0; }
-  .sidebar .logo::before { content: "💰 PayrollHub"; font-size: 24px; }
 
   /* Page title icon */
   .page-title > span:first-child { font-size: 0; } .page-title > span:first-child::before { content: "📊"; font-size: 32px; } .page-title > span.icon-emoji { font-size: 32px !important; } .page-title > span.icon-emoji::before { content: none !important; }
@@ -1137,11 +1071,7 @@ window.addEventListener('load', dashReports);
 })();
 </script>
 
-  <!-- Mobile menu button for smaller screens -->
-  <button class="mobile-menu-btn" onclick="toggleSidebar()">
-    <span style="font-size: 20px;">â˜°</span>
-  </button>
-  <!-- Begin App Container with Sidebar and Main Content -->
+  <!-- Begin App Container with Main Content -->
   <div class="app-container">
       <!-- Added top navigation header to adapt payroll UI -->
       <header class="header">
@@ -1160,59 +1090,6 @@ window.addEventListener('load', dashReports);
           </nav>
         </div>
       </header>
-    <aside class="sidebar" id="sidebar">
-      <div class="sidebar-header">
-        <div class="logo">
-          ðŸ’¼ PayrollHub
-        </div>
-      </div>
-      <nav>
-        <ul class="nav-menu">
-          <li class="nav-item">
-            <button class="nav-link tab-btn active" id="old-tabDashboard" data-page="dashboard">
-              <span class="nav-icon">ðŸ“Š</span>
-              Dashboard
-            </button>
-          </li>
-          <li class="nav-item">
-            <button class="nav-link tab-btn" id="old-tabMain" data-page="dtr">
-              <span class="nav-icon">ðŸ•</span>
-              DTR
-            </button>
-          </li>
-          <li class="nav-item">
-            <button class="nav-link tab-btn" id="old-tabSchedule" data-page="schedules">
-              <span class="nav-icon">ðŸ“…</span>
-              Schedules
-            </button>
-          </li>
-          <li class="nav-item">
-            <button class="nav-link tab-btn" id="old-tabEmployees" data-page="employees">
-              <span class="nav-icon">ðŸ‘¥</span>
-              Employees
-            </button>
-          </li>
-          <li class="nav-item">
-            <button class="nav-link tab-btn" id="old-tabProjects" data-page="projects">
-              <span class="nav-icon">ðŸš€</span>
-              Projects
-            </button>
-          </li>
-          <li class="nav-item">
-            <button class="nav-link tab-btn" id="old-tabPayroll" data-page="payroll">
-              <span class="nav-icon">ðŸ’°</span>
-              Payroll
-            </button>
-          </li>
-          <li class="nav-item">
-            <button class="nav-link tab-btn" id="old-tabProjectTotals" data-page="totals">
-              <span class="nav-icon">ðŸ“ˆ</span>
-              Reports
-            </button>
-          </li>
-        </ul>
-      </nav>
-    </aside>
     <main class="main-content">
       <div class="content-header">
         <h1 class="page-title">
@@ -1241,7 +1118,6 @@ window.addEventListener('load', dashReports);
 
       <!-- Begin original content -->
 
-<!-- Original tab buttons and header removed in favour of sidebar navigation -->
   <!-- Dashboard panel to host high-level metrics and payroll history -->
   <section class="panel active" id="panelDashboard">
    <h3>Dashboard</h3>
@@ -5457,17 +5333,6 @@ rows += `<tr class="totals">
       const active = document.querySelector('.nav-link.active');
       if (active) setTitleFrom(active);
     })();
-    function toggleSidebar(){
-        var sidebar = document.getElementById('sidebar');
-        if(sidebar) sidebar.classList.toggle('active');
-    }
-    document.addEventListener('click', function(e){
-        var sidebar = document.getElementById('sidebar');
-        var mobileBtn = document.querySelector('.mobile-menu-btn');
-        if(window.innerWidth <= 768 && sidebar && sidebar.classList.contains('active') && !sidebar.contains(e.target) && mobileBtn && !mobileBtn.contains(e.target)){
-            sidebar.classList.remove('active');
-        }
-    });
     </script>
     <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
   <script>
