@@ -1436,24 +1436,13 @@ window.addEventListener('load', dashReports);
       // Attendance records store (att_records_v2)
       if (typeof window.storedRecords === 'undefined') {
         /*
-         * Seed the attendance record array from localStorage so the app can
-         * operate offline.  Cloud data, when available, will overwrite this
-         * cache after startup via the DTR hydration logic.
+         * Always initialize the attendance record array as empty.  Unlike other
+         * data stores, DTR records are persisted in a dedicated Supabase table
+         * (`dtr_records`) and should not be bootstrapped from localStorage.  By
+         * starting with an empty array here, the application ensures that any
+         * locally cached data is ignored until the remote dataset is loaded.
          */
-        let initial = [];
-        try {
-          const key = typeof LS_RECORDS === 'string' ? LS_RECORDS : 'att_records_v2';
-          const raw = localStorage.getItem(key);
-          if (raw) {
-            const parsed = JSON.parse(raw);
-            if (Array.isArray(parsed)) initial = parsed;
-          }
-        } catch (_) { /* ignore */ }
-        if (!window.supabase) {
-          console.warn('Supabase unavailable; using cached DTR records');
-        }
-        window.storedRecords = initial;
-      }
+        window.storedRecords = window.storedRecords || []; }
       // Projects store (att_projects_v1)
       if (typeof window.storedProjects === 'undefined') {
         const supaVal = await fetchFromSupabase('att_projects_v1');
@@ -9879,19 +9868,7 @@ document.addEventListener('DOMContentLoaded', async function () {
       }
       if (typeof hideRemoteDtrAlert === 'function') hideRemoteDtrAlert();
     } else {
-      // No remote data â€“ fall back to locally cached records to keep the app
-      // functional offline.  Warn operators that we are using the cache.
-      let fallback = [];
-      try {
-        const raw = localStorage.getItem(LS_RECORDS);
-        if (raw) {
-          const parsed = JSON.parse(raw);
-          if (Array.isArray(parsed)) fallback = parsed;
-        }
-      } catch (e) {}
-      storedRecords = Array.isArray(fallback) ? fallback : [];
-      window.storedRecords = storedRecords;
-      console.warn('Supabase DTR data unavailable; using local cache');
+      // No remote data: clear any existing local dataset and inform the user. window. try { localStorage.removeItem(LS_RECORDS); } catch (e) {}
       if (typeof renderResults === 'function') {
         try { renderResults(); } catch (e) {}
       }
