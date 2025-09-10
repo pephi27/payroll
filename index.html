@@ -80,6 +80,7 @@ const TABLE = "kv_store"
 // `Storage.prototype.setItem` hook will ignore them and they will remain
 // strictly deviceâ€‘local.
 const KNOWN_KEYS = [
+  "att_employees_v2",
   "att_schedules_v2",
   "att_schedules_default",
   "att_projects_v1",
@@ -1417,43 +1418,12 @@ window.addEventListener('load', dashReports);
     try {
       // Employees store (att_employees_v2)
       if (typeof window.storedEmployees === 'undefined') {
-        let localVal = {};
-        let localTs = 0;
-        try { localVal = JSON.parse(localStorage.getItem('att_employees_v2') || '{}'); } catch {}
-        try { localTs = parseInt(localStorage.getItem('att_employees_v2_ts') || '0', 10) || 0; } catch {}
-
-        let remoteVal;
-        let remoteTs = 0;
-        const supa = window.supabase;
-        if (supa) {
-          try {
-            const { data, error } = await supa
-              .from('att_employees_v2')
-              .select('data, updated_at')
-              .eq('id','employees')
-              .maybeSingle();
-            if (!error && data) {
-              remoteVal = data.data || {};
-              remoteTs = data.updated_at ? Date.parse(data.updated_at) : 0;
-            }
-          } catch (e) { console.warn('Employees fetch failed', e); }
-        }
-
-        if (remoteVal && remoteTs > localTs) {
-          window.storedEmployees = remoteVal;
-          try {
-            localStorage.setItem('att_employees_v2', JSON.stringify(remoteVal));
-            localStorage.setItem('att_employees_v2_ts', String(remoteTs));
-          } catch(e){}
+        const supaVal = await fetchFromSupabase('att_employees_v2');
+        if (supaVal !== undefined) {
+          window.storedEmployees = supaVal;
         } else {
-          window.storedEmployees = localVal;
-          if (supa && localTs > remoteTs) {
-            try {
-              await supa
-                .from('att_employees_v2')
-                .upsert({ id: 'employees', data: localVal }, { onConflict: 'id' });
-            } catch (e) { console.warn('Employees sync failed', e); }
-          }
+          // fallback to localStorage
+          window.storedEmployees = JSON.parse(localStorage.getItem('att_employees_v2') || '{}');
         }
       }
       // Attendance records store (att_records_v2)
@@ -5653,7 +5623,6 @@ const LS_RECORDS = 'att_records_v2';
 const LS_SCHEDULES = 'att_schedules_v2';
 const LS_SCHEDULES_DEFAULT = 'att_schedules_default';
 const LS_EMPLOYEES = 'att_employees_v2';
-const LS_EMPLOYEES_TS = 'att_employees_v2_ts';
 const LS_PROJECTS = 'att_projects_v1';
 const LS_FILTER_PROJECT = 'att_filter_project_v1';
 const LS_OVERRIDES_SCHEDULES = 'att_overrides_schedules';
@@ -6071,20 +6040,7 @@ function resetRanges(){
 document.getElementById('saveRangesBtn').addEventListener('click', saveRangesFromUI);
 document.getElementById('resetRangesBtn').addEventListener('click', resetRanges);
 
-function saveEmployeesToLS(){
-  try {
-    localStorage.setItem(LS_EMPLOYEES, JSON.stringify(storedEmployees));
-    localStorage.setItem(LS_EMPLOYEES_TS, String(Date.now()));
-  } catch(e){}
-  const supa = window.supabase || (typeof supabase !== 'undefined' ? supabase : null);
-  if (supa) {
-    supa
-      .from('att_employees_v2')
-      .upsert({ id: 'employees', data: storedEmployees }, { onConflict: 'id' })
-      .then(({ error }) => { if (error) console.error('Supabase employees upsert error:', error.message); })
-      .catch(err => console.error('Supabase employees upsert failed', err));
-  }
-}
+function saveEmployeesToLS(){ localStorage.setItem(LS_EMPLOYEES, JSON.stringify(storedEmployees)); }
 function renderEmpScheduleDropdowns(){
   const sel = document.getElementById('empScheduleSelect'); if(!sel) return;
   sel.innerHTML = '';
