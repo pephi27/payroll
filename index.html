@@ -5586,30 +5586,36 @@ const LS_FILTER_PROJECT = 'att_filter_project_v1';
 const LS_OVERRIDES_SCHEDULES = 'att_overrides_schedules';
 const LS_OVERRIDES_PROJECTS = 'att_overrides_projects';
 
-let overridesSchedules = JSON.parse(localStorage.getItem(LS_OVERRIDES_SCHEDULES) || '{}');
-let overridesProjects = JSON.parse(localStorage.getItem(LS_OVERRIDES_PROJECTS) || '{}');
+let overridesSchedules = {};
+let overridesProjects = {};
+(async () => {
+  try {
+    overridesSchedules = await readKVScoped(LS_OVERRIDES_SCHEDULES, {});
+    overridesProjects = await readKVScoped(LS_OVERRIDES_PROJECTS, {});
+  } catch (e) { console.warn('Overrides read failed', e); }
+})();
 // Store per-date split flags for half-day display. When true for an empId+date,
 // the DTR entry is rendered as two separate rows (AM and PM) rather than a
 // single combined row. The split state is persisted in localStorage under
 // LS_SPLITS. Keys are formatted as empId + '___' + date.
 const LS_SPLITS = 'att_splits_v1';
 let splits = {};
-try {
-  splits = JSON.parse(localStorage.getItem(LS_SPLITS) || '{}');
-  Object.keys(splits).forEach(k => {
-    const v = splits[k];
-    if (v === true) {
-      splits[k] = { AM: true, PM: true, OT: true };
-    } else if (!v || typeof v !== 'object') {
-      delete splits[k];
-    }
-  });
-} catch (e) {
-  splits = {};
-}
-function saveSplits() {
+(async () => {
   try {
-    localStorage.setItem(LS_SPLITS, JSON.stringify(splits));
+    splits = await readKVScoped(LS_SPLITS, {});
+    Object.keys(splits).forEach(k => {
+      const v = splits[k];
+      if (v === true) {
+        splits[k] = { AM: true, PM: true, OT: true };
+      } else if (!v || typeof v !== 'object') {
+        delete splits[k];
+      }
+    });
+  } catch (e) { splits = {}; }
+})();
+async function saveSplits() {
+  try {
+    await writeKVScoped(LS_SPLITS, splits);
   } catch (e) {
     console.warn('Saving splits failed', e);
   }
@@ -5677,9 +5683,9 @@ function unsplitRecord(key) {
   saveSplits();
   renderResults();
 }
-function saveOverrides(){
-  localStorage.setItem(LS_OVERRIDES_SCHEDULES, JSON.stringify(overridesSchedules));
-  localStorage.setItem(LS_OVERRIDES_PROJECTS, JSON.stringify(overridesProjects));
+async function saveOverrides(){
+  await writeKVScoped(LS_OVERRIDES_SCHEDULES, overridesSchedules);
+  await writeKVScoped(LS_OVERRIDES_PROJECTS, overridesProjects);
 }
 
 
@@ -10202,47 +10208,12 @@ document.addEventListener('DOMContentLoaded', async function () {
 (function(){
   const LS_OVR_HOURS = 'att_overrides_hours_v1';
   let overridesHours = {};
-  try { overridesHours = JSON.parse(localStorage.getItem(LS_OVR_HOURS) || '{}') || {}; } catch(e){ overridesHours = {}; }
-  function saveOverridesHours(){ try { localStorage.setItem(LS_OVR_HOURS, JSON.stringify(overridesHours)); } catch(e){} }
-  // Persist overrides to Supabase (kv_store) and fetch initial remote data
-  function saveOverridesHoursRemote(){
-    try {
-      const supabaseClient = window.supabase;
-      const table = window.SUPABASE_TABLE;
-      if(!supabaseClient || !table) return;
-      // Upsert the entire overridesHours object as the value for LS_OVR_HOURS
-      supabaseClient
-        .from(table)
-        .upsert({ key: LS_OVR_HOURS, value: overridesHours }, { onConflict: 'key' })
-        .then(({ error }) => {
-          if (error) console.warn('Supabase upsert overridesHours error:', error);
-        });
-    } catch(e){ console.warn('Supabase upsert overridesHours failed', e); }
-  }
-  // Load remote overridesHours from Supabase on startup, merge/replace local state and apply to table
-  (async function loadRemoteOverrides(){
-    try {
-      const supabaseClient = window.supabase;
-      const table = window.SUPABASE_TABLE;
-      if(!supabaseClient || !table) return;
-      const { data, error } = await supabaseClient
-        .from(table)
-        .select('value')
-        .eq('key', LS_OVR_HOURS)
-        .maybeSingle();
-      if(!error && data && data.value){
-        // replace overridesHours with remote value
-        if (typeof data.value === 'object') {
-          overridesHours = data.value;
-          // persist to local storage for offline use
-          saveOverridesHours();
-          // apply remote values to table after they've loaded
-          applyOverridesToTable();
-          recomputeDtrSummaryFromTable();
-        }
-      }
-    } catch(e){ console.warn('Load remote overrides failed', e); }
+  (async () => {
+    try { overridesHours = await readKVScoped(LS_OVR_HOURS, {}); } catch (e) { overridesHours = {}; }
+    applyOverridesToTable();
+    recomputeDtrSummaryFromTable();
   })();
+  async function saveOverridesHours(){ await writeKVScoped(LS_OVR_HOURS, overridesHours); }
   // Subscribe to realtime updates for overridesHours in Supabase so edits on other devices reflect here
   try {
     const supabaseClient = window.supabase;
@@ -10258,7 +10229,7 @@ document.addEventListener('DOMContentLoaded', async function () {
               const newVal = payload.new && payload.new.value;
               if (newVal && typeof newVal === 'object') {
                 overridesHours = newVal;
-                saveOverridesHours();
+                writeKVScoped(LS_OVR_HOURS, overridesHours);
                 applyOverridesToTable();
                 recomputeDtrSummaryFromTable();
               }
@@ -10393,7 +10364,6 @@ document.addEventListener('DOMContentLoaded', async function () {
             if (overridesHours && Object.prototype.hasOwnProperty.call(overridesHours, k)) delete overridesHours[k];
           }
           saveOverridesHours();
-          if (typeof saveOverridesHoursRemote === 'function') saveOverridesHoursRemote();
           // Write cells, adding asterisk only to edited columns
           const ovNow = overridesHours && overridesHours[k];
           const starReg = ovNow ? (Object.prototype.hasOwnProperty.call(ovNow,'regEdited') ? !!ovNow.regEdited : true) : false;
