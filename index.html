@@ -5258,8 +5258,6 @@ function splitRecord(key) {
   renderResults();
 }
 function unsplitRecord(key) {
-  const btn = document.querySelector('button.btn-unsplit[data-key="' + key + '"]');
-  if (btn) btn.disabled = true;
   const [empId, date] = key.split('___');
   const halves = ['AM', 'PM', 'OT'];
   const dayKey = empId + '___' + date;
@@ -5277,29 +5275,22 @@ function unsplitRecord(key) {
     if (!projMap[pid]) projMap[pid] = [];
     projMap[pid].push(h);
   });
-  let mergedProject = null;
-  Object.keys(projMap).forEach(pid => {
-    const segs = projMap[pid];
-    if (segs.length > 1) {
-      mergedProject = pid;
-      segs.forEach(h => {
-        const hk = dayKey + '___' + h;
-        if (overridesProjects && Object.prototype.hasOwnProperty.call(overridesProjects, hk)) {
-          delete overridesProjects[hk];
-        }
-        if (splitState && splitState[h]) {
-          delete splitState[h];
-        }
-      });
-    }
-  });
-  if (mergedProject !== null) {
-    overridesProjects[dayKey] = mergedProject;
+  const mergePid = Object.keys(projMap).find(pid => projMap[pid].length > 1) || null;
+  if (mergePid !== null) {
+    overridesProjects[dayKey] = mergePid;
+    projMap[mergePid].forEach(h => {
+      const hk = dayKey + '___' + h;
+      if (overridesProjects && Object.prototype.hasOwnProperty.call(overridesProjects, hk)) {
+        delete overridesProjects[hk];
+      }
+      if (splitState && splitState[h]) {
+        delete splitState[h];
+      }
+    });
     Object.keys(projMap).forEach(pid => {
-      if (pid !== mergedProject) {
+      if (pid !== mergePid) {
         projMap[pid].forEach(h => {
-          const hk = dayKey + '___' + h;
-          overridesProjects[hk] = pid;
+          overridesProjects[dayKey + '___' + h] = pid;
           splitState[h] = true;
         });
       }
@@ -5313,7 +5304,6 @@ function unsplitRecord(key) {
   saveOverrides();
   saveSplits();
   renderResults();
-  if (btn) btn.disabled = false;
 }
 function saveOverrides(){
   localStorage.setItem(LS_OVERRIDES_SCHEDULES, JSON.stringify(overridesSchedules));
@@ -6589,7 +6579,7 @@ let otMins = 0;
         htmlSeg += '<td>' + formatHours(regDecSeg) + '</td><td>' + formatHours(otDecSeg) + '</td>';
         const __totSeg = ((parseFloat(regDecSeg)||0) + (parseFloat(otDecSeg)||0));
         htmlSeg += '<td>' + formatHours(__totSeg) + '</td>';
-        htmlSeg += '<td><button type="button" class="btn-unsplit" data-key="' + splitKey + '" onclick="unsplitRecord(this.dataset.key)">Unsplit</button></td>';
+        htmlSeg += '<td><button type="button" class="btn-unsplit" data-key="' + splitKey + '" onclick="unsplitRecord(this.dataset.key)" title="Only segments sharing a project will recombine">Unsplit</button></td>';
         trSeg.innerHTML = htmlSeg;
         try {
           if (typeof manualKeys !== 'undefined' && manualKeys.has(splitKey)) {
