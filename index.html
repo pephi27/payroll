@@ -10049,7 +10049,7 @@ document.addEventListener('DOMContentLoaded', async function () {
   function afterRender(){
     applyOverridesToTable();
     addDtrEditorButtons();
-    addDtrDeleteButtons();
+    if (typeof addDtrDeleteButtons === 'function') addDtrDeleteButtons();
     recomputeDtrSummaryFromTable();
   }
 
