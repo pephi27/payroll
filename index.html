@@ -5532,8 +5532,30 @@ function unsplitRecord(key) {
     alert('Segments must share a project before they can be recombined.');
     return;
   }
+
+  // Clean up segment-level overrides now that segments can be recombined
+  const unifiedProj = projSet.values().next().value;
+  for (const seg of segments) {
+    const segKey = key + '___' + seg;
+    if (overridesProjects && Object.prototype.hasOwnProperty.call(overridesProjects, segKey)) {
+      delete overridesProjects[segKey];
+    }
+    if (overridesSchedules && Object.prototype.hasOwnProperty.call(overridesSchedules, segKey)) {
+      delete overridesSchedules[segKey];
+    }
+  }
+
+  // Update day-level project override if it differs from the employee's default
+  const defaultProj = emp && emp.projectId ? emp.projectId : '';
+  if (String(unifiedProj || '') !== String(defaultProj || '')) {
+    overridesProjects[key] = unifiedProj;
+  } else {
+    delete overridesProjects[key];
+  }
+
   splits[key] = false;
   saveSplits();
+  saveOverrides();
   renderResults();
 }
 function saveOverrides(){
