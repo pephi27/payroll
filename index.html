@@ -5512,6 +5512,26 @@ function splitRecord(key) {
   renderResults();
 }
 function unsplitRecord(key) {
+  const [empId] = key.split('___');
+  const emp = (typeof storedEmployees !== 'undefined' && storedEmployees) ? storedEmployees[empId] : null;
+  let baseProj = emp && emp.projectId ? emp.projectId : '';
+  if (overridesProjects && Object.prototype.hasOwnProperty.call(overridesProjects, key)) {
+    baseProj = overridesProjects[key];
+  }
+  const segments = ['AM', 'PM', 'OT'];
+  const projSet = new Set();
+  for (const seg of segments) {
+    const segKey = key + '___' + seg;
+    let pid = baseProj;
+    if (overridesProjects && Object.prototype.hasOwnProperty.call(overridesProjects, segKey)) {
+      pid = overridesProjects[segKey];
+    }
+    projSet.add(String(pid || ''));
+  }
+  if (projSet.size > 1) {
+    alert('Segments must share a project before they can be recombined.');
+    return;
+  }
   splits[key] = false;
   saveSplits();
   renderResults();
