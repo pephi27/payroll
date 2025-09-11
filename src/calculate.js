@@ -23,9 +23,44 @@ function bridgeMidnight(inStr, outStr){
   return [inM, outM];
 }
 
-function __getNextDayFirstPunch(empId, dateStr){
-  // Placeholder; real implementation should fetch next day punches.
-  return null;
+// Fetch the first punch for `empId` on the day after `dateStr` from Supabase.
+// Environment variables SUPABASE_URL, SUPABASE_KEY and SUPABASE_PUNCH_TABLE
+// control the query.  Returns a time string like "05:30" or null on failure.
+async function defaultNextDayFirstPunch(empId, dateStr){
+  const url = process.env.SUPABASE_URL;
+  const key = process.env.SUPABASE_KEY || process.env.SUPABASE_ANON_KEY;
+  const table = process.env.SUPABASE_PUNCH_TABLE || 'punches';
+  if (!url || !key) return null;
+  try {
+    const d = new Date(dateStr);
+    if (Number.isNaN(d.getTime())) return null;
+    d.setDate(d.getDate() + 1);
+    const nextDate = d.toISOString().slice(0, 10);
+    const params = new URLSearchParams({
+      select: 'time',
+      emp_id: `eq.${empId}`,
+      date: `eq.${nextDate}`,
+      order: 'time',
+      limit: '1'
+    });
+    const resp = await fetch(`${url}/rest/v1/${table}?${params.toString()}`, {
+      headers: { apikey: key, Authorization: `Bearer ${key}` }
+    });
+    if (!resp.ok) return null;
+    const data = await resp.json();
+    if (!Array.isArray(data) || data.length === 0) return null;
+    const punch = data[0];
+    const t = punch.time || punch.punch_time || punch.in;
+    return (typeof t === 'string') ? t : null;
+  } catch (e) {
+    console.warn('__getNextDayFirstPunch failed', e);
+    return null;
+  }
+}
+
+let __getNextDayFirstPunch = defaultNextDayFirstPunch;
+function __setNextDayFirstPunchFetcher(fn){
+  __getNextDayFirstPunch = fn || defaultNextDayFirstPunch;
 }
 
 function isNextDay(inStr, outStr){
@@ -37,7 +72,7 @@ function isNextDay(inStr, outStr){
  * Returns normalized [in, out] strings respecting a 06:30 cutoff
  * or the first punch on the following day.
  */
-function adjustOvernight(inStr, outStr, empId, dateStr){
+async function adjustOvernight(inStr, outStr, empId, dateStr){
   if (!inStr || !outStr) return [inStr, outStr];
   if (isNaN(toMins(inStr)) || isNaN(toMins(outStr))) {
     throw new Error('Invalid time format');
@@ -45,13 +80,17 @@ function adjustOvernight(inStr, outStr, empId, dateStr){
   let [inM, outM] = bridgeMidnight(inStr, outStr);
   if (isNextDay(inStr, outStr)) {
     const cutoff = 6 * 60 + 30; // 06:30 in minutes
-    const nextPunchStr = __getNextDayFirstPunch(empId, dateStr);
     let limitM = cutoff;
-    if (typeof nextPunchStr === 'string') {
-      const npM = toMins(nextPunchStr);
-      if (!isNaN(npM)) {
-        limitM = Math.min(npM, cutoff);
+    try {
+      const nextPunchStr = await __getNextDayFirstPunch(empId, dateStr);
+      if (typeof nextPunchStr === 'string') {
+        const npM = toMins(nextPunchStr);
+        if (!isNaN(npM)) {
+          limitM = Math.min(npM, cutoff);
+        }
       }
+    } catch {
+      // ignore fetch errors, fall back to cutoff
     }
     const maxOut = 1440 + limitM;
     if (outM > maxOut) outM = maxOut;
@@ -59,4 +98,4 @@ function adjustOvernight(inStr, outStr, empId, dateStr){
   return [minsToStr(inM), minsToStr(outM)];
 }
 
-module.exports = { adjustOvernight, toMins };
+module.exports = { adjustOvernight, toMins, __setNextDayFirstPunchFetcher };
