@@ -6874,10 +6874,16 @@ let otMins = 0;
         const cell = (v) => v ? '<td>' + __fmt12Clock(v) + '</td>' : '<td class="missing">-</td>';
         const regDec = minsToDecimal(merged.regMins);
         const otDec = minsToDecimal(merged.otMins);
+        const otOutNextDay = merged.otNextDay || (
+          merged.otOut && (
+            (merged.otIn && toMins(merged.otOut) < toMins(merged.otIn)) ||
+            (!merged.otIn && merged.pmOut && toMins(merged.otOut) < toMins(merged.pmOut))
+          )
+        );
         tr.innerHTML = '<td>'+empId+'</td><td>'+name+'</td><td>'+projectName+'</td><td>'+scheduleName+'</td><td>'+date+'</td>' +
           cell(merged.amIn) + cell(merged.amOut) + cell(merged.pmIn) + cell(merged.pmOut) +
             (merged.otIn ? '<td>'+__fmt12Clock(merged.otIn)+'</td>' : '<td class="missing">-</td>') +
-            (merged.otOut ? '<td>'+__fmt12Clock(merged.otOut)+(merged.otNextDay?' (next day)':'')+'</td>' : '<td class="missing">-</td>') +
+            (merged.otOut ? '<td data-raw="'+merged.otOut+'">'+__fmt12Clock(merged.otOut)+(otOutNextDay?' (+1d)':'')+'</td>' : '<td class="missing">-</td>') +
             '<td>'+formatHours(regDec)+'</td><td>'+formatHours(otDec)+'</td><td>'+formatHours(minsToDecimal(merged.regMins + merged.otMins))+'</td>' +
           '<td><button type="button" class="btn-split" data-key="'+splitKey+'" onclick="splitRecord(this.dataset.key)">Split</button></td>';
         if(overridesSchedules[overrideKey] || overridesProjects[overrideKeyProj] !== undefined){ tr.style.backgroundColor='#fff3cd'; }
