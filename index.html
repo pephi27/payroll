@@ -7201,7 +7201,6 @@ const otInActual = pickEarliest({start: schedule.rng_ot_in_start, end: schedule.
       // Saturday override: sum minutes worked after the Saturday end for
       // every recorded segment.  Each segment contributes its own OT
       // minutes without regard to explicit OT punches.
-      let extraOTMins = 0;
       const satEndM = toMins(__satEnd);
       for (let i = 0; i + 1 < times.length; i += 2) {
         const inStr  = times[i];
@@ -7210,10 +7209,9 @@ const otInActual = pickEarliest({start: schedule.rng_ot_in_start, end: schedule.
         const outM = toMins(outStr);
         const startM = Math.max(inM, satEndM);
         if (outM > startM) {
-          extraOTMins += (outM - startM);
+          dayOTMins += (outM - startM);
         }
       }
-      dayOTMins = extraOTMins;
     } else {
       // Non-Saturday: prefer explicit OT punches when they exist
       if (otInActual && otOutActual && toMins(otInActual) > pmOutRefMins) {
