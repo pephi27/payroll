@@ -1,7 +1,11 @@
 // Utility helpers
 function toMins(str){
   if (typeof str !== 'string') return NaN;
-  const [h,m] = str.split(':').map(Number);
+  const match = /^([0-9]{1,2}):([0-9]{2})$/.exec(str);
+  if (!match) return NaN;
+  const h = Number(match[1]);
+  const m = Number(match[2]);
+  if (h < 0 || h > 23 || m < 0 || m > 59) return NaN;
   return h*60 + m;
 }
 function minsToStr(mins){
@@ -35,6 +39,9 @@ function isNextDay(inStr, outStr){
  */
 function adjustOvernight(inStr, outStr, empId, dateStr){
   if (!inStr || !outStr) return [inStr, outStr];
+  if (isNaN(toMins(inStr)) || isNaN(toMins(outStr))) {
+    throw new Error('Invalid time format');
+  }
   let [inM, outM] = bridgeMidnight(inStr, outStr);
   if (isNextDay(inStr, outStr)) {
     const cutoff = 6 * 60 + 30; // 06:30 in minutes
@@ -52,4 +59,4 @@ function adjustOvernight(inStr, outStr, empId, dateStr){
   return [minsToStr(inM), minsToStr(outM)];
 }
 
-module.exports = { adjustOvernight };
+module.exports = { adjustOvernight, toMins };
