@@ -2,12 +2,12 @@
   "name": "payroll",
   "version": "1.0.0",
   "description": "This project is a browser-based payroll and attendance tool.",
-  "main": "config.js",
   "directories": {
     "test": "test"
   },
   "scripts": {
-    "test": "jest"
+    "test": "jest",
+    "build:config": "node scripts/generate-config.js"
   },
   "keywords": [],
   "author": "",
