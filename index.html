@@ -6657,6 +6657,10 @@ try {
       const firstIn  = amInActual || pmInActual || null;
       const lastOut  = pmOutActual || amOutActual || null;
       totalMins = clampSeg(firstIn, lastOut, __satStart, __satEnd);
+      // If work spills past midnight with no same-day OUT, assume work until the Saturday end
+      if (__otOutNextDay && totalMins === 0 && firstIn) {
+        totalMins = clampSeg(firstIn, __satEnd, __satStart, __satEnd);
+      }
     } else {
       // Weekdays: compute AM and PM independently; add them
       const hasBridge = !!(amInActual && !amOutActual && !pmInActual && pmOutActual);
@@ -6673,30 +6677,28 @@ try {
       }
     }
 
-    const totalRegularDecimal = minsToDecimal(totalMins);
+const totalRegularDecimal = minsToDecimal(totalMins);
 let otMins = 0;
-    if(otInCalc && otOutCalc){
-      const otStartClamp = Math.max(toMins(otInCalc), toMins(__isSaturday ? (__satEnd || rangesForEmp.otIn.start) : rangesForEmp.otIn.start));
-      const otEndClamp   = Math.min(toMins(otOutCalc) + (__otOutNextDay ? 1440 : 0), toMins(__isSaturday ? '23:59' : (rangesForEmp.otOut.end || rangesForEmp.otIn.end)) + (__otOutNextDay ? 1440 : 0));
-      if(otEndClamp > otStartClamp) otMins = otEndClamp - otStartClamp;
-    }
-    
-    // Saturday definitive OT computation: last OUT beyond Saturday end is OT
-    try {
-      if (__isSaturday && __satEnd) {
-        const lastOut = (pmOutActual || amOutActual || null);
-        if (lastOut) {
-          const satEndM = toMins(__satEnd);
-          const satStartClamp = Math.max(satEndM, toMins(schedule.rng_sat_ot_start || __satEnd || DEFAULT_RANGES.rng_sat_ot_start));
-          const satEndClamp   = toMins(schedule.rng_sat_ot_end || DEFAULT_RANGES.rng_sat_ot_end);
-          const lastOutM = toMins(lastOut);
-          const startM = satStartClamp;
-          const endM   = Math.min(lastOutM, satEndClamp);
-          const diff = endM - startM;
-          if (diff > 0) otMins = diff;
-        }
+    if (__isSaturday && __satEnd) {
+      const satEndM = toMins(__satEnd);
+      let outM = null;
+      if (otOutCalc) {
+        outM = toMins(otOutCalc) + (__otOutNextDay ? 1440 : 0);
+      } else {
+        const lastOut = pmOutActual || amOutActual || null;
+        if (lastOut) outM = toMins(lastOut);
       }
-    } catch(e){ console.warn('Saturday OT direct compute failed', e); }
+      const cutoff = toMins('06:30') + 1440;
+      if (outM !== null && outM > satEndM) {
+        otMins = Math.min(outM, cutoff) - satEndM;
+      }
+    } else {
+      if(otInCalc && otOutCalc){
+        const otStartClamp = Math.max(toMins(otInCalc), toMins(rangesForEmp.otIn.start));
+        const otEndClamp   = Math.min(toMins(otOutCalc) + (__otOutNextDay ? 1440 : 0), toMins(rangesForEmp.otOut.end || rangesForEmp.otIn.end) + (__otOutNextDay ? 1440 : 0));
+        if(otEndClamp > otStartClamp) otMins = otEndClamp - otStartClamp;
+      }
+    }
 
     // Fallback OT computation for nonâ€‘Saturday days.
     // When there are no explicit OT punches (or the OT IN occurs before
@@ -7227,6 +7229,14 @@ const otInActual = pickEarliest({start: schedule.rng_ot_in_start, end: schedule.
           segMins(synthPmIn,  pmOutActual, schedule.sch_pm_start, schedule.sch_pm_end);
       }
     }
+    if (__isSaturday && __satEnd && __otOutNextDay && regMins === 0) {
+      const firstIn = amInActual || pmInActual || null;
+      if (firstIn) {
+        const satEndM = toMins(__satEnd);
+        const firstInM = toMins(firstIn);
+        if (satEndM > firstInM) regMins = satEndM - firstInM;
+      }
+    }
     totalsReg[empId] += minsToDec(regMins);
 
     /*
@@ -7257,8 +7267,7 @@ const otInActual = pickEarliest({start: schedule.rng_ot_in_start, end: schedule.
     let dayOTMins = 0;
     if (__isSaturday) {
       // Saturday override: sum minutes worked after the Saturday end for
-      // every recorded segment.  Each segment contributes its own OT
-      // minutes without regard to explicit OT punches.
+      // every recorded segment. Include next-day punches up to 06:30.
       let extraOTMins = 0;
       const satEndM = toMins(__satEnd);
       for (let i = 0; i < times.length; i += 2) {
@@ -7271,6 +7280,18 @@ const otInActual = pickEarliest({start: schedule.rng_ot_in_start, end: schedule.
         if (outM > startM) {
           extraOTMins += (outM - startM);
         }
+      }
+      if (__otOutNextDay && otOutActual) {
+        let startM = satEndM;
+        if (times.length % 2 === 1) {
+          const lastIn = times[times.length - 1];
+          if (lastIn) {
+            const lastInM = toMins(lastIn);
+            if (lastInM > startM) startM = lastInM;
+          }
+        }
+        const endM = Math.min(toMins(otOutActual) + 1440, toMins('06:30') + 1440);
+        if (endM > startM) extraOTMins += (endM - startM);
       }
       dayOTMins = extraOTMins;
     } else {
