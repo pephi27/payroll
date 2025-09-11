@@ -6119,12 +6119,13 @@ document.getElementById('fileInput').addEventListener('change', (ev)=>{
       try {
         const content = String(e.target.result || '');
         const lines = content.split(/\r?\n/);
-// === MIN PATCH: Only keep records inside the current payroll period ===
+// === MIN PATCH: Only keep records inside the current payroll period (From/To) ===
 let __from = '', __to = '';
 try {
-  const range = (typeof getCurrentPayrollRange === 'function') ? getCurrentPayrollRange() : { start: '', end: '' };
-  __from = range.start || '';
-  __to   = range.end   || '';
+  const fEl = document.getElementById('dtrDateFrom');
+  const tEl = document.getElementById('dtrDateTo');
+  __from = (fEl && fEl.value) ? fEl.value : (localStorage.getItem('dtr_filter_from') || '');
+  __to   = (tEl && tEl.value) ? tEl.value : (localStorage.getItem('dtr_filter_to')   || '');
 } catch(_) {}
 function __inRange(d){
   if (!d) return false;
@@ -9113,25 +9114,6 @@ function loadSaved(){
     const n = v == null ? -1 : parseInt(v, 10);
     return Number.isFinite(n) ? n : -1;
   }
-
-  function getCurrentPayrollRange() {
-    try {
-      const idx = getActiveIndex();
-      const hist = Array.isArray(window.payrollHistory) ? window.payrollHistory : loadHistory();
-      const snap = hist && Number.isFinite(idx) ? hist[idx] : null;
-      if (snap && snap.startDate && snap.endDate) {
-        return { start: snap.startDate, end: snap.endDate };
-      }
-      const sel = document.getElementById('activePayrollSelect');
-      const altIdx = sel ? parseInt(sel.value, 10) : NaN;
-      if (Number.isFinite(altIdx) && hist[altIdx]) {
-        const alt = hist[altIdx];
-        return { start: alt.startDate || '', end: alt.endDate || '' };
-      }
-    } catch (_) {}
-    return { start: '', end: '' };
-  }
-  window.getCurrentPayrollRange = getCurrentPayrollRange;
 
   function toIsoDate(s){
   if(!s) return '';
