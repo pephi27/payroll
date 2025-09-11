@@ -54,7 +54,6 @@
     }
   })();
 </script>
-<script src="config.js"></script>
 <script type="module">
 // Minimal, no-login cloud persistence by mirroring localStorage to Supabase.
 // 1) Create a table in Supabase named: kv_store
@@ -71,14 +70,14 @@
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js"
 
-const SUPABASE_URL = window.SUPABASE_URL;
-const SUPABASE_KEY = window.SUPABASE_KEY || window.SUPABASE_ANON_KEY;
+const SUPABASE_URL = window.SUPABASE_URL || "https://qzkzugzfpegozpiqutdv.supabase.co"
+const SUPABASE_KEY = window.SUPABASE_KEY || "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InF6a3p1Z3pmcGVnb3pwaXF1dGR2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTU4MTc5MDMsImV4cCI6MjA3MTM5MzkwM30.mdFYuFjbRfsILWPkQQmVUCDR7dGqEo-mdPZ6iwolvGk"
 const TABLE = "kv_store"
 // List of localStorage keys that should be mirrored to Supabase.  If you add
 // new keys anywhere in the application that you want to persist across
 // devices, add them here as well.  Without inclusion in this list the
 // `Storage.prototype.setItem` hook will ignore them and they will remain
-// strictly device-local.
+// strictly deviceâ€‘local.
 const KNOWN_KEYS = [
   "att_employees_v2",
   "att_schedules_v2",
@@ -118,16 +117,11 @@ const KNOWN_KEYS = [
   ,"att_overrides_hours_v1"
 ]
 
-let supabase = null;
-if (SUPABASE_URL && SUPABASE_KEY) {
-  supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
-} else {
-  console.warn('Supabase URL or key not provided; cloud sync disabled.');
-}
+const supabase = createClient(SUPABASE_URL, SUPABASE_KEY)
 
 // Expose the Supabase client on the global window so that other
-// non-module scripts (e.g. the boot guard) can access it without
-// re-importing the library.  Also expose the table name used for
+// nonâ€‘module scripts (e.g. the boot guard) can access it without
+// reâ€‘importing the library.  Also expose the table name used for
 // key/value storage.  Without this, any attempt to read from
 // Supabase outside of this module would require a duplicate client
 // instantiation, and due to the asynchronous execution order of
@@ -565,7 +559,7 @@ window.addEventListener('load', dashReports);
 
   /* Hide individual deduction columns in Payroll table (show only Total Deductions).
      After adding the Adjustment Hrs column, the indices shift by one.
-     Hide Pag-IBIG to Wed Vale columns (cols 10â€“16). */
+     Hide Pagâ€‘IBIG to Wed Vale columns (cols 10â€“16). */
   #payrollTab #payrollTable th:nth-child(11),
   #payrollTab #payrollTable td:nth-child(11),
   #payrollTab #payrollTable th:nth-child(12),
@@ -2061,10 +2055,10 @@ window.addEventListener('load', dashReports);
       </i>
       and use the Employee Share.
      </div>
-    <!-- Editable Pag-IBIG and PhilHealth tables (employee rates).  Each table allows
+    <!-- Editable Pagâ€‘IBIG and PhilHealth tables (employee rates).  Each table allows
          defining income ranges and the corresponding employee rate (as a decimal).
          The rate is applied to regular pay to compute the contribution. -->
-    <h4>Pag-IBIG Table (Employee Rate)</h4>
+    <h4>Pagâ€‘IBIG Table (Employee Rate)</h4>
     <div class="controls">
       <button id="addPagibigRow">
        Add Row
@@ -2247,10 +2241,10 @@ const LS_VALE='payroll_vale', LS_VALE_WED='payroll_vale_wed';
 const LS_ADJ='payroll_adjustments';
 // LocalStorage key for per-employee adjustment hours (OT adjustments)
 const LS_ADJ_HRS='payroll_adjustment_hours';
-// LocalStorage keys for dynamic Pag-IBIG and PhilHealth contribution rates (employee share)
+// LocalStorage keys for dynamic Pagâ€‘IBIG and PhilHealth contribution rates (employee share)
 const LS_PAGIBIG_RATE='payroll_pagibig_rate';
 const LS_PHILHEALTH_RATE='payroll_philhealth_rate';
-// LocalStorage keys for dynamic Pag-IBIG and PhilHealth contribution tables
+// LocalStorage keys for dynamic Pagâ€‘IBIG and PhilHealth contribution tables
 const LS_PAGIBIG_TABLE='payroll_pagibig_table';
 const LS_PHILHEALTH_TABLE='payroll_philhealth_table';
 // LocalStorage key for per-employee Bantay allowance
@@ -2272,7 +2266,7 @@ let bantayProj = {};
 // LocalStorage key for per-employee contribution flags (Pag-IBIG, PhilHealth, SSS)
 const LS_CONTRIB_FLAGS='payroll_contrib_flags';
 
-// Current employee contribution rates (decimal form).  Defaults: 0.02 (2%) for Pag-IBIG and 0.025 (2.5%) for PhilHealth.
+// Current employee contribution rates (decimal form).  Defaults: 0.02 (2%) for Pagâ€‘IBIG and 0.025 (2.5%) for PhilHealth.
 let pagibigRate = parseFloat(localStorage.getItem(LS_PAGIBIG_RATE) ?? '0.02');
 if (isNaN(pagibigRate)) pagibigRate = 0.02;
 let philhealthRate = parseFloat(localStorage.getItem(LS_PHILHEALTH_RATE) ?? '0.025');
@@ -2354,7 +2348,7 @@ function ensureSeededSSS() {
   }
 }
 ensureSeededSSS();
-// Seed the Pag-IBIG and PhilHealth tables with default rates if empty.  These tables
+// Seed the Pagâ€‘IBIG and PhilHealth tables with default rates if empty.  These tables
 // define income ranges and the corresponding employee contribution rate (decimal).
 const PAGIBIG_SEED = [
   [0, 100000000, 0.02]
@@ -2429,7 +2423,7 @@ let cashDed  = JSON.parse(localStorage.getItem(LS_CASH_DED)  || '{}');
 let cashBal  = JSON.parse(localStorage.getItem(LS_CASH_BAL)  || '{}');
 // Per-employee payroll adjustments (positive or negative amounts)
 let adjustments = JSON.parse(localStorage.getItem(LS_ADJ) || '{}');
-// Per-employee adjustment hours (OT adjustments).  These values represent additional
+// Perâ€‘employee adjustment hours (OT adjustments).  These values represent additional
 // overtime hours that should be added to the regular OT hours when computing OT pay.
 let adjHrs = JSON.parse(localStorage.getItem(LS_ADJ_HRS) || '{}');
 
@@ -2513,7 +2507,7 @@ const lSSS = Number(loanSSS[emp.id] ?? 0);
     const v = Number(vale[emp.id] ?? 0);
     const vW = Number(valeWed[emp.id] ?? 0);
     const regPay = +(rH * rate).toFixed(2);
-    // Use dynamic contribution tables for Pag-IBIG and PhilHealth.  Determine the
+    // Use dynamic contribution tables for Pagâ€‘IBIG and PhilHealth.  Determine the
     // applicable rate based on monthly income and multiply by regular pay.
     const monthly = rate * 8 * 24;
     const piRate = pagibigRateByMonthly(monthly);
@@ -3036,8 +3030,8 @@ document.getElementById('importSss').addEventListener('change', ev=>{
   reader.readAsText(f);
 });
 
-// === Begin Pag-IBIG and PhilHealth Table Management ===
-// Pag-IBIG dynamic table helpers.  Defines helper functions for retrieving and
+// === Begin Pagâ€‘IBIG and PhilHealth Table Management ===
+// Pagâ€‘IBIG dynamic table helpers.  Defines helper functions for retrieving and
 // setting the table in localStorage, rendering the table in the UI, and applying
 // the employee share rate based on income ranges.
 function getPagibigTable(){
@@ -3142,7 +3136,7 @@ function renderPhilhealthTable(){
     });
   });
 }
-// Click handler for adding, resetting and clearing rows in Pag-IBIG and PhilHealth tables.
+// Click handler for adding, resetting and clearing rows in Pagâ€‘IBIG and PhilHealth tables.
 document.addEventListener('click', (e) => {
   if (e.target && e.target.id === 'addPagibigRow') {
     const cur = getPagibigTable();
@@ -3190,7 +3184,7 @@ document.addEventListener('click', (e) => {
     }
   }
 });
-// === End Pag-IBIG and PhilHealth Table Management ===
+// === End Pagâ€‘IBIG and PhilHealth Table Management ===
 function sssShareByMonthly(monthly){
   const rows = getSssTable();
   if(rows.length===0) return 0;
@@ -3200,8 +3194,8 @@ function sssShareByMonthly(monthly){
   return Number(rows[rows.length-1].employee)||0;
 }
 
-// Determine Pag-IBIG contribution rate based on the monthly income.  Uses the
-// editable Pag-IBIG table; returns a decimal rate (e.g. 0.02).  If no matching
+// Determine Pagâ€‘IBIG contribution rate based on the monthly income.  Uses the
+// editable Pagâ€‘IBIG table; returns a decimal rate (e.g. 0.02).  If no matching
 // range is found, returns the last row's rate.
 function pagibigRateByMonthly(monthly){
   const rows = getPagibigTable();
@@ -3383,7 +3377,7 @@ function renderAdjustmentsFoot() {
   }
 }
 
-// Initialize the dynamic Pag-IBIG and PhilHealth rate input fields.  This function
+// Initialize the dynamic Pagâ€‘IBIG and PhilHealth rate input fields.  This function
 // sets their values from the current global variables and attaches input
 // listeners to persist changes to localStorage and recalculate payroll.
 function initializeContributionRates() {
@@ -3702,10 +3696,10 @@ document.addEventListener('DOMContentLoaded', () => {
       const weEl = document.getElementById('weekEnd');
       if (wsEl) wsEl.value = snap.startDate || '';
       if (weEl) weEl.value = snap.endDate || '';
-        try {
-          if (typeof calculatePayrollFromResultsTable === 'function') calculatePayrollFromResultsTable();
-          else if (typeof calculatePayrollFromRecords === 'function') await calculatePayrollFromRecords();
-        } catch (err) {}
+      try {
+        if (typeof calculatePayrollFromResultsTable === 'function') calculatePayrollFromResultsTable();
+        else if (typeof calculatePayrollFromRecords === 'function') calculatePayrollFromRecords();
+      } catch (err) {}
       // Show the payroll panel
       try { showTab('payroll'); } catch (err) {}
     } else if (target.classList.contains('lockActive')) {
@@ -3864,10 +3858,10 @@ document.addEventListener('DOMContentLoaded', () => {
       // Capture DTR records for this employee within the selected date range. Stores an array of {date, times}
       try {
         /*
-         * Use the in-memory storedRecords array (populated from Supabase) to
+         * Use the inâ€‘memory storedRecords array (populated from Supabase) to
          * derive attendance for payroll exports.  Avoid reading from
          * localStorage so that stale browser caches do not leak into
-         * cross-device exports.  The records array is filtered by the
+         * crossâ€‘device exports.  The records array is filtered by the
          * current employee and date range, grouped by date, and then
          * converted into { date, times } objects for export.
          */
@@ -4155,7 +4149,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     // Prevent duplicate snapshots for the same date range. If any snapshot (locked or active)
     // already exists with this start/end, alert the user and skip creation. This avoids
-    // double-entry payroll for the same period.
+    // doubleâ€‘entry payroll for the same period.
     const exists = Array.isArray(payrollHistory) && payrollHistory.some(snap =>
       snap && snap.startDate === start && snap.endDate === end);
     if (exists) {
@@ -4611,7 +4605,7 @@ document.addEventListener('DOMContentLoaded', () => {
       });
     } else {
       // Fallback: derive from live attendance records within the snapshot date range
-      // Use the in-memory storedRecords array rather than localStorage.  If no
+      // Use the inâ€‘memory storedRecords array rather than localStorage.  If no
       // remote data exists the array will be empty, which is preferable to
       // reading stale cache entries.
       let records = Array.isArray(storedRecords) ? storedRecords : [];
@@ -6252,7 +6246,7 @@ document.getElementById('fileInput').addEventListener('change', (ev)=>{
   inputEl.disabled = true;
 
   Array.from(files).forEach(file=>{
-    // Upload the raw .DAT/.TXT file to Supabase for backup/cross-device sync.
+    // Upload the raw .DAT/.TXT file to Supabase for backup/crossâ€‘device sync.
     try {
       if (typeof uploadDtrFileToCloud === 'function') {
         uploadDtrFileToCloud(file);
@@ -6293,7 +6287,7 @@ function __inRange(d){
         try { localStorage.setItem(LS_RECORDS, JSON.stringify(storedRecords)); } catch(e){}
         // Refresh the DTR grid
         if (typeof renderResults === 'function') renderResults();
-        // Persist the records to Supabase for cross-device sync
+        // Persist the records to Supabase for crossâ€‘device sync
         try {
           if (typeof saveDtrToCloud === 'function') saveDtrToCloud(storedRecords);
         } catch (e) {
@@ -6336,7 +6330,7 @@ function __inRange(d){
 document.getElementById('clearData').addEventListener('click', ()=>{
   if(!confirm('Clear all saved attendance data?')) return; // Remove the locally cached attendance data
   localStorage.removeItem(LS_RECORDS);
-  // Persist the cleared dataset to Supabase for cross-device sync
+  // Persist the cleared dataset to Supabase for crossâ€‘device sync
   try {
     if (typeof saveDtrToCloud === 'function') saveDtrToCloud(storedRecords);
   } catch (e) {
@@ -6685,10 +6679,10 @@ let otMins = 0;
       }
     } catch(e){ console.warn('Saturday OT direct compute failed', e); }
 
-    // Fallback OT computation for non-Saturday days.
+    // Fallback OT computation for nonâ€‘Saturday days.
     // When there are no explicit OT punches (or the OT IN occurs before
     // the end of the regular shift), treat any minutes worked beyond
-    // the scheduled PM end as overtime. Only the final clock-out time
+    // the scheduled PM end as overtime. Only the final clockâ€‘out time
     // is considered to avoid counting intermediate segments.
     try {
       if (!__isSaturday) {
@@ -6710,7 +6704,7 @@ let otMins = 0;
           }
         }
       }
-    } catch(err) { console.warn('Non-Saturday OT fallback failed', err); }
+    } catch(err) { console.warn('Nonâ€‘Saturday OT fallback failed', err); }
 
     const otDecimal = minsToDecimal(otMins);
 
@@ -7065,7 +7059,7 @@ document.addEventListener('DOMContentLoaded', function () {
 });
   </script>
   <script>
-async function computeHoursForDateRange(startDate, endDate) {
+function computeHoursForDateRange(startDate, endDate) {
   const totalsReg = {};
   const totalsOT = {};
   Object.keys(storedEmployees).forEach(id => {
@@ -7187,18 +7181,18 @@ const otInActual = pickEarliest({start: schedule.rng_ot_in_start, end: schedule.
      *      OT total.  The resulting OT minutes are added to the employee's
      *      running total.
      *
-     *   2) Non-Saturday with explicit OT punches: When OT In and OT Out
+     *   2) Nonâ€‘Saturday with explicit OT punches: When OT In and OT Out
      *      times are recorded and the OT In occurs after the normal
      *      scheduled end (pmOutRefMins), compute OT as the difference
      *      between OT Out and OT In.  This respects the configured OT
      *      ranges and leaves any early departures uncounted.
      *
-     *   3) Non-Saturday without explicit OT punches: When no valid OT
-     *      punches exist but there is a single end-of-day clock-out, treat
+     *   3) Nonâ€‘Saturday without explicit OT punches: When no valid OT
+     *      punches exist but there is a single endâ€‘ofâ€‘day clockâ€‘out, treat
      *      any minutes worked after the scheduled end as OT.  This
-     *      allows after-hours work to be captured without requiring
+     *      allows afterâ€‘hours work to be captured without requiring
      *      separate OT punches.  If multiple segments exist for the day
-     *      (more than one in/out pair), only the final clock-out is
+     *      (more than one in/out pair), only the final clockâ€‘out is
      *      considered for the fallback; intermediate segments are
      *      presumed to be normal work/breaks and do not contribute to OT.
      */
@@ -7207,42 +7201,41 @@ const otInActual = pickEarliest({start: schedule.rng_ot_in_start, end: schedule.
       // Saturday override: sum minutes worked after the Saturday end for
       // every recorded segment.  Each segment contributes its own OT
       // minutes without regard to explicit OT punches.
+      let extraOTMins = 0;
       const satEndM = toMins(__satEnd);
-      for (let i = 0; i + 1 < times.length; i += 2) {
+      for (let i = 0; i < times.length; i += 2) {
         const inStr  = times[i];
         const outStr = times[i+1];
+        if (!outStr) continue;
         const inM  = toMins(inStr);
         const outM = toMins(outStr);
         const startM = Math.max(inM, satEndM);
         if (outM > startM) {
-          dayOTMins += (outM - startM);
+          extraOTMins += (outM - startM);
         }
       }
+      dayOTMins = extraOTMins;
     } else {
-      // Non-Saturday: prefer explicit OT punches when they exist
+      // Nonâ€‘Saturday: prefer explicit OT punches when they exist
       if (otInActual && otOutActual && toMins(otInActual) > pmOutRefMins) {
         let otInM = toMins(otInActual);
         let otOutM = toMins(otOutActual);
         if (otOutM < otInM) otOutM += 1440;
         dayOTMins = Math.max(0, otOutM - otInM);
       } else {
-        // Fallback: no explicit OT punches.  Check the last clock-out and
+        // Fallback: no explicit OT punches.  Check the last clockâ€‘out and
         // count any minutes worked after the scheduled end as OT.  Only
         // the final out of the day is considered to avoid counting
         // intermediate segments twice.
-        let lastOutStr = null;
+        let lastOutM = null;
         for (let i = 0; i < times.length; i += 2) {
           const outStr = times[i+1];
           if (!outStr) continue;
-          if (!lastOutStr || toMins(outStr) > toMins(lastOutStr)) lastOutStr = outStr;
+          const outM = toMins(outStr);
+          if (lastOutM === null || outM > lastOutM) lastOutM = outM;
         }
-        let otOutEff = lastOutStr;
-        try {
-          const borrowed = await __getNextDayFirstPunch(empId, date, 6 * 60 + 30);
-          if (typeof borrowed === 'string') otOutEff = borrowed;
-        } catch (e) {}
-        if (otOutEff) {
-          let adjLastOut = toMins(otOutEff);
+        if (lastOutM != null) {
+          let adjLastOut = lastOutM;
           if (adjLastOut < pmOutRefMins) adjLastOut += 1440;
           if (adjLastOut > pmOutRefMins) {
             dayOTMins = adjLastOut - pmOutRefMins;
@@ -7257,7 +7250,7 @@ const otInActual = pickEarliest({start: schedule.rng_ot_in_start, end: schedule.
 const dtrStartEl = document.getElementById('filterStart');
 const dtrEndEl = document.getElementById('filterEnd');
 
-async function calculatePayrollFromRecords(){
+function calculatePayrollFromRecords(){
   try { if (typeof renderResults === 'function') renderResults(); } catch(e){ console.warn('renderResults failed', e); }
 
   /*
@@ -7272,8 +7265,8 @@ async function calculatePayrollFromRecords(){
     // to the DTR filter inputs if the payroll period inputs are absent.
     const start = (typeof weekStartEl !== 'undefined' && weekStartEl && weekStartEl.value) ? weekStartEl.value : (dtrStartEl ? dtrStartEl.value : '');
     const end   = (typeof weekEndEl   !== 'undefined' && weekEndEl   && weekEndEl.value)   ? weekEndEl.value   : (dtrEndEl   ? dtrEndEl.value   : '');
-      // Use the helper to compute per-employee hours across the full dataset.
-      const { totalsReg, totalsOT } = await computeHoursForDateRange(start, end);
+    // Use the helper to compute perâ€‘employee hours across the full dataset.
+    const { totalsReg, totalsOT } = computeHoursForDateRange(start, end);
     // Initialize regHours and otHours with computed totals
     regHours = Object.assign({}, totalsReg || {});
     otHours  = Object.assign({}, totalsOT  || {});
@@ -7541,7 +7534,7 @@ function restoreData(file) {
         storedRecords.push({ empId: String(empId), date: dateVal, time: timeVal, manual: true });
         // Persist to localStorage
         localStorage.setItem(LS_RECORDS, JSON.stringify(storedRecords));
-        // Persist to Supabase for cross-device sync
+        // Persist to Supabase for crossâ€‘device sync
         if (typeof saveDtrToCloud === 'function') saveDtrToCloud(storedRecords);
       } catch(e) { console.error('Saving manual DTR failed', e); }
       closeManualModal();
@@ -9170,7 +9163,7 @@ function loadSaved(){
   if (!isNaN(d)) return d.toISOString().slice(0,10);
   return '';
 }
-async function updateWeekInputs(snap) {
+function updateWeekInputs(snap) {
   const startISO = toIsoDate(snap && snap.startDate);
   const endISO   = toIsoDate(snap && snap.endDate);
 
@@ -9197,7 +9190,7 @@ async function updateWeekInputs(snap) {
   try { if (typeof renderResults === 'function') { renderResults(); } } catch (e) {}
 
   // Recalculate payroll if available, deriving hours from the DTR results table
-  try { if (typeof calculatePayrollFromResultsTable === 'function') { calculatePayrollFromResultsTable(); } else if (typeof calculatePayrollFromRecords === 'function') { await calculatePayrollFromRecords(); } } catch (e) {}
+  try { if (typeof calculatePayrollFromResultsTable === 'function') { calculatePayrollFromResultsTable(); } else if (typeof calculatePayrollFromRecords === 'function') { calculatePayrollFromRecords(); } } catch (e) {}
 
   // After updating the week range, toggle editing state based on whether the
   // selected period is locked. Without this, switching between periods would
@@ -9427,7 +9420,7 @@ async function updateWeekInputs(snap) {
   function attachCashAdvanceHandlers() {
     // Handle original amount changes
     document.querySelectorAll('.cashOrig').forEach(inp => {
-      // Update the in-memory values on every keystroke but defer re-rendering
+      // Update the inâ€‘memory values on every keystroke but defer reâ€‘rendering
       inp.addEventListener('input', () => {
         const id = inp.getAttribute('data-id');
         const val = parseFloat(inp.value);
@@ -9442,7 +9435,7 @@ async function updateWeekInputs(snap) {
         localStorage.setItem(LS_CASH_ORIG, JSON.stringify(cashOrig));
         localStorage.setItem(LS_CASH_BAL, JSON.stringify(cashBal));
         // Do not call renderCashAdvanceTable() here; this would rebuild the table
-        // on every keystroke and cause the input to lose focus.  Re-render on blur instead.
+        // on every keystroke and cause the input to lose focus.  Reâ€‘render on blur instead.
       });
       // When the user finishes editing (on blur/change), rebuild the table so buttons/labels refresh
       inp.addEventListener('change', () => {
@@ -9451,7 +9444,7 @@ async function updateWeekInputs(snap) {
     });
     // Handle deduction changes
     document.querySelectorAll('.cashDed').forEach(inp => {
-      // Update the deduction and recalculate totals on each keystroke but do not re-render
+      // Update the deduction and recalculate totals on each keystroke but do not reâ€‘render
       inp.addEventListener('input', () => {
         const id = inp.getAttribute('data-id');
         const val = parseFloat(inp.value);
@@ -9544,7 +9537,7 @@ async function updateWeekInputs(snap) {
      The payroll application originally stored uploaded DTR records exclusively
      in localStorage.  Browsers typically limit localStorage to about 5Â MB,
      which can be quickly exceeded when importing large attendance files.  To
-     provide true cross-device persistence and remove the size constraint,
+     provide true crossâ€‘device persistence and remove the size constraint,
      the functions below save and load the DTR dataset via Supabase.  They
      expect a table named `dtr_records` in your Supabase database with the
      following schema:
@@ -9668,7 +9661,7 @@ document.addEventListener('DOMContentLoaded', async function () {
   try {
     const remote = await loadDtrFromCloud();
     if (Array.isArray(remote) && remote.length) {
-      // When remote data is available, replace the in-memory dataset.  We
+      // When remote data is available, replace the inâ€‘memory dataset.  We
       // deliberately overwrite both the local variable and the global
       // window.storedRecords to ensure all modules reference the same
       // canonical source of truth.  Persist into localStorage as an
