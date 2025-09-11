@@ -3702,10 +3702,10 @@ document.addEventListener('DOMContentLoaded', () => {
       const weEl = document.getElementById('weekEnd');
       if (wsEl) wsEl.value = snap.startDate || '';
       if (weEl) weEl.value = snap.endDate || '';
-      try {
-        if (typeof calculatePayrollFromResultsTable === 'function') calculatePayrollFromResultsTable();
-        else if (typeof calculatePayrollFromRecords === 'function') calculatePayrollFromRecords();
-      } catch (err) {}
+        try {
+          if (typeof calculatePayrollFromResultsTable === 'function') calculatePayrollFromResultsTable();
+          else if (typeof calculatePayrollFromRecords === 'function') await calculatePayrollFromRecords();
+        } catch (err) {}
       // Show the payroll panel
       try { showTab('payroll'); } catch (err) {}
     } else if (target.classList.contains('lockActive')) {
@@ -7065,7 +7065,7 @@ document.addEventListener('DOMContentLoaded', function () {
 });
   </script>
   <script>
-function computeHoursForDateRange(startDate, endDate) {
+async function computeHoursForDateRange(startDate, endDate) {
   const totalsReg = {};
   const totalsOT = {};
   Object.keys(storedEmployees).forEach(id => {
@@ -7230,15 +7230,19 @@ const otInActual = pickEarliest({start: schedule.rng_ot_in_start, end: schedule.
         // count any minutes worked after the scheduled end as OT.  Only
         // the final out of the day is considered to avoid counting
         // intermediate segments twice.
-        let lastOutM = null;
+        let lastOutStr = null;
         for (let i = 0; i < times.length; i += 2) {
           const outStr = times[i+1];
           if (!outStr) continue;
-          const outM = toMins(outStr);
-          if (lastOutM === null || outM > lastOutM) lastOutM = outM;
+          if (!lastOutStr || toMins(outStr) > toMins(lastOutStr)) lastOutStr = outStr;
         }
-        if (lastOutM != null) {
-          let adjLastOut = lastOutM;
+        let otOutEff = lastOutStr;
+        try {
+          const borrowed = await __getNextDayFirstPunch(empId, date);
+          if (typeof borrowed === 'string') otOutEff = borrowed;
+        } catch (e) {}
+        if (otOutEff) {
+          let adjLastOut = toMins(otOutEff);
           if (adjLastOut < pmOutRefMins) adjLastOut += 1440;
           if (adjLastOut > pmOutRefMins) {
             dayOTMins = adjLastOut - pmOutRefMins;
@@ -7253,7 +7257,7 @@ const otInActual = pickEarliest({start: schedule.rng_ot_in_start, end: schedule.
 const dtrStartEl = document.getElementById('filterStart');
 const dtrEndEl = document.getElementById('filterEnd');
 
-function calculatePayrollFromRecords(){
+async function calculatePayrollFromRecords(){
   try { if (typeof renderResults === 'function') renderResults(); } catch(e){ console.warn('renderResults failed', e); }
 
   /*
@@ -7268,8 +7272,8 @@ function calculatePayrollFromRecords(){
     // to the DTR filter inputs if the payroll period inputs are absent.
     const start = (typeof weekStartEl !== 'undefined' && weekStartEl && weekStartEl.value) ? weekStartEl.value : (dtrStartEl ? dtrStartEl.value : '');
     const end   = (typeof weekEndEl   !== 'undefined' && weekEndEl   && weekEndEl.value)   ? weekEndEl.value   : (dtrEndEl   ? dtrEndEl.value   : '');
-    // Use the helper to compute per-employee hours across the full dataset.
-    const { totalsReg, totalsOT } = computeHoursForDateRange(start, end);
+      // Use the helper to compute per-employee hours across the full dataset.
+      const { totalsReg, totalsOT } = await computeHoursForDateRange(start, end);
     // Initialize regHours and otHours with computed totals
     regHours = Object.assign({}, totalsReg || {});
     otHours  = Object.assign({}, totalsOT  || {});
@@ -9166,7 +9170,7 @@ function loadSaved(){
   if (!isNaN(d)) return d.toISOString().slice(0,10);
   return '';
 }
-function updateWeekInputs(snap) {
+async function updateWeekInputs(snap) {
   const startISO = toIsoDate(snap && snap.startDate);
   const endISO   = toIsoDate(snap && snap.endDate);
 
@@ -9193,7 +9197,7 @@ function updateWeekInputs(snap) {
   try { if (typeof renderResults === 'function') { renderResults(); } } catch (e) {}
 
   // Recalculate payroll if available, deriving hours from the DTR results table
-  try { if (typeof calculatePayrollFromResultsTable === 'function') { calculatePayrollFromResultsTable(); } else if (typeof calculatePayrollFromRecords === 'function') { calculatePayrollFromRecords(); } } catch (e) {}
+  try { if (typeof calculatePayrollFromResultsTable === 'function') { calculatePayrollFromResultsTable(); } else if (typeof calculatePayrollFromRecords === 'function') { await calculatePayrollFromRecords(); } } catch (e) {}
 
   // After updating the week range, toggle editing state based on whether the
   // selected period is locked. Without this, switching between periods would
