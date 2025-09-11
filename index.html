@@ -5507,53 +5507,75 @@ function saveSplits() {
 // the split flag in the `splits` object, persist it to localStorage via
 // saveSplits(), and trigger a re-render of the results.
 function splitRecord(key) {
-  splits[key] = true;
+  // When splitting, mark all three segments (AM, PM, OT) as split.  Use
+  // an object so we can track split state per segment.
+  splits[key] = { AM: true, PM: true, OT: true };
   saveSplits();
   renderResults();
 }
 function unsplitRecord(key) {
+  // Group AM/PM/OT segments by their resolved project IDs.  Each group with
+  // more than one segment is recombined (segment-level overrides cleared and
+  // marked as unsplit).  Groups with a single segment remain split.
   const [empId] = key.split('___');
   const emp = (typeof storedEmployees !== 'undefined' && storedEmployees) ? storedEmployees[empId] : null;
-  let baseProj = emp && emp.projectId ? emp.projectId : '';
-  if (overridesProjects && Object.prototype.hasOwnProperty.call(overridesProjects, key)) {
-    baseProj = overridesProjects[key];
-  }
-  const segments = ['AM', 'PM', 'OT'];
-  const projSet = new Set();
-  for (const seg of segments) {
-    const segKey = key + '___' + seg;
-    let pid = baseProj;
-    if (overridesProjects && Object.prototype.hasOwnProperty.call(overridesProjects, segKey)) {
-      pid = overridesProjects[segKey];
-    }
-    projSet.add(String(pid || ''));
-  }
-  if (projSet.size > 1) {
-    alert('Segments must share a project before they can be recombined.');
-    return;
-  }
-
-  // Clean up segment-level overrides now that segments can be recombined
-  const unifiedProj = projSet.values().next().value;
-  for (const seg of segments) {
-    const segKey = key + '___' + seg;
-    if (overridesProjects && Object.prototype.hasOwnProperty.call(overridesProjects, segKey)) {
-      delete overridesProjects[segKey];
-    }
-    if (overridesSchedules && Object.prototype.hasOwnProperty.call(overridesSchedules, segKey)) {
-      delete overridesSchedules[segKey];
-    }
-  }
-
-  // Update day-level project override if it differs from the employee's default
   const defaultProj = emp && emp.projectId ? emp.projectId : '';
-  if (String(unifiedProj || '') !== String(defaultProj || '')) {
-    overridesProjects[key] = unifiedProj;
-  } else {
-    delete overridesProjects[key];
+  let dayProj = overridesProjects && Object.prototype.hasOwnProperty.call(overridesProjects, key)
+    ? overridesProjects[key]
+    : defaultProj;
+
+  const segments = ['AM', 'PM', 'OT'];
+  const groups = {};
+  segments.forEach(seg => {
+    const segKey = key + '___' + seg;
+    const pid = (overridesProjects && Object.prototype.hasOwnProperty.call(overridesProjects, segKey))
+      ? overridesProjects[segKey]
+      : dayProj;
+    const p = String(pid || '');
+    if (!groups[p]) groups[p] = [];
+    groups[p].push(seg);
+  });
+
+  let splitEntry = splits[key];
+  if (!splitEntry || typeof splitEntry !== 'object') {
+    splitEntry = { AM: true, PM: true, OT: true };
   }
 
-  splits[key] = false;
+  Object.keys(groups).forEach(proj => {
+    const segs = groups[proj];
+    if (segs.length > 1) {
+      // Multiple segments share this project â†’ clear per-segment overrides and
+      // mark them unsplit. Also set day-level override if needed.
+      segs.forEach(seg => {
+        const segKey = key + '___' + seg;
+        if (overridesProjects && Object.prototype.hasOwnProperty.call(overridesProjects, segKey)) {
+          delete overridesProjects[segKey];
+        }
+        if (overridesSchedules && Object.prototype.hasOwnProperty.call(overridesSchedules, segKey)) {
+          delete overridesSchedules[segKey];
+        }
+        splitEntry[seg] = false;
+      });
+      const unifiedProj = proj;
+      if (String(unifiedProj || '') !== String(defaultProj || '')) {
+        overridesProjects[key] = unifiedProj;
+      } else {
+        delete overridesProjects[key];
+      }
+    } else {
+      // Single segment â†’ keep its split flag
+      segs.forEach(seg => { splitEntry[seg] = true; });
+    }
+  });
+
+  // Remove split entry if no segments remain split
+  const anySplit = segments.some(seg => splitEntry[seg]);
+  if (anySplit) {
+    splits[key] = splitEntry;
+  } else {
+    delete splits[key];
+  }
+
   saveSplits();
   saveOverrides();
   renderResults();
@@ -6619,18 +6641,19 @@ let otMins = 0;
     // (any overrides are honoured). Each segment has its own project and
     // schedule dropdowns. Grace periods are applied according to the
     // selected schedule.
+
     const splitKey = empId + '___' + date;
-    if (splits && splits[splitKey]) {
-      // The employee name used for both halves
+    let splitEntry = splits && splits[splitKey];
+    if (splitEntry) {
+      if (splitEntry === true) splitEntry = { AM: true, PM: true, OT: true };
       const name = emp ? emp.name : '';
-      // Helper to compute minutes for a segment using a specific schedule and grace
+      const merged = { regMins:0, otMins:0, amIn:null, amOut:null, pmIn:null, pmOut:null, otIn:null, otOut:null, count:0 };
       const clampSegHalf = (inStr, outStr, segStartStr, segEndStr, sched) => {
         if (!inStr || !outStr || !segStartStr || !segEndStr) return 0;
         let inM = toMins(inStr);
         const outM = toMins(outStr);
         const segStart = toMins(segStartStr);
         let segEnd = toMins(segEndStr);
-        // If a PM end is entered as an AM time (e.g., 06:00 instead of 18:00), fix it
         if (segEnd <= segStart && segStart >= 12 * 60 && segEnd <= 12 * 60) segEnd += 12 * 60;
         if (segEnd <= segStart) return 0;
         const g = Number(sched && sched.sch_grace) || 0;
@@ -6638,256 +6661,139 @@ let otMins = 0;
         const endM = Math.min(outM, segEnd);
         return Math.max(0, endM - inM);
       };
-      // Computes OT minutes and the actual OT in/out times for the PM half
       const computeOtHalf = (sched) => {
         let otM = 0, otIn = null, otOut = null;
-        // Reference end of the PM shift for deciding when OT starts
         let pmOutRef = pmOutActual ? toMins(pmOutActual) : toMins(sched.sch_pm_end || DEFAULT_SCHEDULE.sch_pm_end);
-        // Check if the date is Saturday and fetch Saturday start/end times
         let isSat = false, satStart = null, satEnd = null;
         try {
-          const dow = (function(d){
-            const dt = new Date(d + 'T00:00');
-            return (isNaN(dt) ? new Date(d) : dt).getDay();
-          })(date);
-          if (dow === 6) {
-            isSat = true;
-            satStart = sched.sch_sat_start || sched.sch_am_start || '08:00';
-            satEnd   = sched.sch_sat_end   || sched.sch_pm_end || sched.sch_am_end || '11:00';
-            pmOutRef = toMins(satEnd);
-          }
-        } catch(e) { /* ignore errors */ }
-        // Build OT range windows using schedule or defaults
+          const dow = (function(d){ const dt = new Date(d + 'T00:00'); return (isNaN(dt) ? new Date(d) : dt).getDay(); })(date);
+          if (dow === 6) { isSat = true; satStart = sched.sch_sat_start || sched.sch_am_start || '08:00'; satEnd = sched.sch_sat_end || sched.sch_pm_end || sched.sch_am_end || '11:00'; pmOutRef = toMins(satEnd); }
+        } catch(e){}
         const rng = {
-          otIn: {
-            start: sched.rng_ot_in_start || DEFAULT_RANGES.rng_ot_in_start,
-            end:   sched.rng_ot_in_end   || DEFAULT_RANGES.rng_ot_in_end
-          },
-          otOut: {
-            start: sched.rng_ot_out_start || DEFAULT_RANGES.rng_ot_out_start,
-            end:   sched.rng_ot_out_end   || DEFAULT_RANGES.rng_ot_out_end
-          }
+          otIn: { start: sched.rng_ot_in_start || DEFAULT_RANGES.rng_ot_in_start, end: sched.rng_ot_in_end || DEFAULT_RANGES.rng_ot_in_end },
+          otOut:{ start: sched.rng_ot_out_start||DEFAULT_RANGES.rng_ot_out_start, end: sched.rng_ot_out_end||DEFAULT_RANGES.rng_ot_out_end }
         };
-        // Identify candidate OT IN times (first punch beyond pmOutRef in window)
-        const otInCands = times.filter(t => {
-          const m = toMins(t);
-          return m > pmOutRef && m >= toMins(isSat ? satEnd : rng.otIn.start) && m <= toMins(isSat ? '23:59' : rng.otIn.end);
-        });
+        const otInCands = times.filter(t=>{ const m=toMins(t); return m>pmOutRef && m>=toMins(isSat?satEnd:rng.otIn.start) && m<=toMins(isSat?'23:59':rng.otIn.end); });
         otIn = otInCands.length ? otInCands[0] : null;
-        // Identify candidate OT OUT times (last punch beyond pmOutRef in window and after OT IN)
-        const otOutCands = times.filter(t => {
-          const m = toMins(t);
-          return m > pmOutRef && m >= toMins(isSat ? satEnd : rng.otOut.start) && m <= toMins(isSat ? '23:59' : rng.otOut.end);
-        }).filter(t => !otIn || toMins(t) >= toMins(otIn));
-        otOut = otOutCands.length ? otOutCands[otOutCands.length - 1] : null;
-        // Saturday fallback: treat a single OUT beyond Saturday end as OT
-        if (isSat && satEnd) {
-          const lastOut = pmOutActual || amOutActual || null;
-          const lastOutM = lastOut ? toMins(lastOut) : null;
-          const satEndM = toMins(satEnd);
-          if (lastOutM !== null && lastOutM > satEndM) {
-            if (!otIn) otIn = satEnd;
-            if (!otOut) otOut = lastOut;
-          }
-        }
-        // Compute OT minutes within clamped OT window
-        if (otIn && otOut) {
-          const startClamp = Math.max(toMins(otIn), toMins(isSat ? (satEnd || rng.otIn.start) : rng.otIn.start));
-          const endClamp   = Math.min(toMins(otOut), toMins(isSat ? '23:59' : (rng.otOut.end || rng.otIn.end)));
-          if (endClamp > startClamp) otM = endClamp - startClamp;
-        }
-        // Extra Saturday computation: last out beyond Saturday end counts fully as OT
-        try {
-          if (isSat && satEnd) {
-            const lastOut = (pmOutActual || amOutActual || null);
-            if (lastOut) {
-              const satEndM = toMins(satEnd);
-              const satStartClamp = Math.max(satEndM, toMins(sched.rng_sat_ot_start || DEFAULT_RANGES.rng_sat_ot_start));
-              const satEndClamp   = toMins(sched.rng_sat_ot_end || DEFAULT_RANGES.rng_sat_ot_end);
-              const lastOutM = toMins(lastOut);
-              const startM = satStartClamp;
-              const endM   = Math.min(lastOutM, satEndClamp);
-              const diff = endM - startM;
-              if (diff > 0) otM = diff;
-            }
-          }
-        } catch(e) { /* ignore */ }
-
-        // --- Fallback OT logic for nonâ€‘Saturday halves ---
-        // If there are no explicit OT punches (or the OT IN occurs before the end
-        // of the regular shift), and there is a final clockâ€‘out beyond the end
-        // of the PM shift, treat the extra time as OT.  This ensures that
-        // afterâ€‘hours work is captured even without separate OT punches.
-        try {
-          if (!isSat) {
-            // Determine if an explicit OT was captured (OT IN starts after the PM reference)
-            let explicitOT = false;
-            if (otIn && otOut) {
-              const otInM = toMins(otIn);
-              if (otInM > pmOutRef) explicitOT = true;
-            }
-            if (!explicitOT) {
-              const lastOutF = pmOutActual || amOutActual || null;
-              if (lastOutF) {
-                const lastOutM = toMins(lastOutF);
-                if (lastOutM > pmOutRef) {
-                  otM = lastOutM - pmOutRef;
-                  // Leave otIn/otOut unchanged; OT minutes will still be reflected in mins
-                }
-              }
-            }
-          }
-        } catch(err) { /* ignore fallback errors */ }
+        const otOutCands = times.filter(t=>{ const m=toMins(t); return m>pmOutRef && m>=toMins(isSat?satEnd:rng.otOut.start) && m<=toMins(isSat?'23:59':rng.otOut.end); }).filter(t=>!otIn||toMins(t)>=toMins(otIn));
+        otOut = otOutCands.length ? otOutCands[otOutCands.length-1] : null;
+        if (isSat && satEnd) { const lastOut=pmOutActual||amOutActual||null; const lastOutM=lastOut?toMins(lastOut):null; const satEndM=toMins(satEnd); if (lastOutM!==null&&lastOutM>satEndM){ if(!otIn) otIn=satEnd; if(!otOut) otOut=lastOut; } }
+        if (otIn && otOut) { const startClamp=Math.max(toMins(otIn), toMins(isSat?(satEnd||rng.otIn.start):rng.otIn.start)); const endClamp=Math.min(toMins(otOut), toMins(isSat?'23:59':(rng.otOut.end||rng.otIn.end))); if(endClamp>startClamp) otM=endClamp-startClamp; }
         return { mins: otM, otIn: otIn, otOut: otOut };
       };
-      // Build three rows for AM, PM and OT segments.  Each row displays its own
-      // regular and overtime hours along with independent schedule/project
-      // overrides.  When bridging across the midday break (no AM out and no PM
-      // in), synthetic boundary times derived from the schedule are used to split
-      // the continuous shift.
       const hasBridge = !!(amInActual && !amOutActual && !pmInActual && pmOutActual);
-      // Use schedule-defined midday boundaries when splitting through a bridge
       const middayStart = schedule.sch_am_end || '12:00';
       const middayEnd   = schedule.sch_pm_start || '13:00';
-      ['AM','PM','OT'].forEach(function(segment) {
+      ['AM','PM','OT'].forEach(segment => {
         const halfKey = empId + '___' + date + '___' + segment;
         const schedIdHalf = (overridesSchedules && overridesSchedules[halfKey]) ? overridesSchedules[halfKey] : scheduleIdForEmp;
         const schedHalf = storedSchedules[schedIdHalf] || DEFAULT_SCHEDULE;
-        let regMinsSeg = 0;
-        let otMinsSeg = 0;
-        let otInSeg = null, otOutSeg = null;
-        if (segment === 'AM') {
-          if (hasBridge) {
-            regMinsSeg = clampSegHalf(amInActual, middayStart, schedHalf.sch_am_start || DEFAULT_SCHEDULE.sch_am_start, schedHalf.sch_am_end || DEFAULT_SCHEDULE.sch_am_end, schedHalf);
-          } else {
-            regMinsSeg = clampSegHalf(amInActual, amOutActual, schedHalf.sch_am_start || DEFAULT_SCHEDULE.sch_am_start, schedHalf.sch_am_end || DEFAULT_SCHEDULE.sch_am_end, schedHalf);
-          }
-        } else if (segment === 'PM') {
-          if (hasBridge) {
-            regMinsSeg = clampSegHalf(middayEnd, pmOutActual, schedHalf.sch_pm_start || DEFAULT_SCHEDULE.sch_pm_start, schedHalf.sch_pm_end || DEFAULT_SCHEDULE.sch_pm_end, schedHalf);
-          } else {
-            regMinsSeg = clampSegHalf(pmInActual, pmOutActual, schedHalf.sch_pm_start || DEFAULT_SCHEDULE.sch_pm_start, schedHalf.sch_pm_end || DEFAULT_SCHEDULE.sch_pm_end, schedHalf);
-          }
-        } else {
-          const otRes = computeOtHalf(schedHalf);
-          otMinsSeg = otRes.mins;
-          otInSeg  = otRes.otIn;
-          otOutSeg = otRes.otOut;
-        }
+        let regMinsSeg=0, otMinsSeg=0, otInSeg=null, otOutSeg=null;
+        if(segment==='AM'){ regMinsSeg = hasBridge ? clampSegHalf(amInActual, middayStart, schedHalf.sch_am_start || DEFAULT_SCHEDULE.sch_am_start, schedHalf.sch_am_end || DEFAULT_SCHEDULE.sch_am_end, schedHalf) : clampSegHalf(amInActual, amOutActual, schedHalf.sch_am_start || DEFAULT_SCHEDULE.sch_am_start, schedHalf.sch_am_end || DEFAULT_SCHEDULE.sch_am_end, schedHalf); }
+        else if(segment==='PM'){ regMinsSeg = hasBridge ? clampSegHalf(middayEnd, pmOutActual, schedHalf.sch_pm_start || DEFAULT_SCHEDULE.sch_pm_start, schedHalf.sch_pm_end || DEFAULT_SCHEDULE.sch_pm_end, schedHalf) : clampSegHalf(pmInActual, pmOutActual, schedHalf.sch_pm_start || DEFAULT_SCHEDULE.sch_pm_start, schedHalf.sch_pm_end || DEFAULT_SCHEDULE.sch_pm_end, schedHalf); }
+        else { const otRes=computeOtHalf(schedHalf); otMinsSeg=otRes.mins; otInSeg=otRes.otIn; otOutSeg=otRes.otOut; }
         const regDecSeg = minsToDecimal(regMinsSeg);
-        const otDecSeg  = segment === 'OT' ? minsToDecimal(otMinsSeg) : '0.00';
-        let projIdSeg;
-        if (overridesProjects && Object.prototype.hasOwnProperty.call(overridesProjects, halfKey)) {
-          projIdSeg = overridesProjects[halfKey];
-        } else {
-          projIdSeg = empProjId;
-        }
+        const otDecSeg = segment==='OT'? minsToDecimal(otMinsSeg):'0.00';
+        let projIdSeg = (overridesProjects && Object.prototype.hasOwnProperty.call(overridesProjects, halfKey)) ? overridesProjects[halfKey] : empProjId;
         const __segPass = (currentProjectFilter === 'all' || (currentProjectFilter === 'none' && !projIdSeg) || currentProjectFilter === projIdSeg);
-if(!__segPass){ return; }
-const trSeg = document.createElement('tr');
-        let htmlSeg = '';
-        htmlSeg += '<td>' + __fmt12Clock(empId) + '</td>';
-        htmlSeg += '<td>' + (name || '') + '</td>';
-        htmlSeg += '<td></td><td></td>';
-        htmlSeg += '<td>' + __fmt12Clock(date) + '</td>';
-        // Clock in/out columns based on segment.  AM displays morning punches; PM
-        // displays afternoon punches; OT leaves these blank.
-        if (segment === 'AM') {
-          htmlSeg += (amInActual ? '<td>' + __fmt12Clock(amInActual) + '</td>' : '<td class="missing">-</td>');
-          // Show AM out only when not bridging and a punch exists
-          if (hasBridge || !amOutActual) {
-            htmlSeg += '<td class="missing">-</td>';
+        if(!__segPass){ return; }
+        if (splitEntry[segment]) {
+          const trSeg = document.createElement('tr');
+          let htmlSeg='';
+          htmlSeg += '<td>' + __fmt12Clock(empId) + '</td>';
+          htmlSeg += '<td>' + (name || '') + '</td>';
+          htmlSeg += '<td></td><td></td>';
+          htmlSeg += '<td>' + __fmt12Clock(date) + '</td>';
+          if(segment==='AM'){
+            htmlSeg += (amInActual ? '<td>' + __fmt12Clock(amInActual) + '</td>' : '<td class="missing">-</td>');
+            htmlSeg += (hasBridge || !amOutActual) ? '<td class="missing">-</td>' : '<td>' + __fmt12Clock(amOutActual) + '</td>';
+            htmlSeg += '<td class="missing">-</td><td class="missing">-</td>';
+          } else if(segment==='PM'){
+            htmlSeg += '<td class="missing">-</td><td class="missing">-</td>';
+            htmlSeg += (hasBridge || !pmInActual) ? '<td class="missing">-</td>' : '<td>' + __fmt12Clock(pmInActual) + '</td>';
+            htmlSeg += (pmOutActual ? '<td>' + __fmt12Clock(pmOutActual) + '</td>' : '<td class="missing">-</td>');
           } else {
-            htmlSeg += '<td>' + __fmt12Clock(amOutActual) + '</td>';
+            htmlSeg += '<td class="missing">-</td><td class="missing">-</td><td class="missing">-</td><td class="missing">-</td>';
           }
-          htmlSeg += '<td class="missing">-</td><td class="missing">-</td>';
-        } else if (segment === 'PM') {
-          htmlSeg += '<td class="missing">-</td><td class="missing">-</td>';
-          // Show PM in only when not bridging and a punch exists
-          if (hasBridge || !pmInActual) {
-            htmlSeg += '<td class="missing">-</td>';
+          if(segment==='OT'){
+            htmlSeg += (otInSeg ? '<td>'+__fmt12Clock(otInSeg)+'</td>' : '<td class="missing">-</td>');
+            htmlSeg += (otOutSeg ? '<td>'+__fmt12Clock(otOutSeg)+'</td>' : '<td class="missing">-</td>');
           } else {
-            htmlSeg += '<td>' + __fmt12Clock(pmInActual) + '</td>';
+            htmlSeg += '<td class="missing">-</td><td class="missing">-</td>';
           }
-          htmlSeg += (pmOutActual ? '<td>' + __fmt12Clock(pmOutActual) + '</td>' : '<td class="missing">-</td>');
+          htmlSeg += '<td>' + formatHours(regDecSeg) + '</td>';
+          htmlSeg += '<td>' + formatHours(otDecSeg) + '</td>';
+          htmlSeg += '<td>' + formatHours(String((parseFloat(regDecSeg)||0)+(parseFloat(otDecSeg)||0))) + '</td>';
+          htmlSeg += '<td><button type="button" class="btn-unsplit" data-key="' + splitKey + '" onclick="unsplitRecord(this.dataset.key)">Unsplit</button></td>';
+          trSeg.innerHTML = htmlSeg;
+          try {
+            if (typeof manualKeys !== 'undefined' && manualKeys.has(splitKey)) {
+              const nmCellSeg = trSeg.cells[1];
+              if (nmCellSeg && !nmCellSeg.querySelector('.manual-indicator')) {
+                const s2 = document.createElement('span');
+                s2.className = 'manual-indicator';
+                s2.title = 'Contains manual DTR';
+                s2.textContent = '*';
+                nmCellSeg.appendChild(s2);
+              }
+            }
+          } catch(e){}
+          const hasOverrideSeg = (overridesSchedules && overridesSchedules[halfKey]) || (overridesProjects && Object.prototype.hasOwnProperty.call(overridesProjects, halfKey));
+          if (hasOverrideSeg) { trSeg.style.backgroundColor = '#fff3cd'; }
+          const pcSeg = trSeg.cells[2]; if (pcSeg) { pcSeg.innerHTML=''; pcSeg.appendChild(buildProjectDropdownHalf(empId, date, segment, projIdSeg)); }
+          const scSeg = trSeg.cells[3]; if (scSeg) { scSeg.innerHTML=''; scSeg.appendChild(buildScheduleDropdownHalf(empId, date, segment, schedIdHalf)); }
+          trSeg.dataset.empId = empId; trSeg.dataset.date = date; trSeg.dataset.half = segment;
+          (function(){
+            const timesForHalf=[];
+            if(segment==='AM'){ if(amInActual) timesForHalf.push(amInActual); if(!hasBridge && amOutActual) timesForHalf.push(amOutActual); }
+            else if(segment==='PM'){ if(!hasBridge && pmInActual) timesForHalf.push(pmInActual); if(pmOutActual) timesForHalf.push(pmOutActual); }
+            else { if(otInSeg) timesForHalf.push(otInSeg); if(otOutSeg) timesForHalf.push(otOutSeg); }
+            trSeg.dataset.times=JSON.stringify(timesForHalf);
+          })();
+          tbody.appendChild(trSeg);
+          const _regVal=parseFloat(regDecSeg)||0; const _otVal=parseFloat(otDecSeg)||0;
+          _dtrTotalReg+=_regVal; _dtrTotalOt+=_otVal; _dtrEmpIds.add(empId);
         } else {
-          // OT segment leaves both AM and PM punch cells blank
-          htmlSeg += '<td class="missing">-</td><td class="missing">-</td><td class="missing">-</td><td class="missing">-</td>';
+          merged.count++;
+          if(segment==='AM'){ merged.regMins+=regMinsSeg; merged.amIn=amInActual; merged.amOut=hasBridge?middayStart:amOutActual; }
+          else if(segment==='PM'){ merged.regMins+=regMinsSeg; merged.pmIn=hasBridge?middayEnd:pmInActual; merged.pmOut=pmOutActual; }
+          else { merged.otMins+=otMinsSeg; merged.otIn=otInSeg; merged.otOut=otOutSeg; }
         }
-        // OT in/out columns: filled only for OT segment
-        if (segment === 'OT') {
-          htmlSeg += (otInSeg ? '<td>' + __fmt12Clock(otInSeg) + '</td>' : '<td class="missing">-</td>');
-          htmlSeg += (otOutSeg ? '<td>' + __fmt12Clock(otOutSeg) + '</td>' : '<td class="missing">-</td>');
-        } else {
-          htmlSeg += '<td class="missing">-</td><td class="missing">-</td>';
-        }
-        // Regular hours and OT hours columns
-        htmlSeg += '<td>' + formatHours(regDecSeg) + '</td><td>' + formatHours(otDecSeg) + '</td>';
-        const __totSeg = ((parseFloat(regDecSeg)||0) + (parseFloat(otDecSeg)||0));
-        htmlSeg += '<td>' + formatHours(__totSeg) + '</td>';
-        // Action: provide an Unsplit button using a named handler.  All split
-        // segments share the same splitKey.
-        htmlSeg += '<td><button type="button" class="btn-unsplit" data-key="' + splitKey + '" onclick="unsplitRecord(this.dataset.key)">Unsplit</button></td>';
-        trSeg.innerHTML = htmlSeg;
-        // Add manual star indicator on split rows (AM/PM/OT) when any manual entry exists for this emp/date
-        try {
+      });
+      if (merged.count) {
+        const tr = document.createElement('tr');
+        const projectName = (empProjId && storedProjects[empProjId]) ? storedProjects[empProjId].name : (emp && !emp.projectId ? '' : '');
+        const scheduleName = storedSchedules[scheduleIdForEmp] ? storedSchedules[scheduleIdForEmp].name + (scheduleIdForEmp===defaultScheduleId ? ' (Default)' : '') : '';
+        const cell = (v) => v ? '<td>' + __fmt12Clock(v) + '</td>' : '<td class="missing">-</td>';
+        const regDec = minsToDecimal(merged.regMins);
+        const otDec = minsToDecimal(merged.otMins);
+        tr.innerHTML = '<td>'+empId+'</td><td>'+name+'</td><td>'+projectName+'</td><td>'+scheduleName+'</td><td>'+date+'</td>' +
+          cell(merged.amIn) + cell(merged.amOut) + cell(merged.pmIn) + cell(merged.pmOut) +
+          (merged.otIn ? '<td>'+__fmt12Clock(merged.otIn)+'</td>' : '<td class="missing">-</td>') +
+          (merged.otOut ? '<td>'+__fmt12Clock(merged.otOut)+'</td>' : '<td class="missing">-</td>') +
+          '<td>'+formatHours(regDec)+'</td><td>'+formatHours(otDec)+'</td><td>'+formatHours(minsToDecimal(merged.regMins + merged.otMins))+'</td>' +
+          '<td><button type="button" class="btn-split" data-key="'+splitKey+'" onclick="splitRecord(this.dataset.key)">Split</button></td>';
+        if(overridesSchedules[overrideKey] || overridesProjects[overrideKeyProj] !== undefined){ tr.style.backgroundColor='#fff3cd'; }
+        try{
           if (typeof manualKeys !== 'undefined' && manualKeys.has(splitKey)) {
-            const nmCellSeg = trSeg.cells[1];
-            if (nmCellSeg && !nmCellSeg.querySelector('.manual-indicator')) {
-              const s2 = document.createElement('span');
-              s2.className = 'manual-indicator';
-              s2.title = 'Contains manual DTR';
-              s2.textContent = '*';
-              nmCellSeg.appendChild(s2);
+            const nmCell = tr.cells[1];
+            if (nmCell && !nmCell.querySelector('.manual-indicator')) {
+              const s = document.createElement('span');
+              s.className='manual-indicator';
+              s.title='Contains manual DTR';
+              s.textContent='*';
+              nmCell.appendChild(s);
             }
           }
-        } catch(e){}
-        // Highlight if segment-specific overrides are set
-        const hasOverrideSeg = (overridesSchedules && overridesSchedules[halfKey]) || (overridesProjects && Object.prototype.hasOwnProperty.call(overridesProjects, halfKey));
-        if (hasOverrideSeg) {
-          trSeg.style.backgroundColor = '#fff3cd';
-        }
-        // Populate project dropdown
-        const pcSeg = trSeg.cells[2];
-        if (pcSeg) {
-          pcSeg.innerHTML = '';
-          pcSeg.appendChild(buildProjectDropdownHalf(empId, date, segment, projIdSeg));
-        }
-        // Populate schedule dropdown
-        const scSeg = trSeg.cells[3];
-        if (scSeg) {
-          scSeg.innerHTML = '';
-          scSeg.appendChild(buildScheduleDropdownHalf(empId, date, segment, schedIdHalf));
-        }
-        // Attach metadata for deletion or other operations
-        trSeg.dataset.empId = empId;
-        trSeg.dataset.date  = date;
-        trSeg.dataset.half  = segment;
-        (function() {
-          const timesForHalf = [];
-          if (segment === 'AM') {
-            if (amInActual) timesForHalf.push(amInActual);
-            if (!hasBridge && amOutActual) timesForHalf.push(amOutActual);
-          } else if (segment === 'PM') {
-            if (!hasBridge && pmInActual) timesForHalf.push(pmInActual);
-            if (pmOutActual) timesForHalf.push(pmOutActual);
-          } else {
-            if (otInSeg) timesForHalf.push(otInSeg);
-            if (otOutSeg) timesForHalf.push(otOutSeg);
-          }
-          trSeg.dataset.times = JSON.stringify(timesForHalf);
-        })();
-        tbody.appendChild(trSeg);
-        // Accumulate DTR summary totals for this segment
-        const _regVal = parseFloat(regDecSeg) || 0;
-        const _otVal  = parseFloat(otDecSeg) || 0;
-        _dtrTotalReg += _regVal;
-        _dtrTotalOt  += _otVal;
-        _dtrEmpIds.add(empId);
-      });
-      // Skip default combined row rendering
+        }catch(e){}
+        const projCell = tr.cells[2]; if(projCell){ projCell.innerHTML=''; projCell.appendChild(buildProjectDropdown(empId, date, empProjId)); }
+        const schedCell = tr.cells[3]; if(schedCell){ schedCell.innerHTML=''; schedCell.appendChild(buildScheduleDropdown(empId, date, scheduleIdForEmp)); }
+        tbody.appendChild(tr);
+        const _regVal=parseFloat(regDec)||0; const _otVal=parseFloat(otDec)||0; _dtrTotalReg+=_regVal; _dtrTotalOt+=_otVal; _dtrEmpIds.add(empId);
+      }
       continue;
     }
+
     // --- End AM/PM/OT Split Logic ---
 
     const name = emp ? emp.name : '';
@@ -7612,7 +7518,7 @@ function restoreData(file) {
             // behavior of the "Unsplit" button.
             const splitKey = `${empIdCell}___${dateCell}`;
             if (splits && splits[splitKey]) {
-              splits[splitKey] = false;
+              delete splits[splitKey];
               if (typeof saveSplits === 'function') saveSplits();
             }
           } else {
