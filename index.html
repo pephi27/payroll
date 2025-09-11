@@ -6122,10 +6122,10 @@ document.getElementById('fileInput').addEventListener('change', (ev)=>{
 // === MIN PATCH: Only keep records inside the current payroll period (From/To) ===
 let __from = '', __to = '';
 try {
-  const fEl = document.getElementById('dtrDateFrom');
-  const tEl = document.getElementById('dtrDateTo');
-  __from = (fEl && fEl.value) ? fEl.value : (localStorage.getItem('dtr_filter_from') || '');
-  __to   = (tEl && tEl.value) ? tEl.value : (localStorage.getItem('dtr_filter_to')   || '');
+  const fEl = document.getElementById('weekStart');
+  const tEl = document.getElementById('weekEnd');
+  __from = (fEl && fEl.value) ? fEl.value : (localStorage.getItem('payroll_week_start') || '');
+  __to   = (tEl && tEl.value) ? tEl.value : (localStorage.getItem('payroll_week_end')   || '');
 } catch(_) {}
 function __inRange(d){
   if (!d) return false;
