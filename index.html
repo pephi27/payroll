@@ -5481,6 +5481,7 @@ const LS_PROJECTS = 'att_projects_v1';
 const LS_FILTER_PROJECT = 'att_filter_project_v1';
 const LS_OVERRIDES_SCHEDULES = 'att_overrides_schedules';
 const LS_OVERRIDES_PROJECTS = 'att_overrides_projects';
+const SPLIT_OVERRIDES_TABLE = 'split_overrides';
 
 let overridesSchedules = JSON.parse(localStorage.getItem(LS_OVERRIDES_SCHEDULES) || '{}');
 let overridesProjects = JSON.parse(localStorage.getItem(LS_OVERRIDES_PROJECTS) || '{}');
@@ -5501,6 +5502,7 @@ function saveSplits() {
   } catch (e) {
     console.warn('Saving splits failed', e);
   }
+  syncSplitOverrides();
 }
 // Toggle split and unsplit state for a given employee/date key.  These helper
 // functions are used by the DTR table buttons to avoid inline IIFEs.  They set
@@ -5583,6 +5585,80 @@ function unsplitRecord(key) {
 function saveOverrides(){
   localStorage.setItem(LS_OVERRIDES_SCHEDULES, JSON.stringify(overridesSchedules));
   localStorage.setItem(LS_OVERRIDES_PROJECTS, JSON.stringify(overridesProjects));
+  syncSplitOverrides();
+}
+
+function baseKey(k){
+  const parts = String(k || '').split('___');
+  return parts.length >= 2 ? parts[0] + '___' + parts[1] : k;
+}
+function collectOverridesForKey(src, key){
+  const obj = {};
+  if (src && Object.prototype.hasOwnProperty.call(src, key)) obj.base = src[key];
+  ['AM','PM','OT'].forEach(function(seg){
+    const segKey = key + '___' + seg;
+    if (src && Object.prototype.hasOwnProperty.call(src, segKey)) obj[seg] = src[segKey];
+  });
+  return Object.keys(obj).length ? obj : null;
+}
+async function syncSplitOverrides(){
+  if (!window.supabase) return;
+  try {
+    const keySet = new Set();
+    Object.keys(splits || {}).forEach(k => keySet.add(baseKey(k)));
+    Object.keys(overridesProjects || {}).forEach(k => keySet.add(baseKey(k)));
+    Object.keys(overridesSchedules || {}).forEach(k => keySet.add(baseKey(k)));
+    if (keySet.size === 0) return;
+    const rows = [];
+    keySet.forEach(function(k){
+      const parts = k.split('___');
+      rows.push({
+        emp_id: parts[0],
+        date: parts[1],
+        splits: splits[k] || null,
+        overrides_projects: collectOverridesForKey(overridesProjects, k),
+        overrides_schedules: collectOverridesForKey(overridesSchedules, k)
+      });
+    });
+    const { error } = await window.supabase
+      .from(SPLIT_OVERRIDES_TABLE)
+      .upsert(rows, { onConflict: 'emp_id,date' });
+    if (error) console.warn('syncSplitOverrides error', error);
+  } catch (e) {
+    console.warn('syncSplitOverrides failed', e);
+  }
+}
+async function hydrateSplitOverrides(){
+  if (!window.supabase) return;
+  try {
+    const { data, error } = await window.supabase
+      .from(SPLIT_OVERRIDES_TABLE)
+      .select('*');
+    if (error) throw error;
+    (data || []).forEach(function(row){
+      const key = row.emp_id + '___' + row.date;
+      if (row.splits) splits[key] = row.splits;
+      if (row.overrides_projects) {
+        const proj = row.overrides_projects;
+        if (proj.base != null) overridesProjects[key] = proj.base;
+        ['AM','PM','OT'].forEach(function(seg){
+          if (proj[seg] != null) overridesProjects[key + '___' + seg] = proj[seg];
+        });
+      }
+      if (row.overrides_schedules) {
+        const sch = row.overrides_schedules;
+        if (sch.base != null) overridesSchedules[key] = sch.base;
+        ['AM','PM','OT'].forEach(function(seg){
+          if (sch[seg] != null) overridesSchedules[key + '___' + seg] = sch[seg];
+        });
+      }
+    });
+    try { localStorage.setItem(LS_SPLITS, JSON.stringify(splits)); } catch(e){}
+    try { localStorage.setItem(LS_OVERRIDES_PROJECTS, JSON.stringify(overridesProjects)); } catch(e){}
+    try { localStorage.setItem(LS_OVERRIDES_SCHEDULES, JSON.stringify(overridesSchedules)); } catch(e){}
+  } catch (e) {
+    console.warn('hydrate split_overrides failed', e);
+  }
 }
 
 
@@ -6930,18 +7006,22 @@ document.getElementById('clearProjectsBtn').addEventListener('click', ()=>{
   storedProjects = {}; saveProjectsToLS();
 });
 
-ensureSchedules();
-renderScheduleSelector();
-renderScheduleEditor();
-renderEmployees();
-renderProjects();
-renderProjectFilterOptions();
-const savedFilter = localStorage.getItem(LS_FILTER_PROJECT);
-if(document.getElementById('filterProject') && savedFilter && [...document.getElementById('filterProject').options].some(o=>o.value===savedFilter)){
-  document.getElementById('filterProject').value = savedFilter;
-  currentProjectFilter = savedFilter;
+async function initApp(){
+  await hydrateSplitOverrides();
+  ensureSchedules();
+  renderScheduleSelector();
+  renderScheduleEditor();
+  renderEmployees();
+  renderProjects();
+  renderProjectFilterOptions();
+  const savedFilter = localStorage.getItem(LS_FILTER_PROJECT);
+  if(document.getElementById('filterProject') && savedFilter && [...document.getElementById('filterProject').options].some(o=>o.value===savedFilter)){
+    document.getElementById('filterProject').value = savedFilter;
+    currentProjectFilter = savedFilter;
+  }
+  renderResults();
 }
-renderResults();
+initApp();
 document.addEventListener('DOMContentLoaded', function () {
   const dlBtn = document.getElementById('downloadEmployeesCSV');
   if (dlBtn) {
