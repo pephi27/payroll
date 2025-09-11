@@ -5512,61 +5512,7 @@ function splitRecord(key) {
   renderResults();
 }
 function unsplitRecord(key) {
-  const segs = ['AM', 'PM', 'OT'];
-
-  const basePid = Object.prototype.hasOwnProperty.call(overridesProjects, key)
-    ? overridesProjects[key]
-    : undefined;
-
-  const groups = {};
-
-  // Collect project ids for each segment and group them
-  segs.forEach(seg => {
-    const segKey = key + '___' + seg;
-    const pid = Object.prototype.hasOwnProperty.call(overridesProjects, segKey)
-      ? overridesProjects[segKey]
-      : basePid;
-    const gKey = pid === undefined ? '__undefined__' : pid;
-    if (!groups[gKey]) groups[gKey] = { pid, segs: [] };
-    groups[gKey].segs.push(seg);
-  });
-
-  // Promote shared project ids and remove duplicate segment overrides
-  Object.values(groups).forEach(g => {
-    if (g.segs.length > 1) {
-      if (g.pid !== undefined) {
-        overridesProjects[key] = g.pid;
-      } else {
-        delete overridesProjects[key];
-      }
-      g.segs.forEach(seg => {
-        delete overridesProjects[key + '___' + seg];
-      });
-    }
-  });
-
-  // Determine remaining distinct project ids
-  const remaining = new Set();
-  segs.forEach(seg => {
-    const segKey = key + '___' + seg;
-    let pid;
-    if (Object.prototype.hasOwnProperty.call(overridesProjects, segKey)) {
-      pid = overridesProjects[segKey];
-    } else if (Object.prototype.hasOwnProperty.call(overridesProjects, key)) {
-      pid = overridesProjects[key];
-    } else {
-      pid = undefined;
-    }
-    remaining.add(pid);
-  });
-
-  splits[key] = remaining.size > 1;
-
-  if (remaining.size <= 1 && remaining.has(undefined)) {
-    delete overridesProjects[key];
-  }
-
-  saveOverrides();
+  splits[key] = false;
   saveSplits();
   renderResults();
 }
@@ -6173,12 +6119,13 @@ document.getElementById('fileInput').addEventListener('change', (ev)=>{
       try {
         const content = String(e.target.result || '');
         const lines = content.split(/\r?\n/);
-// === MIN PATCH: Only keep records inside the current payroll period ===
+// === MIN PATCH: Only keep records inside the current payroll period (From/To) ===
 let __from = '', __to = '';
 try {
-  const range = (typeof getCurrentPayrollRange === 'function') ? getCurrentPayrollRange() : { start: '', end: '' };
-  __from = range.start || '';
-  __to   = range.end   || '';
+  const fEl = document.getElementById('dtrDateFrom');
+  const tEl = document.getElementById('dtrDateTo');
+  __from = (fEl && fEl.value) ? fEl.value : (localStorage.getItem('dtr_filter_from') || '');
+  __to   = (tEl && tEl.value) ? tEl.value : (localStorage.getItem('dtr_filter_to')   || '');
 } catch(_) {}
 function __inRange(d){
   if (!d) return false;
@@ -9167,25 +9114,6 @@ function loadSaved(){
     const n = v == null ? -1 : parseInt(v, 10);
     return Number.isFinite(n) ? n : -1;
   }
-
-  function getCurrentPayrollRange() {
-    try {
-      const idx = getActiveIndex();
-      const hist = Array.isArray(window.payrollHistory) ? window.payrollHistory : loadHistory();
-      const snap = hist && Number.isFinite(idx) ? hist[idx] : null;
-      if (snap && snap.startDate && snap.endDate) {
-        return { start: snap.startDate, end: snap.endDate };
-      }
-      const sel = document.getElementById('activePayrollSelect');
-      const altIdx = sel ? parseInt(sel.value, 10) : NaN;
-      if (Number.isFinite(altIdx) && hist[altIdx]) {
-        const alt = hist[altIdx];
-        return { start: alt.startDate || '', end: alt.endDate || '' };
-      }
-    } catch (_) {}
-    return { start: '', end: '' };
-  }
-  window.getCurrentPayrollRange = getCurrentPayrollRange;
 
   function toIsoDate(s){
   if(!s) return '';
