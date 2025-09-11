@@ -5049,10 +5049,10 @@ rows += `<tr class="totals">
         };
         const cells = Array.from(document.querySelectorAll('#r_table td.num, #r_table tfoot td.num'));
         cells.forEach(td=>{ td.textContent = fmt(td.textContent); });
-      })();
-    }
+  })();
+  }
 
-    function csvEscape(s){
+      function csvEscape(s){
       if (s == null) return '';
       s = String(s);
       if (/[",\n]/.test(s)) return '"' + s.replace(/"/g,'""') + '"';
@@ -6589,7 +6589,26 @@ const otOutCandidates = times
     return m > pmOutRefMins && m >= toMins(__isSaturday ? __satEnd : rangesForEmp.otOut.start) && m <= toMins(__isSaturday ? '23:59' : rangesForEmp.otOut.end);
   })
   .filter(t => !otInActual || toMins(t) >= toMins(otInActual));
-const otOutActual = otOutCandidates.length ? otOutCandidates[otOutCandidates.length - 1] : null;
+let otOutActual = otOutCandidates.length ? otOutCandidates[otOutCandidates.length - 1] : null;
+let __otOutNextDay = false;
+if (!otOutActual || (otInActual && toMins(otOutActual) < toMins(otInActual))) {
+  try {
+    const dt = new Date(date + 'T00:00');
+    if (!isNaN(dt)) {
+      dt.setDate(dt.getDate() + 1);
+      const nextDate = dt.toISOString().slice(0, 10);
+      const nextTimes = storedRecords
+        .filter(r => r.empId === empId && r.date === nextDate)
+        .map(r => r.time)
+        .sort();
+      const early = nextTimes.find(t => toMins(t) <= toMins('06:30'));
+      if (early) {
+        otOutActual = early;
+        __otOutNextDay = true;
+      }
+    }
+  } catch (e) { console.warn('Next-day OT lookup failed', e); }
+}
 // --- end patch ---
 
 // Saturday fallback: if only a single OUT exists beyond the Saturday end, treat OT as (satEnd -> lastOut)
@@ -6658,7 +6677,7 @@ try {
 let otMins = 0;
     if(otInCalc && otOutCalc){
       const otStartClamp = Math.max(toMins(otInCalc), toMins(__isSaturday ? (__satEnd || rangesForEmp.otIn.start) : rangesForEmp.otIn.start));
-      const otEndClamp   = Math.min(toMins(otOutCalc), toMins(__isSaturday ? '23:59' : (rangesForEmp.otOut.end || rangesForEmp.otIn.end)));
+      const otEndClamp   = Math.min(toMins(otOutCalc) + (__otOutNextDay ? 1440 : 0), toMins(__isSaturday ? '23:59' : (rangesForEmp.otOut.end || rangesForEmp.otIn.end)) + (__otOutNextDay ? 1440 : 0));
       if(otEndClamp > otStartClamp) otMins = otEndClamp - otStartClamp;
     }
     
@@ -6738,7 +6757,7 @@ let otMins = 0;
         return Math.max(0, endM - inM);
       };
       const computeOtHalf = (sched) => {
-        let otM = 0, otIn = null, otOut = null;
+        let otM = 0, otIn = null, otOut = null, nextDay = false;
         let pmOutRef = pmOutActual ? toMins(pmOutActual) : toMins(sched.sch_pm_end || DEFAULT_SCHEDULE.sch_pm_end);
         let isSat = false, satStart = null, satEnd = null;
         try {
@@ -6749,14 +6768,26 @@ let otMins = 0;
           otIn: { start: sched.rng_ot_in_start || DEFAULT_RANGES.rng_ot_in_start, end: sched.rng_ot_in_end || DEFAULT_RANGES.rng_ot_in_end },
           otOut:{ start: sched.rng_ot_out_start||DEFAULT_RANGES.rng_ot_out_start, end: sched.rng_ot_out_end||DEFAULT_RANGES.rng_ot_out_end }
         };
-        const otInCands = times.filter(t=>{ const m=toMins(t); return m>pmOutRef && m>=toMins(isSat?satEnd:rng.otIn.start) && m<=toMins(isSat?'23:59':rng.otIn.end); });
-        otIn = otInCands.length ? otInCands[0] : null;
-        const otOutCands = times.filter(t=>{ const m=toMins(t); return m>pmOutRef && m>=toMins(isSat?satEnd:rng.otOut.start) && m<=toMins(isSat?'23:59':rng.otOut.end); }).filter(t=>!otIn||toMins(t)>=toMins(otIn));
-        otOut = otOutCands.length ? otOutCands[otOutCands.length-1] : null;
-        if (isSat && satEnd) { const lastOut=pmOutActual||amOutActual||null; const lastOutM=lastOut?toMins(lastOut):null; const satEndM=toMins(satEnd); if (lastOutM!==null&&lastOutM>satEndM){ if(!otIn) otIn=satEnd; if(!otOut) otOut=lastOut; } }
-        if (otIn && otOut) { const startClamp=Math.max(toMins(otIn), toMins(isSat?(satEnd||rng.otIn.start):rng.otIn.start)); const endClamp=Math.min(toMins(otOut), toMins(isSat?'23:59':(rng.otOut.end||rng.otIn.end))); if(endClamp>startClamp) otM=endClamp-startClamp; }
-        return { mins: otM, otIn: otIn, otOut: otOut };
-      };
+          const otInCands = times.filter(t=>{ const m=toMins(t); return m>pmOutRef && m>=toMins(isSat?satEnd:rng.otIn.start) && m<=toMins(isSat?'23:59':rng.otIn.end); });
+          otIn = otInCands.length ? otInCands[0] : null;
+          const otOutCands = times.filter(t=>{ const m=toMins(t); return m>pmOutRef && m>=toMins(isSat?satEnd:rng.otOut.start) && m<=toMins(isSat?'23:59':rng.otOut.end); }).filter(t=>!otIn||toMins(t)>=toMins(otIn));
+          otOut = otOutCands.length ? otOutCands[otOutCands.length-1] : null;
+          if (!otOut || (otIn && toMins(otOut) < toMins(otIn))) {
+            try {
+              const dt = new Date(date + 'T00:00');
+              if (!isNaN(dt)) {
+                dt.setDate(dt.getDate() + 1);
+                const nextDate = dt.toISOString().slice(0,10);
+                const nextTimes = storedRecords.filter(r=>r.empId===empId && r.date===nextDate).map(r=>r.time).sort();
+                const early = nextTimes.find(t=>toMins(t) <= toMins('06:30'));
+                if (early) { otOut = early; nextDay = true; }
+              }
+            } catch(e){}
+          }
+          if (isSat && satEnd) { const lastOut=pmOutActual||amOutActual||null; const lastOutM=lastOut?toMins(lastOut):null; const satEndM=toMins(satEnd); if (lastOutM!==null&&lastOutM>satEndM){ if(!otIn) otIn=satEnd; if(!otOut) otOut=lastOut; } }
+          if (otIn && otOut) { const startClamp=Math.max(toMins(otIn), toMins(isSat?(satEnd||rng.otIn.start):rng.otIn.start)); const endClamp=Math.min(toMins(otOut)+(nextDay?1440:0), toMins(isSat?'23:59':(rng.otOut.end||rng.otIn.end))+(nextDay?1440:0)); if(endClamp>startClamp) otM=endClamp-startClamp; }
+          return { mins: otM, otIn: otIn, otOut: otOut, nextDay: nextDay };
+        };
       const hasBridge = !!(amInActual && !amOutActual && !pmInActual && pmOutActual);
       const middayStart = schedule.sch_am_end || '12:00';
       const middayEnd   = schedule.sch_pm_start || '13:00';
@@ -6767,7 +6798,7 @@ let otMins = 0;
         let regMinsSeg=0, otMinsSeg=0, otInSeg=null, otOutSeg=null;
         if(segment==='AM'){ regMinsSeg = hasBridge ? clampSegHalf(amInActual, middayStart, schedHalf.sch_am_start || DEFAULT_SCHEDULE.sch_am_start, schedHalf.sch_am_end || DEFAULT_SCHEDULE.sch_am_end, schedHalf) : clampSegHalf(amInActual, amOutActual, schedHalf.sch_am_start || DEFAULT_SCHEDULE.sch_am_start, schedHalf.sch_am_end || DEFAULT_SCHEDULE.sch_am_end, schedHalf); }
         else if(segment==='PM'){ regMinsSeg = hasBridge ? clampSegHalf(middayEnd, pmOutActual, schedHalf.sch_pm_start || DEFAULT_SCHEDULE.sch_pm_start, schedHalf.sch_pm_end || DEFAULT_SCHEDULE.sch_pm_end, schedHalf) : clampSegHalf(pmInActual, pmOutActual, schedHalf.sch_pm_start || DEFAULT_SCHEDULE.sch_pm_start, schedHalf.sch_pm_end || DEFAULT_SCHEDULE.sch_pm_end, schedHalf); }
-        else { const otRes=computeOtHalf(schedHalf); otMinsSeg=otRes.mins; otInSeg=otRes.otIn; otOutSeg=otRes.otOut; }
+          else { const otRes=computeOtHalf(schedHalf); otMinsSeg=otRes.mins; otInSeg=otRes.otIn; otOutSeg=otRes.otOut; var otNextSeg=otRes.nextDay; }
         const regDecSeg = minsToDecimal(regMinsSeg);
         const otDecSeg = segment==='OT'? minsToDecimal(otMinsSeg):'0.00';
         let projIdSeg = (overridesProjects && Object.prototype.hasOwnProperty.call(overridesProjects, halfKey)) ? overridesProjects[halfKey] : empProjId;
@@ -6791,12 +6822,12 @@ let otMins = 0;
           } else {
             htmlSeg += '<td class="missing">-</td><td class="missing">-</td><td class="missing">-</td><td class="missing">-</td>';
           }
-          if(segment==='OT'){
-            htmlSeg += (otInSeg ? '<td>'+__fmt12Clock(otInSeg)+'</td>' : '<td class="missing">-</td>');
-            htmlSeg += (otOutSeg ? '<td>'+__fmt12Clock(otOutSeg)+'</td>' : '<td class="missing">-</td>');
-          } else {
-            htmlSeg += '<td class="missing">-</td><td class="missing">-</td>';
-          }
+            if(segment==='OT'){
+              htmlSeg += (otInSeg ? '<td>'+__fmt12Clock(otInSeg)+'</td>' : '<td class="missing">-</td>');
+              htmlSeg += (otOutSeg ? '<td>'+__fmt12Clock(otOutSeg)+(otNextSeg?' (next day)':'')+'</td>' : '<td class="missing">-</td>');
+            } else {
+              htmlSeg += '<td class="missing">-</td><td class="missing">-</td>';
+            }
           htmlSeg += '<td>' + formatHours(regDecSeg) + '</td>';
           htmlSeg += '<td>' + formatHours(otDecSeg) + '</td>';
           htmlSeg += '<td>' + formatHours(String((parseFloat(regDecSeg)||0)+(parseFloat(otDecSeg)||0))) + '</td>';
@@ -6833,7 +6864,7 @@ let otMins = 0;
           merged.count++;
           if(segment==='AM'){ merged.regMins+=regMinsSeg; merged.amIn=amInActual; merged.amOut=hasBridge?middayStart:amOutActual; }
           else if(segment==='PM'){ merged.regMins+=regMinsSeg; merged.pmIn=hasBridge?middayEnd:pmInActual; merged.pmOut=pmOutActual; }
-          else { merged.otMins+=otMinsSeg; merged.otIn=otInSeg; merged.otOut=otOutSeg; }
+            else { merged.otMins+=otMinsSeg; merged.otIn=otInSeg; merged.otOut=otOutSeg; if(otNextSeg) merged.otNextDay=true; }
         }
       });
       if (merged.count) {
@@ -6845,9 +6876,9 @@ let otMins = 0;
         const otDec = minsToDecimal(merged.otMins);
         tr.innerHTML = '<td>'+empId+'</td><td>'+name+'</td><td>'+projectName+'</td><td>'+scheduleName+'</td><td>'+date+'</td>' +
           cell(merged.amIn) + cell(merged.amOut) + cell(merged.pmIn) + cell(merged.pmOut) +
-          (merged.otIn ? '<td>'+__fmt12Clock(merged.otIn)+'</td>' : '<td class="missing">-</td>') +
-          (merged.otOut ? '<td>'+__fmt12Clock(merged.otOut)+'</td>' : '<td class="missing">-</td>') +
-          '<td>'+formatHours(regDec)+'</td><td>'+formatHours(otDec)+'</td><td>'+formatHours(minsToDecimal(merged.regMins + merged.otMins))+'</td>' +
+            (merged.otIn ? '<td>'+__fmt12Clock(merged.otIn)+'</td>' : '<td class="missing">-</td>') +
+            (merged.otOut ? '<td>'+__fmt12Clock(merged.otOut)+(merged.otNextDay?' (next day)':'')+'</td>' : '<td class="missing">-</td>') +
+            '<td>'+formatHours(regDec)+'</td><td>'+formatHours(otDec)+'</td><td>'+formatHours(minsToDecimal(merged.regMins + merged.otMins))+'</td>' +
           '<td><button type="button" class="btn-split" data-key="'+splitKey+'" onclick="splitRecord(this.dataset.key)">Split</button></td>';
         if(overridesSchedules[overrideKey] || overridesProjects[overrideKeyProj] !== undefined){ tr.style.backgroundColor='#fff3cd'; }
         try{
@@ -6883,7 +6914,7 @@ let otMins = 0;
       '<td>'+empId+'</td><td>'+name+'</td><td>'+projectName+'</td><td>'+scheduleName+'</td><td>'+date+'</td>' +
       cell(amInActual) + cell(amOutActual) + cell(pmInActual) + cell(pmOutActual) +
       (otInCalc ? '<td>' + __fmt12Clock(otInCalc) + '</td>' : '<td class=\"missing\">-</td>') +
-      (otOutCalc ? '<td>' + __fmt12Clock(otOutCalc) + '</td>' : '<td class=\"missing\">-</td>') +
+      (otOutCalc ? '<td>' + __fmt12Clock(otOutCalc) + (__otOutNextDay ? ' (next day)' : '') + '</td>' : '<td class=\"missing\">-</td>') +
       '<td>'+formatHours(totalRegularDecimal)+'</td><td>'+formatHours(otDecimal)+'</td><td>'+formatHours(__tot)+'</td>' +
       // Use a named handler with a data-key attribute instead of an inline IIFE.
       '<td><button type="button" class="btn-split" data-key="' + empId + '___' + date + '" onclick="splitRecord(this.dataset.key)">Split</button></td>';
@@ -6934,9 +6965,9 @@ let otMins = 0;
     summaryEl.textContent = `Grand Total Hours: ${formatHours(_dtrTotalHours)} | Regular Hours: ${formatHours(_dtrTotalReg)} | OT Hours: ${formatHours(_dtrTotalOt)} | Employees: ${_dtrEmpIds.size}`;
   })();
 
-(function(){
-  const tbl = document.getElementById('resultsTable');
-  if (!tbl) return;
+  (function(){
+    const tbl = document.getElementById('resultsTable');
+    if (!tbl) return;
   // Create/clear tfoot
   let foot = tbl.querySelector('tfoot#resultsFoot');
   if (!foot) {
@@ -6989,8 +7020,15 @@ let otMins = 0;
   foot.appendChild(tr);
   // Hide old textual summary
   const summaryEl = document.getElementById('dtrSummary');
-  if (summaryEl){ summaryEl.textContent = ''; summaryEl.style.display = 'none'; }
-})();
+    if (summaryEl){ summaryEl.textContent = ''; summaryEl.style.display = 'none'; }
+  })();
+  try {
+    if (typeof calculatePayrollFromResultsTable === 'function') {
+      calculatePayrollFromResultsTable();
+    } else if (typeof calculatePayrollFromRecords === 'function') {
+      calculatePayrollFromRecords();
+    }
+  } catch(e) { console.warn('payroll recalculation failed', e); }
 }
 
 document.getElementById('addProjectBtn').addEventListener('click', ()=>{
@@ -7126,7 +7164,21 @@ function computeHoursForDateRange(startDate, endDate) {
       }
     } catch(e){ console.warn('Saturday OT local patch error', e); }
 const otInActual = pickEarliest({start: schedule.rng_ot_in_start, end: schedule.rng_ot_in_end});
-    const otOutActual = pickLatest({start: schedule.rng_ot_out_start, end: schedule.rng_ot_out_end});
+    let otOutActual = pickLatest({start: schedule.rng_ot_out_start, end: schedule.rng_ot_out_end});
+    let __otOutNextDay = false;
+    if (!otOutActual || (otInActual && toMins(otOutActual) < toMins(otInActual))) {
+      try {
+        const dt = new Date(date + 'T00:00');
+        if (!isNaN(dt)) {
+          dt.setDate(dt.getDate() + 1);
+          const nextDate = dt.toISOString().slice(0,10);
+          const nextKey = nextDate + '___' + empId;
+          const nextTimes = grouped[nextKey] ? [...new Set(grouped[nextKey])].sort() : [];
+          const early = nextTimes.find(t => toMins(t) <= toMins('06:30'));
+          if (early) { otOutActual = early; __otOutNextDay = true; }
+        }
+      } catch(e){}
+    }
 
     let regMins = 0;
     const grace = Number(schedule.sch_grace) || 0;
@@ -7220,7 +7272,7 @@ const otInActual = pickEarliest({start: schedule.rng_ot_in_start, end: schedule.
       if (otInActual && otOutActual && toMins(otInActual) > pmOutRefMins) {
         let otInM = toMins(otInActual);
         let otOutM = toMins(otOutActual);
-        if (otOutM < otInM) otOutM += 1440;
+        if (__otOutNextDay || otOutM < otInM) otOutM += 1440;
         dayOTMins = Math.max(0, otOutM - otInM);
       } else {
         // Fallback: no explicit OT punches.  Check the last clockâ€‘out and
