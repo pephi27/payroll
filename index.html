@@ -5512,7 +5512,61 @@ function splitRecord(key) {
   renderResults();
 }
 function unsplitRecord(key) {
-  splits[key] = false;
+  const segs = ['AM', 'PM', 'OT'];
+
+  const basePid = Object.prototype.hasOwnProperty.call(overridesProjects, key)
+    ? overridesProjects[key]
+    : undefined;
+
+  const groups = {};
+
+  // Collect project ids for each segment and group them
+  segs.forEach(seg => {
+    const segKey = key + '___' + seg;
+    const pid = Object.prototype.hasOwnProperty.call(overridesProjects, segKey)
+      ? overridesProjects[segKey]
+      : basePid;
+    const gKey = pid === undefined ? '__undefined__' : pid;
+    if (!groups[gKey]) groups[gKey] = { pid, segs: [] };
+    groups[gKey].segs.push(seg);
+  });
+
+  // Promote shared project ids and remove duplicate segment overrides
+  Object.values(groups).forEach(g => {
+    if (g.segs.length > 1) {
+      if (g.pid !== undefined) {
+        overridesProjects[key] = g.pid;
+      } else {
+        delete overridesProjects[key];
+      }
+      g.segs.forEach(seg => {
+        delete overridesProjects[key + '___' + seg];
+      });
+    }
+  });
+
+  // Determine remaining distinct project ids
+  const remaining = new Set();
+  segs.forEach(seg => {
+    const segKey = key + '___' + seg;
+    let pid;
+    if (Object.prototype.hasOwnProperty.call(overridesProjects, segKey)) {
+      pid = overridesProjects[segKey];
+    } else if (Object.prototype.hasOwnProperty.call(overridesProjects, key)) {
+      pid = overridesProjects[key];
+    } else {
+      pid = undefined;
+    }
+    remaining.add(pid);
+  });
+
+  splits[key] = remaining.size > 1;
+
+  if (remaining.size <= 1 && remaining.has(undefined)) {
+    delete overridesProjects[key];
+  }
+
+  saveOverrides();
   saveSplits();
   renderResults();
 }
