@@ -14,18 +14,25 @@ describe('adjustOvernight', () => {
   });
 
   test('uses next-day punch before cutoff', async () => {
-    __setNextDayFirstPunchFetcher(async () => '05:15');
+    const fetcher = jest.fn(async (_empId, _date, cutoff) => {
+      expect(cutoff).toBe(390);
+      return '05:15';
+    });
+    __setNextDayFirstPunchFetcher(fetcher);
     try {
       await expect(adjustOvernight('23:00', '08:00', 1, '2024-01-01')).resolves.toEqual(['23:00', '05:15']);
+      expect(fetcher).toHaveBeenCalledWith(1, '2024-01-01', 390);
     } finally {
       __setNextDayFirstPunchFetcher();
     }
   });
 
   test('defaults to cutoff when next-day punch missing', async () => {
-    __setNextDayFirstPunchFetcher(async () => null);
+    const fetcher = jest.fn(async () => null);
+    __setNextDayFirstPunchFetcher(fetcher);
     try {
       await expect(adjustOvernight('23:00', '08:00', 1, '2024-01-01')).resolves.toEqual(['23:00', '06:30']);
+      expect(fetcher).toHaveBeenCalledWith(1, '2024-01-01', 390);
     } finally {
       __setNextDayFirstPunchFetcher();
     }

@@ -7238,7 +7238,7 @@ const otInActual = pickEarliest({start: schedule.rng_ot_in_start, end: schedule.
         }
         let otOutEff = lastOutStr;
         try {
-          const borrowed = await __getNextDayFirstPunch(empId, date);
+          const borrowed = await __getNextDayFirstPunch(empId, date, 6 * 60 + 30);
           if (typeof borrowed === 'string') otOutEff = borrowed;
         } catch (e) {}
         if (otOutEff) {
