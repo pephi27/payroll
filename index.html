@@ -7218,7 +7218,10 @@ const otInActual = pickEarliest({start: schedule.rng_ot_in_start, end: schedule.
     } else {
       // Nonâ€‘Saturday: prefer explicit OT punches when they exist
       if (otInActual && otOutActual && toMins(otInActual) > pmOutRefMins) {
-        dayOTMins = Math.max(0, toMins(otOutActual) - toMins(otInActual));
+        let otInM = toMins(otInActual);
+        let otOutM = toMins(otOutActual);
+        if (otOutM < otInM) otOutM += 1440;
+        dayOTMins = Math.max(0, otOutM - otInM);
       } else {
         // Fallback: no explicit OT punches.  Check the last clockâ€‘out and
         // count any minutes worked after the scheduled end as OT.  Only
@@ -7231,8 +7234,12 @@ const otInActual = pickEarliest({start: schedule.rng_ot_in_start, end: schedule.
           const outM = toMins(outStr);
           if (lastOutM === null || outM > lastOutM) lastOutM = outM;
         }
-        if (lastOutM != null && lastOutM > pmOutRefMins) {
-          dayOTMins = lastOutM - pmOutRefMins;
+        if (lastOutM != null) {
+          let adjLastOut = lastOutM;
+          if (adjLastOut < pmOutRefMins) adjLastOut += 1440;
+          if (adjLastOut > pmOutRefMins) {
+            dayOTMins = adjLastOut - pmOutRefMins;
+          }
         }
       }
     }
