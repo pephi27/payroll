@@ -26,7 +26,9 @@ function bridgeMidnight(inStr, outStr){
 // Fetch the first punch for `empId` on the day after `dateStr` from Supabase.
 // Environment variables SUPABASE_URL, SUPABASE_KEY and SUPABASE_PUNCH_TABLE
 // control the query.  Returns a time string like "05:30" or null on failure.
-async function defaultNextDayFirstPunch(empId, dateStr){
+// If `cutoffMins` is provided, punches at or after that many minutes past
+// midnight are ignored and null is returned instead.
+async function defaultNextDayFirstPunch(empId, dateStr, cutoffMins){
   const url = process.env.SUPABASE_URL;
   const key = process.env.SUPABASE_KEY || process.env.SUPABASE_ANON_KEY;
   const table = process.env.SUPABASE_PUNCH_TABLE || 'punches';
@@ -51,7 +53,12 @@ async function defaultNextDayFirstPunch(empId, dateStr){
     if (!Array.isArray(data) || data.length === 0) return null;
     const punch = data[0];
     const t = punch.time || punch.punch_time || punch.in;
-    return (typeof t === 'string') ? t : null;
+    if (typeof t !== 'string') return null;
+    if (typeof cutoffMins === 'number') {
+      const tMins = toMins(t);
+      if (isNaN(tMins) || tMins > cutoffMins) return null;
+    }
+    return t;
   } catch (e) {
     console.warn('__getNextDayFirstPunch failed', e);
     return null;
@@ -82,7 +89,7 @@ async function adjustOvernight(inStr, outStr, empId, dateStr){
     const cutoff = 6 * 60 + 30; // 06:30 in minutes
     let limitM = cutoff;
     try {
-      const nextPunchStr = await __getNextDayFirstPunch(empId, dateStr);
+      const nextPunchStr = await __getNextDayFirstPunch(empId, dateStr, cutoff);
       if (typeof nextPunchStr === 'string') {
         const npM = toMins(nextPunchStr);
         if (!isNaN(npM)) {
