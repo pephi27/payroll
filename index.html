@@ -7203,10 +7203,9 @@ const otInActual = pickEarliest({start: schedule.rng_ot_in_start, end: schedule.
       // minutes without regard to explicit OT punches.
       let extraOTMins = 0;
       const satEndM = toMins(__satEnd);
-      for (let i = 0; i < times.length; i += 2) {
+      for (let i = 0; i + 1 < times.length; i += 2) {
         const inStr  = times[i];
         const outStr = times[i+1];
-        if (!outStr) continue;
         const inM  = toMins(inStr);
         const outM = toMins(outStr);
         const startM = Math.max(inM, satEndM);
