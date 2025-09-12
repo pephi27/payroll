@@ -4955,11 +4955,13 @@ document.addEventListener('DOMContentLoaded', () => {
       // Per-project TBODY blocks
       const tbodies = [];
       let gReg=0,gOT=0,gGross=0;
+      const gDayTotals = dates.map(() => ({ rwh: 0, oth: 0 }));
       const projects = Object.keys(data).sort();
 
       projects.forEach(proj=>{
         const empMap = data[proj];
         let pReg=0,pOT=0,pGross=0;
+        const dayTotals = dates.map(() => ({ rwh: 0, oth: 0 }));
         let rows='';
 
         rows += `<tr class="proj-break"><td colspan="${totalCols}">${proj}</td></tr>`;
@@ -4974,10 +4976,11 @@ document.addEventListener('DOMContentLoaded', () => {
           const rate = getRate(empId, display);
           let rReg=0,rOT=0;
 
-          const cells = dates.map(d=>{
+          const cells = dates.map((d,i)=>{
             const key = d.setHours(0,0,0,0);
             const v = rec.days[key] || { rwh:0, oth:0 };
             rReg += v.rwh; rOT += v.oth;
+            dayTotals[i].rwh += v.rwh; dayTotals[i].oth += v.oth;
             return `<td class="num">${f2(v.rwh)}</td><td class="num">${f2(v.oth)}</td>`;
           }).join('');
 
@@ -4995,8 +4998,6 @@ document.addEventListener('DOMContentLoaded', () => {
             <td class="num">${f2(gross)}</td>
           </tr>`;
         });
-
-        gReg += pReg; gOT += pOT; gGross += pGross;
 
 // Compute per-project Bantay allowance (Supabase-backed)
 const allow = Object.keys(bantay || {}).reduce((sum, empId) => {
@@ -5018,28 +5019,34 @@ rows += `<tr class="allowance">
   <td class="num">${f2(allow)}</td>
 </tr>`;
 
-// Include allowance in project & grand gross
-pGross += allow;
-gGross += allow;
+  // Include allowance in project gross
+  pGross += allow;
 
-rows += `<tr class="totals">
-          <td class="left" colspan="${2 + dates.length*2}">Project Total</td>
-          <td class="num">${f2(pReg)}</td>
-          <td class="num">${f2(pOT)}</td>
-          <td class="num">${f2(pReg + pOT)}</td>
-          <td class="num">${f2(pGross)}</td>
+  rows += `<tr class="totals">
+            <td class="left">Project Total</td>
+            <td class="num">-</td>
+            ${dayTotals.map(dt => `<td class="num">${f2(dt.rwh)}</td><td class="num">${f2(dt.oth)}</td>`).join('')}
+            <td class="num">${f2(pReg)}</td>
+            <td class="num">${f2(pOT)}</td>
+            <td class="num">${f2(pReg + pOT)}</td>
+            <td class="num">${f2(pGross)}</td>
+          </tr>`;
+
+          gReg += pReg; gOT += pOT; gGross += pGross;
+          dayTotals.forEach((dt,i)=>{ gDayTotals[i].rwh += dt.rwh; gDayTotals[i].oth += dt.oth; });
+
+          tbodies.push(`<tbody class="proj-page">${rows}</tbody>`);
+        });
+
+        const foot = `<tr class="totals">
+          <td class="left">Grand Total</td>
+          <td class="num">-</td>
+          ${gDayTotals.map(dt => `<td class="num">${f2(dt.rwh)}</td><td class="num">${f2(dt.oth)}</td>`).join('')}
+          <td class="num">${f2(gReg)}</td>
+          <td class="num">${f2(gOT)}</td>
+          <td class="num">${f2(gReg + gOT)}</td>
+          <td class="num">${f2(gGross)}</td>
         </tr>`;
-
-        tbodies.push(`<tbody class="proj-page">${rows}</tbody>`);
-      });
-
-      const foot = `<tr class="totals">
-        <td class="left" colspan="${2 + dates.length*2}">Grand Total</td>
-        <td class="num">${f2(gReg)}</td>
-        <td class="num">${f2(gOT)}</td>
-        <td class="num">${f2(gReg + gOT)}</td>
-        <td class="num">${f2(gGross)}</td>
-      </tr>`;
 
       $('#r_table').innerHTML = `<thead>${thead1}${thead2}</thead>${tbodies.join('')}<tfoot>${foot}</tfoot>`;
 
@@ -5079,10 +5086,12 @@ rows += `<tr class="totals">
 
       const projects = Object.keys(data).sort();
       let gReg=0,gOT=0,gGross=0;
+      const gDayTotals = dates.map(() => ({ rwh:0, oth:0 }));
 
       projects.forEach(proj=>{
         const empMap = data[proj];
         let pReg=0,pOT=0,pGross=0;
+        const dayTotals = dates.map(() => ({ rwh:0, oth:0 }));
 
         Object.keys(empMap).sort((a,b)=>{
           const A = (empMap[a].name||a).toUpperCase();
@@ -5096,10 +5105,11 @@ rows += `<tr class="totals">
 
           let rReg=0,rOT=0;
           const dayCells = [];
-          dates.forEach(d=>{
+          dates.forEach((d,i)=>{
             const key = d.setHours(0,0,0,0);
             const v = rec.days[key] || { rwh:0, oth:0 };
             rReg += v.rwh; rOT += v.oth;
+            dayTotals[i].rwh += v.rwh; dayTotals[i].oth += v.oth;
             dayCells.push(to2(v.rwh), to2(v.oth));
           });
 
@@ -5128,14 +5138,17 @@ rows += `<tr class="totals">
         } catch (e) { /* no-op if allowance data missing */ }
 
         gReg += pReg; gOT += pOT; gGross += pGross;
+        dayTotals.forEach((dt,i)=>{ gDayTotals[i].rwh += dt.rwh; gDayTotals[i].oth += dt.oth; });
+        const dayTotalsCells = dayTotals.flatMap(dt=>[to2(dt.rwh), to2(dt.oth)]);
         rows.push([proj, 'Project Total', ''].concat(
-          new Array(dates.length*2).fill(''),
+          dayTotalsCells,
           [to2(pReg), to2(pOT), to2(pReg+pOT), to2(pGross)]
         ));
       });
 
+      const gDayTotalsCells = gDayTotals.flatMap(dt=>[to2(dt.rwh), to2(dt.oth)]);
       rows.push(['', 'Grand Total', ''].concat(
-        new Array(dates.length*2).fill(''),
+        gDayTotalsCells,
         [to2(gReg), to2(gOT), to2(gReg+gOT), to2(gGross)]
       ));
 
@@ -5163,11 +5176,13 @@ rows += `<tr class="totals">
         // Build one sheet per project
         const projects = Object.keys(data).sort();
         let gReg=0,gOT=0,gGross=0;
+        const gDayTotals = dates.map(()=>({ rwh:0, oth:0 }));
         const summaryRows = [['PROJECT'].concat(header)];
         projects.forEach(proj=>{
           const empMap = data[proj];
           const rows = [header.slice()];
           let pReg=0,pOT=0,pGross=0;
+          const dayTotals = dates.map(()=>({ rwh:0, oth:0 }));
           Object.keys(empMap).sort((a,b)=>{
             const A = (empMap[a].name||a).toUpperCase();
             const B = (empMap[b].name||b).toUpperCase();
@@ -5178,10 +5193,11 @@ rows += `<tr class="totals">
             const rate = getRate(empId, display);
             let rReg=0,rOT=0;
             const dayCells = [];
-            dates.forEach(d=>{
+            dates.forEach((d,i)=>{
               const key = d.setHours(0,0,0,0);
               const v = rec.days[key] || { rwh:0, oth:0 };
               rReg += v.rwh; rOT += v.oth;
+              dayTotals[i].rwh += v.rwh; dayTotals[i].oth += v.oth;
               dayCells.push(to2(v.rwh), to2(v.oth));
             });
             const otMult = toNum(document.querySelector('#otMultiplier')?.value || 1.5);
@@ -5204,16 +5220,20 @@ rows += `<tr class="totals">
               const zeros = new Array(dates.length*2).fill('0.00');
               rows.push(['Allowance',''].concat(zeros, ['0.00','0.00','0.00', to2(allow)]));
               summaryRows.push([proj, 'Allowance',''].concat(zeros, ['0.00','0.00','0.00', to2(allow)]));
-              pGross += allow; gGross += allow;
+              pGross += allow;
             }
           }catch(e){}
           gReg += pReg; gOT += pOT; gGross += pGross;
-          rows.push(['Project Total',''].concat(new Array(dates.length*2).fill(''), [to2(pReg), to2(pOT), to2(pReg+pOT), to2(pGross)]));
+          dayTotals.forEach((dt,i)=>{ gDayTotals[i].rwh += dt.rwh; gDayTotals[i].oth += dt.oth; });
+          const dayTotalsCells = dayTotals.flatMap(dt=>[to2(dt.rwh), to2(dt.oth)]);
+          rows.push(['Project Total',''].concat(dayTotalsCells, [to2(pReg), to2(pOT), to2(pReg+pOT), to2(pGross)]));
+          summaryRows.push([proj,'Project Total',''].concat(dayTotalsCells,[to2(pReg), to2(pOT), to2(pReg+pOT), to2(pGross)]));
           const ws = XLSX.utils.aoa_to_sheet(rows);
           XLSX.utils.book_append_sheet(wb, ws, (proj || 'Project').toString().substring(0,31));
         });
         // Summary sheet with grand totals
-        summaryRows.push(['','Grand Total',''].concat(new Array(dates.length*2).fill(''), [to2(gReg), to2(gOT), to2(gReg+gOT), to2(gGross)]));
+        const gDayTotalsCells = gDayTotals.flatMap(dt=>[to2(dt.rwh), to2(dt.oth)]);
+        summaryRows.push(['','Grand Total',''].concat(gDayTotalsCells, [to2(gReg), to2(gOT), to2(gReg+gOT), to2(gGross)]));
         const wsSummary = XLSX.utils.aoa_to_sheet(summaryRows);
         XLSX.utils.book_append_sheet(wb, wsSummary, 'Summary');
         const fname = `reports_all_${from}_to_${to}.xlsx`;
@@ -5300,14 +5320,16 @@ rows += `<tr class="totals">
             const header = ['PERSONNEL','RATE'].concat(dayHeader, ['TOTAL REG HRS','TOTAL OT HRS','GRAND TOTAL HOURS','GROSS']);
             const projects = Object.keys(data).sort();
             let gReg=0,gOT=0,gGross=0;
+            const gDayTotals = dates.map(()=>({rwh:0, oth:0}));
             const summaryRows = [['PROJECT'].concat(header)];
             projects.forEach(proj=>{
               const empMap = data[proj];
               const rows = [header.slice()];
               let pReg=0,pOT=0,pGross=0;
+              const dayTotals = dates.map(()=>({rwh:0, oth:0}));
               Object.keys(empMap).sort((a,b)=>{ const A=(empMap[a].name||a).toUpperCase(); const B=(empMap[b].name||b).toUpperCase(); return A.localeCompare(B); }).forEach(empId=>{
                 const rec = empMap[empId]; const display = rec.name || empId; const rate = getRate(empId, display);
-                let rReg=0,rOT=0; const dayCells=[]; dates.forEach(d=>{ const key=d.setHours(0,0,0,0); const v=rec.days[key]||{rwh:0,oth:0}; rReg+=v.rwh; rOT+=v.oth; dayCells.push(to2(v.rwh), to2(v.oth)); });
+                let rReg=0,rOT=0; const dayCells=[]; dates.forEach((d,i)=>{ const key=d.setHours(0,0,0,0); const v=rec.days[key]||{rwh:0,oth:0}; rReg+=v.rwh; rOT+=v.oth; dayTotals[i].rwh+=v.rwh; dayTotals[i].oth+=v.oth; dayCells.push(to2(v.rwh), to2(v.oth)); });
                 const otMult = toNum(document.querySelector('#otMultiplier')?.value || 1.5);
                 const gross = (rReg*rate) + (rOT*rate*otMult); pReg+=rReg; pOT+=rOT; pGross+=gross;
                 rows.push([display, to2(rate)].concat(dayCells, [to2(rReg), to2(rOT), to2(rReg+rOT), to2(gross)]));
@@ -5316,13 +5338,16 @@ rows += `<tr class="totals">
               // Allowance row
               try{
                 const allow = Object.keys(bantay||{}).reduce((sum, empId)=>{ const assigned=(bantayProj||{})[empId]; if(!assigned) return sum; const matchesById=(assigned===proj); const matchesByName=((typeof storedProjects!=='undefined'&&storedProjects&&storedProjects[assigned]?.name)===proj); const amt=parseFloat((bantay&&bantay[empId])||0)||0; return (matchesById||matchesByName)?(sum+amt):sum; },0);
-                if(allow>0){ const zeros=new Array(dates.length*2).fill('0.00'); rows.push(['Allowance',''].concat(zeros,['0.00','0.00','0.00', to2(allow)])); summaryRows.push([proj,'Allowance',''].concat(zeros,['0.00','0.00','0.00', to2(allow)])); pGross+=allow; gGross+=allow; }
+                if(allow>0){ const zeros=new Array(dates.length*2).fill('0.00'); rows.push(['Allowance',''].concat(zeros,['0.00','0.00','0.00', to2(allow)])); summaryRows.push([proj,'Allowance',''].concat(zeros,['0.00','0.00','0.00', to2(allow)])); pGross+=allow; }
               }catch(e){}
               gReg+=pReg; gOT+=pOT; gGross+=pGross;
-              rows.push(['Project Total',''].concat(new Array(dates.length*2).fill(''), [to2(pReg), to2(pOT), to2(pReg+pOT), to2(pGross)]));
+              dayTotals.forEach((dt,i)=>{ gDayTotals[i].rwh += dt.rwh; gDayTotals[i].oth += dt.oth; });
+              const dayTotalsCells = dayTotals.flatMap(dt=>[to2(dt.rwh), to2(dt.oth)]);
+              rows.push(['Project Total',''].concat(dayTotalsCells, [to2(pReg), to2(pOT), to2(pReg+pOT), to2(pGross)]));
               XLSX.utils.book_append_sheet(wb2, XLSX.utils.aoa_to_sheet(rows), (proj||'Project').toString().substring(0,31));
             });
-            summaryRows.push(['','Grand Total',''].concat(new Array(dates.length*2).fill(''), [to2(gReg), to2(gOT), to2(gReg+gOT), to2(gGross)]));
+            const gDayTotalsCells = gDayTotals.flatMap(dt=>[to2(dt.rwh), to2(dt.oth)]);
+            summaryRows.push(['','Grand Total',''].concat(gDayTotalsCells, [to2(gReg), to2(gOT), to2(gReg+gOT), to2(gGross)]));
             XLSX.utils.book_append_sheet(wb2, XLSX.utils.aoa_to_sheet(summaryRows), 'Summary');
           };
           addReportSheets(wb);
