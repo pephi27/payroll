@@ -114,7 +114,6 @@ const KNOWN_KEYS = [
   ,"payroll_bantay"
   ,"payroll_bantay_proj"
   ,"payroll_contrib_flags"
-  ,"att_overrides_hours_v1"
 ]
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY)
@@ -130,26 +129,6 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_KEY)
 // provides a simple, predictable global reference.
 window.supabase = supabase;
 window.SUPABASE_TABLE = TABLE;
-// === Supabase KV helpers (no localStorage) ===
-async function readKV(key){
-  try{
-    const { data, error } = await window.supabase
-      .from(window.SUPABASE_TABLE)
-      .select('value')
-      .eq('key', key)
-      .single();
-    if (error || !data) return null;
-    return data.value;
-  }catch(e){ console.warn('readKV failed', e); return null; }
-}
-async function writeKV(key, value){
-  try{
-    await window.supabase
-      .from(window.SUPABASE_TABLE)
-      .upsert({ key, value });
-  }catch(e){ console.warn('writeKV failed', e); }
-}
-
 
 const __origSetItem = Storage.prototype.setItem
 const __origRemoveItem = Storage.prototype.removeItem
@@ -10100,74 +10079,78 @@ document.addEventListener('DOMContentLoaded', async function () {
 <script>
 // ===== DTR Editor Column (Total Regular & OT editable) =====
 (function(){
-  const LS_OVR_HOURS = 'att_overrides_hours_v1';
+  const OVR_PREFIX = 'att_overrides_hours_v1::';
   let overridesHours = {};
-  try { overridesHours = JSON.parse(localStorage.getItem(LS_OVR_HOURS) || '{}') || {}; } catch(e){ overridesHours = {}; }
-  function saveOverridesHours(){ try { localStorage.setItem(LS_OVR_HOURS, JSON.stringify(overridesHours)); } catch(e){} }
-  // Persist overrides to Supabase (kv_store) and fetch initial remote data
-  function saveOverridesHoursRemote(){
-    try {
+
+  async function upsertOverrideRemote(k, val){
+    try{
       const supabaseClient = window.supabase;
       const table = window.SUPABASE_TABLE;
       if(!supabaseClient || !table) return;
-      // Upsert the entire overridesHours object as the value for LS_OVR_HOURS
-      supabaseClient
+      await supabaseClient
         .from(table)
-        .upsert({ key: LS_OVR_HOURS, value: overridesHours }, { onConflict: 'key' })
-        .then(({ error }) => {
-          if (error) console.warn('Supabase upsert overridesHours error:', error);
-        });
-    } catch(e){ console.warn('Supabase upsert overridesHours failed', e); }
+        .upsert({ key: OVR_PREFIX + k, value: val }, { onConflict: 'key' });
+    }catch(e){ console.warn('Supabase upsert override failed', e); }
   }
-  // Load remote overridesHours from Supabase on startup, merge/replace local state and apply to table
+
+  async function deleteOverrideRemote(k){
+    try{
+      const supabaseClient = window.supabase;
+      const table = window.SUPABASE_TABLE;
+      if(!supabaseClient || !table) return;
+      await supabaseClient.from(table).delete().eq('key', OVR_PREFIX + k);
+    }catch(e){ console.warn('Supabase delete override failed', e); }
+  }
+
+  // Load remote overrides from Supabase on startup and apply to table
   (async function loadRemoteOverrides(){
-    try {
+    try{
       const supabaseClient = window.supabase;
       const table = window.SUPABASE_TABLE;
       if(!supabaseClient || !table) return;
       const { data, error } = await supabaseClient
         .from(table)
-        .select('value')
-        .eq('key', LS_OVR_HOURS)
-        .maybeSingle();
-      if(!error && data && data.value){
-        // replace overridesHours with remote value
-        if (typeof data.value === 'object') {
-          overridesHours = data.value;
-          // persist to local storage for offline use
-          saveOverridesHours();
-          // apply remote values to table after they've loaded
-          applyOverridesToTable();
-          recomputeDtrSummaryFromTable();
-        }
+        .select('key,value')
+        .like('key', OVR_PREFIX + '%');
+      if(!error && Array.isArray(data)){
+        overridesHours = {};
+        data.forEach(row => {
+          try{
+            const k = String(row.key).slice(OVR_PREFIX.length);
+            overridesHours[k] = row.value || {};
+          }catch(_){}
+        });
+        applyOverridesToTable();
+        recomputeDtrSummaryFromTable();
       }
-    } catch(e){ console.warn('Load remote overrides failed', e); }
+    }catch(e){ console.warn('Load remote overrides failed', e); }
   })();
-  // Subscribe to realtime updates for overridesHours in Supabase so edits on other devices reflect here
-  try {
+
+  // Subscribe to realtime updates for per-row overrides so edits on other devices reflect here
+  try{
     const supabaseClient = window.supabase;
     const table = window.SUPABASE_TABLE;
-    if (supabaseClient && table && supabaseClient.channel) {
+    if(supabaseClient && table && supabaseClient.channel){
       supabaseClient
         .channel('dtr_overrides_hours')
-        .on(
-          'postgres_changes',
-          { event: '*', schema: 'public', table: table, filter: `key=eq.${LS_OVR_HOURS}` },
-          (payload) => {
-            try {
-              const newVal = payload.new && payload.new.value;
-              if (newVal && typeof newVal === 'object') {
-                overridesHours = newVal;
-                saveOverridesHours();
-                applyOverridesToTable();
-                recomputeDtrSummaryFromTable();
-              }
-            } catch(e) { console.warn('Realtime payload handling error', e); }
-          }
-        )
+        .on('postgres_changes', { event: '*', schema: 'public', table: table }, (payload) => {
+          try{
+            const row = payload.new || payload.old || {};
+            const key = row.key || '';
+            if(!key.startsWith(OVR_PREFIX)) return;
+            const k = key.slice(OVR_PREFIX.length);
+            if(payload.eventType === 'DELETE'){
+              delete overridesHours[k];
+            } else if (payload.new && payload.new.value){
+              overridesHours[k] = payload.new.value;
+            }
+            applyOverridesToTable();
+            recomputeDtrSummaryFromTable();
+          }catch(e){ console.warn('Realtime payload handling error', e); }
+        })
         .subscribe();
     }
-  } catch(e){ console.warn('Realtime subscription error:', e); }
+  }catch(e){ console.warn('Realtime subscription error:', e); }
 
   function ensureEditorHeader(){
     const table = document.getElementById('resultsTable');
@@ -10287,13 +10270,14 @@ document.addEventListener('DOMContentLoaded', async function () {
           const regEdited  = changedReg || hadPrevReg;
           const otEdited   = changedOt  || hadPrevOt;
           if (regEdited || otEdited){
-            overridesHours[k] = { reg: regVal, ot: otVal, regEdited: !!regEdited, otEdited: !!otEdited };
+            const val = { reg: regVal, ot: otVal, regEdited: !!regEdited, otEdited: !!otEdited };
+            overridesHours[k] = val;
+            upsertOverrideRemote(k, val);
           } else {
             // No per-column edits before or now: remove override entry
             if (overridesHours && Object.prototype.hasOwnProperty.call(overridesHours, k)) delete overridesHours[k];
+            deleteOverrideRemote(k);
           }
-          saveOverridesHours();
-          if (typeof saveOverridesHoursRemote === 'function') saveOverridesHoursRemote();
           // Write cells, adding asterisk only to edited columns
           const ovNow = overridesHours && overridesHours[k];
           const starReg = ovNow ? (Object.prototype.hasOwnProperty.call(ovNow,'regEdited') ? !!ovNow.regEdited : true) : false;
