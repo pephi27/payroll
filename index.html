@@ -3769,21 +3769,24 @@ document.addEventListener('DOMContentLoaded', () => {
         alert('Invalid snapshot dates.');
         return;
       }
-      const newSnap = await buildSnapshot(startDate, endDate);
-      if (!newSnap) {
-        alert('Payroll table is missing or empty.');
-        return;
-      }
-      const json = JSON.stringify(newSnap);
-      const hashBuffer = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(json));
-      const hashArray = Array.from(new Uint8Array(hashBuffer));
-      const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
-      const now = new Date().toISOString();
-      snap.rows = newSnap.rows;
-      snap.totals = newSnap.totals;
-      snap.hash = hashHex;
-      snap.lockedAt = now;
-      snap.locked = true;
+        const pid = `${startDate}_${endDate}`;
+        const frozen = await finalizePeriod(pid);
+        if (!frozen || !(frozen.frozenPayrollRows || []).length) {
+          alert('Payroll table is missing or empty.');
+          return;
+        }
+        const json = JSON.stringify(frozen);
+        const hashBuffer = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(json));
+        const hashArray = Array.from(new Uint8Array(hashBuffer));
+        const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+        const now = new Date().toISOString();
+        snap.frozenPayrollRows = frozen.frozenPayrollRows;
+        snap.frozenTotals = frozen.frozenTotals;
+        snap.frozenEmployees = frozen.frozenEmployees;
+        snap.frozenSchedules = frozen.frozenSchedules;
+        snap.hash = hashHex;
+        snap.lockedAt = now;
+        snap.locked = true;
       saveHistory();
       renderHistory();
       renderActivePayrolls();
@@ -4267,7 +4270,8 @@ document.addEventListener('DOMContentLoaded', () => {
       'Total Deductions','Net Pay'
     ];
     const lines = [header.join(',')];
-    snap.rows.forEach(row => {
+    const rows = snap.rows || snap.frozenPayrollRows || [];
+    rows.forEach(row => {
       const values = [
         row.id, row.name,
         row.rate, row.regHrs, row.otHrs, row.adjHrs, row.totalHrs,
@@ -4353,17 +4357,17 @@ document.addEventListener('DOMContentLoaded', () => {
     } catch (e) {
       // Ignore errors in calculation; snapshot will still be built from current cells
     }
-    const snap = await buildSnapshot(start, end);
-    if (!snap) {
+    const frozen = await finalizePeriod(periodKey());
+    if (!frozen || !(frozen.frozenPayrollRows || []).length) {
       alert('Payroll table is missing or empty.');
       return;
     }
-    const json = JSON.stringify(snap);
+    const json = JSON.stringify(frozen);
     const hashBuffer = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(json));
     const hashArray = Array.from(new Uint8Array(hashBuffer));
     const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
     const now = new Date().toISOString();
-    payrollHistory.push({ startDate: start, endDate: end, rows: snap.rows, totals: snap.totals, hash: hashHex, lockedAt: now, locked: true });
+    payrollHistory.push({ startDate: start, endDate: end, ...frozen, hash: hashHex, lockedAt: now, locked: true });
     saveHistory();
     renderHistory();
     // Disable payroll and DTR editing via helper until date range changes
@@ -4475,10 +4479,10 @@ document.addEventListener('DOMContentLoaded', () => {
     const s1 = payrollHistory[idx1];
     const s2 = payrollHistory[idx2];
     if (!s1 || !s2) return;
-    const map1 = {};
-    s1.rows.forEach(r => { map1[r.id] = r; });
-    const map2 = {};
-    s2.rows.forEach(r => { map2[r.id] = r; });
+      const map1 = {};
+      (s1.rows || s1.frozenPayrollRows || []).forEach(r => { map1[r.id] = r; });
+      const map2 = {};
+      (s2.rows || s2.frozenPayrollRows || []).forEach(r => { map2[r.id] = r; });
     const allIds = new Set([...Object.keys(map1), ...Object.keys(map2)]);
     if (snapshotView) snapshotView.innerHTML = '';
     const table = document.createElement('table');
@@ -4602,7 +4606,7 @@ document.addEventListener('DOMContentLoaded', () => {
       };
     // Each employee row in the snapshot may include an adjAmt property
     // representing manual adjustments. Build the table row accordingly.
-    (snap.rows || []).forEach(r => {
+      (snap.rows || snap.frozenPayrollRows || []).forEach(r => {
       const tr = document.createElement('tr');
       const num = (x)=>{ const n = parseFloat(String(x??'').replace(/,/g,'')); return isNaN(n)?0:n; };
       // Current divisor and OT multiplier
@@ -4741,14 +4745,14 @@ document.addEventListener('DOMContentLoaded', () => {
     // implemented.
     let dtrRows = [];
     let useSnapDtrs = false;
-    (snap.rows || []).forEach(empRow => {
+        (snap.rows || snap.frozenPayrollRows || []).forEach(empRow => {
       if (Array.isArray(empRow.dtrs) && empRow.dtrs.length) {
         useSnapDtrs = true;
       }
     });
     if (useSnapDtrs) {
       // Use the stored dtrs directly from each employee row
-      (snap.rows || []).forEach(empRow => {
+      (snap.rows || snap.frozenPayrollRows || []).forEach(empRow => {
         const id = empRow.id;
         const name = empRow.name || '';
         (empRow.dtrs || []).forEach(d => {
@@ -4767,7 +4771,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!dateStr) return false;
         return (!start || dateStr >= start) && (!end || dateStr <= end);
       }
-      (snap.rows || []).forEach(empRow => {
+        (snap.rows || snap.frozenPayrollRows || []).forEach(empRow => {
         const id = empRow.id;
         const name = empRow.name || '';
         const recs = records.filter(r => r && String(r.empId) === String(id) && inRange(r.date));
@@ -9176,10 +9180,15 @@ function loadSaved(){
     const hist = loadJSON(HIST_KEY, []);
     active = {};
     (hist||[]).forEach(s=>{
-      if (s && s.startDate && s.endDate /* && s.locked */){
-        const key = toKey(s.startDate, s.endDate);
-        active[key] = { startDate:s.startDate, endDate:s.endDate, rows:s.rows||[], totals:s.totals||{} };
-      }
+        if (s && s.startDate && s.endDate /* && s.locked */){
+          const key = toKey(s.startDate, s.endDate);
+          active[key] = {
+            startDate: s.startDate,
+            endDate: s.endDate,
+            rows: s.rows || s.frozenPayrollRows || [],
+            totals: s.totals || s.frozenTotals || {}
+          };
+        }
     });
     saveJSON(ACTIVE_KEY, active);
   }
@@ -9188,7 +9197,12 @@ function loadSaved(){
     if(!snap || !snap.startDate || !snap.endDate) return;
     const key = toKey(snap.startDate, snap.endDate);
     const active = loadJSON(ACTIVE_KEY, {}) || {};
-    active[key] = { startDate:snap.startDate, endDate:snap.endDate, rows:snap.rows||[], totals:snap.totals||{} };
+      active[key] = {
+        startDate: snap.startDate,
+        endDate: snap.endDate,
+        rows: snap.rows || snap.frozenPayrollRows || [],
+        totals: snap.totals || snap.frozenTotals || {}
+      };
     saveJSON(ACTIVE_KEY, active);
     localStorage.setItem(CURRENT_KEY, key);
   }
