@@ -6636,6 +6636,72 @@ function formatHours(value){
 }
 
 function renderResults(){
+  // If the current payroll period is locked, rebuild the payroll table from
+  // the frozen snapshot and skip live recalculation/rendering.
+  try {
+    const pid = typeof periodKey === 'function' ? periodKey() : '';
+    const locked = typeof isLocked === 'function' && isLocked(pid);
+    if (locked) {
+      const hist = Array.isArray(window.payrollHistory)
+        ? window.payrollHistory
+        : (typeof loadHistory === 'function' ? loadHistory() : []);
+      let snap = null;
+      if (pid && Array.isArray(hist)) {
+        const [start, end] = pid.split('_');
+        snap = hist.find(s => {
+          if (!s || !s.locked) return false;
+          const sStart = String(s.startDate || '').split('T')[0];
+          const sEnd = String(s.endDate || '').split('T')[0];
+          return sStart === start && sEnd === end;
+        }) || null;
+      }
+      if (snap) {
+        const rows = snap.frozenPayrollRows || snap.rows || [];
+        const totals = snap.frozenTotals || snap.totals || {};
+        const tb = document.querySelector('#payrollTable tbody');
+        const foot = document.querySelector('#payrollTable tfoot tr');
+        if (tb) {
+          tb.innerHTML = '';
+          rows.forEach(r => {
+            const tr = document.createElement('tr');
+            tr.innerHTML = `
+              <td>${r.id || ''}</td>
+              <td class="wrap">${r.name || ''}</td>
+              <td><input class="cell rate" type="number" step="0.01" value="${r.rate || 0}" disabled></td>
+              <td><input class="cell regHrs" type="number" step="0.01" value="${r.regHrs || 0}" disabled></td>
+              <td><input class="cell otHrs" type="number" step="0.01" value="${r.otHrs || 0}" disabled></td>
+              <td class="adjHrs num">${Number(r.adjHrs || 0).toFixed(2)}</td>
+              <td class="totalHrs num">${Number(r.totalHrs || 0).toFixed(2)}</td>
+              <td class="regPay num">${Number(r.regPay || 0).toFixed(2)}</td>
+              <td class="otPay num">${Number(r.otPay || 0).toFixed(2)}</td>
+              <td class="adjAmt num">${Number(r.adjAmt || 0).toFixed(2)}</td>
+              <td><input class="cell bantay" type="number" step="0.01" value="${r.bantay || 0}" disabled></td>
+              <td class="grossPay num">${Number(r.grossPay || 0).toFixed(2)}</td>
+              <td class="pagibig num">${Number(r.pagibig || 0).toFixed(2)}</td>
+              <td class="philhealth num">${Number(r.philhealth || 0).toFixed(2)}</td>
+              <td class="sss num">${Number(r.sss || 0).toFixed(2)}</td>
+              <td><input class="cell loanSSS" type="number" step="0.01" value="${r.loanSSS || 0}" disabled></td>
+              <td><input class="cell loanPI" type="number" step="0.01" value="${r.loanPI || 0}" disabled></td>
+              <td><input class="cell vale" type="number" step="0.01" value="${r.vale || 0}" disabled></td>
+              <td class="valeWed num">${Number(r.valeWed || 0).toFixed(2)}</td>
+              <td class="totalDed num">${Number(r.totalDed || 0).toFixed(2)}</td>
+              <td class="netPay num">${Number(r.netPay || 0).toFixed(2)}</td>
+              <td><button type="button" class="payslipBtn">Payslip</button></td>`;
+            tb.appendChild(tr);
+          });
+        }
+        if (foot) {
+          foot.querySelectorAll('[data-col]').forEach(td => {
+            const key = td.dataset.col;
+            const val = totals && totals[key] != null ? Number(totals[key]) : 0;
+            td.textContent = val.toFixed(2);
+          });
+        }
+        try { attachRowEvents && attachRowEvents(); } catch(_) {}
+      }
+      return;
+    }
+  } catch (e) { console.warn('locked payroll render failed', e); }
 
 // 12-hour clock formatter for display only (keeps underlying logic 24h)
 function __fmt12Clock(hhmm){
@@ -6660,7 +6726,7 @@ function __fmt12Clock(hhmm){
   currentProjectFilter = document.getElementById('filterProject') ? document.getElementById('filterProject').value : 'all';
   localStorage.setItem(LS_FILTER_PROJECT, currentProjectFilter);
 
-  
+
   const nameQuery = (document.getElementById('dtrSearchName') ? document.getElementById('dtrSearchName').value.trim().toLowerCase() : '');
 const groups = {};
   const manualKeys = new Set();
