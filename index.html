@@ -3961,6 +3961,84 @@ document.addEventListener('DOMContentLoaded', () => {
   window.buildSnapshot = buildSnapshot;
 
   /**
+   * Build a frozen view of the current payroll period. This captures the
+   * payroll snapshot along with employee metadata and resolved schedules so
+   * that the period can be restored even if future changes occur.
+   *
+   * @param {string} periodId `${start}_${end}` identifier for the payroll period
+   * @returns {Promise<{frozenPayrollRows:Array, frozenTotals:Object, frozenEmployees:Object, frozenSchedules:Object}>}
+   */
+  async function finalizePeriod(periodId) {
+    const pid = periodId || (typeof periodKey === 'function' ? periodKey() : '');
+    const parts = (pid || '').split('_');
+    const start = parts[0] || '';
+    const end = parts[1] || '';
+
+    // 1. Capture payroll rows and totals using the existing snapshot builder
+    const snap = await buildSnapshot(start, end) || { rows: [], totals: {} };
+    const frozenPayrollRows = snap.rows || [];
+    const frozenTotals = snap.totals || {};
+
+    // 2. Freeze employee roster and related contribution flags and bantay data
+    const frozenEmployees = {};
+    const empObj = (typeof storedEmployees === 'object' && storedEmployees) || {};
+    const flags = (typeof contribFlags === 'object' && contribFlags) || {};
+    const bantayMap = (typeof bantay === 'object' && bantay) || {};
+    const bantayLinks = (typeof bantayProj === 'object' && bantayProj) || {};
+
+    Object.keys(empObj).forEach(id => {
+      const emp = Object.assign({}, empObj[id]);
+      const cf = flags[id] || {};
+      emp.contribFlags = {
+        pagibig: cf.pagibig !== false,
+        philhealth: cf.philhealth !== false,
+        sss: cf.sss !== false
+      };
+      emp.bantay = parseFloat(bantayMap[id]) || 0;
+      emp.bantayProj = bantayLinks[id] || '';
+      frozenEmployees[id] = emp;
+    });
+
+    // 3. Resolve schedule windows for each employee/date within the period
+    const frozenSchedules = {};
+    if (start && end) {
+      const startD = new Date(start);
+      const endD = new Date(end);
+      for (let d = new Date(startD); d <= endD; d.setDate(d.getDate() + 1)) {
+        const dateStr = d.toISOString().slice(0,10);
+        Object.keys(empObj).forEach(empId => {
+          let schedId = empObj[empId] && empObj[empId].scheduleId ? empObj[empId].scheduleId : defaultScheduleId;
+          const overrideKey = empId + '___' + dateStr;
+          if (typeof overridesSchedules !== 'undefined' && overridesSchedules && overridesSchedules[overrideKey]) {
+            schedId = overridesSchedules[overrideKey];
+          }
+          const schedule = (storedSchedules && storedSchedules[schedId]) ? storedSchedules[schedId] : Object.assign({}, DEFAULT_SCHEDULE);
+          const ranges = {
+            amIn:  { start: schedule.rng_am_in_start  || DEFAULT_RANGES.rng_am_in_start,  end: schedule.rng_am_in_end  || DEFAULT_RANGES.rng_am_in_end },
+            amOut: { start: schedule.rng_am_out_start || DEFAULT_RANGES.rng_am_out_start, end: schedule.rng_am_out_end || DEFAULT_RANGES.rng_am_out_end },
+            pmIn:  { start: schedule.rng_pm_in_start  || DEFAULT_RANGES.rng_pm_in_start,  end: schedule.rng_pm_in_end  || DEFAULT_RANGES.rng_pm_in_end },
+            pmOut: { start: schedule.rng_pm_out_start || DEFAULT_RANGES.rng_pm_out_start, end: schedule.rng_pm_out_end || DEFAULT_RANGES.rng_pm_out_end },
+            otIn:  { start: schedule.rng_ot_in_start  || DEFAULT_RANGES.rng_ot_in_start,  end: schedule.rng_ot_in_end  || DEFAULT_RANGES.rng_ot_in_end },
+            otOut: { start: schedule.rng_ot_out_start || DEFAULT_RANGES.rng_ot_out_start, end: schedule.rng_ot_out_end || DEFAULT_RANGES.rng_ot_out_end },
+            sch_am_start: schedule.sch_am_start || DEFAULT_SCHEDULE.sch_am_start,
+            sch_am_end:   schedule.sch_am_end   || DEFAULT_SCHEDULE.sch_am_end,
+            sch_pm_start: schedule.sch_pm_start || DEFAULT_SCHEDULE.sch_pm_start,
+            sch_pm_end:   schedule.sch_pm_end   || DEFAULT_SCHEDULE.sch_pm_end,
+            sch_sat_start: schedule.sch_sat_start || '',
+            sch_sat_end:   schedule.sch_sat_end   || '',
+            sch_grace: typeof schedule.sch_grace === 'number' ? schedule.sch_grace : DEFAULT_SCHEDULE.sch_grace
+          };
+          if (!frozenSchedules[empId]) frozenSchedules[empId] = {};
+          frozenSchedules[empId][dateStr] = { scheduleId: schedId, ranges };
+        });
+      }
+    }
+
+    return { frozenPayrollRows, frozenTotals, frozenEmployees, frozenSchedules };
+  }
+  window.finalizePeriod = finalizePeriod;
+
+  /**
    * Disable payroll and DTR editing across the application. Once a payroll
    * period is locked, users should not be able to adjust hours, rates, or
    * manually enter or delete DTR entries for that period. This helper
