@@ -2551,6 +2551,7 @@ function setSssTable(rows){
 }
 
 function renderDeductionsTable(){
+  if (window.__lockedPeriod) return;
   const dtbody = document.querySelector('#deductionsTable tbody');
   if (!dtbody) return;
   dtbody.innerHTML = '';
@@ -2792,6 +2793,10 @@ for (let i = 1; i < rows.length; i++) {
   }
 });
 function renderTable(){
+  if (window.__lockedPeriod && window.__lockedSnapshot) {
+    renderLockedPayrollTable(window.__lockedSnapshot);
+    return;
+  }
   // Batch DOM updates to avoid MutationObserver thrash
   window.__suspendTotals = true;
   try {
@@ -2844,6 +2849,48 @@ function renderTable(){
     window.__suspendTotals = false;
     try { (window.scheduleTotals || window.updatePayrollGrandTotals || function(){})(); } catch(e){}
     try { (window.scheduleTotals || window.updateDeductionsGrandTotals || function(){})(); } catch(e){}
+  }
+}
+
+function renderLockedPayrollTable(snap){
+  const table = document.getElementById('payrollTable');
+  if (!table) return;
+  const tbody = table.querySelector('tbody');
+  if (!tbody) return;
+  tbody.innerHTML = '';
+  const fmt = n => Number(n || 0).toFixed(2);
+  (snap.rows || []).forEach(r => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td>${r.id}</td>`+
+      `<td class="wrap">${r.name || ''}</td>`+
+      `<td class="num">${fmt(r.rate)}</td>`+
+      `<td class="num">${fmt(r.regHrs)}</td>`+
+      `<td class="num">${fmt(r.otHrs)}</td>`+
+      `<td class="num">${fmt(r.adjHrs)}</td>`+
+      `<td class="num">${fmt(r.totalHrs)}</td>`+
+      `<td class="num">${fmt(r.regPay)}</td>`+
+      `<td class="num">${fmt(r.otPay)}</td>`+
+      `<td class="num">${fmt(r.adjAmt)}</td>`+
+      `<td class="num">${fmt(r.bantay)}</td>`+
+      `<td class="num">${fmt(r.grossPay)}</td>`+
+      `<td class="num">${fmt(r.pagibig)}</td>`+
+      `<td class="num">${fmt(r.philhealth)}</td>`+
+      `<td class="num">${fmt(r.sss)}</td>`+
+      `<td class="num">${fmt(r.loanSSS)}</td>`+
+      `<td class="num">${fmt(r.loanPI)}</td>`+
+      `<td class="num">${fmt(r.vale)}</td>`+
+      `<td class="num">${fmt(r.valeWed)}</td>`+
+      `<td class="num">${fmt(r.totalDed)}</td>`+
+      `<td class="num">${fmt(r.netPay)}</td>`+
+      `<td></td>`;
+    tbody.appendChild(tr);
+  });
+  const foot = table.querySelector('tfoot');
+  if (foot) {
+    Object.entries(snap.totals || {}).forEach(([k, v]) => {
+      const td = foot.querySelector(`[data-col="${k}"]`);
+      if (td) td.textContent = fmt(v);
+    });
   }
 }
 
@@ -3347,6 +3394,7 @@ function calculateRow(tr){  const readNum = sel => { const el = tr.querySelector
 }
 
 function calculateAll(){
+  if (window.__lockedPeriod) return;
   document.querySelectorAll('#payrollTable tbody tr').forEach(tr=> calculateRow(tr));
   renderDeductionsTable();
 }
@@ -3354,6 +3402,7 @@ function calculateAll(){
 // === Adjustments Tab ===
 // Render the adjustments table listing all employees with an input field for manual adjustment amounts.
 function renderAdjustmentsTable() {
+  if (window.__lockedPeriod) return;
   const atbody = document.querySelector('#adjustmentsTable tbody');
   if (!atbody) return;
   atbody.innerHTML = '';
@@ -3703,6 +3752,30 @@ document.addEventListener('DOMContentLoaded', () => {
   // append to it directly. Without this, new snapshots added via custom UI would only update
   // localStorage and would not appear in the current session until a full page reload.
   window.payrollHistory = payrollHistory;
+  // One-time backfill for older locked snapshots missing context or manifest
+  (function(){
+    let updated = false;
+    payrollHistory.forEach(s => {
+      if (s && s.locked && (!s.context_per_employee || !s.dtr_manifest)) {
+        if (!s.context_per_employee) {
+          s.context_per_employee = (s.rows || []).map(r => ({
+            empId: r.id,
+            name_at_gen: r.name,
+            base_rate_at_gen: r.rate,
+            projectId_at_gen: null,
+            project_name_at_gen: '',
+            allowances_at_gen: { bantay: r.bantay, adjAmt: r.adjAmt },
+            contrib_rates_at_gen: {}
+          }));
+        }
+        if (!s.dtr_manifest) s.dtr_manifest = [];
+        updated = true;
+      }
+    });
+    if (updated) {
+      try { localStorage.setItem(PAYROLL_HIST_KEY, JSON.stringify(payrollHistory)); } catch(e){}
+    }
+  })();
   // Grab references to dashboard elements
   // Use the global weekStart/weekEnd inputs instead of the removed dashStartDate/dashEndDate fields.
   const dashStart = document.getElementById('weekStart');
@@ -3776,14 +3849,23 @@ document.addEventListener('DOMContentLoaded', () => {
         alert('Payroll table is missing or empty.');
         return;
       }
-      const json = JSON.stringify(newSnap);
+      const toHash = {
+        rows: newSnap.rows,
+        totals: newSnap.totals,
+        context_per_employee: newSnap.context_per_employee,
+        dtr_manifest: newSnap.dtr_manifest
+      };
+      const json = JSON.stringify(toHash);
       const hashBuffer = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(json));
       const hashArray = Array.from(new Uint8Array(hashBuffer));
       const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
       const now = new Date().toISOString();
       snap.rows = newSnap.rows;
       snap.totals = newSnap.totals;
+      snap.context_per_employee = newSnap.context_per_employee;
+      snap.dtr_manifest = newSnap.dtr_manifest;
       snap.hash = hashHex;
+      snap.snapshot_sha256 = hashHex;
       snap.lockedAt = now;
       snap.locked = true;
       saveHistory();
@@ -3957,7 +4039,44 @@ document.addEventListener('DOMContentLoaded', () => {
         totals[key] = parseFloat(td.textContent.trim()) || 0;
       });
     }
-    return { startDate, endDate, rows, totals };
+
+    // Build context_per_employee capturing relevant employee info at generation time
+    const context_per_employee = [];
+    (rows || []).forEach(r => {
+      const se = (typeof storedEmployees !== 'undefined' && storedEmployees && storedEmployees[r.id]) || {};
+      const projId = se.projectId || null;
+      const projName = (typeof storedProjects !== 'undefined' && storedProjects && storedProjects[projId]?.name) || '';
+      const monthly = (parseFloat(r.rate) || 0) * 8 * 24;
+      let contrib = {};
+      try {
+        const pi = typeof pagibigRateByMonthly === 'function' ? pagibigRateByMonthly(monthly) : 0;
+        const ph = typeof philhealthRateByMonthly === 'function' ? philhealthRateByMonthly(monthly) : 0;
+        const sssVal = typeof sssShareByMonthly === 'function' ? sssShareByMonthly(monthly) : 0;
+        contrib = { pagibig: pi, philhealth: ph, sss: sssVal };
+      } catch (e) { contrib = {}; }
+      context_per_employee.push({
+        empId: r.id,
+        name_at_gen: r.name,
+        base_rate_at_gen: r.rate,
+        projectId_at_gen: projId,
+        project_name_at_gen: projName,
+        allowances_at_gen: { bantay: r.bantay, adjAmt: r.adjAmt },
+        contrib_rates_at_gen: contrib
+      });
+    });
+
+    // Build DTR manifest describing sources used for this snapshot
+    const dtr_manifest = [];
+    try {
+      const recs = Array.isArray(storedRecords) ? storedRecords.filter(r => (!startDate || r.date >= startDate) && (!endDate || r.date <= endDate)) : [];
+      const json = JSON.stringify(recs);
+      const hashBuffer = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(json));
+      const hashArray = Array.from(new Uint8Array(hashBuffer));
+      const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+      dtr_manifest.push({ sourceType: 'local', pathOrId: 'att_records_v2', dateFrom: startDate, dateTo: endDate, sha256: hashHex });
+    } catch (e) { /* ignore */ }
+
+    return { startDate, endDate, rows, totals, context_per_employee, dtr_manifest };
   }
   // Expose buildSnapshot globally so it can be called from other scripts
   window.buildSnapshot = buildSnapshot;
@@ -3975,7 +4094,7 @@ document.addEventListener('DOMContentLoaded', () => {
       inp.disabled = true;
     });
     // Disable DTR inputs, buttons and selects (manual DTR, delete buttons, filters, etc.)
-    document.querySelectorAll('#panelMain input, #panelMain button, #panelMain select').forEach(el => {
+    document.querySelectorAll('#panelMain input, #panelMain button, #panelMain select, #panelPayroll input, #panelPayroll button, #panelPayroll select').forEach(el => {
       el.disabled = true;
     });
     // Additionally disable key DTR controls explicitly by ID. While the generic selector above
@@ -4032,7 +4151,7 @@ document.addEventListener('DOMContentLoaded', () => {
       inp.disabled = false;
     });
     // Re-enable DTR inputs, buttons and selects
-    document.querySelectorAll('#panelMain input, #panelMain button, #panelMain select').forEach(el => {
+    document.querySelectorAll('#panelMain input, #panelMain button, #panelMain select, #panelPayroll input, #panelPayroll button, #panelPayroll select').forEach(el => {
       el.disabled = false;
     });
     // Re-enable specific DTR controls by ID that were explicitly disabled in
@@ -4146,20 +4265,42 @@ document.addEventListener('DOMContentLoaded', () => {
    * enabled and the forced flags are removed. This helper centralizes the
    * logic of determining lock status and applying the appropriate UI state.
    */
+  function getSnapshotForSelectedPeriod(){
+    const wsEl = document.getElementById('weekStart');
+    const weEl = document.getElementById('weekEnd');
+    if (!wsEl || !weEl) return null;
+    const start = wsEl.value;
+    const end = weEl.value;
+    const hist = Array.isArray(window.payrollHistory) ? window.payrollHistory : [];
+    return hist.find(s => s.locked && s.startDate === start && s.endDate === end) || null;
+  }
+
   function checkAndToggleEditState() {
     const wsEl = document.getElementById('weekStart');
     const weEl = document.getElementById('weekEnd');
     if (!wsEl || !weEl) return;
-    const locked = isSelectedPeriodLocked();
+    const snap = getSnapshotForSelectedPeriod();
+    const locked = !!snap;
     if (locked) {
+      window.__lockedPeriod = true;
+      window.__lockedSnapshot = snap;
+      renderLockedPayrollTable(snap);
       disablePayrollInputs();
-      // Mark inputs as forced so other logic (showTab) doesn't re-enable them
       wsEl.dataset.forced = 'true';
       weEl.dataset.forced = 'true';
     } else {
+      window.__lockedPeriod = false;
+      window.__lockedSnapshot = null;
       enablePayrollInputs();
       if (wsEl.dataset) delete wsEl.dataset.forced;
       if (weEl.dataset) delete weEl.dataset.forced;
+      try {
+        if (typeof calculatePayrollFromResultsTable === 'function') {
+          calculatePayrollFromResultsTable();
+        } else if (typeof calculatePayrollFromRecords === 'function') {
+          calculatePayrollFromRecords();
+        }
+      } catch (_) {}
     }
   }
   window.checkAndToggleEditState = checkAndToggleEditState;
@@ -4230,12 +4371,13 @@ document.addEventListener('DOMContentLoaded', () => {
       alert('Payroll table is missing or empty.');
       return;
     }
-    const json = JSON.stringify(snap);
+    const toHash = { rows: snap.rows, totals: snap.totals, context_per_employee: snap.context_per_employee, dtr_manifest: snap.dtr_manifest };
+    const json = JSON.stringify(toHash);
     const hashBuffer = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(json));
     const hashArray = Array.from(new Uint8Array(hashBuffer));
     const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
     const now = new Date().toISOString();
-    payrollHistory.push({ startDate: start, endDate: end, rows: snap.rows, totals: snap.totals, hash: hashHex, lockedAt: now, locked: false });
+    payrollHistory.push({ startDate: start, endDate: end, rows: snap.rows, totals: snap.totals, context_per_employee: snap.context_per_employee, dtr_manifest: snap.dtr_manifest, hash: hashHex, snapshot_sha256: hashHex, lockedAt: now, locked: false });
     saveHistory();
     // Update both history and active payroll tables after creating a new snapshot
     renderHistory();
@@ -4267,12 +4409,13 @@ document.addEventListener('DOMContentLoaded', () => {
       alert('Payroll table is missing or empty.');
       return;
     }
-    const json = JSON.stringify(snap);
+    const toHash2 = { rows: snap.rows, totals: snap.totals, context_per_employee: snap.context_per_employee, dtr_manifest: snap.dtr_manifest };
+    const json = JSON.stringify(toHash2);
     const hashBuffer = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(json));
     const hashArray = Array.from(new Uint8Array(hashBuffer));
     const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
     const now = new Date().toISOString();
-    payrollHistory.push({ startDate: start, endDate: end, rows: snap.rows, totals: snap.totals, hash: hashHex, lockedAt: now, locked: true });
+    payrollHistory.push({ startDate: start, endDate: end, rows: snap.rows, totals: snap.totals, context_per_employee: snap.context_per_employee, dtr_manifest: snap.dtr_manifest, hash: hashHex, snapshot_sha256: hashHex, lockedAt: now, locked: true });
     saveHistory();
     renderHistory();
     // Disable payroll and DTR editing via helper until date range changes
@@ -4464,6 +4607,18 @@ document.addEventListener('DOMContentLoaded', () => {
     if (titleEl) {
       const lockedInfo = snap.lockedAt ? ` (Locked ${new Date(snap.lockedAt).toLocaleString()})` : '';
       titleEl.textContent = `Payroll Details: ${snap.startDate || ''} - ${snap.endDate || ''}${lockedInfo}`;
+      if (Array.isArray(snap.dtr_manifest) && snap.dtr_manifest.length) {
+        const link = document.createElement('a');
+        link.href = '#';
+        link.textContent = 'View DTR Manifest';
+        link.style.marginLeft = '8px';
+        link.addEventListener('click', ev => {
+          ev.preventDefault();
+          alert(JSON.stringify(snap.dtr_manifest, null, 2));
+        });
+        titleEl.appendChild(document.createTextNode(' '));
+        titleEl.appendChild(link);
+      }
     }
     // Hide dashboard tables and controls
     if (activeTable) activeTable.style.display = 'none';
@@ -6541,6 +6696,7 @@ function formatHours(value){
 }
 
 function renderResults(){
+  if (window.__lockedPeriod) return;
 
 // 12-hour clock formatter for display only (keeps underlying logic 24h)
 function __fmt12Clock(hhmm){
@@ -7340,6 +7496,7 @@ const dtrStartEl = document.getElementById('filterStart');
 const dtrEndEl = document.getElementById('filterEnd');
 
 function calculatePayrollFromRecords(){
+  if (window.__lockedPeriod) return;
   try { if (typeof renderResults === 'function') renderResults(); } catch(e){ console.warn('renderResults failed', e); }
 
   /*
@@ -7404,7 +7561,8 @@ function calculatePayrollFromRecords(){
    * before computing.  Project and name filters are temporarily
    * cleared so that all employees are included, and then restored.
    */
-  function calculatePayrollFromResultsTable() {
+function calculatePayrollFromResultsTable() {
+    if (window.__lockedPeriod) return;
     try {
       // Save current filter/search values
       const searchInput = document.getElementById('dtrSearchName');
@@ -9386,12 +9544,13 @@ function updateWeekInputs(snap) {
           alert('Payroll table is missing or empty.');
           return;
         }
-        const json = JSON.stringify(snap);
+        const toHash = { rows: snap.rows, totals: snap.totals, context_per_employee: snap.context_per_employee, dtr_manifest: snap.dtr_manifest };
+        const json = JSON.stringify(toHash);
         const hashBuffer = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(json));
         const hashArray = Array.from(new Uint8Array(hashBuffer));
         const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
         const now = new Date().toISOString();
-        const newSnap = { startDate: start, endDate: end, rows: snap.rows, totals: snap.totals, hash: hashHex, lockedAt: now, locked: false };
+        const newSnap = { startDate: start, endDate: end, rows: snap.rows, totals: snap.totals, context_per_employee: snap.context_per_employee, dtr_manifest: snap.dtr_manifest, hash: hashHex, snapshot_sha256: hashHex, lockedAt: now, locked: false };
         // Push into global payrollHistory if it exists; else push into local history
         if (Array.isArray(window.payrollHistory)) {
           window.payrollHistory.push(newSnap);
