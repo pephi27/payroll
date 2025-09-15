@@ -8394,15 +8394,22 @@ document.addEventListener('DOMContentLoaded', function(){
     tb.querySelectorAll('tr').forEach(function(tr){
       var c = tr.cells||[];
       function cell(idx){ return (idx>=0 && idx<c.length) ? c[idx].textContent : ''; }
-      t.pagibig   += _parse(cell(map.pagibig));
-      t.philhealth+= _parse(cell(map.philhealth));
-      t.sss       += _parse(cell(map.sss));
-      t.loanSSS   += _parse(cell(map.loanSSS));
-      t.loanPI    += _parse(cell(map.loanPI));
-      t.vale      += _parse(cell(map.vale));
-      t.valeWed   += _parse(cell(map.valeWed));
-      t.total     += _parse(cell(map.total));
+      var pagibig    = _parse(cell(map.pagibig));
+      var philhealth = _parse(cell(map.philhealth));
+      var sss        = _parse(cell(map.sss));
+      var loanSSS    = _parse(cell(map.loanSSS));
+      var loanPI     = _parse(cell(map.loanPI));
+      var vale       = _parse(cell(map.vale));
+      var valeWed    = _parse(cell(map.valeWed));
+      t.pagibig   += pagibig;
+      t.philhealth+= philhealth;
+      t.sss       += sss;
+      t.loanSSS   += loanSSS;
+      t.loanPI    += loanPI;
+      t.vale      += vale;
+      t.valeWed   += valeWed;
     });
+    t.total = t.pagibig + t.philhealth + t.sss + t.loanSSS + t.loanPI + t.vale + t.valeWed;
     Object.keys(t).forEach(function(k){
       var cell = foot.querySelector('[data-col="'+k+'"]');
       if (cell) cell.textContent = _fmt(t[k]);
