@@ -7427,66 +7427,52 @@ function calculatePayrollFromRecords(){
         if (weekStartEl && dtrStart) dtrStart.value = weekStartEl.value;
         if (weekEndEl   && dtrEnd)   dtrEnd.value   = weekEndEl.value;
       } catch (err) {}
-      // Re-render the DTR results table with updated filters and defer
-      // aggregation so the DOM has time to update before querying rows.
+      // Re-render the DTR results table with updated filters
       if (typeof renderResults === 'function') renderResults();
-      const aggregate = () => {
-        try {
-          // Aggregate hours from the rendered DTR table
-          const rows = document.querySelectorAll('#resultsTable tbody tr');
-          const regTotals = {};
-          const otTotals = {};
-          rows.forEach(row => {
-            const cells = row.cells;
-            if (!cells || cells.length < 13) return;
-            const empId = cells[0].textContent.trim();
-            // Column 11: total regular hours; column 12: OT hours
-            const regVal = parseFloat(cells[11].textContent) || 0;
-            const otVal  = parseFloat(cells[12].textContent) || 0;
-            regTotals[empId] = (regTotals[empId] || 0) + regVal;
-            otTotals[empId]  = (otTotals[empId]  || 0) + otVal;
-          });
-          // Restore original filters and search
-          if (searchInput) searchInput.value = origSearch;
-          if (filterSelect) {
-            filterSelect.value = origFilter;
-            if (typeof currentProjectFilter !== 'undefined') currentProjectFilter = origFilter;
-            try { localStorage.setItem(LS_FILTER_PROJECT, origFilter); } catch (e) {}
-          }
-          // Re-render the DTR table with the original filter/search
-          if (typeof renderResults === 'function') renderResults();
-          // Apply aggregated hours to regHours and otHours, rounding to two decimals
-          regHours = {};
-          otHours = {};
-          Object.keys(regTotals).forEach(id => {
-            regHours[id] = +(regTotals[id]).toFixed(2);
-          });
-          Object.keys(otTotals).forEach(id => {
-            otHours[id] = +(otTotals[id]).toFixed(2);
-          });
-          // Ensure every employee has entries for reg and OT hours
-          Object.keys(storedEmployees || {}).forEach(id => {
-            if (!regHours.hasOwnProperty(id)) regHours[id] = 0;
-            if (!otHours.hasOwnProperty(id))  otHours[id]  = 0;
-          });
-          // Persist the hours to localStorage
-          try {
-            localStorage.setItem(LS_REG_HRS, JSON.stringify(regHours));
-            localStorage.setItem(LS_OT_HRS, JSON.stringify(otHours));
-          } catch (err) {}
-          // Rebuild the payroll table using the computed hours
-          if (typeof renderTable === 'function') renderTable();
-        } catch (err) {
-          console.warn('calculatePayrollFromResultsTable failed', err);
-        }
-      };
-      if (typeof requestAnimationFrame === 'function') {
-        requestAnimationFrame(aggregate);
-      } else if (typeof Promise !== 'undefined') {
-        Promise.resolve().then(aggregate);
-      } else {
-        setTimeout(aggregate, 0);
+      // Aggregate hours from the rendered DTR table
+      const rows = document.querySelectorAll('#resultsTable tbody tr');
+      const regTotals = {};
+      const otTotals = {};
+      rows.forEach(row => {
+        const cells = row.cells;
+        if (!cells || cells.length < 13) return;
+        const empId = cells[0].textContent.trim();
+        // Column 11: total regular hours; column 12: OT hours
+        const regVal = parseFloat(cells[11].textContent) || 0;
+        const otVal  = parseFloat(cells[12].textContent) || 0;
+        regTotals[empId] = (regTotals[empId] || 0) + regVal;
+        otTotals[empId]  = (otTotals[empId]  || 0) + otVal;
+      });
+      // Restore original filters and search
+      if (searchInput) searchInput.value = origSearch;
+      if (filterSelect) {
+        filterSelect.value = origFilter;
+        if (typeof currentProjectFilter !== 'undefined') currentProjectFilter = origFilter;
+        try { localStorage.setItem(LS_FILTER_PROJECT, origFilter); } catch (e) {}
       }
+      // Re-render the DTR table with the original filter/search
+      if (typeof renderResults === 'function') renderResults();
+      // Apply aggregated hours to regHours and otHours, rounding to two decimals
+      regHours = {};
+      otHours = {};
+      Object.keys(regTotals).forEach(id => {
+        regHours[id] = +(regTotals[id]).toFixed(2);
+      });
+      Object.keys(otTotals).forEach(id => {
+        otHours[id] = +(otTotals[id]).toFixed(2);
+      });
+      // Ensure every employee has entries for reg and OT hours
+      Object.keys(storedEmployees || {}).forEach(id => {
+        if (!regHours.hasOwnProperty(id)) regHours[id] = 0;
+        if (!otHours.hasOwnProperty(id))  otHours[id]  = 0;
+      });
+      // Persist the hours to localStorage
+      try {
+        localStorage.setItem(LS_REG_HRS, JSON.stringify(regHours));
+        localStorage.setItem(LS_OT_HRS, JSON.stringify(otHours));
+      } catch (err) {}
+      // Rebuild the payroll table using the computed hours
+      if (typeof renderTable === 'function') renderTable();
     } catch (err) {
       console.warn('calculatePayrollFromResultsTable failed', err);
     }
