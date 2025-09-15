@@ -9620,9 +9620,6 @@ function updateWeekInputs(snap) {
         document.querySelectorAll('#deductionsTab .subtab-panel').forEach(panel => {
           panel.style.display = (panel.id === target) ? '' : 'none';
         });
-        if (target === 'dedMainSection' && typeof window.renderDeductionsTable === 'function') {
-          window.renderDeductionsTable();
-        }
       });
     });
     // Initialize panel visibility on page load
