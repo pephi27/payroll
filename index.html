@@ -3286,10 +3286,15 @@ function calculateRow(tr){  const readNum = sel => { const el = tr.querySelector
   const v = Number(tr.querySelector('.vale').value)||0;
   const vW = Number(readNum('.valeWed'))||0;
 
+  // Adjustment amount for this employee (may be positive or negative)
+  const adj = Number(adjustments[id] || 0);
+  // Bantay allowance (treated as positive allowance).  Parse numeric value from bantay input.
+  const bVal = parseFloat((tr.querySelector('.bantay')?.value || '').trim()) || 0;
+
   const regPay = +(reg * rate).toFixed(2);
   tr.querySelector('.totalHrs').textContent = totalHrs.toFixed(2);
   const otPay = +(otTotal * rate * (Number(otMultiplier)||0)).toFixed(2);
-  const gross = +(regPay + otPay).toFixed(2);
+  const gross = +(regPay + otPay + adj + bVal).toFixed(2);
   // Compute contributions using dynamic tables (employee share).  Determine the
   // appropriate rate based on the monthly income and multiply by regular pay.
   const monthly = rate * 8 * 24;
@@ -3308,11 +3313,7 @@ function calculateRow(tr){  const readNum = sel => { const el = tr.querySelector
   const wedValeAmt = vW;
 
   const total = pagibig + philhealth + sss + sssLoan + piLoan + valeAmt + wedValeAmt;
-  // Adjustment amount for this employee (may be positive or negative)
-  const adj = Number(adjustments[id] || 0);
-  // Bantay allowance (treated as positive allowance).  Parse numeric value from bantay input.
-  const bVal = parseFloat((tr.querySelector('.bantay')?.value || '').trim()) || 0;
-  const net = gross - total + adj + bVal;
+  const net = gross - total;
 
   w('.regPay', regPay);
   w('.otPay', otPay);
