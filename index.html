@@ -4075,17 +4075,19 @@ document.addEventListener('DOMContentLoaded', () => {
   window.enablePayrollInputs = enablePayrollInputs;
 
   /**
-   * Determine whether the currently selected payroll period (weekStart/weekEnd values)
-   * corresponds to a locked snapshot. This reads from the global payrollHistory
-   * array if available, otherwise loads history from localStorage. It returns
-   * true if a matching snapshot exists and its `locked` property is truthy.
+   * Determine whether a given payroll period is locked. The period identifier is
+   * the canonical value returned by periodKey() (start and end dates joined by an underscore).
+   * If no periodId is supplied, the current periodKey() value is used. The function
+   * searches payrollHistory for a matching snapshot with `locked === true`.
+   *
+   * @param {string} [periodId] `${start}_${end}` identifier of the payroll period
+   * @returns {boolean} true if a locked snapshot exists for the period
    */
-  function isSelectedPeriodLocked() {
-    const wsEl = document.getElementById('weekStart');
-    const weEl = document.getElementById('weekEnd');
-    if (!wsEl || !weEl) return false;
-    const start = wsEl.value;
-    const end = weEl.value;
+  function isLocked(periodId) {
+    const pid = periodId || (typeof periodKey === 'function' ? periodKey() : '');
+    if (!pid) return false;
+    const [start, end] = pid.split('_');
+    if (!start || !end) return false;
     // Helper to parse either ISO (yyyy-mm-dd) or US (m/d/yyyy) date strings
     function parseDateStr(str) {
       if (!str) return null;
@@ -4124,7 +4126,9 @@ document.addEventListener('DOMContentLoaded', () => {
     const endDateObj = parseDateStr(end);
     if (!startDateObj || !endDateObj) return false;
     // Use the in-memory payrollHistory if available; else load from storage
-    const hist = Array.isArray(window.payrollHistory) ? window.payrollHistory : (typeof loadHistory === 'function' ? loadHistory() : []);
+    const hist = Array.isArray(window.payrollHistory)
+      ? window.payrollHistory
+      : (typeof loadHistory === 'function' ? loadHistory() : []);
     if (!Array.isArray(hist)) return false;
     return hist.some(s => {
       if (!s || !s.startDate || !s.endDate) return false;
@@ -4132,8 +4136,19 @@ document.addEventListener('DOMContentLoaded', () => {
       const sStart = parseDateStr(s.startDate);
       const sEnd = parseDateStr(s.endDate);
       if (!sStart || !sEnd) return false;
-      return s.locked && sStart.getTime() === startDateObj.getTime() && sEnd.getTime() === endDateObj.getTime();
+      return s.locked === true &&
+        sStart.getTime() === startDateObj.getTime() &&
+        sEnd.getTime() === endDateObj.getTime();
     });
+  }
+  window.isLocked = isLocked;
+
+  /**
+   * Determine whether the currently selected payroll period (weekStart/weekEnd values)
+   * corresponds to a locked snapshot by delegating to isLocked().
+   */
+  function isSelectedPeriodLocked() {
+    return isLocked();
   }
   window.isSelectedPeriodLocked = isSelectedPeriodLocked;
 
