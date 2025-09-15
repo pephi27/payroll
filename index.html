@@ -267,6 +267,15 @@ function safeStringify(v){
     opacity: 0.6;
   }
 
+  #panelPayroll.locked {
+    opacity: 0.75;
+  }
+
+  .locked-action {
+    pointer-events: none !important;
+    opacity: 0.5 !important;
+  }
+
 /* === PATCH: Adjustments & Bantay column widths === */
 #payrollTable th:nth-child(10), #payrollTable td:nth-child(10) { width: 100px; min-width: 100px; } /* Adjustments */
 #payrollTable th:nth-child(11), #payrollTable td:nth-child(11) { width: 100px; min-width: 100px; } /* Bantay */
@@ -2508,6 +2517,10 @@ let bantay = allBantay[periodKey()] || {};
 if (divisorDedsEl) {
   divisorDedsEl.value = String(divisor);
   divisorDedsEl.addEventListener('change', () => {
+    if (typeof isLocked === 'function' && typeof periodKey === 'function' && isLocked(periodKey())) {
+      divisorDedsEl.value = String(divisor);
+      return;
+    }
     divisor = parseInt(divisorDedsEl.value, 10) || 1;
     divisorEl.value = String(divisor);
     localStorage.setItem(LS_DIVISOR, String(divisor));
@@ -2515,10 +2528,22 @@ if (divisorDedsEl) {
   });
 }
 
-otMultiplierEl.addEventListener('input', ()=>{ otMultiplier = parseFloat(otMultiplierEl.value)||0; localStorage.setItem(LS_OTMULT, otMultiplier); calculateAll(); });
+otMultiplierEl.addEventListener('input', ()=>{
+  if (typeof isLocked === 'function' && typeof periodKey === 'function' && isLocked(periodKey())) {
+    otMultiplierEl.value = otMultiplier != null ? String(otMultiplier) : '';
+    return;
+  }
+  otMultiplier = parseFloat(otMultiplierEl.value)||0;
+  localStorage.setItem(LS_OTMULT, otMultiplier);
+  calculateAll();
+});
 weekStartEl.addEventListener('input', ()=> localStorage.setItem(LS_WEEKSTART, weekStartEl.value));
 weekEndEl.addEventListener('input', ()=> localStorage.setItem(LS_WEEKEND, weekEndEl.value));
 divisorEl.addEventListener('change', () => {
+  if (typeof isLocked === 'function' && typeof periodKey === 'function' && isLocked(periodKey())) {
+    divisorEl.value = String(divisor);
+    return;
+  }
   divisor = parseInt(divisorEl.value, 10) || 1;
   localStorage.setItem(LS_DIVISOR, String(divisor));
   // Sync the Deductions tab divisor select if it exists
@@ -2651,7 +2676,11 @@ document.addEventListener('click', (e)=>{
   }
 });document.addEventListener('change', (e)=>{
   if(e.target && e.target.id === 'deductionsFileInput'){
-    const file = e.target.files && e.target.files[0]; 
+    if (typeof isLocked === 'function' && typeof periodKey === 'function' && isLocked(periodKey())) {
+      e.target.value = '';
+      return;
+    }
+    const file = e.target.files && e.target.files[0];
     if (!file) return;
     
     const reader = new FileReader();
@@ -2983,34 +3012,50 @@ function attachRowEvents(){
     const bantayI = row.querySelector('.bantay');
       if (bantayI) {
         bantayI.addEventListener('input', async () => {
-        bantay[id] = bantayI.value;
-        allBantay[periodKey()] = bantay;
-        try { localStorage.setItem(LS_BANTAY, JSON.stringify(allBantay)); } catch(_){ }
-        await writeKV(LS_BANTAY, allBantay);
-        calculateRow(row);
-        try { if (typeof window.rebuildReports === 'function') window.rebuildReports(); } catch(e){}
-        // Auto-open project picker when entering a positive amount and no assignment yet
-        const val = parseFloat(bantayI.value) || 0;
-        const hasPicker = !!document.getElementById('bantayProjPicker');
-        if (val > 0 && !bantayProj[id] && !hasPicker) {
+          if (typeof isLocked === 'function' && typeof periodKey === 'function' && isLocked(periodKey())) {
+            const stored = bantay[id];
+            bantayI.value = stored != null ? stored : '';
+            return;
+          }
+          bantay[id] = bantayI.value;
+          allBantay[periodKey()] = bantay;
+          try { localStorage.setItem(LS_BANTAY, JSON.stringify(allBantay)); } catch(_){ }
+          await writeKV(LS_BANTAY, allBantay);
+          calculateRow(row);
+          try { if (typeof window.rebuildReports === 'function') window.rebuildReports(); } catch(e){}
+          // Auto-open project picker when entering a positive amount and no assignment yet
+          const val = parseFloat(bantayI.value) || 0;
+          const hasPicker = !!document.getElementById('bantayProjPicker');
+          if (val > 0 && !bantayProj[id] && !hasPicker) {
+            chooseBantayProject(id, bantayI);
+          }
+          // Auto-clear assignment when reset to zero or blank
+          if (!(val > 0) && bantayProj[id]) {
+            try { delete bantayProj[id]; } catch(_){ }
+            try { await writeKV(LS_BANTAY_PROJ, bantayProj); } catch(_){ }
+            try { if (typeof window.rebuildReports === 'function') window.rebuildReports(); } catch(_){ }
+          }
+        });
+        // Also prompt on change if user typed and then blurs
+        bantayI.addEventListener('change', () => {
+          if (typeof isLocked === 'function' && typeof periodKey === 'function' && isLocked(periodKey())) {
+            const stored = bantay[id];
+            bantayI.value = stored != null ? stored : '';
+            return;
+          }
+          const val = parseFloat(bantayI.value) || 0;
+          if (val > 0) chooseBantayProject(id, bantayI);
+          try { if (typeof window.rebuildReports === 'function') window.rebuildReports(); } catch(e){}
+        });
+        // Allow quick reassign on dblclick
+        bantayI.title = 'Double-click to assign Bantay to a project';
+        bantayI.addEventListener('dblclick', () => {
+          if (typeof isLocked === 'function' && typeof periodKey === 'function' && isLocked(periodKey())) {
+            return;
+          }
           chooseBantayProject(id, bantayI);
-        }
-        // Auto-clear assignment when reset to zero or blank
-        if (!(val > 0) && bantayProj[id]) {
-          try { delete bantayProj[id]; } catch(_){ }
-          try { await writeKV(LS_BANTAY_PROJ, bantayProj); } catch(_){ }
-          try { if (typeof window.rebuildReports === 'function') window.rebuildReports(); } catch(_){ }
-        }
-      });
-      // Also prompt on change if user typed and then blurs
-      bantayI.addEventListener('change', () => {
-        const val = parseFloat(bantayI.value) || 0;
-        if (val > 0) chooseBantayProject(id, bantayI);
-        try { if (typeof window.rebuildReports === 'function') window.rebuildReports(); } catch(e){}
-      });
-      // Allow quick reassign on dblclick
-      bantayI.title = 'Double-click to assign Bantay to a project';
-      bantayI.addEventListener('dblclick', () => chooseBantayProject(id, bantayI));
+        });
+      }
     }
   });
 }
@@ -3018,6 +3063,7 @@ function renderSssTable(){
   const tbodyS = document.querySelector('#sssTable tbody');
   tbodyS.innerHTML='';
   const rows = getSssTable();
+  const periodLocked = typeof isLocked === 'function' && typeof periodKey === 'function' && isLocked(periodKey());
   rows.forEach((r, i)=>{
     const tr = document.createElement('tr');
     tr.innerHTML = `
@@ -3033,6 +3079,9 @@ function renderSssTable(){
     maxI.addEventListener('input', ()=>{ updateRow(i, minI, maxI, empI); });
     empI.addEventListener('input', ()=>{ updateRow(i, minI, maxI, empI); });
     tr.querySelector('.delRow').addEventListener('click', ()=>{
+      if (typeof isLocked === 'function' && typeof periodKey === 'function' && isLocked(periodKey())) {
+        return;
+      }
       const cur = getSssTable();
       cur.splice(i,1);
       setSssTable(cur);
@@ -3040,18 +3089,33 @@ function renderSssTable(){
       calculateAll();
     });
   });
+  try { toggleLockSensitiveControls(periodLocked); } catch (err) {}
 }
 function updateRow(i, minI, maxI, empI){
+  const locked = typeof isLocked === 'function' && typeof periodKey === 'function' && isLocked(periodKey());
   const cur = getSssTable();
+  if (locked) {
+    const prev = cur[i] || {};
+    if (minI) minI.value = prev.min != null ? prev.min : 0;
+    if (maxI) maxI.value = prev.max != null ? prev.max : 0;
+    if (empI) empI.value = prev.employee != null ? prev.employee : 0;
+    return;
+  }
   cur[i] = {min:Number(minI.value)||0, max:Number(maxI.value)||0, employee:Number(empI.value)||0};
   setSssTable(cur);
   calculateAll();
 }
 
 document.getElementById('addSssRow').addEventListener('click', ()=>{
+  if (typeof isLocked === 'function' && typeof periodKey === 'function' && isLocked(periodKey())) {
+    return;
+  }
   const cur = getSssTable(); cur.push({min:0,max:0,employee:0}); setSssTable(cur); renderSssTable();
 });
 document.getElementById('resetSss').addEventListener('click', ()=>{
+  if (typeof isLocked === 'function' && typeof periodKey === 'function' && isLocked(periodKey())) {
+    return;
+  }
   if(confirm('Reset SSS table to 2025 defaults?')){
     const mapped = SSS_SEED_2025.map(r=>({min:r[0], max:r[1], employee:r[2]}));
     setSssTable(mapped);
@@ -3060,6 +3124,9 @@ document.getElementById('resetSss').addEventListener('click', ()=>{
   }
 });
 document.getElementById('clearSss').addEventListener('click', ()=>{
+  if (typeof isLocked === 'function' && typeof periodKey === 'function' && isLocked(periodKey())) {
+    return;
+  }
   if(confirm('Clear all SSS ranges?')){ setSssTable([]); renderSssTable(); calculateAll(); }
 });
 document.getElementById('exportSss').addEventListener('click', ()=>{
@@ -3070,6 +3137,10 @@ document.getElementById('exportSss').addEventListener('click', ()=>{
 });
 document.getElementById('importSss').addEventListener('change', ev=>{
   const f = ev.target.files[0]; if(!f) return;
+  if (typeof isLocked === 'function' && typeof periodKey === 'function' && isLocked(periodKey())) {
+    ev.target.value = '';
+    return;
+  }
   const reader = new FileReader();
   reader.onload = e=>{
     const text = e.target.result;
@@ -3109,6 +3180,7 @@ function renderPagibigTable(){
   if(!tbodyP) return;
   tbodyP.innerHTML = '';
   const rows = getPagibigTable();
+  const periodLocked = typeof isLocked === 'function' && typeof periodKey === 'function' && isLocked(periodKey());
   rows.forEach((r, idx) => {
     const tr = document.createElement('tr');
     tr.innerHTML = `
@@ -3121,6 +3193,14 @@ function renderPagibigTable(){
     const maxI = tr.querySelector('.pagibigMax');
     const rateI = tr.querySelector('.pagibigRate');
     function update(i){
+      if (typeof isLocked === 'function' && typeof periodKey === 'function' && isLocked(periodKey())) {
+        const cur = getPagibigTable();
+        const prev = cur[i] || {};
+        if (minI) minI.value = prev.min != null ? prev.min : 0;
+        if (maxI) maxI.value = prev.max != null ? prev.max : 0;
+        if (rateI) rateI.value = prev.rate != null ? prev.rate : 0;
+        return;
+      }
       const cur = getPagibigTable();
       cur[i] = {min: Number(minI.value) || 0, max: Number(maxI.value) || 0, rate: Number(rateI.value) || 0};
       setPagibigTable(cur);
@@ -3131,6 +3211,9 @@ function renderPagibigTable(){
     maxI.addEventListener('input', () => update(idx));
     rateI.addEventListener('input', () => update(idx));
     tr.querySelector('.delPagibigRow').addEventListener('click', () => {
+      if (typeof isLocked === 'function' && typeof periodKey === 'function' && isLocked(periodKey())) {
+        return;
+      }
       const cur = getPagibigTable();
       cur.splice(idx, 1);
       setPagibigTable(cur);
@@ -3139,6 +3222,7 @@ function renderPagibigTable(){
       if (typeof renderDeductionsTable === 'function') renderDeductionsTable();
     });
   });
+  try { toggleLockSensitiveControls(periodLocked); } catch (err) {}
 }
 function getPhilhealthTable(){
   let arr = [];
@@ -3160,6 +3244,7 @@ function renderPhilhealthTable(){
   if(!tbodyPh) return;
   tbodyPh.innerHTML = '';
   const rows = getPhilhealthTable();
+  const periodLockedPh = typeof isLocked === 'function' && typeof periodKey === 'function' && isLocked(periodKey());
   rows.forEach((r, idx) => {
     const tr = document.createElement('tr');
     tr.innerHTML = `
@@ -3172,6 +3257,14 @@ function renderPhilhealthTable(){
     const maxI = tr.querySelector('.philMax');
     const rateI = tr.querySelector('.philRate');
     function update(i){
+      if (typeof isLocked === 'function' && typeof periodKey === 'function' && isLocked(periodKey())) {
+        const cur = getPhilhealthTable();
+        const prev = cur[i] || {};
+        if (minI) minI.value = prev.min != null ? prev.min : 0;
+        if (maxI) maxI.value = prev.max != null ? prev.max : 0;
+        if (rateI) rateI.value = prev.rate != null ? prev.rate : 0;
+        return;
+      }
       const cur = getPhilhealthTable();
       cur[i] = {min: Number(minI.value) || 0, max: Number(maxI.value) || 0, rate: Number(rateI.value) || 0};
       setPhilhealthTable(cur);
@@ -3182,6 +3275,9 @@ function renderPhilhealthTable(){
     maxI.addEventListener('input', () => update(idx));
     rateI.addEventListener('input', () => update(idx));
     tr.querySelector('.delPhilRow').addEventListener('click', () => {
+      if (typeof isLocked === 'function' && typeof periodKey === 'function' && isLocked(periodKey())) {
+        return;
+      }
       const cur = getPhilhealthTable();
       cur.splice(idx, 1);
       setPhilhealthTable(cur);
@@ -3190,10 +3286,14 @@ function renderPhilhealthTable(){
       if (typeof renderDeductionsTable === 'function') renderDeductionsTable();
     });
   });
+  try { toggleLockSensitiveControls(periodLockedPh); } catch (err) {}
 }
 // Click handler for adding, resetting and clearing rows in Pagâ€‘IBIG and PhilHealth tables.
 document.addEventListener('click', (e) => {
   if (e.target && e.target.id === 'addPagibigRow') {
+    if (typeof isLocked === 'function' && typeof periodKey === 'function' && isLocked(periodKey())) {
+      return;
+    }
     const cur = getPagibigTable();
     cur.push({min: 0, max: 0, rate: 0});
     setPagibigTable(cur);
@@ -3201,6 +3301,9 @@ document.addEventListener('click', (e) => {
     calculateAll();
     if (typeof renderDeductionsTable === 'function') renderDeductionsTable();
   } else if (e.target && e.target.id === 'resetPagibig') {
+    if (typeof isLocked === 'function' && typeof periodKey === 'function' && isLocked(periodKey())) {
+      return;
+    }
     if (confirm('Reset Pag-IBIG table to defaults?')) {
       const mapped = PAGIBIG_SEED.map(r => ({min: r[0], max: r[1], rate: r[2]}));
       setPagibigTable(mapped);
@@ -3209,6 +3312,9 @@ document.addEventListener('click', (e) => {
       if (typeof renderDeductionsTable === 'function') renderDeductionsTable();
     }
   } else if (e.target && e.target.id === 'clearPagibig') {
+    if (typeof isLocked === 'function' && typeof periodKey === 'function' && isLocked(periodKey())) {
+      return;
+    }
     if (confirm('Clear all Pag-IBIG ranges?')) {
       setPagibigTable([]);
       renderPagibigTable();
@@ -3216,6 +3322,9 @@ document.addEventListener('click', (e) => {
       if (typeof renderDeductionsTable === 'function') renderDeductionsTable();
     }
   } else if (e.target && e.target.id === 'addPhilRow') {
+    if (typeof isLocked === 'function' && typeof periodKey === 'function' && isLocked(periodKey())) {
+      return;
+    }
     const cur = getPhilhealthTable();
     cur.push({min: 0, max: 0, rate: 0});
     setPhilhealthTable(cur);
@@ -3223,6 +3332,9 @@ document.addEventListener('click', (e) => {
     calculateAll();
     if (typeof renderDeductionsTable === 'function') renderDeductionsTable();
   } else if (e.target && e.target.id === 'resetPhil') {
+    if (typeof isLocked === 'function' && typeof periodKey === 'function' && isLocked(periodKey())) {
+      return;
+    }
     if (confirm('Reset PhilHealth table to defaults?')) {
       const mapped = PHILHEALTH_SEED.map(r => ({min: r[0], max: r[1], rate: r[2]}));
       setPhilhealthTable(mapped);
@@ -3231,6 +3343,9 @@ document.addEventListener('click', (e) => {
       if (typeof renderDeductionsTable === 'function') renderDeductionsTable();
     }
   } else if (e.target && e.target.id === 'clearPhil') {
+    if (typeof isLocked === 'function' && typeof periodKey === 'function' && isLocked(periodKey())) {
+      return;
+    }
     if (confirm('Clear all PhilHealth ranges?')) {
       setPhilhealthTable([]);
       renderPhilhealthTable();
@@ -3345,6 +3460,13 @@ function calculateRow(tr){  const readNum = sel => { const el = tr.querySelector
 }
 
 function calculateAll(){
+  try {
+    if (typeof isLocked === 'function' && typeof periodKey === 'function' && isLocked(periodKey())) {
+      return;
+    }
+  } catch (err) {
+    console.warn('calculateAll locked check failed', err);
+  }
   document.querySelectorAll('#payrollTable tbody tr').forEach(tr=> calculateRow(tr));
   renderDeductionsTable();
 }
@@ -3355,6 +3477,7 @@ function renderAdjustmentsTable() {
   const atbody = document.querySelector('#adjustmentsTable tbody');
   if (!atbody) return;
   atbody.innerHTML = '';
+  const periodLocked = typeof isLocked === 'function' && typeof periodKey === 'function' && isLocked(periodKey());
   employeeList.forEach(emp => {
     const id = emp.id;
     const name = emp.name;
@@ -3376,6 +3499,11 @@ function renderAdjustmentsTable() {
   atbody.querySelectorAll('.adjInput').forEach(inp => {
     inp.addEventListener('input', () => {
       const empId = inp.getAttribute('data-id');
+      if (typeof isLocked === 'function' && typeof periodKey === 'function' && isLocked(periodKey())) {
+        const stored = adjustments[empId];
+        inp.value = stored !== undefined ? stored : '';
+        return;
+      }
       const n = parseFloat(inp.value);
       if (!isNaN(n) && n !== 0) {
         // Round to 2 decimal places and store
@@ -3394,6 +3522,11 @@ function renderAdjustmentsTable() {
   atbody.querySelectorAll('.adjHrsInput').forEach(inp => {
     inp.addEventListener('input', () => {
       const empId = inp.getAttribute('data-id');
+      if (typeof isLocked === 'function' && typeof periodKey === 'function' && isLocked(periodKey())) {
+        const stored = adjHrs[empId];
+        inp.value = stored !== undefined ? stored : '';
+        return;
+      }
       const n = parseFloat(inp.value);
       if (!isNaN(n) && n !== 0) {
         // Round to 2 decimal places and store
@@ -3410,6 +3543,9 @@ function renderAdjustmentsTable() {
   });
   // Initialize totals for adjustments (amount and hours)
   renderAdjustmentsFoot();
+  try {
+    toggleLockSensitiveControls(periodLocked);
+  } catch (err) {}
 }
 
 // Compute and display the total of all adjustment amounts in the adjustments table footer.
@@ -4155,6 +4291,41 @@ document.addEventListener('DOMContentLoaded', () => {
   // Expose helper globally so other scripts can enable editing
   window.enablePayrollInputs = enablePayrollInputs;
 
+  function toggleLockSensitiveControls(locked) {
+    const isLockedState = !!locked;
+    const panelPayroll = document.getElementById('panelPayroll');
+    if (panelPayroll) {
+      panelPayroll.classList.toggle('locked', isLockedState);
+    }
+
+    function applyLockStateToElement(el) {
+      if (!el) return;
+      if ('disabled' in el) {
+        if (isLockedState) {
+          if (!el.hasAttribute('data-lock-prev-disabled')) {
+            el.setAttribute('data-lock-prev-disabled', el.disabled ? 'true' : 'false');
+          }
+          el.disabled = true;
+        } else if (el.hasAttribute('data-lock-prev-disabled')) {
+          el.disabled = el.getAttribute('data-lock-prev-disabled') === 'true';
+          el.removeAttribute('data-lock-prev-disabled');
+        }
+      }
+      el.classList.toggle('locked-action', isLockedState);
+    }
+
+    applyLockStateToElement(document.getElementById('newPayrollPeriod'));
+    document.querySelectorAll('.refreshActiveWeek').forEach(el => applyLockStateToElement(el));
+    ['empFileInput', 'deductionsFileInput', 'fileInput', 'importSss', 'otMultiplier', 'deductionDivisor', 'deductionDivisorDeds', 'pagibigRateInput', 'philhealthRateInput', 'addSssRow', 'resetSss', 'clearSss', 'addPagibigRow', 'resetPagibig', 'clearPagibig', 'addPhilRow', 'resetPhil', 'clearPhil'].forEach(id => {
+      const el = document.getElementById(id);
+      if (el) applyLockStateToElement(el);
+    });
+    document.querySelectorAll('#adjustmentsTable input, #adjustmentsTable button').forEach(el => applyLockStateToElement(el));
+    document.querySelectorAll('#sssTable input, #sssTable button, #pagibigTable input, #pagibigTable button, #philhealthTable input, #philhealthTable button').forEach(el => applyLockStateToElement(el));
+    document.querySelectorAll('#cashAdvanceSection input, #cashAdvanceSection button').forEach(el => applyLockStateToElement(el));
+  }
+  window.toggleLockSensitiveControls = toggleLockSensitiveControls;
+
   /**
    * Determine whether a given payroll period is locked. The period identifier is
    * the canonical value returned by periodKey() (start and end dates joined by an underscore).
@@ -4254,6 +4425,11 @@ document.addEventListener('DOMContentLoaded', () => {
       enablePayrollInputs();
       if (wsEl.dataset) delete wsEl.dataset.forced;
       if (weEl.dataset) delete weEl.dataset.forced;
+    }
+    try {
+      toggleLockSensitiveControls(locked);
+    } catch (err) {
+      console.warn('toggleLockSensitiveControls failed', err);
     }
   }
   window.checkAndToggleEditState = checkAndToggleEditState;
@@ -6034,6 +6210,9 @@ tabs.tabPayroll.addEventListener('click', ()=>{
     if (typeof calculatePayrollFromResultsTable === 'function') calculatePayrollFromResultsTable();
     else if (typeof calculatePayrollFromRecords === 'function') calculatePayrollFromRecords();
   } catch(e){}
+  try {
+    if (typeof checkAndToggleEditState === 'function') checkAndToggleEditState();
+  } catch (e) {}
 });
 
 // Switch to the dashboard tab when clicked. Render payroll history if available.
@@ -6646,6 +6825,10 @@ document.getElementById('clearEmployeesBtn').addEventListener('click', ()=>{
 });
 
 document.getElementById('empFileInput').addEventListener('change', (evt) => {
+  if (typeof isLocked === 'function' && typeof periodKey === 'function' && isLocked(periodKey())) {
+    evt.target.value = '';
+    return;
+  }
   const file = evt.target.files && evt.target.files[0]; if (!file) return;
   const reader = new FileReader();
   reader.onload = function(e) {
@@ -6706,6 +6889,10 @@ function parseLine(line){
 
 document.getElementById('fileInput').addEventListener('change', (ev)=>{
   const inputEl = ev.target;
+  if (typeof isLocked === 'function' && typeof periodKey === 'function' && isLocked(periodKey())) {
+    inputEl.value = '';
+    return;
+  }
   const files = inputEl.files;
   if (!files || !files.length) return;
 
@@ -9604,6 +9791,9 @@ function loadSaved(){
   }
 
   function reRenderAll(){
+    if (typeof isLocked === 'function' && typeof periodKey === 'function' && isLocked(periodKey())) {
+      return;
+    }
     try{ applyActiveWeekToGlobals(); }catch(_){}
     try{ window.renderResults && renderResults(); }catch(_){}
     try{ window.calculateAll && calculateAll(); }catch(_){}
@@ -9618,6 +9808,9 @@ function loadSaved(){
       if (btn._wired) return;
       btn._wired = true;
       btn.addEventListener('click', ()=>{
+        if (typeof isLocked === 'function' && typeof periodKey === 'function' && isLocked(periodKey())) {
+          return;
+        }
         const sel = btn.parentElement && btn.parentElement.querySelector('.activeWeekSelect');
         if (!sel) return;
         localStorage.setItem(CURRENT_KEY, sel.value || '');
@@ -9823,6 +10016,9 @@ function updateWeekInputs(snap) {
   }
 
   function onNewPeriod() {
+    if (typeof isLocked === 'function' && typeof periodKey === 'function' && isLocked(periodKey())) {
+      return;
+    }
     const start = prompt('Enter start date (YYYY-MM-DD):');
     const end = start ? prompt('Enter end date (YYYY-MM-DD):') : null;
     if (!start || !end) return;
@@ -9881,6 +10077,9 @@ function updateWeekInputs(snap) {
   }
 
   function onPanelApply(e) {
+    if (typeof isLocked === 'function' && typeof periodKey === 'function' && isLocked(periodKey())) {
+      return;
+    }
     const wrap = e.target.closest('.active-week-bar');
     if (!wrap) return;
     const sel = wrap.querySelector('.activeWeekSelect');
@@ -9950,6 +10149,7 @@ function updateWeekInputs(snap) {
     const tb = document.querySelector('#cashAdvanceTable tbody');
     if (!tb) return;
     tb.innerHTML = '';
+    const periodLocked = typeof isLocked === 'function' && typeof periodKey === 'function' && isLocked(periodKey());
     (employeeList || []).forEach(emp => {
       const id = emp.id;
       const name = emp.name || '';
@@ -9983,6 +10183,9 @@ function updateWeekInputs(snap) {
       tb.appendChild(tr);
     });
     attachCashAdvanceHandlers();
+    try {
+      toggleLockSensitiveControls(periodLocked);
+    } catch (err) {}
   }
 
   function attachCashAdvanceHandlers() {
@@ -9991,6 +10194,11 @@ function updateWeekInputs(snap) {
       // Update the inâ€‘memory values on every keystroke but defer reâ€‘rendering
       inp.addEventListener('input', () => {
         const id = inp.getAttribute('data-id');
+        if (typeof isLocked === 'function' && typeof periodKey === 'function' && isLocked(periodKey())) {
+          const stored = cashOrig[id];
+          inp.value = stored !== undefined ? stored : '';
+          return;
+        }
         const val = parseFloat(inp.value);
         if (!isNaN(val) && val > 0) {
           cashOrig[id] = +(val.toFixed(2));
@@ -10007,6 +10215,11 @@ function updateWeekInputs(snap) {
       });
       // When the user finishes editing (on blur/change), rebuild the table so buttons/labels refresh
       inp.addEventListener('change', () => {
+        if (typeof isLocked === 'function' && typeof periodKey === 'function' && isLocked(periodKey())) {
+          const stored = cashOrig[inp.getAttribute('data-id')];
+          inp.value = stored !== undefined ? stored : '';
+          return;
+        }
         renderCashAdvanceTable();
       });
     });
@@ -10015,6 +10228,11 @@ function updateWeekInputs(snap) {
       // Update the deduction and recalculate totals on each keystroke but do not reâ€‘render
       inp.addEventListener('input', () => {
         const id = inp.getAttribute('data-id');
+        if (typeof isLocked === 'function' && typeof periodKey === 'function' && isLocked(periodKey())) {
+          const stored = cashDed[id];
+          inp.value = stored !== undefined ? stored : '';
+          return;
+        }
         const val = parseFloat(inp.value);
         if (!isNaN(val) && val > 0) {
           cashDed[id] = +(val.toFixed(2));
@@ -10031,12 +10249,20 @@ function updateWeekInputs(snap) {
       });
       // Rebuild the table when the user commits their change (on blur/change)
       inp.addEventListener('change', () => {
+        if (typeof isLocked === 'function' && typeof periodKey === 'function' && isLocked(periodKey())) {
+          const stored = cashDed[inp.getAttribute('data-id')];
+          inp.value = stored !== undefined ? stored : '';
+          return;
+        }
         renderCashAdvanceTable();
       });
     });
     // Handle update (apply a single deduction)
     document.querySelectorAll('.cashUpdateBtn').forEach(btn => {
       btn.addEventListener('click', () => {
+        if (typeof isLocked === 'function' && typeof periodKey === 'function' && isLocked(periodKey())) {
+          return;
+        }
         const id = btn.getAttribute('data-id');
         const orig = Number(cashOrig[id] ?? 0);
         const ded  = Number(cashDed[id] ?? 0);
