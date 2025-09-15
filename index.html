@@ -1968,12 +1968,6 @@ window.addEventListener('load', dashReports);
          OT Pay
         </th>
         <th>
-         Adjustments
-        </th>
-        <th>
-         Bantay
-        </th>
-        <th>
          Gross Pay
         </th>
         <th>
@@ -2001,6 +1995,12 @@ window.addEventListener('load', dashReports);
          Total Deductions
         </th>
         <th>
+         Adjustments
+        </th>
+        <th>
+         Bantay
+        </th>
+        <th>
          Net Pay
         </th>
        <th>
@@ -2023,8 +2023,6 @@ window.addEventListener('load', dashReports);
     <td class="num" data-col="totalHrs">0.00</td>
     <td class="num" data-col="regPay">0.00</td>
     <td class="num" data-col="otPay">0.00</td>
-    <td class="num" data-col="adjAmt">0.00</td>
-    <td class="num" data-col="bantay">0.00</td>
     <td class="num" data-col="grossPay">0.00</td>
     <td class="num" data-col="pagibig">0.00</td>
     <td class="num" data-col="philhealth">0.00</td>
@@ -2034,6 +2032,8 @@ window.addEventListener('load', dashReports);
     <td class="num" data-col="vale">0.00</td>
     <td class="num" data-col="valeWed">0.00</td>
     <td class="num" data-col="totalDed">0.00</td>
+    <td class="num" data-col="adjAmt">0.00</td>
+    <td class="num" data-col="bantay">0.00</td>
     <td class="num" data-col="netPay">0.00</td>
     <td></td>
   </tr>
@@ -2805,8 +2805,6 @@ function renderTable(){
         <td><input class="cell otHrs" title="Non-editable in Payroll" type="number" step="0.01" value="${oH}" disabled></td>
         <td class="adjHrs num">${aH ? aH.toFixed(2) : '0.00'}</td><td class="totalHrs num">0.00</td><td class="regPay num">0.00</td>
         <td class="otPay num">0.00</td>
-        <td class="adjAmt num">0.00</td>
-        <td><input class="cell bantay" type="number" step="0.01" value="${bVal}"></td>
         <td class="grossPay num">0.00</td>
         <td class="pagibig num">0.00</td>
         <td class="philhealth num">0.00</td>
@@ -2816,6 +2814,8 @@ function renderTable(){
         <td><input class="cell vale" type="number" step="0.01" value="${v}"></td>
         <td class="valeWed num">${vW}</td>
         <td class="totalDed num">0.00</td>
+        <td class="adjAmt num">0.00</td>
+        <td><input class="cell bantay" type="number" step="0.01" value="${bVal}"></td>
         <td class="netPay num">0.00</td>
         <td><button type="button" class="payslipBtn">Payslip</button></td>`;
       frag.appendChild(tr);
@@ -3473,7 +3473,7 @@ function updateContributionNote() {
 }
 document.getElementById('downloadPayrollCSV').addEventListener('click', ()=>{
   // Include Adjustments column in payroll CSV export
-  const header = ['Week Start','Week End','OT Multiplier','Divisor','ID','Name','Regular Hours','OT Hours','Hourly Rate','Regular Pay','OT Pay','Adjustments','Bantay','Gross Pay','Pag-IBIG','PhilHealth','SSS','SSS Loan','Pag-IBIG Loan','Vale','Wed Vale','Total Deductions','Net Pay'];
+  const header = ['Week Start','Week End','OT Multiplier','Divisor','ID','Name','Regular Hours','OT Hours','Hourly Rate','Regular Pay','OT Pay','Gross Pay','Pag-IBIG','PhilHealth','SSS','SSS Loan','Pag-IBIG Loan','Vale','Wed Vale','Total Deductions','Adjustments','Net Pay'];
   const rows=[header];
   const ws = weekStartEl.value||''; const we = weekEndEl.value||''; const otm = String(otMultiplierEl.value||''); const div = String(divisorEl.value||'1');
   document.querySelectorAll('#payrollTable tbody tr').forEach(tr=>{
@@ -3482,8 +3482,6 @@ document.getElementById('downloadPayrollCSV').addEventListener('click', ()=>{
     const regI = tr.querySelector('.regHrs'); const otI = tr.querySelector('.otHrs'); const rateI = tr.querySelector('.rate');
     const regPay = tr.querySelector('.regPay').textContent.trim();
     const otPay = tr.querySelector('.otPay').textContent.trim();
-    const adj   = tr.querySelector('.adjAmt') ? tr.querySelector('.adjAmt').textContent.trim() : '';
-    const bantay = tr.querySelector('.bantay') ? tr.querySelector('.bantay').value : '';
     const grossPay = tr.querySelector('.grossPay').textContent.trim();
     const pagibig = tr.querySelector('.pagibig').textContent.trim();
     const philhealth = tr.querySelector('.philhealth').textContent.trim();
@@ -3491,8 +3489,9 @@ document.getElementById('downloadPayrollCSV').addEventListener('click', ()=>{
     const lSSS = tr.querySelector('.loanSSS').value; const lPI = tr.querySelector('.loanPI').value;
     const v = tr.querySelector('.vale').value; const vW = tr.querySelector('.valeWed').value;
     const total = tr.querySelector('.totalDed').textContent.trim();
+    const adj   = tr.querySelector('.adjAmt') ? tr.querySelector('.adjAmt').textContent.trim() : '';
     const net   = tr.querySelector('.netPay').textContent.trim();
-    rows.push([ws,we,otm,div,id,name,regI.value,otI.value,rateI.value,regPay,otPay,adj,bantay,grossPay,pagibig,philhealth,sss,lSSS,lPI,v,vW,total,net]);
+    rows.push([ws,we,otm,div,id,name,regI.value,otI.value,rateI.value,regPay,otPay,grossPay,pagibig,philhealth,sss,lSSS,lPI,v,vW,total,adj,net]);
   });
   const csv = rows.map(r=>r.map(s=>{
     s = String(s ?? '');
@@ -3876,8 +3875,8 @@ document.addEventListener('DOMContentLoaded', () => {
     }
       // Column index fallbacks aligned with current payrollTable structure
       // 0:ID, 1:Name, 2:Rate, 3:RegHrs, 4:OTHrs, 5:AdjHrs, 6:TotalHrs, 7:RegPay, 8:OTPay,
-      // 9:Adjustments, 10:Bantay, 11:Gross, 12:Pag-IBIG, 13:PhilHealth, 14:SSS, 15:SSS Loan,
-      // 16:Pag-IBIG Loan, 17:Vale, 18:Wed Vale, 19:Total Ded, 20:Net Pay, 21:Payslip
+      // 9:Gross, 10:Pag-IBIG, 11:PhilHealth, 12:SSS, 13:SSS Loan, 14:Pag-IBIG Loan,
+      // 15:Vale, 16:Wed Vale, 17:Total Ded, 18:Adjustments, 19:Bantay, 20:Net Pay, 21:Payslip
       data.rate = readNum('.rate', 2);
       data.regHrs = readNum('.regHrs', 3);
       data.otHrs = readNum('.otHrs', 4);
@@ -3885,17 +3884,17 @@ document.addEventListener('DOMContentLoaded', () => {
       data.totalHrs = readNum('.totalHrs', 6);
       data.regPay = readNum('.regPay', 7);
       data.otPay = readNum('.otPay', 8);
-      data.adjAmt = readNum('.adjAmt', 9);
-      data.bantay = readNum('.bantay', 10);
-      data.grossPay = readNum('.grossPay', 11);
-      data.pagibig = readNum('.pagibig', 12);
-      data.philhealth = readNum('.philhealth', 13);
-      data.sss = readNum('.sss', 14);
-      data.loanSSS = readNum('.loanSSS', 15);
-      data.loanPI = readNum('.loanPI', 16);
-      data.vale = readNum('.vale', 17);
-      data.valeWed = readNum('.valeWed', 18);
-      data.totalDed = readNum('.totalDed', 19);
+      data.grossPay = readNum('.grossPay', 9);
+      data.pagibig = readNum('.pagibig', 10);
+      data.philhealth = readNum('.philhealth', 11);
+      data.sss = readNum('.sss', 12);
+      data.loanSSS = readNum('.loanSSS', 13);
+      data.loanPI = readNum('.loanPI', 14);
+      data.vale = readNum('.vale', 15);
+      data.valeWed = readNum('.valeWed', 16);
+      data.totalDed = readNum('.totalDed', 17);
+      data.adjAmt = readNum('.adjAmt', 18);
+      data.bantay = readNum('.bantay', 19);
       data.netPay = readNum('.netPay', 20);
       // Capture DTR records for this employee within the selected date range. Stores an array of {date, times}
       try {
@@ -4152,19 +4151,19 @@ document.addEventListener('DOMContentLoaded', () => {
     // Mirror the payroll grid ordering, including adjustment/total hours and Bantay
     const header = [
       'ID','Name','Hourly Rate','Regular Hours','OT Hours','Adjustment Hours','Total Hours',
-      'Regular Pay','OT Pay','Adjustments','Bantay','Gross Pay',
+      'Regular Pay','OT Pay','Gross Pay',
       'Pag-IBIG','PhilHealth','SSS','SSS Loan','Pag-IBIG Loan','Vale','Wed Vale',
-      'Total Deductions','Net Pay'
+      'Total Deductions','Adjustments','Bantay','Net Pay'
     ];
     const lines = [header.join(',')];
     snap.rows.forEach(row => {
       const values = [
         row.id, row.name,
         row.rate, row.regHrs, row.otHrs, row.adjHrs, row.totalHrs,
-        row.regPay, row.otPay, row.adjAmt, row.bantay, row.grossPay,
+        row.regPay, row.otPay, row.grossPay,
         row.pagibig, row.philhealth, row.sss,
         row.loanSSS, row.loanPI, row.vale, row.valeWed,
-        row.totalDed, row.netPay
+        row.totalDed, row.adjAmt, row.bantay, row.netPay
       ];
       lines.push(values.map(v => {
         const s = String(v ?? '');
@@ -4467,9 +4466,9 @@ document.addEventListener('DOMContentLoaded', () => {
     // Display columns similar to the live payroll grid (omit Total Deductions per request)
     const headers = [
       'ID','Name','Hourly Rate','Regular Hrs','OT Hrs','Adjustment Hrs','Total Hours',
-      'Reg Pay','OT Pay','Adjustments','Bantay','Gross',
+      'Reg Pay','OT Pay','Gross',
       'Pag-IBIG','PhilHealth','SSS','SSS Loan','Pag-IBIG Loan','Vale','Wed Vale',
-      'Net Pay'
+      'Adjustments','Bantay','Net Pay'
     ];
     headers.forEach(h => {
       const th = document.createElement('th');
@@ -4547,10 +4546,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
       const vals = [
         id, r.name, rate, regHrs, otHrs, adjHrs, totalHrs,
-        regPay, otPay, adjAmt, bantay, gross,
+        regPay, otPay, gross,
         pagibig, philhealth, sss,
         loanSSSPer, loanPIPer, vale, wedVale,
-        netPay
+        adjAmt, bantay, netPay
       ];
       // Accumulate grand totals
       GT.regHrs     += regHrs;
