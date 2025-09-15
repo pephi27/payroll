@@ -598,21 +598,29 @@ window.addEventListener('load', dashReports);
 
   /* Hide individual deduction columns in Payroll table (show only Total Deductions).
      After adding the Adjustment column before Bantay, the indices shift by one.
-     Hide Pag‑IBIG to Wed Vale columns (cols 13–19). */
-  #payrollTab #payrollTable th:nth-child(13),
-  #payrollTab #payrollTable td:nth-child(13),
-  #payrollTab #payrollTable th:nth-child(14),
-  #payrollTab #payrollTable td:nth-child(14),
-  #payrollTab #payrollTable th:nth-child(15),
-  #payrollTab #payrollTable td:nth-child(15),
-  #payrollTab #payrollTable th:nth-child(16),
-  #payrollTab #payrollTable td:nth-child(16),
-  #payrollTab #payrollTable th:nth-child(17),
-  #payrollTab #payrollTable td:nth-child(17),
-  #payrollTab #payrollTable th:nth-child(18),
-  #payrollTab #payrollTable td:nth-child(18),
-  #payrollTab #payrollTable th:nth-child(19),
-  #payrollTab #payrollTable td:nth-child(19) { display: none; }
+     Hide Pag‑IBIG to Wed Vale columns (cols 13–19) for thead and tbody.
+     The tfoot row has a collapsed first cell; hide cols 12–18 instead. */
+  #payrollTab #payrollTable thead th:nth-child(13),
+  #payrollTab #payrollTable tbody td:nth-child(13),
+  #payrollTab #payrollTable thead th:nth-child(14),
+  #payrollTab #payrollTable tbody td:nth-child(14),
+  #payrollTab #payrollTable thead th:nth-child(15),
+  #payrollTab #payrollTable tbody td:nth-child(15),
+  #payrollTab #payrollTable thead th:nth-child(16),
+  #payrollTab #payrollTable tbody td:nth-child(16),
+  #payrollTab #payrollTable thead th:nth-child(17),
+  #payrollTab #payrollTable tbody td:nth-child(17),
+  #payrollTab #payrollTable thead th:nth-child(18),
+  #payrollTab #payrollTable tbody td:nth-child(18),
+  #payrollTab #payrollTable thead th:nth-child(19),
+  #payrollTab #payrollTable tbody td:nth-child(19) { display: none; }
+  #payrollTab #payrollTable tfoot td:nth-child(12),
+  #payrollTab #payrollTable tfoot td:nth-child(13),
+  #payrollTab #payrollTable tfoot td:nth-child(14),
+  #payrollTab #payrollTable tfoot td:nth-child(15),
+  #payrollTab #payrollTable tfoot td:nth-child(16),
+  #payrollTab #payrollTable tfoot td:nth-child(17),
+  #payrollTab #payrollTable tfoot td:nth-child(18) { display: none; }
 /* === PATCH: column widths for Hourly Rate, Regular Hours, OT Hours === */
 #payrollTable th, #payrollTable td { white-space: nowrap; }
 #payrollTable th:nth-child(3), #payrollTable td:nth-child(3) { width: 110px; min-width: 110px; } /* Hourly Rate */
