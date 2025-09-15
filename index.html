@@ -6,6 +6,36 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>PayrollPro</title>
 
+  <!-- Performance: preconnect to critical origins and modulepreload -->
+  <link rel="preconnect" href="https://qzkzugzfpegozpiqutdv.supabase.co" crossorigin>
+  <link rel="dns-prefetch" href="//qzkzugzfpegozpiqutdv.supabase.co">
+  <link rel="preconnect" href="https://esm.sh" crossorigin>
+  <link rel="dns-prefetch" href="//esm.sh">
+  <link rel="modulepreload" href="https://esm.sh/@supabase/supabase-js" crossorigin>
+
+  <script type="module">
+    // Non-invasive performance tweaks: lazy-load offscreen media, async decode images.
+    const onReady = (cb) => {
+      if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', cb, { once: true });
+      else cb();
+    };
+    onReady(() => {
+      try {
+        const vh = window.innerHeight || document.documentElement.clientHeight || 800;
+        document.querySelectorAll('img').forEach(img => {
+          try { if (!img.hasAttribute('decoding')) img.setAttribute('decoding', 'async'); } catch {}
+          if (!img.hasAttribute('loading')) {
+            const rect = img.getBoundingClientRect();
+            if (rect && rect.top > vh) { try { img.setAttribute('loading', 'lazy'); } catch {} }
+          }
+        });
+        document.querySelectorAll('iframe').forEach(el => {
+          if (!el.hasAttribute('loading')) { try { el.setAttribute('loading', 'lazy'); } catch {} }
+        });
+      } catch { /* no-op */ }
+    });
+  </script>
+
 <!-- === Supabase KV Sync Adapter (no-login, auto-sync) === -->
 <script>
   // Global KV helpers for classic scripts; Supabase-aware if available.
@@ -205,10 +235,18 @@ Storage.prototype.removeItem = function(k) {
       }
     })
     if (changed) {
-      // One-time reload to let downstream scripts render with hydrated data
-      if (!sessionStorage.getItem("__kv_reloaded")) {
-        sessionStorage.setItem("__kv_reloaded","1")
-        location.reload()
+      // Avoid reload: signal hydration complete and re-render once safely.
+      try { sessionStorage.removeItem("__kv_reloaded"); } catch {}
+      try { window.__kv_hydrated = true; } catch {}
+      try { window.dispatchEvent(new Event('kv-hydrated')); } catch {}
+      const rerender = () => {
+        try { if (typeof window.calculateAll === 'function') window.calculateAll(); } catch {}
+        try { if (typeof window.renderResults === 'function') window.renderResults(); } catch {}
+      };
+      if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', () => { setTimeout(rerender, 0); }, { once: true });
+      } else {
+        setTimeout(rerender, 0);
       }
     }
   } catch (e) { console.warn("Initial hydrate failed", e) }
@@ -380,8 +418,8 @@ h3{margin:0 0 3px 0;font-size:10px;}
         const v = parseFloat((inp.value||'').toString().replace(/,/g,''));
         if(!isNaN(v) && v===0){ inp.value = ''; }
       });
-      // Text cells: convert 0/0.00 to '-'
-      Array.from(tbody.querySelectorAll('td')).forEach(td=>{
+      // Text cells: convert 0/0.00 to '-' (only numeric cells)
+      Array.from(tbody.querySelectorAll('td.num')).forEach(td=>{
         if(td.querySelector('input')) return; // inputs handled above
         const raw = (td.textContent||'').replace(/,/g,'').trim();
         if(raw==='') return;
@@ -6529,6 +6567,8 @@ const groups = {};
   });
 
   const tbody = document.querySelector('#resultsTable tbody'); tbody.innerHTML='';
+  // Track rows appended to avoid expensive DOM queries after render
+  let _rowCount = 0;
   // Initialize totals for DTR summary. We will accumulate regular and OT hours and unique employee IDs
   let _dtrTotalReg = 0;
   let _dtrTotalOt  = 0;
@@ -6855,6 +6895,7 @@ let otMins = 0;
             trSeg.dataset.times=JSON.stringify(timesForHalf);
           })();
           tbody.appendChild(trSeg);
+          _rowCount++;
           const _regVal=parseFloat(regDecSeg)||0; const _otVal=parseFloat(otDecSeg)||0;
           _dtrTotalReg+=_regVal; _dtrTotalOt+=_otVal; _dtrEmpIds.add(empId);
         } else {
@@ -6936,6 +6977,7 @@ let otMins = 0;
     const schedCell = tr.cells[3];
     if(schedCell){ schedCell.innerHTML = ''; schedCell.appendChild(buildScheduleDropdown(empId, date, scheduleIdForEmp)); }
     tbody.appendChild(tr);
+    _rowCount++;
     // Accumulate totals for unsplit rows
     const _regVal = parseFloat(totalRegularDecimal) || 0;
     const _otVal  = parseFloat(otDecimal) || 0;
@@ -6945,14 +6987,13 @@ let otMins = 0;
   }
 
   // Show/hide download button
-  document.getElementById('downloadCSV').style.display =
-    document.querySelectorAll('#resultsTable tbody tr').length ? 'inline-block' : 'none';
+  document.getElementById('downloadCSV').style.display = _rowCount ? 'inline-block' : 'none';
   // --- DTR Summary ---
   // After building the table, update the summary using accumulated totals
   (function(){
     const summaryEl = document.getElementById('dtrSummary');
     if (!summaryEl) return;
-    const rowCount = document.querySelectorAll('#resultsTable tbody tr').length;
+    const rowCount = _rowCount;
     if (!rowCount) {
       summaryEl.textContent = '';
       return;
@@ -10976,4 +11017,131 @@ document.addEventListener('DOMContentLoaded', async function () {
 })();
 </script>
 </body>
+<script>
+// === CalculateAll Scheduler: coalesce multiple calls per frame ===
+(function(){
+  try {
+    if (window.calculateAll && !window.calculateAll.__scheduledWrapped) {
+      const orig = window.calculateAll;
+      let scheduled = false;
+      function run(){
+        scheduled = false;
+        try { orig(); } catch(e) { console.warn('calculateAll error', e); }
+      }
+      const wrap = function(){
+        if (scheduled) return;
+        scheduled = true;
+        (window.requestAnimationFrame || setTimeout)(run, 0);
+      };
+      wrap.__scheduledWrapped = true;
+      window.calculateAll = wrap;
+    }
+  } catch(e) { /* no-op */ }
+})();
+
+// === Deductions render: skip work when hidden; build via fragment ===
+(function(){
+  function isDeductionsVisible(){
+    const el = document.getElementById('deductionsTab');
+    return !!(el && el.classList && el.classList.contains('active'));
+  }
+  try {
+    const orig = window.renderDeductionsTable;
+    if (typeof orig === 'function' && !orig.__perfWrapped) {
+      const optimized = function(){
+        if (!isDeductionsVisible()) { window.__deductionsDirty = true; return; }
+        window.__deductionsDirty = false;
+        try {
+          const dtbody = document.querySelector('#deductionsTable tbody');
+          if (!dtbody) return;
+          const frag = document.createDocumentFragment();
+          const div = Number(typeof divisor !== 'undefined' ? divisor : (window.divisor || 1)) || 1;
+          dtbody.innerHTML = '';
+          const _employees = (typeof employeeList !== 'undefined' ? employeeList : (window.employeeList || []));
+          const _regHours = (typeof regHours !== 'undefined' ? regHours : (window.regHours || {}));
+          const _storedEmployees = (typeof storedEmployees !== 'undefined' ? storedEmployees : (window.storedEmployees || {}));
+          const _rates = (typeof payrollRates !== 'undefined' ? payrollRates : (window.payrollRates || {}));
+          const _loanSSS = (typeof loanSSS !== 'undefined' ? loanSSS : (window.loanSSS || {}));
+          const _loanPI = (typeof loanPI !== 'undefined' ? loanPI : (window.loanPI || {}));
+          const _vale = (typeof vale !== 'undefined' ? vale : (window.vale || {}));
+          const _valeWed = (typeof valeWed !== 'undefined' ? valeWed : (window.valeWed || {}));
+          const _piRateFn = (typeof pagibigRateByMonthly === 'function' ? pagibigRateByMonthly : (window.pagibigRateByMonthly || null));
+          const _phRateFn = (typeof philhealthRateByMonthly === 'function' ? philhealthRateByMonthly : (window.philhealthRateByMonthly || null));
+          const _sssFn = (typeof sssShareByMonthly === 'function' ? sssShareByMonthly : (window.sssShareByMonthly || null));
+          const _piFlat = (typeof pagibigRate !== 'undefined' ? pagibigRate : (window.pagibigRate || 0));
+          const _phFlat = (typeof philhealthRate !== 'undefined' ? philhealthRate : (window.philhealthRate || 0));
+          _employees.forEach(emp => {
+            const id = emp.id;
+            const rH = Number(_regHours[id] || 0);
+            const stored = _storedEmployees[id];
+            const rate = Number((stored && stored.hourlyRate) ?? (_rates[id] ?? 0)) || 0;
+            if (_rates) _rates[id] = rate;
+            const lSSS = Number(_loanSSS[id] || 0);
+            const lPI = Number(_loanPI[id] || 0);
+            const v = Number(_vale[id] || 0);
+            const vW = Number(_valeWed[id] || 0);
+            const regPay = +(rH * rate).toFixed(2);
+            const monthly = rate * 8 * 24;
+            const piRate = (_piRateFn ? _piRateFn(monthly) : _piFlat);
+            const phRate = (_phRateFn ? _phRateFn(monthly) : _phFlat);
+            const pagibig = +((regPay * piRate) / div).toFixed(2);
+            const philhealth = +((regPay * phRate) / div).toFixed(2);
+            const sssFull = (_sssFn ? _sssFn(monthly) : 0);
+            const sss = +(sssFull / div).toFixed(2);
+            const sssLoan = +(lSSS / div).toFixed(2);
+            const piLoan = +(lPI / div).toFixed(2);
+            const total = +(pagibig + philhealth + sss + sssLoan + piLoan + v + vW).toFixed(2);
+            const tr = document.createElement('tr');
+            tr.innerHTML = '<td>'+id+'</td><td class="wrap">'+(emp.name||'')+'</td>'+
+              '<td class="num">'+pagibig.toFixed(2)+'</td>'+
+              '<td class="num">'+philhealth.toFixed(2)+'</td>'+
+              '<td class="num">'+sss.toFixed(2)+'</td>'+
+              '<td class="num">'+sssLoan.toFixed(2)+'</td>'+
+              '<td class="num">'+piLoan.toFixed(2)+'</td>'+
+              '<td class="num">'+v.toFixed(2)+'</td>'+
+              '<td class="num">'+vW.toFixed(2)+'</td>'+
+              '<td class="num">'+total.toFixed(2)+'</td>';
+            frag.appendChild(tr);
+          });
+          dtbody.appendChild(frag);
+        } catch(e) { try { return orig(); } catch(_){} }
+        try { (window.scheduleTotals||window.updateDeductionsGrandTotals||function(){})(); } catch(e){}
+      };
+      optimized.__perfWrapped = true;
+      window.renderDeductionsTable = optimized;
+    }
+  } catch(e) { /* no-op */ }
+  // Render pending deductions when its tab becomes active
+  document.addEventListener('click', function(ev){
+    const btn = ev.target && ev.target.closest && ev.target.closest('#panelPayroll .tabs .tab-btn');
+    if (btn && btn.dataset && btn.dataset.tab === 'deductionsTab'){
+      if (window.__deductionsDirty && typeof window.renderDeductionsTable === 'function'){
+        try { window.renderDeductionsTable(); } catch(e){}
+      }
+    }
+  }, true);
+})();
+</script>
+<script>
+// === RenderResults Scheduler: coalesce rapid calls into one per frame ===
+(function(){
+  try {
+    if (window.renderResults && !window.renderResults.__scheduledWrapped) {
+      const orig = window.renderResults;
+      let scheduled = false;
+      function run(){
+        scheduled = false;
+        try { orig(); } catch(e) { console.warn('renderResults error', e); }
+      }
+      const wrap = function(){
+        if (scheduled) return;
+        scheduled = true;
+        (window.requestAnimationFrame || setTimeout)(run, 0);
+      };
+      wrap.__scheduledWrapped = true;
+      window.renderResults = wrap;
+    }
+  } catch(e) { /* no-op */ }
+})();
+</script>
 </html>
