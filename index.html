@@ -6048,6 +6048,162 @@ if (tabs.tabDashboard) {
 
 const scheduleSelect = document.getElementById('scheduleSelect');
 const scheduleNameInput = document.getElementById('scheduleName');
+const scheduleGraceInput = document.querySelector('[data-key="sch_grace"]');
+
+const scheduleNameDisplay = document.createElement('span');
+scheduleNameDisplay.className = 'schedule-readonly';
+scheduleNameDisplay.style.display = 'none';
+scheduleNameDisplay.style.marginLeft = '6px';
+if (scheduleNameInput && scheduleNameInput.parentElement) {
+  scheduleNameInput.parentElement.appendChild(scheduleNameDisplay);
+}
+const scheduleGraceDisplay = document.createElement('span');
+scheduleGraceDisplay.className = 'schedule-readonly';
+scheduleGraceDisplay.style.display = 'none';
+scheduleGraceDisplay.style.marginLeft = '6px';
+if (scheduleGraceInput && scheduleGraceInput.parentElement) {
+  scheduleGraceInput.parentElement.appendChild(scheduleGraceDisplay);
+}
+
+let scheduleEditorTemplate = null;
+
+function captureScheduleEditorTemplate(){
+  if (scheduleEditorTemplate) return;
+  const segmentsBody = document.querySelector('#scheduleTable tbody');
+  const rangesBody = document.querySelector('#rangesTable tbody');
+  if (segmentsBody && rangesBody) {
+    scheduleEditorTemplate = {
+      segments: segmentsBody.innerHTML,
+      ranges: rangesBody.innerHTML
+    };
+  }
+}
+
+function restoreScheduleEditorTemplate(){
+  if (!scheduleEditorTemplate) return;
+  const segmentsBody = document.querySelector('#scheduleTable tbody');
+  const rangesBody = document.querySelector('#rangesTable tbody');
+  if (segmentsBody) {
+    if (segmentsBody.dataset.locked === 'true') {
+      segmentsBody.innerHTML = scheduleEditorTemplate.segments;
+      delete segmentsBody.dataset.locked;
+    } else if (!segmentsBody.children.length) {
+      segmentsBody.innerHTML = scheduleEditorTemplate.segments;
+    }
+  }
+  if (rangesBody) {
+    if (rangesBody.dataset.locked === 'true') {
+      rangesBody.innerHTML = scheduleEditorTemplate.ranges;
+      delete rangesBody.dataset.locked;
+    } else if (!rangesBody.children.length) {
+      rangesBody.innerHTML = scheduleEditorTemplate.ranges;
+    }
+  }
+}
+
+function toggleScheduleControlsForLock(locked){
+  const idsToHide = ['addScheduleBtn','deleteScheduleBtn','saveScheduleBtn','saveRangesBtn','resetRangesBtn'];
+  idsToHide.forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.style.display = locked ? 'none' : '';
+  });
+  if (scheduleNameInput) scheduleNameInput.style.display = locked ? 'none' : '';
+  if (scheduleGraceInput) scheduleGraceInput.style.display = locked ? 'none' : '';
+  if (scheduleNameDisplay) scheduleNameDisplay.style.display = locked ? 'inline' : 'none';
+  if (scheduleGraceDisplay) scheduleGraceDisplay.style.display = locked ? 'inline' : 'none';
+}
+
+function renderLockedScheduleEditorView(pid){
+  captureScheduleEditorTemplate();
+  const segmentsBody = document.querySelector('#scheduleTable tbody');
+  const rangesBody = document.querySelector('#rangesTable tbody');
+  if (!segmentsBody || !rangesBody) return;
+  segmentsBody.dataset.locked = 'true';
+  rangesBody.dataset.locked = 'true';
+
+  const snap = getLockedSnapshot(pid);
+  if (!snap || !snap.frozenSchedules) {
+    segmentsBody.innerHTML = '<tr><td colspan="3" class="muted">No frozen schedule data for this period.</td></tr>';
+    rangesBody.innerHTML = '<tr><td colspan="3" class="muted">No frozen schedule data for this period.</td></tr>';
+    if (scheduleNameDisplay) scheduleNameDisplay.textContent = '—';
+    if (scheduleGraceDisplay) scheduleGraceDisplay.textContent = '—';
+    return;
+  }
+
+  const scheduleMap = new Map();
+  Object.keys(snap.frozenSchedules || {}).forEach(empId => {
+    const days = snap.frozenSchedules[empId] || {};
+    Object.keys(days).sort().forEach(dateKey => {
+      const entry = days[dateKey];
+      if (entry && entry.scheduleId && !scheduleMap.has(entry.scheduleId)) {
+        scheduleMap.set(entry.scheduleId, entry.ranges || {});
+      }
+    });
+  });
+
+  let selectedId = scheduleSelect && scheduleSelect.value;
+  if (!scheduleMap.has(selectedId)) {
+    selectedId = scheduleMap.size ? Array.from(scheduleMap.keys())[0] : '';
+  }
+  if (scheduleSelect && selectedId) {
+    const hasOption = Array.from(scheduleSelect.options || []).some(o => o.value === selectedId);
+    if (!hasOption) {
+      const opt = document.createElement('option');
+      opt.value = selectedId;
+      opt.textContent = resolveScheduleLabel(selectedId);
+      scheduleSelect.appendChild(opt);
+    }
+    scheduleSelect.value = selectedId;
+  }
+
+  const ranges = scheduleMap.get(selectedId) || {};
+  const scheduleDef = (storedSchedules && storedSchedules[selectedId]) || null;
+
+  const segmentsRows = [
+    { label: 'AM', start: ranges.sch_am_start || (scheduleDef && scheduleDef.sch_am_start) || DEFAULT_SCHEDULE.sch_am_start || '', end: ranges.sch_am_end || (scheduleDef && scheduleDef.sch_am_end) || DEFAULT_SCHEDULE.sch_am_end || '' },
+    { label: 'PM', start: ranges.sch_pm_start || (scheduleDef && scheduleDef.sch_pm_start) || DEFAULT_SCHEDULE.sch_pm_start || '', end: ranges.sch_pm_end || (scheduleDef && scheduleDef.sch_pm_end) || DEFAULT_SCHEDULE.sch_pm_end || '' },
+    { label: 'Saturday', start: ranges.sch_sat_start || (scheduleDef && scheduleDef.sch_sat_start) || '', end: ranges.sch_sat_end || (scheduleDef && scheduleDef.sch_sat_end) || '' }
+  ];
+
+  segmentsBody.innerHTML = segmentsRows.map(row => {
+    const startVal = row.start || '—';
+    const endVal = row.end || '—';
+    return `<tr><td>${row.label}</td><td>${escapeHtml(startVal)}</td><td>${escapeHtml(endVal)}</td></tr>`;
+  }).join('');
+
+  const fallback = scheduleDef || {};
+  const normalizeRange = (range, startFallback, endFallback) => {
+    const startVal = (range && range.start) || startFallback || '';
+    const endVal = (range && range.end) || endFallback || '';
+    return {
+      start: startVal || '—',
+      end: endVal || '—'
+    };
+  };
+
+  const rangeRows = [
+    { label: 'Clock In 1', range: ranges.amIn, startKey: 'rng_am_in_start', endKey: 'rng_am_in_end' },
+    { label: 'Clock Out 1', range: ranges.amOut, startKey: 'rng_am_out_start', endKey: 'rng_am_out_end' },
+    { label: 'Clock In 2', range: ranges.pmIn, startKey: 'rng_pm_in_start', endKey: 'rng_pm_in_end' },
+    { label: 'Clock Out 2', range: ranges.pmOut, startKey: 'rng_pm_out_start', endKey: 'rng_pm_out_end' },
+    { label: 'OT In', range: ranges.otIn, startKey: 'rng_ot_in_start', endKey: 'rng_ot_in_end' },
+    { label: 'OT Out', range: ranges.otOut, startKey: 'rng_ot_out_start', endKey: 'rng_ot_out_end' },
+    { label: 'Saturday OT In', range: ranges.satOt, startKey: 'rng_sat_ot_start', endKey: 'rng_sat_ot_end' }
+  ];
+
+  rangesBody.innerHTML = rangeRows.map(row => {
+    const startFallback = (fallback && fallback[row.startKey]) || (DEFAULT_RANGES && DEFAULT_RANGES[row.startKey]) || '';
+    const endFallback = (fallback && fallback[row.endKey]) || (DEFAULT_RANGES && DEFAULT_RANGES[row.endKey]) || '';
+    const formatted = normalizeRange(row.range, startFallback, endFallback);
+    return `<tr><td>${row.label}</td><td>${escapeHtml(formatted.start)}</td><td>${escapeHtml(formatted.end)}</td></tr>`;
+  }).join('');
+
+  const graceValue = (ranges.sch_grace !== undefined && ranges.sch_grace !== null)
+    ? ranges.sch_grace
+    : (scheduleDef && scheduleDef.sch_grace !== undefined ? scheduleDef.sch_grace : DEFAULT_SCHEDULE.sch_grace);
+  if (scheduleGraceDisplay) scheduleGraceDisplay.textContent = (graceValue !== undefined && graceValue !== null && graceValue !== '') ? String(graceValue) : '—';
+  if (scheduleNameDisplay) scheduleNameDisplay.textContent = selectedId ? resolveScheduleLabel(selectedId) : '—';
+}
 
 function renderScheduleSelector(){
   scheduleSelect.innerHTML = '';
@@ -6064,20 +6220,41 @@ function renderScheduleSelector(){
 }
 
 function renderScheduleEditor(){
+  captureScheduleEditorTemplate();
+  const pid = typeof periodKey === 'function' ? periodKey() : '';
+  const locked = typeof isLocked === 'function' && isLocked(pid);
+  toggleScheduleControlsForLock(locked);
+  if (locked) {
+    renderLockedScheduleEditorView(pid);
+    return;
+  }
+
+  restoreScheduleEditorTemplate();
+
   const sel = scheduleSelect.value;
   if(!sel || !storedSchedules[sel]) return;
   const s = storedSchedules[sel];
-  document.querySelector('[data-key="sch_am_start"]').value = s.sch_am_start || DEFAULT_SCHEDULE.sch_am_start;
-  document.querySelector('[data-key="sch_am_end"]').value = s.sch_am_end || DEFAULT_SCHEDULE.sch_am_end;
-  document.querySelector('[data-key="sch_pm_start"]').value = s.sch_pm_start || DEFAULT_SCHEDULE.sch_pm_start;
-  document.querySelector('[data-key="sch_pm_end"]').value = s.sch_pm_end || DEFAULT_SCHEDULE.sch_pm_end;
-  
+  const amStart = document.querySelector('[data-key="sch_am_start"]');
+  if (amStart) amStart.value = s.sch_am_start || DEFAULT_SCHEDULE.sch_am_start;
+  const amEnd = document.querySelector('[data-key="sch_am_end"]');
+  if (amEnd) amEnd.value = s.sch_am_end || DEFAULT_SCHEDULE.sch_am_end;
+  const pmStart = document.querySelector('[data-key="sch_pm_start"]');
+  if (pmStart) pmStart.value = s.sch_pm_start || DEFAULT_SCHEDULE.sch_pm_start;
+  const pmEnd = document.querySelector('[data-key="sch_pm_end"]');
+  if (pmEnd) pmEnd.value = s.sch_pm_end || DEFAULT_SCHEDULE.sch_pm_end;
+
   const satStartInp = document.querySelector('[data-key="sch_sat_start"]');
   const satEndInp   = document.querySelector('[data-key="sch_sat_end"]');
   if (satStartInp) satStartInp.value = (s.sch_sat_start || "");
   if (satEndInp)   satEndInp.value   = (s.sch_sat_end   || "");
-document.querySelector('[data-key="sch_grace"]').value = (s.sch_grace !== undefined ? s.sch_grace : DEFAULT_SCHEDULE.sch_grace);
-  scheduleNameInput.value = s.name || ("Schedule " + sel);
+  if (scheduleGraceInput) {
+    scheduleGraceInput.value = (s.sch_grace !== undefined ? s.sch_grace : DEFAULT_SCHEDULE.sch_grace);
+  }
+  if (scheduleNameInput) {
+    scheduleNameInput.value = s.name || ("Schedule " + sel);
+  }
+  if (scheduleNameDisplay) scheduleNameDisplay.textContent = '';
+  if (scheduleGraceDisplay) scheduleGraceDisplay.textContent = '';
   document.querySelectorAll('#rangesTable input[data-key]').forEach(inp=>{
     const key = inp.dataset.key;
     inp.value = s[key] || (DEFAULT_RANGES && DEFAULT_RANGES[key]) || "";
@@ -6249,16 +6426,127 @@ filterProjectSel && filterProjectSel.addEventListener('change', ()=>{
   renderResults();
 });
 
+function escapeHtml(value){
+  if (value === null || value === undefined) return '';
+  return String(value).replace(/[&<>"']/g, ch => ({
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#39;'
+  })[ch] || ch);
+}
+
+function resolveScheduleLabel(schedId){
+  if (!schedId) return '';
+  const sched = storedSchedules && storedSchedules[schedId];
+  const name = sched && sched.name;
+  if (name && name !== schedId) return `${name} (${schedId})`;
+  return schedId;
+}
+
+function resolveProjectLabel(projectId){
+  if (!projectId) return '';
+  const proj = storedProjects && storedProjects[projectId];
+  const name = proj && proj.name;
+  if (name && name !== projectId) return `${name} (${projectId})`;
+  return projectId;
+}
+
+function toggleEmployeeControlsForLock(locked){
+  const addBtn = document.getElementById('addEmployeeBtn');
+  if (addBtn) addBtn.style.display = locked ? 'none' : '';
+  const clearBtn = document.getElementById('clearEmployeesBtn');
+  if (clearBtn) clearBtn.style.display = locked ? 'none' : '';
+  ['empIdInput','empNameInput','empRateInput','empBankInput','empScheduleSelect','empProjectSelect','empFileInput'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.disabled = !!locked;
+  });
+}
+
+function renderLockedEmployeesTable(pid){
+  const tbody = document.querySelector('#employeesTable tbody');
+  if (!tbody) return;
+  tbody.innerHTML = '';
+  const snap = getLockedSnapshot(pid);
+  if (!snap || !snap.frozenEmployees) {
+    const tr = document.createElement('tr');
+    tr.innerHTML = '<td colspan="10" class="muted">No frozen employee data for this period.</td>';
+    tbody.appendChild(tr);
+    return;
+  }
+  const frozenEmployees = snap.frozenEmployees || {};
+  const frozenSchedules = snap.frozenSchedules || {};
+  const ids = Object.keys(frozenEmployees).sort((a, b) => {
+    const na = /^\d+$/.test(a), nb = /^\d+$/.test(b);
+    if (na && nb) return Number(a) - Number(b);
+    return String(a).localeCompare(String(b));
+  });
+  if (!ids.length) {
+    const tr = document.createElement('tr');
+    tr.innerHTML = '<td colspan="10" class="muted">No frozen employee data for this period.</td>';
+    tbody.appendChild(tr);
+    return;
+  }
+  ids.forEach(id => {
+    const emp = frozenEmployees[id] || {};
+    const scheduleSet = new Set();
+    const empSchedules = frozenSchedules[id] || {};
+    Object.keys(empSchedules).forEach(dateKey => {
+      const entry = empSchedules[dateKey];
+      if (entry && entry.scheduleId) scheduleSet.add(entry.scheduleId);
+    });
+    if (!scheduleSet.size && emp.scheduleId) scheduleSet.add(emp.scheduleId);
+    const scheduleIds = Array.from(scheduleSet).sort((a, b) => String(a).localeCompare(String(b)));
+    const scheduleText = scheduleIds.length ? scheduleIds.map(resolveScheduleLabel).join(', ') : '—';
+    const projectId = emp.projectId || '';
+    const projectText = projectId ? (resolveProjectLabel(projectId) || projectId) : '—';
+    const rateVal = emp.hourlyRate;
+    const rateNum = Number(rateVal);
+    const rateText = rateVal !== undefined && rateVal !== null && isFinite(rateNum) ? rateNum.toFixed(2) : '—';
+    const bankText = emp.bankAccount ? emp.bankAccount : '—';
+    const flags = emp.contribFlags || {};
+    const pagibigText = flags.pagibig === false ? 'No' : 'Yes';
+    const philhealthText = flags.philhealth === false ? 'No' : 'Yes';
+    const sssText = flags.sss === false ? 'No' : 'Yes';
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td>${escapeHtml(id)}</td>` +
+      `<td class="wrap">${escapeHtml(emp.name || '')}</td>` +
+      `<td>${escapeHtml(rateText)}</td>` +
+      `<td>${escapeHtml(scheduleText)}</td>` +
+      `<td>${escapeHtml(projectText)}</td>` +
+      `<td>${escapeHtml(bankText)}</td>` +
+      `<td>${escapeHtml(pagibigText)}</td>` +
+      `<td>${escapeHtml(philhealthText)}</td>` +
+      `<td>${escapeHtml(sssText)}</td>` +
+      '<td class="muted">Locked</td>';
+    tbody.appendChild(tr);
+  });
+}
+
 function renderEmployees(){
+  const pid = typeof periodKey === 'function' ? periodKey() : '';
+  const locked = typeof isLocked === 'function' && isLocked(pid);
+  toggleEmployeeControlsForLock(locked);
+  if (locked) {
+    renderLockedEmployeesTable(pid);
+    return;
+  }
+
   renderEmpScheduleDropdowns();
   renderProjectDropdowns();
-  const tbody = document.querySelector('#employeesTable tbody'); tbody.innerHTML = '';
+
+  const tbody = document.querySelector('#employeesTable tbody');
+  if (!tbody) return;
+  tbody.innerHTML = '';
+
   const ids = Object.keys(storedEmployees).sort((a,b)=>{
     const na = /^\d+$/.test(a), nb = /^\d+$/.test(b);
     if (na && nb) return Number(a) - Number(b);
     return String(a).localeCompare(String(b));
   });
-ids.forEach(id => {
+
+  ids.forEach(id => {
     const emp = storedEmployees[id];
     let scheduleOptionsHtml = '';
     Object.keys(storedSchedules).forEach(sid=>{
@@ -6270,18 +6558,18 @@ ids.forEach(id => {
       projectOptionsHtml += `<option value="${pid}" ${emp.projectId===pid ? 'selected' : ''}>${storedProjects[pid].name}</option>`;
     });
     const tr = document.createElement('tr');
-    tr.innerHTML = `<td>${id}</td>
-      <td><input class="cell emp-name-input" data-id="${id}" value="${emp.name}"></td>
-      <td><input class="cell emp-rate-input" type="number" step="0.01" min="0" data-id="${id}" value="${emp.hourlyRate != null ? emp.hourlyRate : ''}" disabled></td>
-      <td><select class="emp-sel-schedule" data-id="${id}">${scheduleOptionsHtml}</select></td>
-      <td><select class="emp-sel-project" data-id="${id}">${projectOptionsHtml}</select></td>
-      <td><input class="cell emp-bank-input" data-id="${id}" value="${emp.bankAccount != null ? emp.bankAccount : ''}"></td>
-      <td><input type="checkbox" class="emp-pagibig" data-id="${id}" ${ (contribFlags[id] && contribFlags[id].pagibig === false) ? '' : 'checked'}></td>
-      <td><input type="checkbox" class="emp-philhealth" data-id="${id}" ${ (contribFlags[id] && contribFlags[id].philhealth === false) ? '' : 'checked'}></td>
-      <td><input type="checkbox" class="emp-sss" data-id="${id}" ${ (contribFlags[id] && contribFlags[id].sss === false) ? '' : 'checked'}></td>
-      <td><button class="del-emp" data-id="${id}">Delete</button></td>`;
+    tr.innerHTML = `<td>${id}</td>` +
+      `<td><input class="cell emp-name-input" data-id="${id}" value="${emp.name}"></td>` +
+      `<td><input class="cell emp-rate-input" type="number" step="0.01" min="0" data-id="${id}" value="${emp.hourlyRate != null ? emp.hourlyRate : ''}" disabled></td>` +
+      `<td><select class="emp-sel-schedule" data-id="${id}">${scheduleOptionsHtml}</select></td>` +
+      `<td><select class="emp-sel-project" data-id="${id}">${projectOptionsHtml}</select></td>` +
+      `<td><input class="cell emp-bank-input" data-id="${id}" value="${emp.bankAccount != null ? emp.bankAccount : ''}"></td>` +
+      `<td><input type="checkbox" class="emp-pagibig" data-id="${id}" ${ (contribFlags[id] && contribFlags[id].pagibig === false) ? '' : 'checked'}></td>` +
+      `<td><input type="checkbox" class="emp-philhealth" data-id="${id}" ${ (contribFlags[id] && contribFlags[id].philhealth === false) ? '' : 'checked'}></td>` +
+      `<td><input type="checkbox" class="emp-sss" data-id="${id}" ${ (contribFlags[id] && contribFlags[id].sss === false) ? '' : 'checked'}></td>` +
+      `<td><button class="del-emp" data-id="${id}">Delete</button></td>`;
     tbody.appendChild(tr);
-    // Attach event listeners for contribution checkboxes for this employee
+
     const cbPagibig = tr.querySelector('.emp-pagibig');
     const cbPhilhealth = tr.querySelector('.emp-philhealth');
     const cbSss = tr.querySelector('.emp-sss');
@@ -6321,7 +6609,7 @@ ids.forEach(id => {
     try { payrollRates[id] = val; localStorage.setItem(LS_RATES, JSON.stringify(payrollRates)); } catch(err) {}
     renderResults();
   }));
-document.querySelectorAll('.emp-sel-schedule').forEach(sel=> sel.addEventListener('change', (e)=>{
+  document.querySelectorAll('.emp-sel-schedule').forEach(sel=> sel.addEventListener('change', (e)=>{
     storedEmployees[e.target.dataset.id].scheduleId = e.target.value; saveEmployeesToLS(); renderResults();
   }));
   document.querySelectorAll('.emp-sel-project').forEach(sel=> sel.addEventListener('change', (e)=>{
@@ -6334,7 +6622,6 @@ document.querySelectorAll('.emp-sel-schedule').forEach(sel=> sel.addEventListene
     }
   }));
 }
-
 document.getElementById('addEmployeeBtn').addEventListener('click', ()=>{
   const id = document.getElementById('empIdInput').value.trim();
   const name = document.getElementById('empNameInput').value.trim();
@@ -6635,6 +6922,28 @@ function formatHours(value){
   return (!isFinite(num) || num === 0) ? '-' : num.toFixed(2);
 }
 
+function getLockedSnapshot(pid){
+  if (!pid) return null;
+  try {
+    const hist = Array.isArray(window.payrollHistory)
+      ? window.payrollHistory
+      : (typeof loadHistory === 'function' ? loadHistory() : []);
+    if (!Array.isArray(hist)) return null;
+    const parts = String(pid || '').split('_');
+    const start = parts[0] || '';
+    const end = parts[1] || '';
+    if (!start || !end) return null;
+    return hist.find(s => {
+      if (!s || !s.locked) return false;
+      const sStart = String(s.startDate || '').split('T')[0];
+      const sEnd = String(s.endDate || '').split('T')[0];
+      return sStart === start && sEnd === end;
+    }) || null;
+  } catch (e) {
+    return null;
+  }
+}
+
 function renderResults(){
   // If the current payroll period is locked, rebuild the payroll table from
   // the frozen snapshot and skip live recalculation/rendering.
@@ -6642,19 +6951,7 @@ function renderResults(){
     const pid = typeof periodKey === 'function' ? periodKey() : '';
     const locked = typeof isLocked === 'function' && isLocked(pid);
     if (locked) {
-      const hist = Array.isArray(window.payrollHistory)
-        ? window.payrollHistory
-        : (typeof loadHistory === 'function' ? loadHistory() : []);
-      let snap = null;
-      if (pid && Array.isArray(hist)) {
-        const [start, end] = pid.split('_');
-        snap = hist.find(s => {
-          if (!s || !s.locked) return false;
-          const sStart = String(s.startDate || '').split('T')[0];
-          const sEnd = String(s.endDate || '').split('T')[0];
-          return sStart === start && sEnd === end;
-        }) || null;
-      }
+      const snap = getLockedSnapshot(pid);
       if (snap) {
         const rows = snap.frozenPayrollRows || snap.rows || [];
         const totals = snap.frozenTotals || snap.totals || {};
