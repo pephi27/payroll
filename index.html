@@ -2489,7 +2489,7 @@ let allAdjHrs = JSON.parse(localStorage.getItem(LS_ADJ_HRS) || '{}');
 let adjHrs = allAdjHrs[periodKey()] || {};
 let allBantay = JSON.parse(localStorage.getItem(LS_BANTAY) || '{}');
 let bantay = allBantay[periodKey()] || {};
-;(async function(){
+async function initBantayFromCloud(){
   try{
     let v = await readKV(LS_BANTAY);
     if (!v) {
@@ -2503,7 +2503,10 @@ let bantay = allBantay[periodKey()] || {};
     try{ if (typeof renderSssTable==='function') renderSssTable(); }catch(_){ }
     try { if (typeof window.rebuildReports === 'function') window.rebuildReports(); } catch(_){ }
   }catch(e){}
-})();
+}
+
+initBantayFromCloud();
+window.addEventListener('kv-hydrated', initBantayFromCloud);
 // Sync the Deductions tab divisor select with the stored divisor value and attach event listener
 if (divisorDedsEl) {
   divisorDedsEl.value = String(divisor);
