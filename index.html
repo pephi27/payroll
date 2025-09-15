@@ -2442,20 +2442,6 @@ let loanPI = JSON.parse(localStorage.getItem(LS_LOAN_PI) || '{}');
 let vale = JSON.parse(localStorage.getItem(LS_VALE) || '{}');
 let valeWed = JSON.parse(localStorage.getItem(LS_VALE_WED) || '{}');
 
-// Bantay allowance values per employee. Defaults to empty object if not present.
-let bantay = {};
-;(async function(){
-  try{
-    let v = await readKV(LS_BANTAY);
-    if (!v) {
-      try { v = JSON.parse(localStorage.getItem(LS_BANTAY) || '{}'); } catch(_){}
-    }
-    if (v && typeof v === 'object') bantay = v;
-    try { localStorage.setItem(LS_BANTAY, JSON.stringify(bantay)); } catch(_){ }
-    try{ if (typeof renderSssTable==='function') renderSssTable(); }catch(_){ }
-    try { if (typeof window.rebuildReports === 'function') window.rebuildReports(); } catch(_){ }
-  }catch(e){}
-})();
 // Per-employee contribution deduction flags. Each entry keyed by employee ID holds booleans {pagibig, philhealth, sss}
 let contribFlags = JSON.parse(localStorage.getItem(LS_CONTRIB_FLAGS) || '{}');
 
@@ -2471,11 +2457,6 @@ const LS_CASH_ORIG = 'payroll_cashAdvanceOrig',
 let cashOrig = JSON.parse(localStorage.getItem(LS_CASH_ORIG) || '{}');
 let cashDed  = JSON.parse(localStorage.getItem(LS_CASH_DED)  || '{}');
 let cashBal  = JSON.parse(localStorage.getItem(LS_CASH_BAL)  || '{}');
-// Per-employee payroll adjustments (positive or negative amounts)
-let adjustments = JSON.parse(localStorage.getItem(LS_ADJ) || '{}');
-// Perâ€‘employee adjustment hours (OT adjustments).  These values represent additional
-// overtime hours that should be added to the regular OT hours when computing OT pay.
-let adjHrs = JSON.parse(localStorage.getItem(LS_ADJ_HRS) || '{}');
 
 let otMultiplier = parseFloat(localStorage.getItem(LS_OTMULT)) || 1.50;
 let weekStartSaved = localStorage.getItem(LS_WEEKSTART) || '';
@@ -2500,6 +2481,29 @@ otMultiplierEl.value = otMultiplier;
 weekStartEl.value = weekStartSaved;
 weekEndEl.value = weekEndSaved;
 divisorEl.value = divisor;
+
+function periodKey(){return (weekStartEl.value||'')+'_'+(weekEndEl.value||'');}
+let allAdjustments = JSON.parse(localStorage.getItem(LS_ADJ) || '{}');
+let adjustments = allAdjustments[periodKey()] || {};
+let allAdjHrs = JSON.parse(localStorage.getItem(LS_ADJ_HRS) || '{}');
+let adjHrs = allAdjHrs[periodKey()] || {};
+let allBantay = JSON.parse(localStorage.getItem(LS_BANTAY) || '{}');
+let bantay = allBantay[periodKey()] || {};
+;(async function(){
+  try{
+    let v = await readKV(LS_BANTAY);
+    if (!v) {
+      try { v = JSON.parse(localStorage.getItem(LS_BANTAY) || '{}'); } catch(_){ }
+    }
+    if (v && typeof v === 'object') {
+      allBantay = v;
+      bantay = allBantay[periodKey()] || {};
+    }
+    try { localStorage.setItem(LS_BANTAY, JSON.stringify(allBantay)); } catch(_){ }
+    try{ if (typeof renderSssTable==='function') renderSssTable(); }catch(_){ }
+    try { if (typeof window.rebuildReports === 'function') window.rebuildReports(); } catch(_){ }
+  }catch(e){}
+})();
 // Sync the Deductions tab divisor select with the stored divisor value and attach event listener
 if (divisorDedsEl) {
   divisorDedsEl.value = String(divisor);
@@ -2977,11 +2981,12 @@ function attachRowEvents(){
 
     // Add event listener for Bantay allowance input. Store to cloud and recalc net pay.
     const bantayI = row.querySelector('.bantay');
-    if (bantayI) {
-      bantayI.addEventListener('input', async () => {
+      if (bantayI) {
+        bantayI.addEventListener('input', async () => {
         bantay[id] = bantayI.value;
-        try { localStorage.setItem(LS_BANTAY, JSON.stringify(bantay)); } catch(_){ }
-        await writeKV(LS_BANTAY, bantay);
+        allBantay[periodKey()] = bantay;
+        try { localStorage.setItem(LS_BANTAY, JSON.stringify(allBantay)); } catch(_){ }
+        await writeKV(LS_BANTAY, allBantay);
         calculateRow(row);
         try { if (typeof window.rebuildReports === 'function') window.rebuildReports(); } catch(e){}
         // Auto-open project picker when entering a positive amount and no assignment yet
@@ -3379,7 +3384,8 @@ function renderAdjustmentsTable() {
         // Remove the entry when zero or invalid
         delete adjustments[empId];
       }
-      localStorage.setItem(LS_ADJ, JSON.stringify(adjustments));
+      allAdjustments[periodKey()] = adjustments;
+      localStorage.setItem(LS_ADJ, JSON.stringify(allAdjustments));
       calculateAll();
       renderAdjustmentsFoot();
     });
@@ -3396,7 +3402,8 @@ function renderAdjustmentsTable() {
         // Remove the entry when zero or invalid
         delete adjHrs[empId];
       }
-      localStorage.setItem(LS_ADJ_HRS, JSON.stringify(adjHrs));
+      allAdjHrs[periodKey()] = adjHrs;
+      localStorage.setItem(LS_ADJ_HRS, JSON.stringify(allAdjHrs));
       calculateAll();
       renderAdjustmentsFoot();
     });
@@ -7473,19 +7480,29 @@ function calculatePayrollFromRecords(){
 
 weekStartEl.addEventListener('change', () => {
   if (dtrStartEl) dtrStartEl.value = weekStartEl.value;
-  // Recalculate payroll based on DTR results whenever the payroll period changes
+  adjustments = allAdjustments[periodKey()] || {};
+  adjHrs = allAdjHrs[periodKey()] || {};
+  bantay = allBantay[periodKey()] || {};
   try {
     if (typeof calculatePayrollFromResultsTable === 'function') calculatePayrollFromResultsTable();
     else if (typeof calculatePayrollFromRecords === 'function') calculatePayrollFromRecords();
   } catch (e) {}
+  if (typeof renderTable === 'function') renderTable();
+  if (typeof renderAdjustmentsTable === 'function') renderAdjustmentsTable();
+  calculateAll();
 });
 weekEndEl.addEventListener('change', () => {
   if (dtrEndEl) dtrEndEl.value = weekEndEl.value;
-  // Recalculate payroll based on DTR results whenever the payroll period changes
+  adjustments = allAdjustments[periodKey()] || {};
+  adjHrs = allAdjHrs[periodKey()] || {};
+  bantay = allBantay[periodKey()] || {};
   try {
     if (typeof calculatePayrollFromResultsTable === 'function') calculatePayrollFromResultsTable();
     else if (typeof calculatePayrollFromRecords === 'function') calculatePayrollFromRecords();
   } catch (e) {}
+  if (typeof renderTable === 'function') renderTable();
+  if (typeof renderAdjustmentsTable === 'function') renderAdjustmentsTable();
+  calculateAll();
 });
 if (dtrStartEl) {
   dtrStartEl.addEventListener('change', () => {
