@@ -3756,7 +3756,8 @@ document.addEventListener('DOMContentLoaded', () => {
       if (wsEl) wsEl.value = snap.startDate || '';
       if (weEl) weEl.value = snap.endDate || '';
       try {
-        if (typeof calculatePayrollFromRecords === 'function') calculatePayrollFromRecords();
+        if (typeof calculatePayrollFromResultsTable === 'function') calculatePayrollFromResultsTable();
+        else if (typeof calculatePayrollFromRecords === 'function') calculatePayrollFromRecords();
       } catch (err) {}
       // Show the payroll panel
       try { showTab('payroll'); } catch (err) {}
@@ -3768,24 +3769,21 @@ document.addEventListener('DOMContentLoaded', () => {
         alert('Invalid snapshot dates.');
         return;
       }
-        const pid = `${startDate}_${endDate}`;
-        const frozen = await finalizePeriod(pid);
-        if (!frozen || !(frozen.frozenPayrollRows || []).length) {
-          alert('Payroll table is missing or empty.');
-          return;
-        }
-        const json = JSON.stringify(frozen);
-        const hashBuffer = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(json));
-        const hashArray = Array.from(new Uint8Array(hashBuffer));
-        const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
-        const now = new Date().toISOString();
-        snap.frozenPayrollRows = frozen.frozenPayrollRows;
-        snap.frozenTotals = frozen.frozenTotals;
-        snap.frozenEmployees = frozen.frozenEmployees;
-        snap.frozenSchedules = frozen.frozenSchedules;
-        snap.hash = hashHex;
-        snap.lockedAt = now;
-        snap.locked = true;
+      const newSnap = await buildSnapshot(startDate, endDate);
+      if (!newSnap) {
+        alert('Payroll table is missing or empty.');
+        return;
+      }
+      const json = JSON.stringify(newSnap);
+      const hashBuffer = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(json));
+      const hashArray = Array.from(new Uint8Array(hashBuffer));
+      const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+      const now = new Date().toISOString();
+      snap.rows = newSnap.rows;
+      snap.totals = newSnap.totals;
+      snap.hash = hashHex;
+      snap.lockedAt = now;
+      snap.locked = true;
       saveHistory();
       renderHistory();
       renderActivePayrolls();
@@ -3963,84 +3961,6 @@ document.addEventListener('DOMContentLoaded', () => {
   window.buildSnapshot = buildSnapshot;
 
   /**
-   * Build a frozen view of the current payroll period. This captures the
-   * payroll snapshot along with employee metadata and resolved schedules so
-   * that the period can be restored even if future changes occur.
-   *
-   * @param {string} periodId `${start}_${end}` identifier for the payroll period
-   * @returns {Promise<{frozenPayrollRows:Array, frozenTotals:Object, frozenEmployees:Object, frozenSchedules:Object}>}
-   */
-  async function finalizePeriod(periodId) {
-    const pid = periodId || (typeof periodKey === 'function' ? periodKey() : '');
-    const parts = (pid || '').split('_');
-    const start = parts[0] || '';
-    const end = parts[1] || '';
-
-    // 1. Capture payroll rows and totals using the existing snapshot builder
-    const snap = await buildSnapshot(start, end) || { rows: [], totals: {} };
-    const frozenPayrollRows = snap.rows || [];
-    const frozenTotals = snap.totals || {};
-
-    // 2. Freeze employee roster and related contribution flags and bantay data
-    const frozenEmployees = {};
-    const empObj = (typeof storedEmployees === 'object' && storedEmployees) || {};
-    const flags = (typeof contribFlags === 'object' && contribFlags) || {};
-    const bantayMap = (typeof bantay === 'object' && bantay) || {};
-    const bantayLinks = (typeof bantayProj === 'object' && bantayProj) || {};
-
-    Object.keys(empObj).forEach(id => {
-      const emp = Object.assign({}, empObj[id]);
-      const cf = flags[id] || {};
-      emp.contribFlags = {
-        pagibig: cf.pagibig !== false,
-        philhealth: cf.philhealth !== false,
-        sss: cf.sss !== false
-      };
-      emp.bantay = parseFloat(bantayMap[id]) || 0;
-      emp.bantayProj = bantayLinks[id] || '';
-      frozenEmployees[id] = emp;
-    });
-
-    // 3. Resolve schedule windows for each employee/date within the period
-    const frozenSchedules = {};
-    if (start && end) {
-      const startD = new Date(start);
-      const endD = new Date(end);
-      for (let d = new Date(startD); d <= endD; d.setDate(d.getDate() + 1)) {
-        const dateStr = d.toISOString().slice(0,10);
-        Object.keys(empObj).forEach(empId => {
-          let schedId = empObj[empId] && empObj[empId].scheduleId ? empObj[empId].scheduleId : defaultScheduleId;
-          const overrideKey = empId + '___' + dateStr;
-          if (typeof overridesSchedules !== 'undefined' && overridesSchedules && overridesSchedules[overrideKey]) {
-            schedId = overridesSchedules[overrideKey];
-          }
-          const schedule = (storedSchedules && storedSchedules[schedId]) ? storedSchedules[schedId] : Object.assign({}, DEFAULT_SCHEDULE);
-          const ranges = {
-            amIn:  { start: schedule.rng_am_in_start  || DEFAULT_RANGES.rng_am_in_start,  end: schedule.rng_am_in_end  || DEFAULT_RANGES.rng_am_in_end },
-            amOut: { start: schedule.rng_am_out_start || DEFAULT_RANGES.rng_am_out_start, end: schedule.rng_am_out_end || DEFAULT_RANGES.rng_am_out_end },
-            pmIn:  { start: schedule.rng_pm_in_start  || DEFAULT_RANGES.rng_pm_in_start,  end: schedule.rng_pm_in_end  || DEFAULT_RANGES.rng_pm_in_end },
-            pmOut: { start: schedule.rng_pm_out_start || DEFAULT_RANGES.rng_pm_out_start, end: schedule.rng_pm_out_end || DEFAULT_RANGES.rng_pm_out_end },
-            otIn:  { start: schedule.rng_ot_in_start  || DEFAULT_RANGES.rng_ot_in_start,  end: schedule.rng_ot_in_end  || DEFAULT_RANGES.rng_ot_in_end },
-            otOut: { start: schedule.rng_ot_out_start || DEFAULT_RANGES.rng_ot_out_start, end: schedule.rng_ot_out_end || DEFAULT_RANGES.rng_ot_out_end },
-            sch_am_start: schedule.sch_am_start || DEFAULT_SCHEDULE.sch_am_start,
-            sch_am_end:   schedule.sch_am_end   || DEFAULT_SCHEDULE.sch_am_end,
-            sch_pm_start: schedule.sch_pm_start || DEFAULT_SCHEDULE.sch_pm_start,
-            sch_pm_end:   schedule.sch_pm_end   || DEFAULT_SCHEDULE.sch_pm_end,
-            sch_sat_start: schedule.sch_sat_start || '',
-            sch_sat_end:   schedule.sch_sat_end   || '',
-            sch_grace: typeof schedule.sch_grace === 'number' ? schedule.sch_grace : DEFAULT_SCHEDULE.sch_grace
-          };
-          if (!frozenSchedules[empId]) frozenSchedules[empId] = {};
-          frozenSchedules[empId][dateStr] = { scheduleId: schedId, ranges };
-        });
-      }
-    }
-
-    return { frozenPayrollRows, frozenTotals, frozenEmployees, frozenSchedules };
-  }
-  window.finalizePeriod = finalizePeriod;
-
-  /**
    * Disable payroll and DTR editing across the application. Once a payroll
    * period is locked, users should not be able to adjust hours, rates, or
    * manually enter or delete DTR entries for that period. This helper
@@ -4155,19 +4075,17 @@ document.addEventListener('DOMContentLoaded', () => {
   window.enablePayrollInputs = enablePayrollInputs;
 
   /**
-   * Determine whether a given payroll period is locked. The period identifier is
-   * the canonical value returned by periodKey() (start and end dates joined by an underscore).
-   * If no periodId is supplied, the current periodKey() value is used. The function
-   * searches payrollHistory for a matching snapshot with `locked === true`.
-   *
-   * @param {string} [periodId] `${start}_${end}` identifier of the payroll period
-   * @returns {boolean} true if a locked snapshot exists for the period
+   * Determine whether the currently selected payroll period (weekStart/weekEnd values)
+   * corresponds to a locked snapshot. This reads from the global payrollHistory
+   * array if available, otherwise loads history from localStorage. It returns
+   * true if a matching snapshot exists and its `locked` property is truthy.
    */
-  function isLocked(periodId) {
-    const pid = periodId || (typeof periodKey === 'function' ? periodKey() : '');
-    if (!pid) return false;
-    const [start, end] = pid.split('_');
-    if (!start || !end) return false;
+  function isSelectedPeriodLocked() {
+    const wsEl = document.getElementById('weekStart');
+    const weEl = document.getElementById('weekEnd');
+    if (!wsEl || !weEl) return false;
+    const start = wsEl.value;
+    const end = weEl.value;
     // Helper to parse either ISO (yyyy-mm-dd) or US (m/d/yyyy) date strings
     function parseDateStr(str) {
       if (!str) return null;
@@ -4206,9 +4124,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const endDateObj = parseDateStr(end);
     if (!startDateObj || !endDateObj) return false;
     // Use the in-memory payrollHistory if available; else load from storage
-    const hist = Array.isArray(window.payrollHistory)
-      ? window.payrollHistory
-      : (typeof loadHistory === 'function' ? loadHistory() : []);
+    const hist = Array.isArray(window.payrollHistory) ? window.payrollHistory : (typeof loadHistory === 'function' ? loadHistory() : []);
     if (!Array.isArray(hist)) return false;
     return hist.some(s => {
       if (!s || !s.startDate || !s.endDate) return false;
@@ -4216,19 +4132,8 @@ document.addEventListener('DOMContentLoaded', () => {
       const sStart = parseDateStr(s.startDate);
       const sEnd = parseDateStr(s.endDate);
       if (!sStart || !sEnd) return false;
-      return s.locked === true &&
-        sStart.getTime() === startDateObj.getTime() &&
-        sEnd.getTime() === endDateObj.getTime();
+      return s.locked && sStart.getTime() === startDateObj.getTime() && sEnd.getTime() === endDateObj.getTime();
     });
-  }
-  window.isLocked = isLocked;
-
-  /**
-   * Determine whether the currently selected payroll period (weekStart/weekEnd values)
-   * corresponds to a locked snapshot by delegating to isLocked().
-   */
-  function isSelectedPeriodLocked() {
-    return isLocked();
   }
   window.isSelectedPeriodLocked = isSelectedPeriodLocked;
 
@@ -4269,8 +4174,7 @@ document.addEventListener('DOMContentLoaded', () => {
       'Total Deductions','Net Pay'
     ];
     const lines = [header.join(',')];
-    const rows = snap.rows || snap.frozenPayrollRows || [];
-    rows.forEach(row => {
+    snap.rows.forEach(row => {
       const values = [
         row.id, row.name,
         row.rate, row.regHrs, row.otHrs, row.adjHrs, row.totalHrs,
@@ -4356,17 +4260,17 @@ document.addEventListener('DOMContentLoaded', () => {
     } catch (e) {
       // Ignore errors in calculation; snapshot will still be built from current cells
     }
-    const frozen = await finalizePeriod(periodKey());
-    if (!frozen || !(frozen.frozenPayrollRows || []).length) {
+    const snap = await buildSnapshot(start, end);
+    if (!snap) {
       alert('Payroll table is missing or empty.');
       return;
     }
-    const json = JSON.stringify(frozen);
+    const json = JSON.stringify(snap);
     const hashBuffer = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(json));
     const hashArray = Array.from(new Uint8Array(hashBuffer));
     const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
     const now = new Date().toISOString();
-    payrollHistory.push({ startDate: start, endDate: end, ...frozen, hash: hashHex, lockedAt: now, locked: true });
+    payrollHistory.push({ startDate: start, endDate: end, rows: snap.rows, totals: snap.totals, hash: hashHex, lockedAt: now, locked: true });
     saveHistory();
     renderHistory();
     // Disable payroll and DTR editing via helper until date range changes
@@ -4420,7 +4324,7 @@ document.addEventListener('DOMContentLoaded', () => {
           const we = document.getElementById('weekEnd');
           const prevS = ws && ws.value; const prevE = we && we.value;
           if (ws) ws.value = snap.startDate || prevS; if (we) we.value = snap.endDate || prevE;
-          try { if (typeof calculatePayrollFromRecords === 'function') calculatePayrollFromRecords(); } catch (e) {}
+          try{ if (typeof calculatePayrollFromResultsTable==='function') calculatePayrollFromResultsTable(); else if (typeof calculatePayrollFromRecords==='function') calculatePayrollFromRecords(); }catch(e){}
           try{ if (typeof window.rebuildReports === 'function') window.rebuildReports(); }catch(e){}
           setTimeout(function(){
             try{ window.exportExcelAllTabs(); }catch(e){}
@@ -4478,10 +4382,10 @@ document.addEventListener('DOMContentLoaded', () => {
     const s1 = payrollHistory[idx1];
     const s2 = payrollHistory[idx2];
     if (!s1 || !s2) return;
-      const map1 = {};
-      (s1.rows || s1.frozenPayrollRows || []).forEach(r => { map1[r.id] = r; });
-      const map2 = {};
-      (s2.rows || s2.frozenPayrollRows || []).forEach(r => { map2[r.id] = r; });
+    const map1 = {};
+    s1.rows.forEach(r => { map1[r.id] = r; });
+    const map2 = {};
+    s2.rows.forEach(r => { map2[r.id] = r; });
     const allIds = new Set([...Object.keys(map1), ...Object.keys(map2)]);
     if (snapshotView) snapshotView.innerHTML = '';
     const table = document.createElement('table');
@@ -4605,7 +4509,7 @@ document.addEventListener('DOMContentLoaded', () => {
       };
     // Each employee row in the snapshot may include an adjAmt property
     // representing manual adjustments. Build the table row accordingly.
-      (snap.rows || snap.frozenPayrollRows || []).forEach(r => {
+    (snap.rows || []).forEach(r => {
       const tr = document.createElement('tr');
       const num = (x)=>{ const n = parseFloat(String(x??'').replace(/,/g,'')); return isNaN(n)?0:n; };
       // Current divisor and OT multiplier
@@ -4744,14 +4648,14 @@ document.addEventListener('DOMContentLoaded', () => {
     // implemented.
     let dtrRows = [];
     let useSnapDtrs = false;
-        (snap.rows || snap.frozenPayrollRows || []).forEach(empRow => {
+    (snap.rows || []).forEach(empRow => {
       if (Array.isArray(empRow.dtrs) && empRow.dtrs.length) {
         useSnapDtrs = true;
       }
     });
     if (useSnapDtrs) {
       // Use the stored dtrs directly from each employee row
-      (snap.rows || snap.frozenPayrollRows || []).forEach(empRow => {
+      (snap.rows || []).forEach(empRow => {
         const id = empRow.id;
         const name = empRow.name || '';
         (empRow.dtrs || []).forEach(d => {
@@ -4770,7 +4674,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!dateStr) return false;
         return (!start || dateStr >= start) && (!end || dateStr <= end);
       }
-        (snap.rows || snap.frozenPayrollRows || []).forEach(empRow => {
+      (snap.rows || []).forEach(empRow => {
         const id = empRow.id;
         const name = empRow.name || '';
         const recs = records.filter(r => r && String(r.empId) === String(id) && inRange(r.date));
@@ -5524,7 +5428,7 @@ rows += `<tr class="allowance">
         const we = document.getElementById('weekEnd');
         const prevS = ws && ws.value; const prevE = we && we.value;
         if (ws) ws.value = from || prevS; if (we) we.value = to || prevE;
-        try { if (typeof calculatePayrollFromRecords === 'function') calculatePayrollFromRecords(); } catch (e) {}
+        try{ if (typeof calculatePayrollFromResultsTable==='function') calculatePayrollFromResultsTable(); else if (typeof calculatePayrollFromRecords==='function') calculatePayrollFromRecords(); }catch(e){}
         try{ if (typeof window.rebuildReports==='function') window.rebuildReports(); }catch(e){}
         setTimeout(function(){ try{ exportExcelAllTabs(); } finally { try{ if (ws) ws.value = prevS; if (we) we.value = prevE; if (typeof window.rebuildReports==='function') window.rebuildReports(); }catch(e){} } }, 300);
       }catch(e){ console.warn('Export for range failed', e); }
@@ -6028,9 +5932,10 @@ tabs.tabPayroll.addEventListener('click', ()=>{
   } catch (e) {}
 
   showTab('payroll');
-  // When entering the payroll tab, recompute hours for the selected payroll period
+  // When entering the payroll tab, derive hours directly from the DTR results table
   try {
-    if (typeof calculatePayrollFromRecords === 'function') calculatePayrollFromRecords();
+    if (typeof calculatePayrollFromResultsTable === 'function') calculatePayrollFromResultsTable();
+    else if (typeof calculatePayrollFromRecords === 'function') calculatePayrollFromRecords();
   } catch(e){}
 });
 
@@ -6046,162 +5951,6 @@ if (tabs.tabDashboard) {
 
 const scheduleSelect = document.getElementById('scheduleSelect');
 const scheduleNameInput = document.getElementById('scheduleName');
-const scheduleGraceInput = document.querySelector('[data-key="sch_grace"]');
-
-const scheduleNameDisplay = document.createElement('span');
-scheduleNameDisplay.className = 'schedule-readonly';
-scheduleNameDisplay.style.display = 'none';
-scheduleNameDisplay.style.marginLeft = '6px';
-if (scheduleNameInput && scheduleNameInput.parentElement) {
-  scheduleNameInput.parentElement.appendChild(scheduleNameDisplay);
-}
-const scheduleGraceDisplay = document.createElement('span');
-scheduleGraceDisplay.className = 'schedule-readonly';
-scheduleGraceDisplay.style.display = 'none';
-scheduleGraceDisplay.style.marginLeft = '6px';
-if (scheduleGraceInput && scheduleGraceInput.parentElement) {
-  scheduleGraceInput.parentElement.appendChild(scheduleGraceDisplay);
-}
-
-let scheduleEditorTemplate = null;
-
-function captureScheduleEditorTemplate(){
-  if (scheduleEditorTemplate) return;
-  const segmentsBody = document.querySelector('#scheduleTable tbody');
-  const rangesBody = document.querySelector('#rangesTable tbody');
-  if (segmentsBody && rangesBody) {
-    scheduleEditorTemplate = {
-      segments: segmentsBody.innerHTML,
-      ranges: rangesBody.innerHTML
-    };
-  }
-}
-
-function restoreScheduleEditorTemplate(){
-  if (!scheduleEditorTemplate) return;
-  const segmentsBody = document.querySelector('#scheduleTable tbody');
-  const rangesBody = document.querySelector('#rangesTable tbody');
-  if (segmentsBody) {
-    if (segmentsBody.dataset.locked === 'true') {
-      segmentsBody.innerHTML = scheduleEditorTemplate.segments;
-      delete segmentsBody.dataset.locked;
-    } else if (!segmentsBody.children.length) {
-      segmentsBody.innerHTML = scheduleEditorTemplate.segments;
-    }
-  }
-  if (rangesBody) {
-    if (rangesBody.dataset.locked === 'true') {
-      rangesBody.innerHTML = scheduleEditorTemplate.ranges;
-      delete rangesBody.dataset.locked;
-    } else if (!rangesBody.children.length) {
-      rangesBody.innerHTML = scheduleEditorTemplate.ranges;
-    }
-  }
-}
-
-function toggleScheduleControlsForLock(locked){
-  const idsToHide = ['addScheduleBtn','deleteScheduleBtn','saveScheduleBtn','saveRangesBtn','resetRangesBtn'];
-  idsToHide.forEach(id => {
-    const el = document.getElementById(id);
-    if (el) el.style.display = locked ? 'none' : '';
-  });
-  if (scheduleNameInput) scheduleNameInput.style.display = locked ? 'none' : '';
-  if (scheduleGraceInput) scheduleGraceInput.style.display = locked ? 'none' : '';
-  if (scheduleNameDisplay) scheduleNameDisplay.style.display = locked ? 'inline' : 'none';
-  if (scheduleGraceDisplay) scheduleGraceDisplay.style.display = locked ? 'inline' : 'none';
-}
-
-function renderLockedScheduleEditorView(pid){
-  captureScheduleEditorTemplate();
-  const segmentsBody = document.querySelector('#scheduleTable tbody');
-  const rangesBody = document.querySelector('#rangesTable tbody');
-  if (!segmentsBody || !rangesBody) return;
-  segmentsBody.dataset.locked = 'true';
-  rangesBody.dataset.locked = 'true';
-
-  const snap = getLockedSnapshot(pid);
-  if (!snap || !snap.frozenSchedules) {
-    segmentsBody.innerHTML = '<tr><td colspan="3" class="muted">No frozen schedule data for this period.</td></tr>';
-    rangesBody.innerHTML = '<tr><td colspan="3" class="muted">No frozen schedule data for this period.</td></tr>';
-    if (scheduleNameDisplay) scheduleNameDisplay.textContent = '—';
-    if (scheduleGraceDisplay) scheduleGraceDisplay.textContent = '—';
-    return;
-  }
-
-  const scheduleMap = new Map();
-  Object.keys(snap.frozenSchedules || {}).forEach(empId => {
-    const days = snap.frozenSchedules[empId] || {};
-    Object.keys(days).sort().forEach(dateKey => {
-      const entry = days[dateKey];
-      if (entry && entry.scheduleId && !scheduleMap.has(entry.scheduleId)) {
-        scheduleMap.set(entry.scheduleId, entry.ranges || {});
-      }
-    });
-  });
-
-  let selectedId = scheduleSelect && scheduleSelect.value;
-  if (!scheduleMap.has(selectedId)) {
-    selectedId = scheduleMap.size ? Array.from(scheduleMap.keys())[0] : '';
-  }
-  if (scheduleSelect && selectedId) {
-    const hasOption = Array.from(scheduleSelect.options || []).some(o => o.value === selectedId);
-    if (!hasOption) {
-      const opt = document.createElement('option');
-      opt.value = selectedId;
-      opt.textContent = resolveScheduleLabel(selectedId);
-      scheduleSelect.appendChild(opt);
-    }
-    scheduleSelect.value = selectedId;
-  }
-
-  const ranges = scheduleMap.get(selectedId) || {};
-  const scheduleDef = (storedSchedules && storedSchedules[selectedId]) || null;
-
-  const segmentsRows = [
-    { label: 'AM', start: ranges.sch_am_start || (scheduleDef && scheduleDef.sch_am_start) || DEFAULT_SCHEDULE.sch_am_start || '', end: ranges.sch_am_end || (scheduleDef && scheduleDef.sch_am_end) || DEFAULT_SCHEDULE.sch_am_end || '' },
-    { label: 'PM', start: ranges.sch_pm_start || (scheduleDef && scheduleDef.sch_pm_start) || DEFAULT_SCHEDULE.sch_pm_start || '', end: ranges.sch_pm_end || (scheduleDef && scheduleDef.sch_pm_end) || DEFAULT_SCHEDULE.sch_pm_end || '' },
-    { label: 'Saturday', start: ranges.sch_sat_start || (scheduleDef && scheduleDef.sch_sat_start) || '', end: ranges.sch_sat_end || (scheduleDef && scheduleDef.sch_sat_end) || '' }
-  ];
-
-  segmentsBody.innerHTML = segmentsRows.map(row => {
-    const startVal = row.start || '—';
-    const endVal = row.end || '—';
-    return `<tr><td>${row.label}</td><td>${escapeHtml(startVal)}</td><td>${escapeHtml(endVal)}</td></tr>`;
-  }).join('');
-
-  const fallback = scheduleDef || {};
-  const normalizeRange = (range, startFallback, endFallback) => {
-    const startVal = (range && range.start) || startFallback || '';
-    const endVal = (range && range.end) || endFallback || '';
-    return {
-      start: startVal || '—',
-      end: endVal || '—'
-    };
-  };
-
-  const rangeRows = [
-    { label: 'Clock In 1', range: ranges.amIn, startKey: 'rng_am_in_start', endKey: 'rng_am_in_end' },
-    { label: 'Clock Out 1', range: ranges.amOut, startKey: 'rng_am_out_start', endKey: 'rng_am_out_end' },
-    { label: 'Clock In 2', range: ranges.pmIn, startKey: 'rng_pm_in_start', endKey: 'rng_pm_in_end' },
-    { label: 'Clock Out 2', range: ranges.pmOut, startKey: 'rng_pm_out_start', endKey: 'rng_pm_out_end' },
-    { label: 'OT In', range: ranges.otIn, startKey: 'rng_ot_in_start', endKey: 'rng_ot_in_end' },
-    { label: 'OT Out', range: ranges.otOut, startKey: 'rng_ot_out_start', endKey: 'rng_ot_out_end' },
-    { label: 'Saturday OT In', range: ranges.satOt, startKey: 'rng_sat_ot_start', endKey: 'rng_sat_ot_end' }
-  ];
-
-  rangesBody.innerHTML = rangeRows.map(row => {
-    const startFallback = (fallback && fallback[row.startKey]) || (DEFAULT_RANGES && DEFAULT_RANGES[row.startKey]) || '';
-    const endFallback = (fallback && fallback[row.endKey]) || (DEFAULT_RANGES && DEFAULT_RANGES[row.endKey]) || '';
-    const formatted = normalizeRange(row.range, startFallback, endFallback);
-    return `<tr><td>${row.label}</td><td>${escapeHtml(formatted.start)}</td><td>${escapeHtml(formatted.end)}</td></tr>`;
-  }).join('');
-
-  const graceValue = (ranges.sch_grace !== undefined && ranges.sch_grace !== null)
-    ? ranges.sch_grace
-    : (scheduleDef && scheduleDef.sch_grace !== undefined ? scheduleDef.sch_grace : DEFAULT_SCHEDULE.sch_grace);
-  if (scheduleGraceDisplay) scheduleGraceDisplay.textContent = (graceValue !== undefined && graceValue !== null && graceValue !== '') ? String(graceValue) : '—';
-  if (scheduleNameDisplay) scheduleNameDisplay.textContent = selectedId ? resolveScheduleLabel(selectedId) : '—';
-}
 
 function renderScheduleSelector(){
   scheduleSelect.innerHTML = '';
@@ -6218,41 +5967,20 @@ function renderScheduleSelector(){
 }
 
 function renderScheduleEditor(){
-  captureScheduleEditorTemplate();
-  const pid = typeof periodKey === 'function' ? periodKey() : '';
-  const locked = typeof isLocked === 'function' && isLocked(pid);
-  toggleScheduleControlsForLock(locked);
-  if (locked) {
-    renderLockedScheduleEditorView(pid);
-    return;
-  }
-
-  restoreScheduleEditorTemplate();
-
   const sel = scheduleSelect.value;
   if(!sel || !storedSchedules[sel]) return;
   const s = storedSchedules[sel];
-  const amStart = document.querySelector('[data-key="sch_am_start"]');
-  if (amStart) amStart.value = s.sch_am_start || DEFAULT_SCHEDULE.sch_am_start;
-  const amEnd = document.querySelector('[data-key="sch_am_end"]');
-  if (amEnd) amEnd.value = s.sch_am_end || DEFAULT_SCHEDULE.sch_am_end;
-  const pmStart = document.querySelector('[data-key="sch_pm_start"]');
-  if (pmStart) pmStart.value = s.sch_pm_start || DEFAULT_SCHEDULE.sch_pm_start;
-  const pmEnd = document.querySelector('[data-key="sch_pm_end"]');
-  if (pmEnd) pmEnd.value = s.sch_pm_end || DEFAULT_SCHEDULE.sch_pm_end;
-
+  document.querySelector('[data-key="sch_am_start"]').value = s.sch_am_start || DEFAULT_SCHEDULE.sch_am_start;
+  document.querySelector('[data-key="sch_am_end"]').value = s.sch_am_end || DEFAULT_SCHEDULE.sch_am_end;
+  document.querySelector('[data-key="sch_pm_start"]').value = s.sch_pm_start || DEFAULT_SCHEDULE.sch_pm_start;
+  document.querySelector('[data-key="sch_pm_end"]').value = s.sch_pm_end || DEFAULT_SCHEDULE.sch_pm_end;
+  
   const satStartInp = document.querySelector('[data-key="sch_sat_start"]');
   const satEndInp   = document.querySelector('[data-key="sch_sat_end"]');
   if (satStartInp) satStartInp.value = (s.sch_sat_start || "");
   if (satEndInp)   satEndInp.value   = (s.sch_sat_end   || "");
-  if (scheduleGraceInput) {
-    scheduleGraceInput.value = (s.sch_grace !== undefined ? s.sch_grace : DEFAULT_SCHEDULE.sch_grace);
-  }
-  if (scheduleNameInput) {
-    scheduleNameInput.value = s.name || ("Schedule " + sel);
-  }
-  if (scheduleNameDisplay) scheduleNameDisplay.textContent = '';
-  if (scheduleGraceDisplay) scheduleGraceDisplay.textContent = '';
+document.querySelector('[data-key="sch_grace"]').value = (s.sch_grace !== undefined ? s.sch_grace : DEFAULT_SCHEDULE.sch_grace);
+  scheduleNameInput.value = s.name || ("Schedule " + sel);
   document.querySelectorAll('#rangesTable input[data-key]').forEach(inp=>{
     const key = inp.dataset.key;
     inp.value = s[key] || (DEFAULT_RANGES && DEFAULT_RANGES[key]) || "";
@@ -6424,127 +6152,16 @@ filterProjectSel && filterProjectSel.addEventListener('change', ()=>{
   renderResults();
 });
 
-function escapeHtml(value){
-  if (value === null || value === undefined) return '';
-  return String(value).replace(/[&<>"']/g, ch => ({
-    '&': '&amp;',
-    '<': '&lt;',
-    '>': '&gt;',
-    '"': '&quot;',
-    "'": '&#39;'
-  })[ch] || ch);
-}
-
-function resolveScheduleLabel(schedId){
-  if (!schedId) return '';
-  const sched = storedSchedules && storedSchedules[schedId];
-  const name = sched && sched.name;
-  if (name && name !== schedId) return `${name} (${schedId})`;
-  return schedId;
-}
-
-function resolveProjectLabel(projectId){
-  if (!projectId) return '';
-  const proj = storedProjects && storedProjects[projectId];
-  const name = proj && proj.name;
-  if (name && name !== projectId) return `${name} (${projectId})`;
-  return projectId;
-}
-
-function toggleEmployeeControlsForLock(locked){
-  const addBtn = document.getElementById('addEmployeeBtn');
-  if (addBtn) addBtn.style.display = locked ? 'none' : '';
-  const clearBtn = document.getElementById('clearEmployeesBtn');
-  if (clearBtn) clearBtn.style.display = locked ? 'none' : '';
-  ['empIdInput','empNameInput','empRateInput','empBankInput','empScheduleSelect','empProjectSelect','empFileInput'].forEach(id => {
-    const el = document.getElementById(id);
-    if (el) el.disabled = !!locked;
-  });
-}
-
-function renderLockedEmployeesTable(pid){
-  const tbody = document.querySelector('#employeesTable tbody');
-  if (!tbody) return;
-  tbody.innerHTML = '';
-  const snap = getLockedSnapshot(pid);
-  if (!snap || !snap.frozenEmployees) {
-    const tr = document.createElement('tr');
-    tr.innerHTML = '<td colspan="10" class="muted">No frozen employee data for this period.</td>';
-    tbody.appendChild(tr);
-    return;
-  }
-  const frozenEmployees = snap.frozenEmployees || {};
-  const frozenSchedules = snap.frozenSchedules || {};
-  const ids = Object.keys(frozenEmployees).sort((a, b) => {
-    const na = /^\d+$/.test(a), nb = /^\d+$/.test(b);
-    if (na && nb) return Number(a) - Number(b);
-    return String(a).localeCompare(String(b));
-  });
-  if (!ids.length) {
-    const tr = document.createElement('tr');
-    tr.innerHTML = '<td colspan="10" class="muted">No frozen employee data for this period.</td>';
-    tbody.appendChild(tr);
-    return;
-  }
-  ids.forEach(id => {
-    const emp = frozenEmployees[id] || {};
-    const scheduleSet = new Set();
-    const empSchedules = frozenSchedules[id] || {};
-    Object.keys(empSchedules).forEach(dateKey => {
-      const entry = empSchedules[dateKey];
-      if (entry && entry.scheduleId) scheduleSet.add(entry.scheduleId);
-    });
-    if (!scheduleSet.size && emp.scheduleId) scheduleSet.add(emp.scheduleId);
-    const scheduleIds = Array.from(scheduleSet).sort((a, b) => String(a).localeCompare(String(b)));
-    const scheduleText = scheduleIds.length ? scheduleIds.map(resolveScheduleLabel).join(', ') : '—';
-    const projectId = emp.projectId || '';
-    const projectText = projectId ? (resolveProjectLabel(projectId) || projectId) : '—';
-    const rateVal = emp.hourlyRate;
-    const rateNum = Number(rateVal);
-    const rateText = rateVal !== undefined && rateVal !== null && isFinite(rateNum) ? rateNum.toFixed(2) : '—';
-    const bankText = emp.bankAccount ? emp.bankAccount : '—';
-    const flags = emp.contribFlags || {};
-    const pagibigText = flags.pagibig === false ? 'No' : 'Yes';
-    const philhealthText = flags.philhealth === false ? 'No' : 'Yes';
-    const sssText = flags.sss === false ? 'No' : 'Yes';
-    const tr = document.createElement('tr');
-    tr.innerHTML = `<td>${escapeHtml(id)}</td>` +
-      `<td class="wrap">${escapeHtml(emp.name || '')}</td>` +
-      `<td>${escapeHtml(rateText)}</td>` +
-      `<td>${escapeHtml(scheduleText)}</td>` +
-      `<td>${escapeHtml(projectText)}</td>` +
-      `<td>${escapeHtml(bankText)}</td>` +
-      `<td>${escapeHtml(pagibigText)}</td>` +
-      `<td>${escapeHtml(philhealthText)}</td>` +
-      `<td>${escapeHtml(sssText)}</td>` +
-      '<td class="muted">Locked</td>';
-    tbody.appendChild(tr);
-  });
-}
-
 function renderEmployees(){
-  const pid = typeof periodKey === 'function' ? periodKey() : '';
-  const locked = typeof isLocked === 'function' && isLocked(pid);
-  toggleEmployeeControlsForLock(locked);
-  if (locked) {
-    renderLockedEmployeesTable(pid);
-    return;
-  }
-
   renderEmpScheduleDropdowns();
   renderProjectDropdowns();
-
-  const tbody = document.querySelector('#employeesTable tbody');
-  if (!tbody) return;
-  tbody.innerHTML = '';
-
+  const tbody = document.querySelector('#employeesTable tbody'); tbody.innerHTML = '';
   const ids = Object.keys(storedEmployees).sort((a,b)=>{
     const na = /^\d+$/.test(a), nb = /^\d+$/.test(b);
     if (na && nb) return Number(a) - Number(b);
     return String(a).localeCompare(String(b));
   });
-
-  ids.forEach(id => {
+ids.forEach(id => {
     const emp = storedEmployees[id];
     let scheduleOptionsHtml = '';
     Object.keys(storedSchedules).forEach(sid=>{
@@ -6556,18 +6173,18 @@ function renderEmployees(){
       projectOptionsHtml += `<option value="${pid}" ${emp.projectId===pid ? 'selected' : ''}>${storedProjects[pid].name}</option>`;
     });
     const tr = document.createElement('tr');
-    tr.innerHTML = `<td>${id}</td>` +
-      `<td><input class="cell emp-name-input" data-id="${id}" value="${emp.name}"></td>` +
-      `<td><input class="cell emp-rate-input" type="number" step="0.01" min="0" data-id="${id}" value="${emp.hourlyRate != null ? emp.hourlyRate : ''}" disabled></td>` +
-      `<td><select class="emp-sel-schedule" data-id="${id}">${scheduleOptionsHtml}</select></td>` +
-      `<td><select class="emp-sel-project" data-id="${id}">${projectOptionsHtml}</select></td>` +
-      `<td><input class="cell emp-bank-input" data-id="${id}" value="${emp.bankAccount != null ? emp.bankAccount : ''}"></td>` +
-      `<td><input type="checkbox" class="emp-pagibig" data-id="${id}" ${ (contribFlags[id] && contribFlags[id].pagibig === false) ? '' : 'checked'}></td>` +
-      `<td><input type="checkbox" class="emp-philhealth" data-id="${id}" ${ (contribFlags[id] && contribFlags[id].philhealth === false) ? '' : 'checked'}></td>` +
-      `<td><input type="checkbox" class="emp-sss" data-id="${id}" ${ (contribFlags[id] && contribFlags[id].sss === false) ? '' : 'checked'}></td>` +
-      `<td><button class="del-emp" data-id="${id}">Delete</button></td>`;
+    tr.innerHTML = `<td>${id}</td>
+      <td><input class="cell emp-name-input" data-id="${id}" value="${emp.name}"></td>
+      <td><input class="cell emp-rate-input" type="number" step="0.01" min="0" data-id="${id}" value="${emp.hourlyRate != null ? emp.hourlyRate : ''}" disabled></td>
+      <td><select class="emp-sel-schedule" data-id="${id}">${scheduleOptionsHtml}</select></td>
+      <td><select class="emp-sel-project" data-id="${id}">${projectOptionsHtml}</select></td>
+      <td><input class="cell emp-bank-input" data-id="${id}" value="${emp.bankAccount != null ? emp.bankAccount : ''}"></td>
+      <td><input type="checkbox" class="emp-pagibig" data-id="${id}" ${ (contribFlags[id] && contribFlags[id].pagibig === false) ? '' : 'checked'}></td>
+      <td><input type="checkbox" class="emp-philhealth" data-id="${id}" ${ (contribFlags[id] && contribFlags[id].philhealth === false) ? '' : 'checked'}></td>
+      <td><input type="checkbox" class="emp-sss" data-id="${id}" ${ (contribFlags[id] && contribFlags[id].sss === false) ? '' : 'checked'}></td>
+      <td><button class="del-emp" data-id="${id}">Delete</button></td>`;
     tbody.appendChild(tr);
-
+    // Attach event listeners for contribution checkboxes for this employee
     const cbPagibig = tr.querySelector('.emp-pagibig');
     const cbPhilhealth = tr.querySelector('.emp-philhealth');
     const cbSss = tr.querySelector('.emp-sss');
@@ -6607,7 +6224,7 @@ function renderEmployees(){
     try { payrollRates[id] = val; localStorage.setItem(LS_RATES, JSON.stringify(payrollRates)); } catch(err) {}
     renderResults();
   }));
-  document.querySelectorAll('.emp-sel-schedule').forEach(sel=> sel.addEventListener('change', (e)=>{
+document.querySelectorAll('.emp-sel-schedule').forEach(sel=> sel.addEventListener('change', (e)=>{
     storedEmployees[e.target.dataset.id].scheduleId = e.target.value; saveEmployeesToLS(); renderResults();
   }));
   document.querySelectorAll('.emp-sel-project').forEach(sel=> sel.addEventListener('change', (e)=>{
@@ -6620,6 +6237,7 @@ function renderEmployees(){
     }
   }));
 }
+
 document.getElementById('addEmployeeBtn').addEventListener('click', ()=>{
   const id = document.getElementById('empIdInput').value.trim();
   const name = document.getElementById('empNameInput').value.trim();
@@ -6920,98 +6538,7 @@ function formatHours(value){
   return (!isFinite(num) || num === 0) ? '-' : num.toFixed(2);
 }
 
-function getLockedSnapshot(pid){
-  if (!pid) return null;
-  try {
-    const hist = Array.isArray(window.payrollHistory)
-      ? window.payrollHistory
-      : (typeof loadHistory === 'function' ? loadHistory() : []);
-    if (!Array.isArray(hist)) return null;
-    const parts = String(pid || '').split('_');
-    const start = parts[0] || '';
-    const end = parts[1] || '';
-    if (!start || !end) return null;
-    return hist.find(s => {
-      if (!s || !s.locked) return false;
-      const sStart = String(s.startDate || '').split('T')[0];
-      const sEnd = String(s.endDate || '').split('T')[0];
-      return sStart === start && sEnd === end;
-    }) || null;
-  } catch (e) {
-    return null;
-  }
-}
-
 function renderResults(){
-  // If the current payroll period is locked, rebuild the payroll table from
-  // the frozen snapshot and skip live recalculation/rendering.
-  try {
-    const pid = typeof periodKey === 'function' ? periodKey() : '';
-    const locked = typeof isLocked === 'function' && isLocked(pid);
-    if (locked) {
-      const snap = getLockedSnapshot(pid);
-      if (snap) {
-        const rows = snap.frozenPayrollRows || snap.rows || [];
-        const totals = snap.frozenTotals || snap.totals || {};
-        const tb = document.querySelector('#payrollTable tbody');
-        const foot = document.querySelector('#payrollTable tfoot tr');
-        if (tb) {
-          tb.innerHTML = '';
-          rows.forEach(r => {
-            const tr = document.createElement('tr');
-            tr.innerHTML = `
-              <td>${r.id || ''}</td>
-              <td class="wrap">${r.name || ''}</td>
-              <td><input class="cell rate" type="number" step="0.01" value="${r.rate || 0}" disabled></td>
-              <td><input class="cell regHrs" type="number" step="0.01" value="${r.regHrs || 0}" disabled></td>
-              <td><input class="cell otHrs" type="number" step="0.01" value="${r.otHrs || 0}" disabled></td>
-              <td class="adjHrs num">${Number(r.adjHrs || 0).toFixed(2)}</td>
-              <td class="totalHrs num">${Number(r.totalHrs || 0).toFixed(2)}</td>
-              <td class="regPay num">${Number(r.regPay || 0).toFixed(2)}</td>
-              <td class="otPay num">${Number(r.otPay || 0).toFixed(2)}</td>
-              <td class="adjAmt num">${Number(r.adjAmt || 0).toFixed(2)}</td>
-              <td><input class="cell bantay" type="number" step="0.01" value="${r.bantay || 0}" disabled></td>
-              <td class="grossPay num">${Number(r.grossPay || 0).toFixed(2)}</td>
-              <td class="pagibig num">${Number(r.pagibig || 0).toFixed(2)}</td>
-              <td class="philhealth num">${Number(r.philhealth || 0).toFixed(2)}</td>
-              <td class="sss num">${Number(r.sss || 0).toFixed(2)}</td>
-              <td><input class="cell loanSSS" type="number" step="0.01" value="${r.loanSSS || 0}" disabled></td>
-              <td><input class="cell loanPI" type="number" step="0.01" value="${r.loanPI || 0}" disabled></td>
-              <td><input class="cell vale" type="number" step="0.01" value="${r.vale || 0}" disabled></td>
-              <td class="valeWed num">${Number(r.valeWed || 0).toFixed(2)}</td>
-              <td class="totalDed num">${Number(r.totalDed || 0).toFixed(2)}</td>
-              <td class="netPay num">${Number(r.netPay || 0).toFixed(2)}</td>
-              <td><button type="button" class="payslipBtn">Payslip</button></td>`;
-            tb.appendChild(tr);
-          });
-        }
-        if (foot) {
-          foot.querySelectorAll('[data-col]').forEach(td => {
-            const key = td.dataset.col;
-            const val = totals && totals[key] != null ? Number(totals[key]) : 0;
-            td.textContent = val.toFixed(2);
-          });
-        }
-        try { attachRowEvents && attachRowEvents(); } catch(_) {}
-      }
-      try {
-        const addButtonsFn = (typeof addDtrDeleteButtons === 'function')
-          ? addDtrDeleteButtons
-          : (typeof window !== 'undefined' && typeof window.addDtrDeleteButtons === 'function'
-            ? window.addDtrDeleteButtons
-            : null);
-        if (addButtonsFn) addButtonsFn();
-      } catch (e) {}
-      try {
-        if (typeof checkAndToggleEditState === 'function') {
-          checkAndToggleEditState();
-        } else if (typeof window !== 'undefined' && typeof window.checkAndToggleEditState === 'function') {
-          window.checkAndToggleEditState();
-        }
-      } catch (e) {}
-      return;
-    }
-  } catch (e) { console.warn('locked payroll render failed', e); }
 
 // 12-hour clock formatter for display only (keeps underlying logic 24h)
 function __fmt12Clock(hhmm){
@@ -7031,16 +6558,12 @@ function __fmt12Clock(hhmm){
   renderScheduleSelector();
   renderProjectFilterOptions();
 
-  const startDate = document.getElementById('dtrDateFrom')?.value
-                 || document.getElementById('weekStart')?.value
-                 || null;
-  const endDate   = document.getElementById('dtrDateTo')?.value
-                 || document.getElementById('weekEnd')?.value
-                 || null;
+  const startDate = document.getElementById('weekStart').value || null;
+  const endDate = document.getElementById('weekEnd').value || null;
   currentProjectFilter = document.getElementById('filterProject') ? document.getElementById('filterProject').value : 'all';
   localStorage.setItem(LS_FILTER_PROJECT, currentProjectFilter);
 
-
+  
   const nameQuery = (document.getElementById('dtrSearchName') ? document.getElementById('dtrSearchName').value.trim().toLowerCase() : '');
 const groups = {};
   const manualKeys = new Set();
@@ -7483,19 +7006,6 @@ let otMins = 0;
 
   // Show/hide download button
   document.getElementById('downloadCSV').style.display = _rowCount ? 'inline-block' : 'none';
-  const __addButtonsFn = (typeof addDtrDeleteButtons === 'function')
-    ? addDtrDeleteButtons
-    : (typeof window !== 'undefined' && typeof window.addDtrDeleteButtons === 'function'
-      ? window.addDtrDeleteButtons
-      : null);
-  if (__addButtonsFn) {
-    try { __addButtonsFn(); } catch (e) {}
-  }
-  if (typeof checkAndToggleEditState === 'function') {
-    checkAndToggleEditState();
-  } else if (typeof window !== 'undefined' && typeof window.checkAndToggleEditState === 'function') {
-    try { window.checkAndToggleEditState(); } catch (e) {}
-  }
   // --- DTR Summary ---
   // After building the table, update the summary using accumulated totals
   (function(){
@@ -7824,6 +7334,9 @@ const otInActual = pickEarliest({start: schedule.rng_ot_in_start, end: schedule.
   }
   return { totalsReg, totalsOT };
 }
+const dtrStartEl = document.getElementById('filterStart');
+const dtrEndEl = document.getElementById('filterEnd');
+
 function calculatePayrollFromRecords(){
   try { if (typeof renderResults === 'function') renderResults(); } catch(e){ console.warn('renderResults failed', e); }
 
@@ -7835,9 +7348,10 @@ function calculatePayrollFromRecords(){
    * any filtering performed on the DTR tab.
    */
   try {
-    // Determine the date range solely from the payroll period inputs.
-    const start = (typeof weekStartEl !== 'undefined' && weekStartEl && weekStartEl.value) ? weekStartEl.value : '';
-    const end   = (typeof weekEndEl   !== 'undefined' && weekEndEl   && weekEndEl.value)   ? weekEndEl.value   : '';
+    // Determine the date range from the payroll period inputs.  Fall back
+    // to the DTR filter inputs if the payroll period inputs are absent.
+    const start = (typeof weekStartEl !== 'undefined' && weekStartEl && weekStartEl.value) ? weekStartEl.value : (dtrStartEl ? dtrStartEl.value : '');
+    const end   = (typeof weekEndEl   !== 'undefined' && weekEndEl   && weekEndEl.value)   ? weekEndEl.value   : (dtrEndEl   ? dtrEndEl.value   : '');
     // Use the helper to compute perâ€‘employee hours across the full dataset.
     const { totalsReg, totalsOT } = computeHoursForDateRange(start, end);
     // Initialize regHours and otHours with computed totals
@@ -7876,27 +7390,149 @@ function calculatePayrollFromRecords(){
   }
 }
 
+  /**
+   * Compute regular and overtime hours directly from the DTR results table.
+   * This implementation scans the #resultsTable built by renderResults() and
+   * aggregates the regular and OT hours by employee. By relying on the
+   * existing DTR computation (which correctly handles split records and
+   * schedule overrides), the payroll tab stays in sync with whatever
+   * appears in the DTR tab, even when rounding and OT logic differs from
+   * the generic computeHoursForDateRange() helper.  The selected payroll
+   * period (weekStart/weekEnd) is mirrored onto the DTR date filters
+   * before computing.  Project and name filters are temporarily
+   * cleared so that all employees are included, and then restored.
+   */
+  function calculatePayrollFromResultsTable() {
+    try {
+      // Save current filter/search values
+      const searchInput = document.getElementById('dtrSearchName');
+      const filterSelect = document.getElementById('filterProject');
+      const origSearch = searchInput ? searchInput.value : '';
+      const origFilter = filterSelect ? filterSelect.value : '';
+      // Clear name search and select all projects
+      if (searchInput) searchInput.value = '';
+      if (filterSelect) {
+        filterSelect.value = 'all';
+        // Persist the filter state so renderResults respects it
+        if (typeof currentProjectFilter !== 'undefined') currentProjectFilter = 'all';
+        try { localStorage.setItem(LS_FILTER_PROJECT, 'all'); } catch (e) {}
+      }
+      // Sync the DTR date range with the payroll period.  Update the
+      // DTR filter inputs if present (filterStart/filterEnd) and let
+      // renderResults() handle the new range.  Some DTR pages use
+      // dtrDateFrom/dtrDateTo instead.
+      try {
+        const dtrStart = document.getElementById('filterStart') || document.getElementById('dtrDateFrom');
+        const dtrEnd   = document.getElementById('filterEnd')   || document.getElementById('dtrDateTo');
+        if (weekStartEl && dtrStart) dtrStart.value = weekStartEl.value;
+        if (weekEndEl   && dtrEnd)   dtrEnd.value   = weekEndEl.value;
+      } catch (err) {}
+      // Re-render the DTR results table with updated filters
+      if (typeof renderResults === 'function') renderResults();
+      // Aggregate hours from the rendered DTR table
+      const rows = document.querySelectorAll('#resultsTable tbody tr');
+      const regTotals = {};
+      const otTotals = {};
+      rows.forEach(row => {
+        const cells = row.cells;
+        if (!cells || cells.length < 13) return;
+        const empId = cells[0].textContent.trim();
+        // Column 11: total regular hours; column 12: OT hours
+        const regVal = parseFloat(cells[11].textContent) || 0;
+        const otVal  = parseFloat(cells[12].textContent) || 0;
+        regTotals[empId] = (regTotals[empId] || 0) + regVal;
+        otTotals[empId]  = (otTotals[empId]  || 0) + otVal;
+      });
+      // Restore original filters and search
+      if (searchInput) searchInput.value = origSearch;
+      if (filterSelect) {
+        filterSelect.value = origFilter;
+        if (typeof currentProjectFilter !== 'undefined') currentProjectFilter = origFilter;
+        try { localStorage.setItem(LS_FILTER_PROJECT, origFilter); } catch (e) {}
+      }
+      // Re-render the DTR table with the original filter/search
+      if (typeof renderResults === 'function') renderResults();
+      // Apply aggregated hours to regHours and otHours, rounding to two decimals
+      regHours = {};
+      otHours = {};
+      Object.keys(regTotals).forEach(id => {
+        regHours[id] = +(regTotals[id]).toFixed(2);
+      });
+      Object.keys(otTotals).forEach(id => {
+        otHours[id] = +(otTotals[id]).toFixed(2);
+      });
+      // Ensure every employee has entries for reg and OT hours
+      Object.keys(storedEmployees || {}).forEach(id => {
+        if (!regHours.hasOwnProperty(id)) regHours[id] = 0;
+        if (!otHours.hasOwnProperty(id))  otHours[id]  = 0;
+      });
+      // Persist the hours to localStorage
+      try {
+        localStorage.setItem(LS_REG_HRS, JSON.stringify(regHours));
+        localStorage.setItem(LS_OT_HRS, JSON.stringify(otHours));
+      } catch (err) {}
+      // Rebuild the payroll table using the computed hours
+      if (typeof renderTable === 'function') renderTable();
+    } catch (err) {
+      console.warn('calculatePayrollFromResultsTable failed', err);
+    }
+  }
+
 weekStartEl.addEventListener('change', () => {
+  if (dtrStartEl) dtrStartEl.value = weekStartEl.value;
   adjustments = allAdjustments[periodKey()] || {};
   adjHrs = allAdjHrs[periodKey()] || {};
   bantay = allBantay[periodKey()] || {};
   try {
-    if (typeof calculatePayrollFromRecords === 'function') calculatePayrollFromRecords();
+    if (typeof calculatePayrollFromResultsTable === 'function') calculatePayrollFromResultsTable();
+    else if (typeof calculatePayrollFromRecords === 'function') calculatePayrollFromRecords();
   } catch (e) {}
   if (typeof renderTable === 'function') renderTable();
   if (typeof renderAdjustmentsTable === 'function') renderAdjustmentsTable();
   calculateAll();
 });
 weekEndEl.addEventListener('change', () => {
+  if (dtrEndEl) dtrEndEl.value = weekEndEl.value;
   adjustments = allAdjustments[periodKey()] || {};
   adjHrs = allAdjHrs[periodKey()] || {};
   bantay = allBantay[periodKey()] || {};
   try {
-    if (typeof calculatePayrollFromRecords === 'function') calculatePayrollFromRecords();
+    if (typeof calculatePayrollFromResultsTable === 'function') calculatePayrollFromResultsTable();
+    else if (typeof calculatePayrollFromRecords === 'function') calculatePayrollFromRecords();
   } catch (e) {}
   if (typeof renderTable === 'function') renderTable();
   if (typeof renderAdjustmentsTable === 'function') renderAdjustmentsTable();
   calculateAll();
+});
+if (dtrStartEl) {
+  dtrStartEl.addEventListener('change', () => {
+    weekStartEl.value = dtrStartEl.value;
+    // When editing the DTR date range directly, recompute payroll hours from the DTR table
+    try {
+      if (typeof calculatePayrollFromResultsTable === 'function') calculatePayrollFromResultsTable();
+      else if (typeof calculatePayrollFromRecords === 'function') calculatePayrollFromRecords();
+    } catch (e) {}
+  });
+}
+if (dtrEndEl) {
+  dtrEndEl.addEventListener('change', () => {
+    weekEndEl.value = dtrEndEl.value;
+    // When editing the DTR date range directly, recompute payroll hours from the DTR table
+    try {
+      if (typeof calculatePayrollFromResultsTable === 'function') calculatePayrollFromResultsTable();
+      else if (typeof calculatePayrollFromRecords === 'function') calculatePayrollFromRecords();
+    } catch (e) {}
+  });
+}
+
+tabs.tabPayroll.addEventListener('click', () => {
+  if (dtrStartEl && !weekStartEl.value) weekStartEl.value = dtrStartEl.value;
+  if (dtrEndEl && !weekEndEl.value) weekEndEl.value = dtrEndEl.value;
+  // Compute hours based on the current DTR table rather than recomputing from raw records
+  try {
+    if (typeof calculatePayrollFromResultsTable === 'function') calculatePayrollFromResultsTable();
+    else if (typeof calculatePayrollFromRecords === 'function') calculatePayrollFromRecords();
+  } catch (e) {}
 });
 function backupData() {
   const data = {};
@@ -8093,12 +7729,32 @@ function restoreData(file) {
       tr.appendChild(td);
     });
   }
-  window.addDtrDeleteButtons = addDtrDeleteButtons;
+  function patchRenderResults(){
+    if(typeof renderResults !== 'function') return false;
+    const original = renderResults;
+    window.renderResults = function(){
+      const res = original.apply(this, arguments);
+      try { addDtrDeleteButtons(); } catch(e){}
+      // After rendering results, always check whether the selected payroll period is
+      // locked and toggle editing accordingly. This ensures that dynamic
+      // controls inserted by renderResults() respect the current lock state.
+      try {
+        if (typeof checkAndToggleEditState === 'function') {
+          checkAndToggleEditState();
+        }
+      } catch(e) {}
+      return res;
+    };
+    try { addDtrDeleteButtons(); } catch(e){}
+    return true;
+  }
   function init(){
     wireManualDTR();
-    addDtrDeleteButtons();
-    if (typeof window.checkAndToggleEditState === 'function') {
-      try { window.checkAndToggleEditState(); } catch (e) {}
+    if(!patchRenderResults()){
+      const iv = setInterval(() => {
+        if(patchRenderResults()) clearInterval(iv);
+      }, 200);
+      setTimeout(() => clearInterval(iv), 6000);
     }
   }
   if(document.readyState === 'loading'){
@@ -9151,22 +8807,11 @@ function loadSaved(){
   }
 
   function withinRange(dateStr, from, to){
-    const toMidnightTimestamp = (value) => {
-      if (!value) return null;
-      const date = new Date(value);
-      if (Number.isNaN(date.getTime())) return null;
-      date.setHours(0, 0, 0, 0);
-      return date.getTime();
-    };
-
-    const targetTime = toMidnightTimestamp(dateStr);
-    if (targetTime === null) return false;
-
-    const fromTime = toMidnightTimestamp(from);
-    const toTime = toMidnightTimestamp(to);
-
-    if (fromTime !== null && targetTime < fromTime) return false;
-    if (toTime !== null && targetTime > toTime) return false;
+    if (!dateStr) return false;
+    const s = dateStr.trim();
+    if (!s) return false;
+    if (from && s < from) return false;
+    if (to   && s > to)   return false;
     return true;
   }
 
@@ -9178,17 +8823,13 @@ function loadSaved(){
 
     const tbody = document.querySelector('#resultsTable tbody');
     if (!tbody) return;
-    const fromDate = f ? new Date(f) : null;
-    const toDate = t ? new Date(t) : null;
-    const validFrom = (fromDate && !Number.isNaN(fromDate.getTime())) ? fromDate : null;
-    const validTo = (toDate && !Number.isNaN(toDate.getTime())) ? toDate : null;
-    const hasRange = !!(validFrom || validTo);
+    const hasRange = !!(f || t);
 
     Array.from(tbody.rows).forEach(tr=>{
       // Adjust the index below if your Date column index is different.
       // Assuming the "Date" column is 4 (0-based), change as necessary.
       const dateStr = (tr.cells[4]?.textContent || '').trim();
-      const show = !hasRange || withinRange(dateStr, validFrom, validTo);
+      const show = !hasRange || withinRange(dateStr, f, t);
       tr.style.display = show ? '' : 'none';
     });
 
@@ -9442,15 +9083,10 @@ function loadSaved(){
     const hist = loadJSON(HIST_KEY, []);
     active = {};
     (hist||[]).forEach(s=>{
-        if (s && s.startDate && s.endDate /* && s.locked */){
-          const key = toKey(s.startDate, s.endDate);
-          active[key] = {
-            startDate: s.startDate,
-            endDate: s.endDate,
-            rows: s.rows || s.frozenPayrollRows || [],
-            totals: s.totals || s.frozenTotals || {}
-          };
-        }
+      if (s && s.startDate && s.endDate /* && s.locked */){
+        const key = toKey(s.startDate, s.endDate);
+        active[key] = { startDate:s.startDate, endDate:s.endDate, rows:s.rows||[], totals:s.totals||{} };
+      }
     });
     saveJSON(ACTIVE_KEY, active);
   }
@@ -9459,12 +9095,7 @@ function loadSaved(){
     if(!snap || !snap.startDate || !snap.endDate) return;
     const key = toKey(snap.startDate, snap.endDate);
     const active = loadJSON(ACTIVE_KEY, {}) || {};
-      active[key] = {
-        startDate: snap.startDate,
-        endDate: snap.endDate,
-        rows: snap.rows || snap.frozenPayrollRows || [],
-        totals: snap.totals || snap.frozenTotals || {}
-      };
+    active[key] = { startDate:snap.startDate, endDate:snap.endDate, rows:snap.rows||[], totals:snap.totals||{} };
     saveJSON(ACTIVE_KEY, active);
     localStorage.setItem(CURRENT_KEY, key);
   }
@@ -9656,12 +9287,8 @@ function updateWeekInputs(snap) {
   // Refresh DTR list immediately
   try { if (typeof renderResults === 'function') { renderResults(); } } catch (e) {}
 
-  // Recalculate payroll if available using the payroll period inputs
-  try {
-    if (typeof calculatePayrollFromRecords === 'function') {
-      calculatePayrollFromRecords();
-    }
-  } catch (e) {}
+  // Recalculate payroll if available, deriving hours from the DTR results table
+  try { if (typeof calculatePayrollFromResultsTable === 'function') { calculatePayrollFromResultsTable(); } else if (typeof calculatePayrollFromRecords === 'function') { calculatePayrollFromRecords(); } } catch (e) {}
 
   // After updating the week range, toggle editing state based on whether the
   // selected period is locked. Without this, switching between periods would
