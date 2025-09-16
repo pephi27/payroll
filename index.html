@@ -6890,6 +6890,8 @@ let otMins = 0;
           htmlSeg += '<td>' + formatHours(otDecSeg) + '</td>';
           htmlSeg += '<td>' + formatHours(String((parseFloat(regDecSeg)||0)+(parseFloat(otDecSeg)||0))) + '</td>';
           htmlSeg += '<td><button type="button" class="btn-unsplit" data-key="' + splitKey + '" onclick="unsplitRecord(this.dataset.key)">Unsplit</button></td>';
+          // Ensure Actions column always has a Delete button for split rows
+          htmlSeg += '<td class="actions-cell"><button type="button" class="dtr-del-btn">Delete</button></td>';
           trSeg.innerHTML = htmlSeg;
           try {
             if (typeof manualKeys !== 'undefined' && manualKeys.has(splitKey)) {
@@ -6976,7 +6978,9 @@ let otMins = 0;
       (otOutCalc ? '<td>' + __fmt12Clock(otOutCalc) + '</td>' : '<td class=\"missing\">-</td>') +
       '<td>'+formatHours(totalRegularDecimal)+'</td><td>'+formatHours(otDecimal)+'</td><td>'+formatHours(__tot)+'</td>' +
       // Use a named handler with a data-key attribute instead of an inline IIFE.
-      '<td><button type="button" class="btn-split" data-key="' + empId + '___' + date + '" onclick="splitRecord(this.dataset.key)">Split</button></td>';
+      '<td><button type="button" class="btn-split" data-key="' + empId + '___' + date + '" onclick="splitRecord(this.dataset.key)">Split</button></td>' +
+      // Ensure Actions column always has a Delete button for unsplit rows
+      '<td class="actions-cell"><button type="button" class="dtr-del-btn">Delete</button></td>';
     if(overridesSchedules[overrideKey] || overridesProjects[overrideKeyProj] !== undefined){
       tr.style.backgroundColor = '#fff3cd';
     }
@@ -7670,6 +7674,56 @@ function restoreData(file) {
       theadRow.appendChild(th);
     }
   }
+  // Robust event delegation so Delete works even if rows insert buttons directly
+  function setupDtrDeleteDelegation(){
+    const table = document.getElementById('resultsTable');
+    if (!table || table.__dtrDelBound) return;
+    table.addEventListener('click', function(ev){
+      const btn = ev.target && ev.target.closest ? ev.target.closest('.dtr-del-btn') : null;
+      if (!btn) return;
+      const tr = btn.closest('tr');
+      if (!tr) return;
+      const empIdCell = tr.cells[0] ? tr.cells[0].textContent.trim() : '';
+      const dateCell  = tr.cells[4] ? tr.cells[4].textContent.trim() : '';
+      if(!empIdCell || !dateCell) return;
+      const isSplitHalf = tr.dataset && tr.dataset.half;
+      const confirmMsg = isSplitHalf
+        ? `Delete this ${tr.dataset.half} DTR for ${empIdCell} on ${dateCell}?`
+        : `Delete all DTR entries for ${empIdCell} on ${dateCell}?`;
+      if(!confirm(confirmMsg)) return;
+      try {
+        if (isSplitHalf) {
+          let timesForHalf = [];
+          try { timesForHalf = JSON.parse(tr.dataset.times || '[]'); } catch(e) { timesForHalf = []; }
+          timesForHalf.forEach(t => {
+            for (let i = 0; i < storedRecords.length; i++) {
+              const rec = storedRecords[i];
+              if (String(rec.empId) === String(empIdCell) && rec.date === dateCell && rec.time === t) {
+                storedRecords.splice(i, 1);
+                break;
+              }
+            }
+          });
+          const splitKey = `${empIdCell}___${dateCell}`;
+          if (splits && splits[splitKey]) {
+            delete splits[splitKey];
+            if (typeof saveSplits === 'function') saveSplits();
+          }
+        } else {
+          for(let i = storedRecords.length - 1; i >= 0; i--){
+            const rec = storedRecords[i];
+            if(String(rec.empId) === String(empIdCell) && rec.date === dateCell){
+              storedRecords.splice(i, 1);
+            }
+          }
+        }
+        localStorage.setItem(LS_RECORDS, JSON.stringify(storedRecords));
+        try { if (typeof saveDtrToCloud === 'function') saveDtrToCloud(storedRecords); } catch (e) {}
+        renderResults();
+      } catch(e){ console.error('DTR delete failed', e); }
+    });
+    table.__dtrDelBound = true;
+  }
   function addDtrDeleteButtons(){
     const table = document.getElementById('resultsTable');
     if(!table) return;
@@ -7756,6 +7810,7 @@ function restoreData(file) {
     window.renderResults = function(){
       const res = original.apply(this, arguments);
       try { addDtrDeleteButtons(); } catch(e){}
+      try { setupDtrDeleteDelegation(); } catch(e){}
       // After rendering results, always check whether the selected payroll period is
       // locked and toggle editing accordingly. This ensures that dynamic
       // controls inserted by renderResults() respect the current lock state.
@@ -7771,6 +7826,7 @@ function restoreData(file) {
   }
   function init(){
     wireManualDTR();
+    setupDtrDeleteDelegation();
     if(!patchRenderResults()){
       const iv = setInterval(() => {
         if(patchRenderResults()) clearInterval(iv);
@@ -10415,7 +10471,6 @@ document.addEventListener('DOMContentLoaded', async function () {
   function afterRender(){
     applyOverridesToTable();
     addDtrEditorButtons();
-    addDtrDeleteButtons();
     recomputeDtrSummaryFromTable();
   }
 
