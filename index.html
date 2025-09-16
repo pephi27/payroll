@@ -3756,8 +3756,7 @@ document.addEventListener('DOMContentLoaded', () => {
       if (wsEl) wsEl.value = snap.startDate || '';
       if (weEl) weEl.value = snap.endDate || '';
       try {
-        if (typeof calculatePayrollFromResultsTable === 'function') calculatePayrollFromResultsTable();
-        else if (typeof calculatePayrollFromRecords === 'function') calculatePayrollFromRecords();
+        if (typeof calculatePayrollFromRecords === 'function') calculatePayrollFromRecords();
       } catch (err) {}
       // Show the payroll panel
       try { showTab('payroll'); } catch (err) {}
@@ -4421,7 +4420,7 @@ document.addEventListener('DOMContentLoaded', () => {
           const we = document.getElementById('weekEnd');
           const prevS = ws && ws.value; const prevE = we && we.value;
           if (ws) ws.value = snap.startDate || prevS; if (we) we.value = snap.endDate || prevE;
-          try{ if (typeof calculatePayrollFromResultsTable==='function') calculatePayrollFromResultsTable(); else if (typeof calculatePayrollFromRecords==='function') calculatePayrollFromRecords(); }catch(e){}
+          try { if (typeof calculatePayrollFromRecords === 'function') calculatePayrollFromRecords(); } catch (e) {}
           try{ if (typeof window.rebuildReports === 'function') window.rebuildReports(); }catch(e){}
           setTimeout(function(){
             try{ window.exportExcelAllTabs(); }catch(e){}
@@ -5525,7 +5524,7 @@ rows += `<tr class="allowance">
         const we = document.getElementById('weekEnd');
         const prevS = ws && ws.value; const prevE = we && we.value;
         if (ws) ws.value = from || prevS; if (we) we.value = to || prevE;
-        try{ if (typeof calculatePayrollFromResultsTable==='function') calculatePayrollFromResultsTable(); else if (typeof calculatePayrollFromRecords==='function') calculatePayrollFromRecords(); }catch(e){}
+        try { if (typeof calculatePayrollFromRecords === 'function') calculatePayrollFromRecords(); } catch (e) {}
         try{ if (typeof window.rebuildReports==='function') window.rebuildReports(); }catch(e){}
         setTimeout(function(){ try{ exportExcelAllTabs(); } finally { try{ if (ws) ws.value = prevS; if (we) we.value = prevE; if (typeof window.rebuildReports==='function') window.rebuildReports(); }catch(e){} } }, 300);
       }catch(e){ console.warn('Export for range failed', e); }
@@ -6029,10 +6028,9 @@ tabs.tabPayroll.addEventListener('click', ()=>{
   } catch (e) {}
 
   showTab('payroll');
-  // When entering the payroll tab, derive hours directly from the DTR results table
+  // When entering the payroll tab, recompute hours for the selected payroll period
   try {
-    if (typeof calculatePayrollFromResultsTable === 'function') calculatePayrollFromResultsTable();
-    else if (typeof calculatePayrollFromRecords === 'function') calculatePayrollFromRecords();
+    if (typeof calculatePayrollFromRecords === 'function') calculatePayrollFromRecords();
   } catch(e){}
 });
 
@@ -7033,8 +7031,12 @@ function __fmt12Clock(hhmm){
   renderScheduleSelector();
   renderProjectFilterOptions();
 
-  const startDate = document.getElementById('weekStart').value || null;
-  const endDate = document.getElementById('weekEnd').value || null;
+  const startDate = document.getElementById('dtrDateFrom')?.value
+                 || document.getElementById('weekStart')?.value
+                 || null;
+  const endDate   = document.getElementById('dtrDateTo')?.value
+                 || document.getElementById('weekEnd')?.value
+                 || null;
   currentProjectFilter = document.getElementById('filterProject') ? document.getElementById('filterProject').value : 'all';
   localStorage.setItem(LS_FILTER_PROJECT, currentProjectFilter);
 
@@ -7822,9 +7824,6 @@ const otInActual = pickEarliest({start: schedule.rng_ot_in_start, end: schedule.
   }
   return { totalsReg, totalsOT };
 }
-const dtrStartEl = document.getElementById('filterStart');
-const dtrEndEl = document.getElementById('filterEnd');
-
 function calculatePayrollFromRecords(){
   try { if (typeof renderResults === 'function') renderResults(); } catch(e){ console.warn('renderResults failed', e); }
 
@@ -7836,10 +7835,9 @@ function calculatePayrollFromRecords(){
    * any filtering performed on the DTR tab.
    */
   try {
-    // Determine the date range from the payroll period inputs.  Fall back
-    // to the DTR filter inputs if the payroll period inputs are absent.
-    const start = (typeof weekStartEl !== 'undefined' && weekStartEl && weekStartEl.value) ? weekStartEl.value : (dtrStartEl ? dtrStartEl.value : '');
-    const end   = (typeof weekEndEl   !== 'undefined' && weekEndEl   && weekEndEl.value)   ? weekEndEl.value   : (dtrEndEl   ? dtrEndEl.value   : '');
+    // Determine the date range solely from the payroll period inputs.
+    const start = (typeof weekStartEl !== 'undefined' && weekStartEl && weekStartEl.value) ? weekStartEl.value : '';
+    const end   = (typeof weekEndEl   !== 'undefined' && weekEndEl   && weekEndEl.value)   ? weekEndEl.value   : '';
     // Use the helper to compute perâ€‘employee hours across the full dataset.
     const { totalsReg, totalsOT } = computeHoursForDateRange(start, end);
     // Initialize regHours and otHours with computed totals
@@ -7878,149 +7876,27 @@ function calculatePayrollFromRecords(){
   }
 }
 
-  /**
-   * Compute regular and overtime hours directly from the DTR results table.
-   * This implementation scans the #resultsTable built by renderResults() and
-   * aggregates the regular and OT hours by employee. By relying on the
-   * existing DTR computation (which correctly handles split records and
-   * schedule overrides), the payroll tab stays in sync with whatever
-   * appears in the DTR tab, even when rounding and OT logic differs from
-   * the generic computeHoursForDateRange() helper.  The selected payroll
-   * period (weekStart/weekEnd) is mirrored onto the DTR date filters
-   * before computing.  Project and name filters are temporarily
-   * cleared so that all employees are included, and then restored.
-   */
-  function calculatePayrollFromResultsTable() {
-    try {
-      // Save current filter/search values
-      const searchInput = document.getElementById('dtrSearchName');
-      const filterSelect = document.getElementById('filterProject');
-      const origSearch = searchInput ? searchInput.value : '';
-      const origFilter = filterSelect ? filterSelect.value : '';
-      // Clear name search and select all projects
-      if (searchInput) searchInput.value = '';
-      if (filterSelect) {
-        filterSelect.value = 'all';
-        // Persist the filter state so renderResults respects it
-        if (typeof currentProjectFilter !== 'undefined') currentProjectFilter = 'all';
-        try { localStorage.setItem(LS_FILTER_PROJECT, 'all'); } catch (e) {}
-      }
-      // Sync the DTR date range with the payroll period.  Update the
-      // DTR filter inputs if present (filterStart/filterEnd) and let
-      // renderResults() handle the new range.  Some DTR pages use
-      // dtrDateFrom/dtrDateTo instead.
-      try {
-        const dtrStart = document.getElementById('filterStart') || document.getElementById('dtrDateFrom');
-        const dtrEnd   = document.getElementById('filterEnd')   || document.getElementById('dtrDateTo');
-        if (weekStartEl && dtrStart) dtrStart.value = weekStartEl.value;
-        if (weekEndEl   && dtrEnd)   dtrEnd.value   = weekEndEl.value;
-      } catch (err) {}
-      // Re-render the DTR results table with updated filters
-      if (typeof renderResults === 'function') renderResults();
-      // Aggregate hours from the rendered DTR table
-      const rows = document.querySelectorAll('#resultsTable tbody tr');
-      const regTotals = {};
-      const otTotals = {};
-      rows.forEach(row => {
-        const cells = row.cells;
-        if (!cells || cells.length < 13) return;
-        const empId = cells[0].textContent.trim();
-        // Column 11: total regular hours; column 12: OT hours
-        const regVal = parseFloat(cells[11].textContent) || 0;
-        const otVal  = parseFloat(cells[12].textContent) || 0;
-        regTotals[empId] = (regTotals[empId] || 0) + regVal;
-        otTotals[empId]  = (otTotals[empId]  || 0) + otVal;
-      });
-      // Restore original filters and search
-      if (searchInput) searchInput.value = origSearch;
-      if (filterSelect) {
-        filterSelect.value = origFilter;
-        if (typeof currentProjectFilter !== 'undefined') currentProjectFilter = origFilter;
-        try { localStorage.setItem(LS_FILTER_PROJECT, origFilter); } catch (e) {}
-      }
-      // Re-render the DTR table with the original filter/search
-      if (typeof renderResults === 'function') renderResults();
-      // Apply aggregated hours to regHours and otHours, rounding to two decimals
-      regHours = {};
-      otHours = {};
-      Object.keys(regTotals).forEach(id => {
-        regHours[id] = +(regTotals[id]).toFixed(2);
-      });
-      Object.keys(otTotals).forEach(id => {
-        otHours[id] = +(otTotals[id]).toFixed(2);
-      });
-      // Ensure every employee has entries for reg and OT hours
-      Object.keys(storedEmployees || {}).forEach(id => {
-        if (!regHours.hasOwnProperty(id)) regHours[id] = 0;
-        if (!otHours.hasOwnProperty(id))  otHours[id]  = 0;
-      });
-      // Persist the hours to localStorage
-      try {
-        localStorage.setItem(LS_REG_HRS, JSON.stringify(regHours));
-        localStorage.setItem(LS_OT_HRS, JSON.stringify(otHours));
-      } catch (err) {}
-      // Rebuild the payroll table using the computed hours
-      if (typeof renderTable === 'function') renderTable();
-    } catch (err) {
-      console.warn('calculatePayrollFromResultsTable failed', err);
-    }
-  }
-
 weekStartEl.addEventListener('change', () => {
-  if (dtrStartEl) dtrStartEl.value = weekStartEl.value;
   adjustments = allAdjustments[periodKey()] || {};
   adjHrs = allAdjHrs[periodKey()] || {};
   bantay = allBantay[periodKey()] || {};
   try {
-    if (typeof calculatePayrollFromResultsTable === 'function') calculatePayrollFromResultsTable();
-    else if (typeof calculatePayrollFromRecords === 'function') calculatePayrollFromRecords();
+    if (typeof calculatePayrollFromRecords === 'function') calculatePayrollFromRecords();
   } catch (e) {}
   if (typeof renderTable === 'function') renderTable();
   if (typeof renderAdjustmentsTable === 'function') renderAdjustmentsTable();
   calculateAll();
 });
 weekEndEl.addEventListener('change', () => {
-  if (dtrEndEl) dtrEndEl.value = weekEndEl.value;
   adjustments = allAdjustments[periodKey()] || {};
   adjHrs = allAdjHrs[periodKey()] || {};
   bantay = allBantay[periodKey()] || {};
   try {
-    if (typeof calculatePayrollFromResultsTable === 'function') calculatePayrollFromResultsTable();
-    else if (typeof calculatePayrollFromRecords === 'function') calculatePayrollFromRecords();
+    if (typeof calculatePayrollFromRecords === 'function') calculatePayrollFromRecords();
   } catch (e) {}
   if (typeof renderTable === 'function') renderTable();
   if (typeof renderAdjustmentsTable === 'function') renderAdjustmentsTable();
   calculateAll();
-});
-if (dtrStartEl) {
-  dtrStartEl.addEventListener('change', () => {
-    weekStartEl.value = dtrStartEl.value;
-    // When editing the DTR date range directly, recompute payroll hours from the DTR table
-    try {
-      if (typeof calculatePayrollFromResultsTable === 'function') calculatePayrollFromResultsTable();
-      else if (typeof calculatePayrollFromRecords === 'function') calculatePayrollFromRecords();
-    } catch (e) {}
-  });
-}
-if (dtrEndEl) {
-  dtrEndEl.addEventListener('change', () => {
-    weekEndEl.value = dtrEndEl.value;
-    // When editing the DTR date range directly, recompute payroll hours from the DTR table
-    try {
-      if (typeof calculatePayrollFromResultsTable === 'function') calculatePayrollFromResultsTable();
-      else if (typeof calculatePayrollFromRecords === 'function') calculatePayrollFromRecords();
-    } catch (e) {}
-  });
-}
-
-tabs.tabPayroll.addEventListener('click', () => {
-  if (dtrStartEl && !weekStartEl.value) weekStartEl.value = dtrStartEl.value;
-  if (dtrEndEl && !weekEndEl.value) weekEndEl.value = dtrEndEl.value;
-  // Compute hours based on the current DTR table rather than recomputing from raw records
-  try {
-    if (typeof calculatePayrollFromResultsTable === 'function') calculatePayrollFromResultsTable();
-    else if (typeof calculatePayrollFromRecords === 'function') calculatePayrollFromRecords();
-  } catch (e) {}
 });
 function backupData() {
   const data = {};
@@ -9780,8 +9656,12 @@ function updateWeekInputs(snap) {
   // Refresh DTR list immediately
   try { if (typeof renderResults === 'function') { renderResults(); } } catch (e) {}
 
-  // Recalculate payroll if available, deriving hours from the DTR results table
-  try { if (typeof calculatePayrollFromResultsTable === 'function') { calculatePayrollFromResultsTable(); } else if (typeof calculatePayrollFromRecords === 'function') { calculatePayrollFromRecords(); } } catch (e) {}
+  // Recalculate payroll if available using the payroll period inputs
+  try {
+    if (typeof calculatePayrollFromRecords === 'function') {
+      calculatePayrollFromRecords();
+    }
+  } catch (e) {}
 
   // After updating the week range, toggle editing state based on whether the
   // selected period is locked. Without this, switching between periods would
