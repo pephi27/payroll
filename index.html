@@ -6996,6 +6996,21 @@ function renderResults(){
         }
         try { attachRowEvents && attachRowEvents(); } catch(_) {}
       }
+      try {
+        const addButtonsFn = (typeof addDtrDeleteButtons === 'function')
+          ? addDtrDeleteButtons
+          : (typeof window !== 'undefined' && typeof window.addDtrDeleteButtons === 'function'
+            ? window.addDtrDeleteButtons
+            : null);
+        if (addButtonsFn) addButtonsFn();
+      } catch (e) {}
+      try {
+        if (typeof checkAndToggleEditState === 'function') {
+          checkAndToggleEditState();
+        } else if (typeof window !== 'undefined' && typeof window.checkAndToggleEditState === 'function') {
+          window.checkAndToggleEditState();
+        }
+      } catch (e) {}
       return;
     }
   } catch (e) { console.warn('locked payroll render failed', e); }
@@ -7466,6 +7481,19 @@ let otMins = 0;
 
   // Show/hide download button
   document.getElementById('downloadCSV').style.display = _rowCount ? 'inline-block' : 'none';
+  const __addButtonsFn = (typeof addDtrDeleteButtons === 'function')
+    ? addDtrDeleteButtons
+    : (typeof window !== 'undefined' && typeof window.addDtrDeleteButtons === 'function'
+      ? window.addDtrDeleteButtons
+      : null);
+  if (__addButtonsFn) {
+    try { __addButtonsFn(); } catch (e) {}
+  }
+  if (typeof checkAndToggleEditState === 'function') {
+    checkAndToggleEditState();
+  } else if (typeof window !== 'undefined' && typeof window.checkAndToggleEditState === 'function') {
+    try { window.checkAndToggleEditState(); } catch (e) {}
+  }
   // --- DTR Summary ---
   // After building the table, update the summary using accumulated totals
   (function(){
@@ -8189,32 +8217,12 @@ function restoreData(file) {
       tr.appendChild(td);
     });
   }
-  function patchRenderResults(){
-    if(typeof renderResults !== 'function') return false;
-    const original = renderResults;
-    window.renderResults = function(){
-      const res = original.apply(this, arguments);
-      try { addDtrDeleteButtons(); } catch(e){}
-      // After rendering results, always check whether the selected payroll period is
-      // locked and toggle editing accordingly. This ensures that dynamic
-      // controls inserted by renderResults() respect the current lock state.
-      try {
-        if (typeof checkAndToggleEditState === 'function') {
-          checkAndToggleEditState();
-        }
-      } catch(e) {}
-      return res;
-    };
-    try { addDtrDeleteButtons(); } catch(e){}
-    return true;
-  }
+  window.addDtrDeleteButtons = addDtrDeleteButtons;
   function init(){
     wireManualDTR();
-    if(!patchRenderResults()){
-      const iv = setInterval(() => {
-        if(patchRenderResults()) clearInterval(iv);
-      }, 200);
-      setTimeout(() => clearInterval(iv), 6000);
+    addDtrDeleteButtons();
+    if (typeof window.checkAndToggleEditState === 'function') {
+      try { window.checkAndToggleEditState(); } catch (e) {}
     }
   }
   if(document.readyState === 'loading'){
