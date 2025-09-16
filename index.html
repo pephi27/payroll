@@ -9275,11 +9275,22 @@ function loadSaved(){
   }
 
   function withinRange(dateStr, from, to){
-    if (!dateStr) return false;
-    const s = dateStr.trim();
-    if (!s) return false;
-    if (from && s < from) return false;
-    if (to   && s > to)   return false;
+    const toMidnightTimestamp = (value) => {
+      if (!value) return null;
+      const date = new Date(value);
+      if (Number.isNaN(date.getTime())) return null;
+      date.setHours(0, 0, 0, 0);
+      return date.getTime();
+    };
+
+    const targetTime = toMidnightTimestamp(dateStr);
+    if (targetTime === null) return false;
+
+    const fromTime = toMidnightTimestamp(from);
+    const toTime = toMidnightTimestamp(to);
+
+    if (fromTime !== null && targetTime < fromTime) return false;
+    if (toTime !== null && targetTime > toTime) return false;
     return true;
   }
 
@@ -9291,13 +9302,17 @@ function loadSaved(){
 
     const tbody = document.querySelector('#resultsTable tbody');
     if (!tbody) return;
-    const hasRange = !!(f || t);
+    const fromDate = f ? new Date(f) : null;
+    const toDate = t ? new Date(t) : null;
+    const validFrom = (fromDate && !Number.isNaN(fromDate.getTime())) ? fromDate : null;
+    const validTo = (toDate && !Number.isNaN(toDate.getTime())) ? toDate : null;
+    const hasRange = !!(validFrom || validTo);
 
     Array.from(tbody.rows).forEach(tr=>{
       // Adjust the index below if your Date column index is different.
       // Assuming the "Date" column is 4 (0-based), change as necessary.
       const dateStr = (tr.cells[4]?.textContent || '').trim();
-      const show = !hasRange || withinRange(dateStr, f, t);
+      const show = !hasRange || withinRange(dateStr, validFrom, validTo);
       tr.style.display = show ? '' : 'none';
     });
 
