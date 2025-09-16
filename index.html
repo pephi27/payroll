@@ -6558,8 +6558,11 @@ function __fmt12Clock(hhmm){
   renderScheduleSelector();
   renderProjectFilterOptions();
 
-  const startDate = document.getElementById('weekStart').value || null;
-  const endDate = document.getElementById('weekEnd').value || null;
+  // Respect DTR tab's Date filter when present; fall back to active week.
+  const __df = document.getElementById('dtrDateFrom');
+  const __dt = document.getElementById('dtrDateTo');
+  const startDate = (__df && __df.value) ? __df.value : (document.getElementById('weekStart').value || null);
+  const endDate   = (__dt && __dt.value) ? __dt.value : (document.getElementById('weekEnd').value || null);
   currentProjectFilter = document.getElementById('filterProject') ? document.getElementById('filterProject').value : 'all';
   localStorage.setItem(LS_FILTER_PROJECT, currentProjectFilter);
 
@@ -7409,12 +7412,21 @@ function calculatePayrollFromRecords(){
       const filterSelect = document.getElementById('filterProject');
       const origSearch = searchInput ? searchInput.value : '';
       const origFilter = filterSelect ? filterSelect.value : '';
+      // Save current DTR date inputs (so we can restore after aggregation)
+      const dtrStartElTmp = document.getElementById('filterStart') || document.getElementById('dtrDateFrom');
+      const dtrEndElTmp   = document.getElementById('filterEnd')   || document.getElementById('dtrDateTo');
+      const origFrom = dtrStartElTmp ? dtrStartElTmp.value : '';
+      const origTo   = dtrEndElTmp   ? dtrEndElTmp.value   : '';
+      // Preserve original LS project filter to fully restore later
+      let __savedLSFilter = null;
+      try { __savedLSFilter = localStorage.getItem(LS_FILTER_PROJECT); } catch(_) {}
       // Clear name search and select all projects
       if (searchInput) searchInput.value = '';
       if (filterSelect) {
         filterSelect.value = 'all';
         // Persist the filter state so renderResults respects it
         if (typeof currentProjectFilter !== 'undefined') currentProjectFilter = 'all';
+        // Do not permanently persist this temporary change; we will restore later.
         try { localStorage.setItem(LS_FILTER_PROJECT, 'all'); } catch (e) {}
       }
       // Sync the DTR date range with the payroll period.  Update the
@@ -7448,9 +7460,18 @@ function calculatePayrollFromRecords(){
       if (filterSelect) {
         filterSelect.value = origFilter;
         if (typeof currentProjectFilter !== 'undefined') currentProjectFilter = origFilter;
-        try { localStorage.setItem(LS_FILTER_PROJECT, origFilter); } catch (e) {}
+        // Restore original LS filter value exactly as it was
+        try {
+          if (__savedLSFilter !== null && __savedLSFilter !== undefined) localStorage.setItem(LS_FILTER_PROJECT, __savedLSFilter);
+          else localStorage.removeItem(LS_FILTER_PROJECT);
+        } catch (e) {}
       }
-      // Re-render the DTR table with the original filter/search
+      // Restore DTR date range values to what the user had prior to aggregation
+      try {
+        if (dtrStartElTmp) dtrStartElTmp.value = origFrom;
+        if (dtrEndElTmp)   dtrEndElTmp.value   = origTo;
+      } catch(_) {}
+      // Re-render the DTR table with the original filter/search and date range
       if (typeof renderResults === 'function') renderResults();
       // Apply aggregated hours to regHours and otHours, rounding to two decimals
       regHours = {};
@@ -7729,8 +7750,6 @@ function restoreData(file) {
       tr.appendChild(td);
     });
   }
-  window.ensureActionsHeader = ensureActionsHeader;
-  window.addDtrDeleteButtons = addDtrDeleteButtons;
   function patchRenderResults(){
     if(typeof renderResults !== 'function') return false;
     const original = renderResults;
@@ -10396,8 +10415,6 @@ document.addEventListener('DOMContentLoaded', async function () {
   function afterRender(){
     applyOverridesToTable();
     addDtrEditorButtons();
-    if (typeof window.ensureActionsHeader === 'function') window.ensureActionsHeader();
-    if (typeof window.addDtrDeleteButtons === 'function') window.addDtrDeleteButtons();
     recomputeDtrSummaryFromTable();
   }
 
