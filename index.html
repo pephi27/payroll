@@ -1932,6 +1932,15 @@ window.addEventListener('load', dashReports);
       </label>
       <div style="flex:1 1 auto">
       </div>
+      <div class="lock-controls" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end;">
+       <span class="note" id="lockStatus" style="min-width:160px;display:inline-block"></span>
+       <button class="primary" id="lockPeriodBtn" type="button">
+        Lock Period
+       </button>
+       <button class="danger" id="unlockPeriodBtn" style="display:none" type="button">
+        Unlock
+       </button>
+      </div>
       <button class="primary" id="downloadPayrollCSV">
        Download Payroll CSV
       </button>
@@ -3967,111 +3976,48 @@ document.addEventListener('DOMContentLoaded', () => {
    * centralizes the logic so both global and per-row lock actions can reuse
    * it. Date range controls and Generate/Lock buttons are also disabled.
    */
+  function markLockDisabled(el) {
+    if (!el || el.disabled) return;
+    try {
+      el.dataset.lockDisabled = '1';
+    } catch (_) {}
+    el.disabled = true;
+  }
+
+  function clearLockDisabled(el) {
+    if (!el) return;
+    if (el.dataset && el.dataset.lockDisabled) {
+      el.disabled = false;
+      try { delete el.dataset.lockDisabled; } catch (_) {}
+    }
+  }
+
   function disablePayrollInputs() {
-    // Disable all editable fields in the payroll table
-    document.querySelectorAll('#payrollTable input').forEach(inp => {
-      inp.disabled = true;
+    const allowButtons = new Set(['downloadPayrollCSV','printPayrollBtn','printAllPayslipsBtn','lockPeriodBtn','unlockPeriodBtn','r_print','r_csv','downloadProjectTotalsCSV','exportSss','exportDeductionsCSV']);
+    document.querySelectorAll('#panelPayroll button').forEach(btn => {
+      if (allowButtons.has(btn.id) || btn.classList.contains('payslipBtn')) return;
+      markLockDisabled(btn);
     });
-    // Disable DTR inputs, buttons and selects (manual DTR, delete buttons, filters, etc.)
-    document.querySelectorAll('#panelMain input, #panelMain button, #panelMain select').forEach(el => {
-      el.disabled = true;
-    });
-    // Additionally disable key DTR controls explicitly by ID. While the generic selector above
-    // should catch most elements, some dynamically inserted controls (or those outside
-    // #panelMain) may escape. Explicitly disabling them ensures search fields, date filters,
-    // project dropdowns and import/export buttons cannot be used once locked. These IDs
-    // correspond to the manual DTR workflow and DTR filtering controls.
-    ['dtrSearchName','dtrDateFrom','dtrDateTo','dtrDateClear','filterProject','downloadCSV','fileInput','manualDtrBtn','printDtrBtn','clearData','dtrDateRangeFrom','dtrDateRangeTo'].forEach(id => {
-      const el = document.getElementById(id);
-      if (el) el.disabled = true;
-    });
-    // Disable all select elements within the results table (project and schedule selectors)
-    document.querySelectorAll('#resultsTable select').forEach(sel => {
-      sel.disabled = true;
-    });
-    // Disable any DTR delete buttons that may have been added
-    document.querySelectorAll('.dtr-del-btn').forEach(btn => {
-      btn.disabled = true;
+    document.querySelectorAll('#panelPayroll input, #panelPayroll select, #panelPayroll textarea').forEach(el => {
+      if (el.closest('.lock-controls')) return;
+      if (el.id === 'lockPeriodBtn' || el.id === 'unlockPeriodBtn') return;
+      markLockDisabled(el);
     });
 
-    // Add a locked class to the DTR panel to disable pointer events. This is a
-    // visual and functional safeguard for cases where individual inputs might
-    // get re-enabled by other scripts. The CSS defined above ensures
-    // #panelMain.locked blocks all interaction with its contents.
-    const pm = document.getElementById('panelMain');
-    if (pm) pm.classList.add('locked');
-    // Also disable inputs and buttons within the manual DTR modal if it exists. The modal is not
-    // nested under #panelMain, so we need to explicitly target it. Without this, users could
-    // potentially enter a manual record even after locking by using the modal fields directly.
-    document.querySelectorAll('#manualDtrModal input, #manualDtrModal button, #manualDtrModal select').forEach(el => {
-      el.disabled = true;
+    const allowDtrIds = new Set(['dtrSearchName','dtrDateFrom','dtrDateTo','dtrDateClear','filterProject','downloadCSV','printDtrBtn']);
+    document.querySelectorAll('#panelMain input, #panelMain select, #panelMain button, #panelMain textarea').forEach(el => {
+      if (allowDtrIds.has(el.id)) return;
+      if (el.closest('.results-wrapper')) { markLockDisabled(el); return; }
+      markLockDisabled(el);
     });
-    // Disable dashboard date range inputs and action buttons
-    const ws = document.getElementById('weekStart');
-    const we = document.getElementById('weekEnd');
-    const genBtn = document.getElementById('dashGenerate');
-    const lockBtn = document.getElementById('dashLock');
-    if (ws) ws.disabled = true;
-    if (we) we.disabled = true;
-    if (genBtn) genBtn.disabled = true;
-    if (lockBtn) lockBtn.disabled = true;
+    document.querySelectorAll('#resultsTable select, #resultsTable button').forEach(markLockDisabled);
+    document.querySelectorAll('#manualDtrModal input, #manualDtrModal select, #manualDtrModal button, #manualDtrModal textarea').forEach(markLockDisabled);
   }
-  // Expose helper globally so other scripts can disable editing
   window.disablePayrollInputs = disablePayrollInputs;
 
-  /**
-   * Re-enable payroll and DTR editing across the application. This should be
-   * called when the user changes the date range after locking, or when a
-   * snapshot is unlocked. It resets disabled fields and action buttons.
-   */
   function enablePayrollInputs() {
-    // Re-enable payroll table inputs
-    document.querySelectorAll('#payrollTable input').forEach(inp => {
-      inp.disabled = false;
-    });
-    // Re-enable DTR inputs, buttons and selects
-    document.querySelectorAll('#panelMain input, #panelMain button, #panelMain select').forEach(el => {
-      el.disabled = false;
-    });
-    // Re-enable specific DTR controls by ID that were explicitly disabled in
-    // disablePayrollInputs(). This ensures search, date filters, project filter,
-    // and import/export controls become usable again when the payroll is unlocked
-    // or the date range is changed.
-    ['dtrSearchName','dtrDateFrom','dtrDateTo','dtrDateClear','filterProject','downloadCSV','fileInput','manualDtrBtn','printDtrBtn','clearData','dtrDateRangeFrom','dtrDateRangeTo'].forEach(id => {
-      const el = document.getElementById(id);
-      if (el) el.disabled = false;
-    });
-    // Re-enable selects in the results table (project and schedule selectors)
-    document.querySelectorAll('#resultsTable select').forEach(sel => {
-      sel.disabled = false;
-    });
-    // Re-enable any DTR delete buttons
-    document.querySelectorAll('.dtr-del-btn').forEach(btn => {
-      btn.disabled = false;
-    });
-
-    // Remove the locked class from the DTR panel so pointer events and
-    // interaction are restored. When the user switches to an unlocked period or
-    // explicitly unlocks a snapshot, this class must be removed.
-    const pm = document.getElementById('panelMain');
-    if (pm) pm.classList.remove('locked');
-    // Re-enable manual DTR modal fields and buttons. When a payroll is unlocked or the date
-    // range changes, users should be able to enter manual DTR entries again. This undoes the
-    // disablement applied in disablePayrollInputs().
-    document.querySelectorAll('#manualDtrModal input, #manualDtrModal button, #manualDtrModal select').forEach(el => {
-      el.disabled = false;
-    });
-    // Re-enable dashboard date range and action buttons
-    const ws = document.getElementById('weekStart');
-    const we = document.getElementById('weekEnd');
-    const genBtn = document.getElementById('dashGenerate');
-    const lockBtn = document.getElementById('dashLock');
-    if (ws) ws.disabled = false;
-    if (we) we.disabled = false;
-    if (genBtn) genBtn.disabled = false;
-    if (lockBtn) lockBtn.disabled = false;
+    document.querySelectorAll('[data-lock-disabled="1"]').forEach(clearLockDisabled);
   }
-  // Expose helper globally so other scripts can enable editing
   window.enablePayrollInputs = enablePayrollInputs;
 
   /**
@@ -11119,6 +11065,469 @@ document.addEventListener('DOMContentLoaded', async function () {
     var _origCA = window.calculateAll;
     window.calculateAll = function(){ var r = _origCA.apply(this, arguments); try{ rebuildDtrFooter(); }catch(e){} return r; };
   }
+})();
+</script>
+<script>
+(function(){
+  const LOCK_KEY = 'lock:periods';
+  const SNAP_PREFIX = {
+    dtr: 'snap:dtr:',
+    payroll: 'snap:payroll:',
+    reports: 'snap:reports:'
+  };
+  let lockMap = null;
+  let currentSnapshot = null;
+  let ensureSeq = 0;
+
+  function toPeriodId(){
+    try {
+      if (typeof periodKey === 'function') {
+        const k = periodKey();
+        if (k) return k;
+      }
+    } catch (_) {}
+    const ws = document.getElementById('weekStart');
+    const we = document.getElementById('weekEnd');
+    const start = ws && ws.value ? ws.value : '';
+    const end = we && we.value ? we.value : '';
+    return (start || '') + '_' + (end || '');
+  }
+
+  function parseNum(val){
+    const n = parseFloat(String(val || '').replace(/[^0-9.\-]/g, ''));
+    return isNaN(n) ? 0 : n;
+  }
+
+  function formatNum(val){
+    const n = Number(val) || 0;
+    return n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  }
+
+  function toDayValue(str){
+    if (!str) return NaN;
+    const d = new Date(str);
+    if (!isNaN(d)) return d.setHours(0, 0, 0, 0);
+    return NaN;
+  }
+
+  async function readKey(key){
+    let value;
+    if (typeof readKV === 'function') {
+      try { value = await readKV(key, undefined); } catch (_) { value = undefined; }
+    }
+    if (value !== undefined && value !== null) return value;
+    try {
+      const raw = localStorage.getItem(key);
+      if (raw != null) return JSON.parse(raw);
+    } catch (_) {}
+    return null;
+  }
+
+  async function writeKey(key, value){
+    if (typeof writeKV === 'function') {
+      try { await writeKV(key, value); return; } catch (_) {}
+    }
+    try { localStorage.setItem(key, JSON.stringify(value)); } catch (_) {}
+  }
+
+  async function loadLockMap(){
+    if (lockMap) return lockMap;
+    let data = null;
+    if (typeof readKV === 'function') {
+      try { data = await readKV(LOCK_KEY, null); } catch (_) { data = null; }
+    }
+    if (!data || typeof data !== 'object' || Array.isArray(data)) {
+      try { data = JSON.parse(localStorage.getItem(LOCK_KEY) || '{}'); } catch (_) { data = {}; }
+    }
+    lockMap = data && typeof data === 'object' && !Array.isArray(data) ? data : {};
+    return lockMap;
+  }
+
+  async function saveLockMap(map){
+    lockMap = map;
+    await writeKey(LOCK_KEY, map);
+  }
+
+  function updateLockStatus(info){
+    const statusEl = document.getElementById('lockStatus');
+    const lockBtn = document.getElementById('lockPeriodBtn');
+    const unlockBtn = document.getElementById('unlockPeriodBtn');
+    if (info) {
+      if (statusEl) statusEl.textContent = 'Locked ' + (info.lockedAt ? new Date(info.lockedAt).toLocaleString() : '');
+      if (lockBtn) { lockBtn.style.display = 'none'; lockBtn.disabled = true; }
+      if (unlockBtn) { unlockBtn.style.display = ''; unlockBtn.disabled = false; }
+    } else {
+      if (statusEl) statusEl.textContent = 'Unlocked';
+      if (lockBtn) { lockBtn.style.display = ''; lockBtn.disabled = false; }
+      if (unlockBtn) { unlockBtn.style.display = 'none'; unlockBtn.disabled = true; }
+    }
+  }
+
+  function captureDtrSnapshot(){
+    const table = document.getElementById('resultsTable');
+    if (!table) return { rows: [], summary: '' };
+    const body = table.tBodies && table.tBodies[0];
+    const rows = [];
+    if (body) {
+      Array.from(body.rows || []).forEach(tr => {
+        const cells = tr.cells || [];
+        if (!cells.length) return;
+        const projectCell = cells[2];
+        const schedCell = cells[3];
+        const projectSelect = projectCell ? projectCell.querySelector('select') : null;
+        const scheduleSelect = schedCell ? schedCell.querySelector('select') : null;
+        const projectLabel = projectSelect ? (projectSelect.options[projectSelect.selectedIndex] ? projectSelect.options[projectSelect.selectedIndex].textContent.trim() : '') : (projectCell ? projectCell.textContent.trim() : '');
+        const projectValue = projectSelect ? projectSelect.value : projectLabel;
+        const nameCell = cells[1];
+        let nameText = '';
+        if (nameCell) {
+          const clone = nameCell.cloneNode(true);
+          const markers = clone.querySelectorAll('.manual-indicator');
+          markers.forEach(m => m.parentNode.removeChild(m));
+          nameText = clone.textContent.trim();
+        }
+        const rowObj = {
+          html: tr.outerHTML,
+          meta: {
+            id: cells[0] ? cells[0].textContent.trim() : '',
+            name: nameText || (nameCell ? nameCell.textContent.trim() : ''),
+            projectValue: projectValue,
+            projectLabel: projectLabel,
+            schedule: scheduleSelect ? scheduleSelect.value : (schedCell ? schedCell.textContent.trim() : ''),
+            date: cells[4] ? cells[4].textContent.trim() : '',
+            regHours: parseNum(cells[11] ? cells[11].textContent : ''),
+            otHours: parseNum(cells[12] ? cells[12].textContent : ''),
+            totalHours: parseNum(cells[13] ? cells[13].textContent : '')
+          }
+        };
+        if (!rowObj.meta.totalHours) rowObj.meta.totalHours = rowObj.meta.regHours + rowObj.meta.otHours;
+        rows.push(rowObj);
+      });
+    }
+    const summaryEl = document.getElementById('dtrSummary');
+    const summary = summaryEl ? summaryEl.textContent || '' : '';
+    return { rows, summary };
+  }
+
+  function getFilterValues(){
+    const search = (document.getElementById('dtrSearchName') && document.getElementById('dtrSearchName').value || '').trim().toLowerCase();
+    const project = document.getElementById('filterProject') ? document.getElementById('filterProject').value : '';
+    const from = document.getElementById('dtrDateFrom') ? document.getElementById('dtrDateFrom').value : '';
+    const to = document.getElementById('dtrDateTo') ? document.getElementById('dtrDateTo').value : '';
+    return { search, project, from, to };
+  }
+
+  function matchesRow(meta, filters){
+    if (!meta) return false;
+    if (filters.search) {
+      const n = (meta.name || '').toLowerCase();
+      const id = (meta.id || '').toLowerCase();
+      if (!n.includes(filters.search) && !id.includes(filters.search)) return false;
+    }
+    if (filters.project && filters.project !== 'all' && filters.project !== '') {
+      const proj = meta.projectValue || meta.projectLabel || '';
+      if (String(proj) !== String(filters.project) && String(meta.projectLabel || '').toLowerCase() !== String(filters.project || '').toLowerCase()) return false;
+    }
+    const fromVal = toDayValue(filters.from);
+    if (!isNaN(fromVal)) {
+      const rowVal = toDayValue(meta.date);
+      if (!isNaN(rowVal) && rowVal < fromVal) return false;
+    }
+    const toVal = toDayValue(filters.to);
+    if (!isNaN(toVal)) {
+      const rowVal = toDayValue(meta.date);
+      if (!isNaN(rowVal) && rowVal > toVal) return false;
+    }
+    return true;
+  }
+
+  function renderDtrSnapshot(snapshot){
+    const table = document.getElementById('resultsTable');
+    if (!table) return;
+    const body = table.tBodies && table.tBodies[0];
+    if (!body) return;
+    const rows = snapshot && Array.isArray(snapshot.rows) ? snapshot.rows : [];
+    const filters = getFilterValues();
+    const filtered = rows.filter(r => matchesRow(r.meta, filters));
+    body.innerHTML = filtered.map(r => r.html).join('');
+    Array.from(body.querySelectorAll('input, select, textarea, button')).forEach(el => {
+      try {
+        if (!el.disabled) {
+          el.dataset.lockDisabled = '1';
+          el.disabled = true;
+        }
+      } catch (_) { el.disabled = true; }
+    });
+    const downloadBtn = document.getElementById('downloadCSV');
+    if (downloadBtn) downloadBtn.style.display = filtered.length ? 'inline-block' : 'none';
+    const summaryEl = document.getElementById('dtrSummary');
+    if (summaryEl) {
+      if (!filtered.length) {
+        summaryEl.textContent = '';
+      } else {
+        let reg = 0;
+        let ot = 0;
+        let total = 0;
+        const seen = new Set();
+        filtered.forEach(row => {
+          const meta = row.meta || {};
+          reg += Number(meta.regHours || 0);
+          ot += Number(meta.otHours || 0);
+          total += Number(meta.totalHours || (meta.regHours || 0) + (meta.otHours || 0));
+          if (meta.id) seen.add(meta.id);
+        });
+        summaryEl.textContent = 'Grand Total Hours: ' + formatNum(total) +
+          ' | Regular Hours: ' + formatNum(reg) +
+          ' | OT Hours: ' + formatNum(ot) +
+          ' | Employees: ' + seen.size;
+      }
+    }
+    try { if (typeof rebuildDtrFooter === 'function') rebuildDtrFooter(); } catch (_) {}
+  }
+
+  function capturePayrollSnapshot(){
+    const table = document.getElementById('payrollTable');
+    if (!table) return { tbody: '', tfoot: '' };
+    const body = table.tBodies && table.tBodies[0];
+    const foot = table.tFoot;
+    return {
+      tbody: body ? body.innerHTML : '',
+      tfoot: foot ? foot.innerHTML : ''
+    };
+  }
+
+  function renderPayrollSnapshot(snapshot){
+    const table = document.getElementById('payrollTable');
+    if (!table) return;
+    const body = table.tBodies && table.tBodies[0];
+    const foot = table.tFoot;
+    if (body && snapshot && typeof snapshot.tbody === 'string') body.innerHTML = snapshot.tbody;
+    if (foot && snapshot && typeof snapshot.tfoot === 'string') foot.innerHTML = snapshot.tfoot;
+    if (body) {
+      Array.from(body.querySelectorAll('input, select, textarea')).forEach(el => {
+        try {
+          if (!el.disabled) {
+            el.dataset.lockDisabled = '1';
+            el.disabled = true;
+          }
+        } catch (_) { el.disabled = true; }
+      });
+    }
+  }
+
+  function captureReportsSnapshot(){
+    const tbl = document.getElementById('r_table');
+    const proj = document.getElementById('projectTotalsTable');
+    return {
+      rTable: tbl ? tbl.innerHTML : '',
+      projectTotals: proj ? proj.innerHTML : ''
+    };
+  }
+
+  function renderReportsSnapshot(snapshot){
+    const tbl = document.getElementById('r_table');
+    if (tbl && snapshot && typeof snapshot.rTable === 'string') tbl.innerHTML = snapshot.rTable;
+    const proj = document.getElementById('projectTotalsTable');
+    if (proj && snapshot && typeof snapshot.projectTotals === 'string') proj.innerHTML = snapshot.projectTotals;
+  }
+
+  async function hashString(str){
+    if (window.crypto && crypto.subtle && typeof TextEncoder !== 'undefined') {
+      try {
+        const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(str));
+        return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('');
+      } catch (_) {}
+    }
+    let hash = 0;
+    for (let i = 0; i < str.length; i++) {
+      hash = ((hash << 5) - hash) + str.charCodeAt(i);
+      hash |= 0;
+    }
+    return 'fallback-' + (hash >>> 0).toString(16);
+  }
+
+  async function captureSnapshots(periodId){
+    const dtr = captureDtrSnapshot();
+    const payroll = capturePayrollSnapshot();
+    const reports = captureReportsSnapshot();
+    const hash = await hashString(JSON.stringify({ dtr, payroll, reports }) || '');
+    return { dtr, payroll, reports, hash };
+  }
+
+  async function readSnapshots(periodId){
+    const [dtr, payroll, reports] = await Promise.all([
+      readKey(SNAP_PREFIX.dtr + periodId),
+      readKey(SNAP_PREFIX.payroll + periodId),
+      readKey(SNAP_PREFIX.reports + periodId)
+    ]);
+    return { dtr, payroll, reports };
+  }
+
+  function applySnapshot(){
+    if (!currentSnapshot) return;
+    renderDtrSnapshot(currentSnapshot.dtr || { rows: [], summary: '' });
+    renderPayrollSnapshot(currentSnapshot.payroll || { tbody: '', tfoot: '' });
+    renderReportsSnapshot(currentSnapshot.reports || { rTable: '', projectTotals: '' });
+    if (typeof disablePayrollInputs === 'function') disablePayrollInputs();
+    updateLockStatus(currentSnapshot.info || null);
+  }
+
+  function clearSnapshot(){
+    currentSnapshot = null;
+    updateLockStatus(null);
+    if (typeof enablePayrollInputs === 'function') enablePayrollInputs();
+  }
+
+  async function ensureSnapshot(){
+    const seq = ++ensureSeq;
+    await loadLockMap();
+    if (seq !== ensureSeq) return;
+    const periodId = toPeriodId();
+    if (!periodId) {
+      if (seq === ensureSeq) clearSnapshot();
+      return;
+    }
+    const info = lockMap ? lockMap[periodId] : null;
+    if (info) {
+      const snaps = await readSnapshots(periodId);
+      if (seq !== ensureSeq) return;
+      currentSnapshot = {
+        periodId,
+        info,
+        dtr: snaps.dtr || { rows: [], summary: '' },
+        payroll: snaps.payroll || { tbody: '', tfoot: '' },
+        reports: snaps.reports || { rTable: '', projectTotals: '' }
+      };
+      applySnapshot();
+    } else if (seq === ensureSeq) {
+      clearSnapshot();
+    }
+  }
+
+  async function lockPeriod(){
+    const periodId = toPeriodId();
+    if (!periodId || periodId === '_') {
+      alert('Set Week Start and Week End before locking.');
+      return;
+    }
+    const snaps = await captureSnapshots(periodId);
+    await Promise.all([
+      writeKey(SNAP_PREFIX.dtr + periodId, snaps.dtr),
+      writeKey(SNAP_PREFIX.payroll + periodId, snaps.payroll),
+      writeKey(SNAP_PREFIX.reports + periodId, snaps.reports)
+    ]);
+    const map = await loadLockMap();
+    map[periodId] = { lockedAt: new Date().toISOString(), sha256: snaps.hash };
+    await saveLockMap(map);
+    currentSnapshot = { periodId, info: map[periodId], dtr: snaps.dtr, payroll: snaps.payroll, reports: snaps.reports };
+    applySnapshot();
+  }
+
+  async function unlockPeriod(){
+    const periodId = toPeriodId();
+    const map = await loadLockMap();
+    if (periodId && map && map[periodId]) {
+      delete map[periodId];
+      await saveLockMap(map);
+    }
+    clearSnapshot();
+    if (typeof renderResults === 'function') { try { renderResults(); } catch (_) {} }
+    if (typeof renderTable === 'function') { try { renderTable(); } catch (_) {} }
+    if (typeof calculatePayrollFromResultsTable === 'function') { try { calculatePayrollFromResultsTable(); } catch (_) {} }
+    else if (typeof calculatePayrollFromRecords === 'function') { try { calculatePayrollFromRecords(); } catch (_) {} }
+    if (typeof calculateAll === 'function') { try { calculateAll(); } catch (_) {} }
+    if (typeof window.rebuildReports === 'function') { try { window.rebuildReports(); } catch (_) {} }
+  }
+
+  function wrapFunction(name, handler){
+    const orig = window[name];
+    if (typeof orig !== 'function') return;
+    if (orig.__lockWrapped) return;
+    const wrapped = function(){
+      const args = Array.from(arguments);
+      if (currentSnapshot && currentSnapshot.info) {
+        return handler(orig, this, args);
+      }
+      return orig.apply(this, args);
+    };
+    wrapped.__lockWrapped = true;
+    window[name] = wrapped;
+  }
+
+  function setupWrappers(){
+    wrapFunction('renderResults', function(orig, ctx, args){
+      if (currentSnapshot && currentSnapshot.dtr) {
+        renderDtrSnapshot(currentSnapshot.dtr);
+        return;
+      }
+      return orig.apply(ctx, args);
+    });
+    wrapFunction('calculateAll', function(){ return; });
+    wrapFunction('calculatePayrollFromResultsTable', function(){ return; });
+    wrapFunction('calculatePayrollFromRecords', function(){ return; });
+    wrapFunction('renderTable', function(orig, ctx, args){
+      if (currentSnapshot && currentSnapshot.payroll) {
+        renderPayrollSnapshot(currentSnapshot.payroll);
+        return;
+      }
+      return orig.apply(ctx, args);
+    });
+    wrapFunction('rebuildReports', function(orig, ctx, args){
+      if (currentSnapshot && currentSnapshot.reports) {
+        renderReportsSnapshot(currentSnapshot.reports);
+        return;
+      }
+      return orig.apply(ctx, args);
+    });
+  }
+
+  function setupListeners(){
+    const lockBtn = document.getElementById('lockPeriodBtn');
+    if (lockBtn && !lockBtn.__lockHandler) {
+      lockBtn.__lockHandler = true;
+      lockBtn.addEventListener('click', () => { lockPeriod().catch(err => console.warn('Lock failed', err)); });
+    }
+    const unlockBtn = document.getElementById('unlockPeriodBtn');
+    if (unlockBtn && !unlockBtn.__lockHandler) {
+      unlockBtn.__lockHandler = true;
+      unlockBtn.addEventListener('click', () => { unlockPeriod().catch(err => console.warn('Unlock failed', err)); });
+    }
+    ['weekStart','weekEnd'].forEach(id => {
+      const el = document.getElementById(id);
+      if (el && !el.__lockWatcher) {
+        el.__lockWatcher = true;
+        el.addEventListener('change', () => { ensureSnapshot().catch(err => console.warn('Lock state check failed', err)); });
+      }
+    });
+    window.addEventListener('kv-hydrated', () => { ensureSnapshot().catch(() => {}); });
+  }
+
+  document.addEventListener('DOMContentLoaded', () => {
+    loadLockMap().then(() => {
+      setupWrappers();
+      setupListeners();
+      ensureSnapshot();
+    }).catch(() => {
+      setupWrappers();
+      setupListeners();
+      ensureSnapshot();
+    });
+  });
+
+  const prevIsLocked = window.isSelectedPeriodLocked;
+  window.isSelectedPeriodLocked = function(){
+    const periodId = toPeriodId();
+    if (lockMap && periodId && lockMap[periodId]) return true;
+    if (typeof prevIsLocked === 'function') {
+      try { return prevIsLocked(); } catch (_) {}
+    }
+    return false;
+  };
+
+  window.__payrollLock = {
+    isLocked: () => !!(currentSnapshot && currentSnapshot.info),
+    refresh: () => ensureSnapshot()
+  };
 })();
 </script>
 </body>
