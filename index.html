@@ -11281,7 +11281,24 @@ document.addEventListener('DOMContentLoaded', async function () {
     await renderFromSnapshots();
     try { setPayrollLockedUI(true); } catch{}
   }
-  async function unlockPeriod(){ /* no-op for snapshots; UI will recompute naturally */ try { setPayrollLockedUI(false); } catch{} }
+  function refreshUnlockedViews(){
+    try { if (typeof window.renderResults === 'function') window.renderResults(); } catch{}
+    try {
+      if (typeof window.calculatePayrollFromResultsTable === 'function') window.calculatePayrollFromResultsTable();
+      else if (typeof window.calculatePayrollFromRecords === 'function') window.calculatePayrollFromRecords();
+    } catch{}
+    try { if (typeof window.renderTable === 'function') window.renderTable(); } catch{}
+    try { if (typeof window.renderAdjustmentsTable === 'function') window.renderAdjustmentsTable(); } catch{}
+    try { if (typeof window.calculateAll === 'function') window.calculateAll(); } catch{}
+    try {
+      if (typeof window.rebuildReports === 'function') window.rebuildReports();
+      else if (typeof window.renderProjectTotals === 'function') window.renderProjectTotals();
+    } catch{}
+  }
+  async function unlockPeriod(){
+    try { setPayrollLockedUI(false); } catch{}
+    try { refreshUnlockedViews(); } catch{}
+  }
 
   function guard(name){
     try {
@@ -11298,7 +11315,7 @@ document.addEventListener('DOMContentLoaded', async function () {
       const t = ev.target;
       if (!t) return;
       if (t.closest && t.closest('#activePayrollTable') && t.classList && t.classList.contains('lockActive')){ setTimeout(lockPeriod, 0); }
-      if (t.classList && t.classList.contains('unlockSnapshot')){ setTimeout(unlockPeriod, 0); setTimeout(function(){ if (!isLocked()) renderFromSnapshots(); }, 100); }
+      if (t.classList && t.classList.contains('unlockSnapshot')){ setTimeout(unlockPeriod, 0); }
     }, true);
     // On load, if selected period is locked, render snapshots immediately
     try { if (isLocked()) { renderFromSnapshots(); setPayrollLockedUI(true);} else { setPayrollLockedUI(false);} } catch{}
