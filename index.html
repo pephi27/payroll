@@ -11868,95 +11868,6 @@ document.addEventListener('DOMContentLoaded', async function () {
     return false;
   }
 
-  function collectFooterSnapshot(id){
-    const foot = document.querySelector('#' + id + ' tfoot');
-    if (!foot) return null;
-    const data = {};
-    let hasData = false;
-    foot.querySelectorAll('[data-col]').forEach(td => {
-      const key = td.dataset && td.dataset.col;
-      if (!key) return;
-      data[key] = (td.textContent || '').trim();
-      hasData = true;
-    });
-    return hasData ? data : null;
-  }
-
-  function applyFooterSnapshot(id, snapshot){
-    if (!snapshot) return;
-    const foot = document.querySelector('#' + id + ' tfoot');
-    if (!foot) return;
-    Object.keys(snapshot).forEach(key => {
-      const cell = foot.querySelector('[data-col="' + key + '"]');
-      if (cell) cell.textContent = snapshot[key];
-    });
-  }
-
-  function collectTableBodyHtml(id){
-    const tbl = document.getElementById(id);
-    if (!tbl) return null;
-    const tb = tbl.tBodies && tbl.tBodies[0] || tbl.querySelector('tbody');
-    if (!tb) return null;
-    return tb.innerHTML;
-  }
-
-  function applyTableBodyHtml(id, html){
-    if (typeof html !== 'string') return false;
-    const tbl = document.getElementById(id);
-    if (!tbl) return false;
-    const tb = tbl.tBodies && tbl.tBodies[0] || tbl.querySelector('tbody');
-    if (!tb) return false;
-    tb.innerHTML = html;
-    return true;
-  }
-  function captureTableSnapshot(id, opts = {}){
-    const snap = {};
-    const data = serializeTableById(id);
-    if (data) snap.data = data;
-    const html = collectTableBodyHtml(id);
-    if (html !== null) snap.html = html;
-    if (opts.includeFooter){
-      const foot = collectFooterSnapshot(id);
-      if (foot) snap.footer = foot;
-    }
-    return Object.keys(snap).length ? snap : null;
-  }
-
-  function applySubtabTableSnapshot(id, snapshot){
-    if (!snapshot) return;
-    if (typeof snapshot === 'string'){
-      applyTableBodyHtml(id, snapshot);
-      return;
-    }
-    if (!(snapshot.html && applyTableBodyHtml(id, snapshot.html))){
-      if (snapshot.data) {
-        renderSimpleTableSnapshot(id, snapshot.data);
-      } else if (snapshot.rows) {
-        renderSimpleTableSnapshot(id, snapshot);
-      }
-    }
-    const footer = snapshot.footer || snapshot.totals;
-    if (footer) applyFooterSnapshot(id, footer);
-  }
-  function collectPayrollSubtabSnapshots(){
-    const contributions = {
-      sss: captureTableSnapshot('sssTable'),
-      pagibig: captureTableSnapshot('pagibigTable'),
-      philhealth: captureTableSnapshot('philhealthTable')
-    };
-    const deductionsMain = captureTableSnapshot('deductionsTable', { includeFooter: true });
-    const deductions = {
-      main: deductionsMain,
-      cashAdvance: captureTableSnapshot('cashAdvanceTable'),
-      totals: deductionsMain && deductionsMain.footer ? deductionsMain.footer : collectFooterSnapshot('deductionsTable')
-    };
-    const adjustmentsTable = captureTableSnapshot('adjustmentsTable', { includeFooter: true });
-    const adjustments = {
-      table: adjustmentsTable,
-      totals: adjustmentsTable && adjustmentsTable.footer ? adjustmentsTable.footer : collectFooterSnapshot('adjustmentsTable')
-    };
-    return { contributions, deductions, adjustments };
-  }
   function isLocked(){
     try { if (typeof isSelectedPeriodLocked === "function") return !!isSelectedPeriodLocked(); } catch {}
     try {
@@ -11982,12 +11893,11 @@ document.addEventListener('DOMContentLoaded', async function () {
   async function renderFromSnapshots(){
     const p = getPeriod();
     const pid = pidFromDates(p.start, p.end);
-    const [dtr, payroll, reports, dtrRecords, subtabs] = await Promise.all([
+    const [dtr, payroll, reports, dtrRecords] = await Promise.all([
       readKVWithLocal(`snap:dtr:${pid}`),
       readKVWithLocal(`snap:payroll:${pid}`),
       readKVWithLocal(`snap:reports:${pid}`),
-      readKVWithLocal(`snap:dtrRecords:${pid}`),
-      readKVWithLocal(`snap:subtabs:${pid}`)
+      readKVWithLocal(`snap:dtrRecords:${pid}`)
     ]);
 
     if (Array.isArray(dtrRecords)) {
@@ -12050,39 +11960,7 @@ document.addEventListener('DOMContentLoaded', async function () {
       } catch{}
     }
 
-    if (subtabs){
-      const contributions = subtabs.contributions || {};
-      applySubtabTableSnapshot('sssTable', contributions.sss);
-      applySubtabTableSnapshot('pagibigTable', contributions.pagibig);
-      applySubtabTableSnapshot('philhealthTable', contributions.philhealth);
-
-      const deductionsSnap = subtabs.deductions || {};
-      applySubtabTableSnapshot('deductionsTable', deductionsSnap.main);
-      if (deductionsSnap.cashAdvance) applySubtabTableSnapshot('cashAdvanceTable', deductionsSnap.cashAdvance);
-      if (deductionsSnap.totals && !(deductionsSnap.main && (deductionsSnap.main.footer || deductionsSnap.main.totals))) {
-        applyFooterSnapshot('deductionsTable', deductionsSnap.totals);
-      }
-
-      const adjustmentsSnap = subtabs.adjustments || {};
-      if (adjustmentsSnap.table) {
-        applySubtabTableSnapshot('adjustmentsTable', adjustmentsSnap.table);
-      } else {
-        applySubtabTableSnapshot('adjustmentsTable', adjustmentsSnap);
-      }
-      if (adjustmentsSnap.totals && !(adjustmentsSnap.table && (adjustmentsSnap.table.footer || adjustmentsSnap.table.totals))) {
-        applyFooterSnapshot('adjustmentsTable', adjustmentsSnap.totals);
-      }
-    }
-      const adjustmentsSnap = subtabs.adjustments || {};
-      if (adjustmentsSnap.table) {
-        applySubtabTableSnapshot('adjustmentsTable', adjustmentsSnap.table);
-      } else {
-        applySubtabTableSnapshot('adjustmentsTable', adjustmentsSnap);
-      }
-      if (adjustmentsSnap.totals && !(adjustmentsSnap.table && (adjustmentsSnap.table.footer || adjustmentsSnap.table.totals))) {\r\n        applyFooterSnapshot('adjustmentsTable', adjustmentsSnap.totals);\r\n      }
-    }
-
-    try { setPayrollLockedUI(true); } catch{}(true); } catch{}
+    try { setPayrollLockedUI(true); } catch{}
   }
 
   async function lockPeriod(){
@@ -12094,12 +11972,10 @@ document.addEventListener('DOMContentLoaded', async function () {
     const reports = serializeTableById('projectTotalsTable') || serializeTableById('r_table') || { headers:[], rows:[] };
     const payroll = (typeof window.buildSnapshot==='function') ? await window.buildSnapshot(p.start, p.end) : null;
     const dtrRecords = collectRecordsForPeriod(p.start, p.end);
-    const subtabSnaps = collectPayrollSubtabSnapshots();
     await writeKVMirror(`snap:dtr:${pid}`, dtr);
     await writeKVMirror(`snap:payroll:${pid}`, payroll);
     await writeKVMirror(`snap:reports:${pid}`, reports);
     await writeKVMirror(`snap:dtrRecords:${pid}`, dtrRecords);
-    await writeKVMirror(`snap:subtabs:${pid}`, subtabSnaps);
     try { window.__lockedDtrRecords = dtrRecords; window.__lockedDtrKey = pid; window.__lockedDtrPeriod = { start: p.start, end: p.end }; } catch (e) {}
     await renderFromSnapshots();
     try { setPayrollLockedUI(true); } catch{}
@@ -12108,15 +11984,6 @@ document.addEventListener('DOMContentLoaded', async function () {
   async function unlockPeriod(){
     try { setPayrollLockedUI(false); } catch {}
     try { window.__lockedDtrRecords = null; window.__lockedDtrKey = null; window.__lockedDtrPeriod = null; } catch (e) {}
-    setTimeout(() => {
-      try { if (typeof window.renderDeductionsTable === 'function') window.renderDeductionsTable(); } catch {}
-      try { if (typeof window.renderCashAdvanceTable === 'function') window.renderCashAdvanceTable(); } catch {}
-      try { if (typeof window.renderAdjustmentsTable === 'function') window.renderAdjustmentsTable(); } catch {}
-      try { if (typeof window.renderAdjustmentsFoot === 'function') window.renderAdjustmentsFoot(); } catch {}
-      try { if (typeof window.renderSssTable === 'function') window.renderSssTable(); } catch {}
-      try { if (typeof window.renderPagibigTable === 'function') window.renderPagibigTable(); } catch {}
-      try { if (typeof window.renderPhilhealthTable === 'function') window.renderPhilhealthTable(); } catch {}
-    }, 50);
   }
 
   function guard(name){
@@ -12127,18 +11994,7 @@ document.addEventListener('DOMContentLoaded', async function () {
     } catch{}
   }
 
-  const GUARDED_FUNCTIONS = [
-    'calculatePayrollFromResultsTable',
-    'calculatePayrollFromRecords',
-    'rebuildReports',
-    'renderProjectTotals',
-    'calculateAll',
-    'renderTable',
-    'renderDeductionsTable',
-    'renderCashAdvanceTable',
-    'renderAdjustmentsTable',
-    'renderAdjustmentsFoot'
-  ];
+  const GUARDED_FUNCTIONS = ['calculatePayrollFromResultsTable','calculatePayrollFromRecords','rebuildReports','renderProjectTotals','calculateAll','renderTable'];
   GUARDED_FUNCTIONS.forEach(guard);
 
   document.addEventListener('DOMContentLoaded', function(){
@@ -12176,13 +12032,3 @@ document.addEventListener('DOMContentLoaded', async function () {
 })();
 </script>
 </html>
-
-
-
-
-
-
-
-
-
-
