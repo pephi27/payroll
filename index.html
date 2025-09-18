@@ -2448,10 +2448,6 @@ ensureSeededPhilhealth();
 let payrollRates = JSON.parse(localStorage.getItem(LS_RATES) || '{}');
 let regHours = JSON.parse(localStorage.getItem(LS_REG_HRS) || '{}');
 let otHours = JSON.parse(localStorage.getItem(LS_OT_HRS) || '{}');
-let loanSSS = JSON.parse(localStorage.getItem(LS_LOAN_SSS) || '{}');
-let loanPI = JSON.parse(localStorage.getItem(LS_LOAN_PI) || '{}');
-let vale = JSON.parse(localStorage.getItem(LS_VALE) || '{}');
-let valeWed = JSON.parse(localStorage.getItem(LS_VALE_WED) || '{}');
 
 // Per-employee contribution deduction flags. Each entry keyed by employee ID holds booleans {pagibig, philhealth, sss}
 let contribFlags = JSON.parse(localStorage.getItem(LS_CONTRIB_FLAGS) || '{}');
@@ -2494,12 +2490,176 @@ weekEndEl.value = weekEndSaved;
 divisorEl.value = divisor;
 
 function periodKey(){return (weekStartEl.value||'')+'_'+(weekEndEl.value||'');}
+const PERIOD_META_KEY='__meta';
+const PERIOD_DEFAULT_KEY='__default';
+function isPlainObject(val){ return !!val && typeof val === 'object' && !Array.isArray(val); }
+function clonePeriodData(src){
+  if(!isPlainObject(src)) return {};
+  try { return JSON.parse(JSON.stringify(src)); } catch (e) {
+    const out = {};
+    Object.keys(src || {}).forEach(k => { out[k] = src[k]; });
+    return out;
+  }
+}
+function splitPeriodKey(key){
+  if (typeof key !== 'string') return { start: '', end: '' };
+  const parts = key.split('_');
+  return { start: parts[0] || '', end: parts[1] || '' };
+}
+function comparePeriodKeys(a, b){
+  if (a === b) return 0;
+  const pa = splitPeriodKey(a);
+  const pb = splitPeriodKey(b);
+  if (pa.start && pb.start && pa.start !== pb.start) return pa.start < pb.start ? -1 : 1;
+  if (pa.start && !pb.start) return 1;
+  if (!pa.start && pb.start) return -1;
+  if (pa.end && pb.end && pa.end !== pb.end) return pa.end < pb.end ? -1 : 1;
+  if (pa.end && !pb.end) return 1;
+  if (!pa.end && pb.end) return -1;
+  const aStr = typeof a === 'string' ? a : '';
+  const bStr = typeof b === 'string' ? b : '';
+  if (aStr === bStr) return 0;
+  return aStr < bStr ? -1 : 1;
+}
+function sortedPeriodKeys(map){
+  return Object.keys(map || {})
+    .filter(k => k !== PERIOD_META_KEY && k !== PERIOD_DEFAULT_KEY)
+    .sort(comparePeriodKeys);
+}
+function ensurePeriodMeta(map){
+  if (!isPlainObject(map)) return { periodScoped: true, latestKey: '' };
+  const meta = isPlainObject(map[PERIOD_META_KEY]) ? map[PERIOD_META_KEY] : {};
+  meta.periodScoped = true;
+  if (typeof meta.latestKey !== 'string') meta.latestKey = '';
+  map[PERIOD_META_KEY] = meta;
+  return meta;
+}
+function loadPeriodScopedMap(lsKey){
+  let parsed;
+  try { parsed = JSON.parse(localStorage.getItem(lsKey) || '{}'); }
+  catch(e){ parsed = {}; }
+  if (!isPlainObject(parsed)) parsed = {};
+  const meta = parsed[PERIOD_META_KEY];
+  if (!isPlainObject(meta) || meta.periodScoped !== true) {
+    const legacy = parsed;
+    parsed = {};
+    parsed[PERIOD_META_KEY] = { periodScoped: true, latestKey: '' };
+    parsed[PERIOD_DEFAULT_KEY] = isPlainObject(legacy) ? legacy : {};
+  } else {
+    parsed[PERIOD_META_KEY] = Object.assign({}, meta, { periodScoped: true });
+  }
+  const ensuredMeta = ensurePeriodMeta(parsed);
+  const keys = sortedPeriodKeys(parsed);
+  if (!ensuredMeta.latestKey && keys.length) {
+    ensuredMeta.latestKey = keys[keys.length - 1];
+  }
+  if (!isPlainObject(parsed[PERIOD_DEFAULT_KEY]) && ensuredMeta.latestKey && isPlainObject(parsed[ensuredMeta.latestKey])) {
+    parsed[PERIOD_DEFAULT_KEY] = clonePeriodData(parsed[ensuredMeta.latestKey]);
+  }
+  return parsed;
+}
+function findCarryTemplate(map, key, fallbackKey){
+  const keys = sortedPeriodKeys(map);
+  if (!keys.length) return null;
+  let candidate = null;
+  for (const existing of keys){
+    if (comparePeriodKeys(existing, key) <= 0) {
+      candidate = existing;
+    } else {
+      break;
+    }
+  }
+  if (candidate && isPlainObject(map[candidate])) return map[candidate];
+  if (fallbackKey && comparePeriodKeys(fallbackKey, key) <= 0 && isPlainObject(map[fallbackKey])) {
+    return map[fallbackKey];
+  }
+  return null;
+}
+function ensurePeriodData(map, key, template, options){
+  if (!isPlainObject(map)) return {};
+  const allowDefault = !options || options.allowDefault !== false;
+  if (!isPlainObject(map[key])) {
+    let base = {};
+    if (isPlainObject(template)) base = template;
+    else if (allowDefault && isPlainObject(map[PERIOD_DEFAULT_KEY])) base = map[PERIOD_DEFAULT_KEY];
+    map[key] = clonePeriodData(base);
+  }
+  return map[key];
+}
+function updatePeriodLatest(map, key, data){
+  if (!isPlainObject(map) || !key) return;
+  const meta = ensurePeriodMeta(map);
+  if (!meta.latestKey || comparePeriodKeys(key, meta.latestKey) >= 0) {
+    meta.latestKey = key;
+    if (isPlainObject(data)) {
+      map[PERIOD_DEFAULT_KEY] = clonePeriodData(data);
+    }
+  }
+}
+function persistPeriodScopedMap(lsKey, map){
+  if (!isPlainObject(map)) return;
+  ensurePeriodMeta(map);
+  try { localStorage.setItem(lsKey, JSON.stringify(map)); } catch(e){}
+}
+let currentPeriodKey = periodKey();
+const allLoanSSS = loadPeriodScopedMap(LS_LOAN_SSS);
+const allLoanPI = loadPeriodScopedMap(LS_LOAN_PI);
+const allVale = loadPeriodScopedMap(LS_VALE);
+const allValeWed = loadPeriodScopedMap(LS_VALE_WED);
+let loanSSS = ensurePeriodData(allLoanSSS, currentPeriodKey);
+let loanPI = ensurePeriodData(allLoanPI, currentPeriodKey);
+let vale = ensurePeriodData(allVale, currentPeriodKey);
+let valeWed = ensurePeriodData(allValeWed, currentPeriodKey);
+function saveCurrentPeriodDeductions(){
+  if (!currentPeriodKey) return;
+  allLoanSSS[currentPeriodKey] = loanSSS || {};
+  allLoanPI[currentPeriodKey] = loanPI || {};
+  allVale[currentPeriodKey] = vale || {};
+  allValeWed[currentPeriodKey] = valeWed || {};
+  updatePeriodLatest(allLoanSSS, currentPeriodKey, loanSSS);
+  updatePeriodLatest(allLoanPI, currentPeriodKey, loanPI);
+  updatePeriodLatest(allVale, currentPeriodKey, vale);
+  updatePeriodLatest(allValeWed, currentPeriodKey, valeWed);
+  persistPeriodScopedMap(LS_LOAN_SSS, allLoanSSS);
+  persistPeriodScopedMap(LS_LOAN_PI, allLoanPI);
+  persistPeriodScopedMap(LS_VALE, allVale);
+  persistPeriodScopedMap(LS_VALE_WED, allValeWed);
+  try {
+    window.loanSSS = loanSSS;
+    window.loanPI = loanPI;
+    window.vale = vale;
+    window.valeWed = valeWed;
+  } catch(e){}
+}
+saveCurrentPeriodDeductions();
 let allAdjustments = JSON.parse(localStorage.getItem(LS_ADJ) || '{}');
-let adjustments = allAdjustments[periodKey()] || {};
+let adjustments = allAdjustments[currentPeriodKey] || {};
 let allAdjHrs = JSON.parse(localStorage.getItem(LS_ADJ_HRS) || '{}');
-let adjHrs = allAdjHrs[periodKey()] || {};
+let adjHrs = allAdjHrs[currentPeriodKey] || {};
 let allBantay = JSON.parse(localStorage.getItem(LS_BANTAY) || '{}');
-let bantay = allBantay[periodKey()] || {};
+let bantay = allBantay[currentPeriodKey] || {};
+function syncPeriodScopedData(){
+  const pk = periodKey();
+  if (pk === currentPeriodKey) return false;
+  const prevKey = currentPeriodKey;
+  saveCurrentPeriodDeductions();
+  const direction = comparePeriodKeys(pk, prevKey);
+  const carryForward = direction >= 0;
+  const tplSSS = carryForward ? findCarryTemplate(allLoanSSS, pk, prevKey) : null;
+  const tplPI = carryForward ? findCarryTemplate(allLoanPI, pk, prevKey) : null;
+  const tplVale = carryForward ? findCarryTemplate(allVale, pk, prevKey) : null;
+  const tplValeWed = carryForward ? findCarryTemplate(allValeWed, pk, prevKey) : null;
+  loanSSS = ensurePeriodData(allLoanSSS, pk, tplSSS, { allowDefault: carryForward });
+  loanPI = ensurePeriodData(allLoanPI, pk, tplPI, { allowDefault: carryForward });
+  vale = ensurePeriodData(allVale, pk, tplVale, { allowDefault: carryForward });
+  valeWed = ensurePeriodData(allValeWed, pk, tplValeWed, { allowDefault: carryForward });
+  adjustments = allAdjustments[pk] || {};
+  adjHrs = allAdjHrs[pk] || {};
+  bantay = allBantay[pk] || {};
+  currentPeriodKey = pk;
+  saveCurrentPeriodDeductions();
+  return true;
+}
 ;(async function(){
   try{
     let v = await readKV(LS_BANTAY);
@@ -2508,7 +2668,7 @@ let bantay = allBantay[periodKey()] || {};
     }
     if (v && typeof v === 'object') {
       allBantay = v;
-      bantay = allBantay[periodKey()] || {};
+      bantay = allBantay[currentPeriodKey] || {};
     }
     try { localStorage.setItem(LS_BANTAY, JSON.stringify(allBantay)); } catch(_){ }
     try{ if (typeof renderSssTable==='function') renderSssTable(); }catch(_){ }
@@ -2560,6 +2720,7 @@ function setSssTable(rows){
 }
 
 function renderDeductionsTable(){
+  syncPeriodScopedData();
   const dtbody = document.querySelector('#deductionsTable tbody');
   if (!dtbody) return;
   dtbody.innerHTML = '';
@@ -2768,10 +2929,7 @@ for (let i = 1; i < rows.length; i++) {
         }
         
         // Save to localStorage
-        localStorage.setItem(LS_LOAN_PI, JSON.stringify(loanPI));
-        localStorage.setItem(LS_LOAN_SSS, JSON.stringify(loanSSS));
-        localStorage.setItem(LS_VALE, JSON.stringify(vale));
-        localStorage.setItem(LS_VALE_WED, JSON.stringify(valeWed));
+        saveCurrentPeriodDeductions();
         
         // Refresh displays
         if (typeof renderDeductionsTable === 'function') renderDeductionsTable();
@@ -2801,6 +2959,7 @@ for (let i = 1; i < rows.length; i++) {
   }
 });
 function renderTable(){
+  syncPeriodScopedData();
   // Batch DOM updates to avoid MutationObserver thrash
   window.__suspendTotals = true;
   try {
@@ -2982,10 +3141,7 @@ function attachRowEvents(){
         localStorage.setItem(LS_REG_HRS, JSON.stringify(regHours));
         localStorage.setItem(LS_OT_HRS, JSON.stringify(otHours));
         localStorage.setItem(LS_RATES, JSON.stringify(payrollRates));
-        localStorage.setItem(LS_LOAN_SSS, JSON.stringify(loanSSS));
-        localStorage.setItem(LS_LOAN_PI, JSON.stringify(loanPI));
-        localStorage.setItem(LS_VALE, JSON.stringify(vale));
-        localStorage.setItem(LS_VALE_WED, JSON.stringify(valeWed));
+        saveCurrentPeriodDeductions();
         calculateRow(row);
       });
     });
@@ -2995,7 +3151,7 @@ function attachRowEvents(){
       if (bantayI) {
         bantayI.addEventListener('input', async () => {
         bantay[id] = bantayI.value;
-        allBantay[periodKey()] = bantay;
+        allBantay[currentPeriodKey] = bantay;
         try { localStorage.setItem(LS_BANTAY, JSON.stringify(allBantay)); } catch(_){ }
         await writeKV(LS_BANTAY, allBantay);
         calculateRow(row);
@@ -3356,6 +3512,7 @@ function calculateRow(tr){  const readNum = sel => { const el = tr.querySelector
 }
 
 function calculateAll(){
+  syncPeriodScopedData();
   document.querySelectorAll('#payrollTable tbody tr').forEach(tr=> calculateRow(tr));
   renderDeductionsTable();
 }
@@ -3363,6 +3520,7 @@ function calculateAll(){
 // === Adjustments Tab ===
 // Render the adjustments table listing all employees with an input field for manual adjustment amounts.
 function renderAdjustmentsTable() {
+  syncPeriodScopedData();
   const atbody = document.querySelector('#adjustmentsTable tbody');
   if (!atbody) return;
   atbody.innerHTML = '';
@@ -3395,7 +3553,7 @@ function renderAdjustmentsTable() {
         // Remove the entry when zero or invalid
         delete adjustments[empId];
       }
-      allAdjustments[periodKey()] = adjustments;
+      allAdjustments[currentPeriodKey] = adjustments;
       localStorage.setItem(LS_ADJ, JSON.stringify(allAdjustments));
       calculateAll();
       renderAdjustmentsFoot();
@@ -3413,7 +3571,7 @@ function renderAdjustmentsTable() {
         // Remove the entry when zero or invalid
         delete adjHrs[empId];
       }
-      allAdjHrs[periodKey()] = adjHrs;
+      allAdjHrs[currentPeriodKey] = adjHrs;
       localStorage.setItem(LS_ADJ_HRS, JSON.stringify(allAdjHrs));
       calculateAll();
       renderAdjustmentsFoot();
@@ -7523,9 +7681,7 @@ function calculatePayrollFromRecords(){
 
 weekStartEl.addEventListener('change', () => {
   if (dtrStartEl) dtrStartEl.value = weekStartEl.value;
-  adjustments = allAdjustments[periodKey()] || {};
-  adjHrs = allAdjHrs[periodKey()] || {};
-  bantay = allBantay[periodKey()] || {};
+  syncPeriodScopedData();
   try {
     if (typeof calculatePayrollFromResultsTable === 'function') calculatePayrollFromResultsTable();
     else if (typeof calculatePayrollFromRecords === 'function') calculatePayrollFromRecords();
@@ -7536,9 +7692,7 @@ weekStartEl.addEventListener('change', () => {
 });
 weekEndEl.addEventListener('change', () => {
   if (dtrEndEl) dtrEndEl.value = weekEndEl.value;
-  adjustments = allAdjustments[periodKey()] || {};
-  adjHrs = allAdjHrs[periodKey()] || {};
-  bantay = allBantay[periodKey()] || {};
+  syncPeriodScopedData();
   try {
     if (typeof calculatePayrollFromResultsTable === 'function') calculatePayrollFromResultsTable();
     else if (typeof calculatePayrollFromRecords === 'function') calculatePayrollFromRecords();
@@ -7551,6 +7705,7 @@ if (dtrStartEl) {
   dtrStartEl.addEventListener('change', () => {
     weekStartEl.value = dtrStartEl.value;
     // When editing the DTR date range directly, recompute payroll hours from the DTR table
+    syncPeriodScopedData();
     try {
       if (typeof calculatePayrollFromResultsTable === 'function') calculatePayrollFromResultsTable();
       else if (typeof calculatePayrollFromRecords === 'function') calculatePayrollFromRecords();
@@ -7561,6 +7716,7 @@ if (dtrEndEl) {
   dtrEndEl.addEventListener('change', () => {
     weekEndEl.value = dtrEndEl.value;
     // When editing the DTR date range directly, recompute payroll hours from the DTR table
+    syncPeriodScopedData();
     try {
       if (typeof calculatePayrollFromResultsTable === 'function') calculatePayrollFromResultsTable();
       else if (typeof calculatePayrollFromRecords === 'function') calculatePayrollFromRecords();
@@ -9579,6 +9735,7 @@ function updateWeekInputs(snap) {
 
   // Render the cash advance tracker table
   function renderCashAdvanceTable() {
+    syncPeriodScopedData();
     const tb = document.querySelector('#cashAdvanceTable tbody');
     if (!tb) return;
     tb.innerHTML = '';
@@ -9657,7 +9814,7 @@ function updateWeekInputs(snap) {
           delete vale[id];
         }
         localStorage.setItem(LS_CASH_DED, JSON.stringify(cashDed));
-        localStorage.setItem(LS_VALE, JSON.stringify(vale));
+        saveCurrentPeriodDeductions();
         calculateAll();
         // Avoid calling renderCashAdvanceTable() here; it would reset focus on every key press.
       });
@@ -9684,11 +9841,11 @@ function updateWeekInputs(snap) {
           delete cashDed[id];
           delete vale[id];
           localStorage.setItem(LS_CASH_DED, JSON.stringify(cashDed));
-          localStorage.setItem(LS_VALE, JSON.stringify(vale));
         }
         // Persist the new balance
         cashBal[id] = +(newBal.toFixed(2));
         localStorage.setItem(LS_CASH_BAL, JSON.stringify(cashBal));
+        saveCurrentPeriodDeductions();
         calculateAll();
         // Re-render the table to reflect the updated balance; the update button remains active.
         renderCashAdvanceTable();
