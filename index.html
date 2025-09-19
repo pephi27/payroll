@@ -335,13 +335,14 @@ document.addEventListener('DOMContentLoaded', function() {
     var html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>All Payslips</title>
 <style>
 @page { size: letter portrait; margin: 0.25in; }
-html, body { width: 8.5in; height: 11in; margin: 0; }
+html, body { width: 8.5in; height: 11in; margin: 0; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
 body{font-family:Arial,Helvetica,sans-serif;margin:0;padding:0 0.1in;}
 /* 12 per page: 3 columns x 4 rows, compact spacing */
 .payslip-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:0.03in;}
-.payslip{box-sizing:border-box;padding:0.06in;border:1px solid #e2e8f0;height:2.6in;overflow:hidden;border-radius:3px;background:#fff;}
+.payslip{box-sizing:border-box;padding:0.06in;border:1pt solid #000!important;border-style:solid!important;height:2.6in;overflow:hidden;border-radius:3px;background:#fff;}
 table{border-collapse:collapse;width:100%;font-size:8.5px;}
-th,td{border:1px solid #e2e8f0;padding:1px;text-align:left;}
+th,td{border:1pt solid #000!important;border-style:solid!important;padding:1px;text-align:left;}
+table,th,td{border-color:#000!important;border-style:solid!important;}
 th{background:#f1f5f9;}
 .page-break{page-break-after:always;break-after:page;}
 h3{margin:0 0 3px 0;font-size:10px;}
@@ -3839,12 +3840,27 @@ document.addEventListener('DOMContentLoaded', function(){
       var num = parseFloat(raw);
       if (!isNaN(num) && num === 0) td.textContent = '-';
     });
+    // Rename selected header labels for print-only
+    (function(){
+      function norm(s){ return String(s||'').replace(/\s+/g,' ').trim().toLowerCase(); }
+      var map = new Map([
+        ['regular hours','REG HRS'],
+        ['ot hours','OT HRS'],
+        ['adjustment hrs','ADJ HRS'],
+        ['adjustments','ADJ'],
+        ['total deductions','TOTAL DEDUC.']
+      ]);
+      clone.querySelectorAll('thead th').forEach(function(th){
+        var key = norm(th.textContent);
+        if (map.has(key)) th.textContent = map.get(key);
+      });
+    })();
     // Build a new window for printing
     const w = window.open('', '', 'width=900,height=700');
     if (!w) return;
     w.document.write('<html><head><meta charset="utf-8"><title>Payroll Report</title>');
     // Basic styles: borders and alignment
-    w.document.write('<style>body{font-family:Arial,Helvetica,sans-serif;margin:20px;} table{border-collapse:collapse;width:100%;} th,td{border:1px solid #ddd;padding:6px;} th{background:#f1f5f9;} td.num{text-align:right;} th:nth-child(1),td:nth-child(1),th:nth-child(2),td:nth-child(2){text-align:left;} tfoot td{font-weight:700;background:#fff7ed;border-top:2px solid #e2e8f0;} #payrollTable th, #payrollTable td { white-space: nowrap; }#payrollTable th:nth-child(3), #payrollTable td:nth-child(3) { width:110px; min-width:110px; }#payrollTable th:nth-child(4), #payrollTable td:nth-child(4) { width:120px; min-width:120px; }#payrollTable th:nth-child(5), #payrollTable td:nth-child(5) { width:120px; min-width:120px; }</style>');
+    w.document.write('<style>@page{size:letter landscape;margin:10mm} html,body{-webkit-print-color-adjust:exact;print-color-adjust:exact;width:11in;height:8.5in;margin:0} body{font-family:Arial,Helvetica,sans-serif;margin:0;} h2{margin:0 0 6px;font-size:16px} table{border-collapse:collapse;width:100%;table-layout:fixed} thead{display:table-header-group} tfoot{display:table-footer-group} th,td{border:1pt solid #000!important;border-style:solid!important;padding:4px;font-size:11px} table,th,td{border-color:#000!important;border-style:solid!important} th{background:#f1f5f9} td.num{text-align:right} th:nth-child(1),td:nth-child(1),th:nth-child(2),td:nth-child(2){text-align:left} tfoot td{font-weight:700;background:#fff7ed;border-top:2pt solid #000!important} #payrollTable{page-break-inside:auto} #payrollTable tr{page-break-inside:avoid;break-inside:avoid-page} #payrollTable th, #payrollTable td { white-space: nowrap !important; page-break-inside: avoid; } #payrollTable th:nth-child(1), #payrollTable td:nth-child(1) { width:30px; min-width:30px; } #payrollTable th:nth-child(2), #payrollTable td:nth-child(2) { width:150px; min-width:150px; } #payrollTable th:nth-child(3), #payrollTable td:nth-child(3) { width:60px; min-width:60px; } #payrollTable th:nth-child(4), #payrollTable td:nth-child(4) { width:60px; min-width:60px; } #payrollTable th:nth-child(5), #payrollTable td:nth-child(5) { width:60px; min-width:60px; } #payrollTable th:nth-child(6), #payrollTable td:nth-child(6) { width:60px; min-width:60px; } #payrollTable th:nth-child(7), #payrollTable td:nth-child(7) { width:60px; min-width:60px; } #payrollTable th:nth-child(8), #payrollTable td:nth-child(8) { width:60px; min-width:60px; } #payrollTable th:nth-child(9), #payrollTable td:nth-child(9) { width:60px; min-width:60px; } #payrollTable th:nth-child(10), #payrollTable td:nth-child(10) { width:60px; min-width:60px; } #payrollTable th:nth-child(11), #payrollTable td:nth-child(11) { width:60px; min-width:60px; } #payrollTable th:nth-child(12), #payrollTable td:nth-child(12) { width:60px; min-width:60px; } #payrollTable th:nth-child(13), #payrollTable td:nth-child(13) { width:60px; min-width:60px; } #payrollTable th:nth-child(14), #payrollTable td:nth-child(14) { width:60px; min-width:60px; } #payrollTable th:nth-child(15), #payrollTable td:nth-child(15) { width:60px; min-width:60px; } #payrollTable th:nth-child(16), #payrollTable td:nth-child(16) { width:60px; min-width:60px; } #payrollTable th:nth-child(17), #payrollTable td:nth-child(17) { width:60px; min-width:60px; } #payrollTable th:nth-child(18), #payrollTable td:nth-child(18) { width:60px; min-width:60px; } #payrollTable th:nth-child(19), #payrollTable td:nth-child(19) { width:60px; min-width:60px; } #payrollTable th:nth-child(20), #payrollTable td:nth-child(20) { width:50px; min-width:50px; } #payrollTable th:nth-child(21), #payrollTable td:nth-child(21) { width:75px; min-width:75px; }</style>');
     w.document.write('</head><body>');
     // Header with date range if available
     const ws = document.getElementById('weekStart');
@@ -3852,15 +3868,19 @@ document.addEventListener('DOMContentLoaded', function(){
     const startDate = ws && ws.value ? ws.value : '';
     const endDate = we && we.value ? we.value : '';
     if (startDate && endDate) {
-      w.document.write('<h2>Payroll Report (' + startDate + ' to ' + endDate + ')</h2>');
+      w.document.write('<div id="printWrap"><h2>Payroll Report (' + startDate + ' to ' + endDate + ')</h2>');
     } else {
-      w.document.write('<h2>Payroll Report</h2>');
+      w.document.write('<div id="printWrap"><h2>Payroll Report</h2>');
     }
     w.document.write(clone.outerHTML);
-    w.document.write('</body></html>');
+    w.document.write('</div></body></html>');
     w.document.close();
-    w.focus();
-    safePrint(w);
+    // Print without auto-scaling
+    try {
+      w.addEventListener('load', function(){
+        try { safePrint(w); } catch(e){}
+      }, { once: true });
+    } catch(e) { try { safePrint(w); } catch(_){} }
     // Optionally close after printing (comment out if you don't want auto-close)
     // w.close();
   });
