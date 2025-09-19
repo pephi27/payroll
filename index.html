@@ -384,7 +384,7 @@ h3{margin:0 0 3px 0;font-size:10px;}
       addDed('SSS', sss);
       addDed('SSS Loan', sssLoan);
       addDed('Pag-IBIG Loan', piLoan);
-      addDed('Vale', v);
+      addDed('Account', v);
       addDed('Wed Vale', vW);
 
       html += `<div class="payslip">
@@ -2012,7 +2012,7 @@ window.addEventListener('load', dashReports);
          Pag-IBIG Loan
         </th>
         <th>
-         Vale
+         Account
         </th>
         <th>
          Wed Vale
@@ -2227,7 +2227,7 @@ window.addEventListener('load', dashReports);
         <th>SSS</th>
         <th>SSS Loan</th>
         <th>Pag-IBIG Loan</th>
-        <th>Vale</th>
+        <th>Account</th>
         <th>Wed Vale</th>
         <th>Total Deductions</th>
        </tr>
@@ -2762,7 +2762,7 @@ const lSSS = Number(loanSSS[emp.id] ?? 0);
 document.addEventListener('click', (e)=>{
   if(e.target && e.target.id === 'exportDeductionsCSV'){
     try {
-      const header = ['ID','Name','Pag-IBIG','PhilHealth','SSS','SSS Loan','Pag-IBIG Loan','Vale','Wed Vale','Total Deductions'];
+      const header = ['ID','Name','Pag-IBIG','PhilHealth','SSS','SSS Loan','Pag-IBIG Loan','Account','Wed Vale','Total Deductions'];
       const rows = [header];
 
       const div = Number(typeof divisor !== 'undefined' ? divisor : 1) || 1;
@@ -2884,16 +2884,26 @@ document.addEventListener('click', (e)=>{
         
         // Map column indexes by header names to tolerate column reordering
         const header = rows[0].map(h => String(h).trim().toLowerCase());
+        const idxId = header.indexOf('id');
+        const idxName = header.indexOf('name');
+        const idxSSSLoan = header.indexOf('sss loan');
+        const idxPagibigLoan = header.indexOf('pag-ibig loan');
+        const idxVale = header.indexOf('vale');
+        const idxAccount = header.indexOf('account');
+        const idxWedVale = header.indexOf('wed vale');
         const IDX = {
-          id: header.indexOf('id'),
-          name: header.indexOf('name'),
-          sssloan: header.indexOf('sss loan'),
-          pagibigloan: header.indexOf('pag-ibig loan'),
-          vale: header.indexOf('vale'),
-          wedvale: header.indexOf('wed vale')
+          id: idxId,
+          name: idxName,
+          sssloan: idxSSSLoan,
+          pagibigloan: idxPagibigLoan,
+          vale: (idxAccount >= 0 ? idxAccount : idxVale),
+          wedvale: idxWedVale
         };
-        const req = ['id','sssloan','pagibigloan','vale','wedvale'];
-        for (const k of req){ if (IDX[k] < 0){ alert('Upload missing column: ' + k); return; } }
+        if (IDX.id < 0) { alert('Upload missing column: id'); return; }
+        if (IDX.sssloan < 0) { alert('Upload missing column: sss loan'); return; }
+        if (IDX.pagibigloan < 0) { alert('Upload missing column: pag-ibig loan'); return; }
+        if (IDX.vale < 0) { alert('Upload missing column: account (or vale)'); return; }
+        if (IDX.wedvale < 0) { alert('Upload missing column: wed vale'); return; }
 for (let i = 1; i < rows.length; i++) {
           const row = rows[i];
           if (row.length < 10) {
@@ -3659,7 +3669,7 @@ function updateContributionNote() {
 }
   document.getElementById('downloadPayrollCSV').addEventListener('click', ()=>{
   // Include Adjustments column before Bantay in payroll CSV export
-  const header = ['Week Start','Week End','OT Multiplier','Divisor','ID','Name','Regular Hours','OT Hours','Hourly Rate','Regular Pay','OT Pay','Adjustments','Bantay','Gross Pay','Pag-IBIG','PhilHealth','SSS','SSS Loan','Pag-IBIG Loan','Vale','Wed Vale','Total Deductions','Net Pay'];
+  const header = ['Week Start','Week End','OT Multiplier','Divisor','ID','Name','Regular Hours','OT Hours','Hourly Rate','Regular Pay','OT Pay','Adjustments','Bantay','Gross Pay','Pag-IBIG','PhilHealth','SSS','SSS Loan','Pag-IBIG Loan','Account','Wed Vale','Total Deductions','Net Pay'];
   const rows=[header];
   const ws = weekStartEl.value||''; const we = weekEndEl.value||''; const otm = String(otMultiplierEl.value||''); const div = String(divisorEl.value||'1');
   document.querySelectorAll('#payrollTable tbody tr').forEach(tr=>{
@@ -8665,7 +8675,7 @@ document.addEventListener('DOMContentLoaded', function(){
       sss: findIdx(['sss']),
       loanSSS: findIdx(['sss loan','loan sss']),
       loanPI: findIdx(['pag-ibig loan','pag ibig loan','loan pi','pi loan']),
-      vale: findIdx(['vale']),
+      vale: findIdx(['vale','account','acct']),
       valeWed: findIdx(['vale wed','wed vale']),
       total: findIdx(['total','total deductions','total ded'])
     };
@@ -9030,7 +9040,7 @@ document.addEventListener('click', function(e) {
       <tr><td>SSS</td><td class="right">${sss}</td></tr>
       <tr><td>SSS Loan</td><td class="right">${sssLoan}</td></tr>
       <tr><td>Pag-IBIG Loan</td><td class="right">${piLoan}</td></tr>
-      <tr><td>Vale</td><td class="right">${valeAmt}</td></tr>
+      <tr><td>Account</td><td class="right">${valeAmt}</td></tr>
       <tr><td>Wednesday Vale</td><td class="right">${wedValeAmt}</td></tr>
       <tr><td>Adjustments</td><td class="right">${adjAmt}</td></tr>
       <tr><th>Total Deductions</th><th class="right">${totalDed}</th></tr>
@@ -11513,5 +11523,16 @@ function setPayrollLockedUI(locked){
     }
   } catch(e){}
 }
+</script>
+<script>
+// Normalize Deductions note: rename Column 8 label from Vale to Account in the help text.
+document.addEventListener('DOMContentLoaded', function(){
+  try{
+    var note = document.querySelector('#deductionsTab .section.note');
+    if (note && note.innerHTML && /Column\s*8:<\/strong>\s*Vale/i.test(note.innerHTML)){
+      note.innerHTML = note.innerHTML.replace(/(Column\s*8:<\/strong>)\s*Vale/i, '$1 Account');
+    }
+  }catch(e){}
+});
 </script>
 </html>
