@@ -225,15 +225,29 @@ Storage.prototype.removeItem = function(k) {
       .in("key", KNOWN_KEYS)
     if (error) { console.warn("Supabase fetch error:", error.message); return }
     let changed = false
-    ;(data || []).forEach(row => {
+    for (const row of (data || [])) {
       const k = row.key
       const cloudStr = safeStringify(row.value)
       const cur = localStorage.getItem(k)
+      // Conflict resolution: if both sides look like period-scoped maps
+      // and have __meta.lastUpdatedAt, prefer the newer side.
+      let preferLocal = false
+      try {
+        const cloudObj = (row && typeof row.value === 'object') ? row.value : JSON.parse(cloudStr || 'null')
+        const localObj = cur ? JSON.parse(cur) : null
+        const lc = localObj && localObj.__meta && Number(localObj.__meta.lastUpdatedAt)
+        const rc = cloudObj && cloudObj.__meta && Number(cloudObj.__meta.lastUpdatedAt)
+        if (lc && rc && lc > rc) preferLocal = true
+      } catch(_) {}
+      if (preferLocal) {
+        try { await supabase.from(TABLE).upsert({ key: k, value: JSON.parse(cur) }, { onConflict: 'key' }) } catch(_){ }
+        continue
+      }
       if (cloudStr != null && cloudStr !== cur) {
         try { __origSetItem.call(localStorage, k, cloudStr) } catch {}
         changed = true
       }
-    })
+    }
     if (changed) {
       // Avoid reload: signal hydration complete and re-render once safely.
       try { sessionStorage.removeItem("__kv_reloaded"); } catch {}
@@ -2599,7 +2613,11 @@ function updatePeriodLatest(map, key, data){
 function persistPeriodScopedMap(lsKey, map){
   if (!isPlainObject(map)) return;
   ensurePeriodMeta(map);
+  try {
+    if (isPlainObject(map.__meta)) map.__meta.lastUpdatedAt = Date.now();
+  } catch(_){}
   try { localStorage.setItem(lsKey, JSON.stringify(map)); } catch(e){}
+  try { if (typeof writeKV === 'function') writeKV(lsKey, map); } catch(_){}
 }
 let currentPeriodKey = periodKey();
 const allLoanSSS = loadPeriodScopedMap(LS_LOAN_SSS);
