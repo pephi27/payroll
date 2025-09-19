@@ -1955,8 +1955,8 @@ window.addEventListener('load', dashReports);
      </div>
      <!-- Contribution formula note with dynamic rates updated via script -->
      <div id="contribNote" class="section note">
-      Pag-IBIG = Regular Pay &times; 2% &divide; Divisor, PhilHealth = Regular Pay &times; 2.5% &divide; Divisor,
-    SSS = (Employee Share by Monthly Income) &divide; Divisor. Loans &amp; Vales are manual (not divided).
+      Pag-IBIG = Regular Pay × 2% (not divided), PhilHealth = Regular Pay × 2.5% (not divided),
+    SSS = (Employee Share by Monthly Income) ÷ Divisor. SSS Loan and Pag‑IBIG Loan are divided by the Divisor. Vales are manual (not divided).
      </div>
      <table id="payrollTable">
       <thead>
@@ -2739,8 +2739,8 @@ const lSSS = Number(loanSSS[emp.id] ?? 0);
     const piRate = pagibigRateByMonthly(monthly);
     const phRate = philhealthRateByMonthly(monthly);
     const div = Number(divisor) || 1;
-    const pagibig = +((regPay * piRate) / div).toFixed(2);
-    const philhealth = +((regPay * phRate) / div).toFixed(2);
+    const pagibig = +((regPay * piRate)).toFixed(2);
+    const philhealth = +((regPay * phRate)).toFixed(2);
     const sssFull = sssShareByMonthly(monthly);
     const sss = +(sssFull / div).toFixed(2);
     const sssLoan = +(lSSS / div).toFixed(2);
@@ -3483,8 +3483,8 @@ function calculateRow(tr){  const readNum = sel => { const el = tr.querySelector
   // Check per-employee contribution deduction flags; default to true if not set
   const flags = contribFlags[id] || {};
   const div = Number(divisor) || 1;
-  const pagibig = (flags.pagibig !== false ? +((regPay * piRate) / div).toFixed(2) : 0);
-  const philhealth = (flags.philhealth !== false ? +((regPay * phRate) / div).toFixed(2) : 0);
+  const pagibig = (flags.pagibig !== false ? +((regPay * piRate)).toFixed(2) : 0);
+  const philhealth = (flags.philhealth !== false ? +((regPay * phRate)).toFixed(2) : 0);
   const sssFull = sssShareByMonthly(monthly);
   const sss = (flags.sss !== false ? +(sssFull / div).toFixed(2) : 0);
   const sssLoan = +(lSSS / div).toFixed(2);
@@ -3653,9 +3653,9 @@ function updateContributionNote() {
   if (!noteEl) return;
   const piPct = (pagibigRate * 100).toFixed(2);
   const phPct = (philhealthRate * 100).toFixed(2);
-  noteEl.innerHTML = 'Pag-IBIG = Regular Pay &times; ' + piPct + '% &divide; Divisor, ' +
-    'PhilHealth = Regular Pay &times; ' + phPct + '% &divide; Divisor, ' +
-    'SSS = (Employee Share by Monthly Income) &divide; Divisor. Loans &amp; Vales are manual (not divided).';
+  noteEl.innerHTML = 'Pag-IBIG = Regular Pay &times; ' + piPct + '% (not divided), ' +
+    'PhilHealth = Regular Pay &times; ' + phPct + '% (not divided), ' +
+    'SSS = (Employee Share by Monthly Income) &divide; Divisor. SSS Loan and Pag-IBIG Loan are divided by the Divisor. Vales are manual (not divided).';
 }
   document.getElementById('downloadPayrollCSV').addEventListener('click', ()=>{
   // Include Adjustments column before Bantay in payroll CSV export
@@ -4711,14 +4711,14 @@ document.addEventListener('DOMContentLoaded', () => {
       // Heuristic: if snapshot has truncated values (e.g., 2.00 due to commas), recompute using current rules
       // 'looksWrong' heuristic no longer needed since we recompute unconditionally
 
-      // Always recompute contributions with current tables and apply divisor
+      // Always recompute contributions with current tables (apply divisor only to SSS)
       try{
         const monthly = rate * 8 * 24;
         const flags = (typeof contribFlags !== 'undefined' && contribFlags[id]) || {};
         const piRate = (typeof pagibigRateByMonthly==='function') ? pagibigRateByMonthly(monthly) : 0;
         const phRate = (typeof philhealthRateByMonthly==='function') ? philhealthRateByMonthly(monthly) : 0;
-        pagibig    = (flags.pagibig !== false   ? +((regPay * piRate) / curDiv).toFixed(2) : 0);
-        philhealth = (flags.philhealth !== false? +((regPay * phRate) / curDiv).toFixed(2) : 0);
+        pagibig    = (flags.pagibig !== false   ? +((regPay * piRate)).toFixed(2) : 0);
+        philhealth = (flags.philhealth !== false? +((regPay * phRate)).toFixed(2) : 0);
         const sssFull = (typeof sssShareByMonthly==='function') ? sssShareByMonthly(monthly) : 0;
         sss = (flags.sss !== false ? +(sssFull / curDiv).toFixed(2) : 0);
       }catch(e){}
@@ -11256,8 +11256,8 @@ document.addEventListener('DOMContentLoaded', async function () {
             const monthly = rate * 8 * 24;
             const piRate = (_piRateFn ? _piRateFn(monthly) : _piFlat);
             const phRate = (_phRateFn ? _phRateFn(monthly) : _phFlat);
-            const pagibig = +((regPay * piRate) / div).toFixed(2);
-            const philhealth = +((regPay * phRate) / div).toFixed(2);
+            const pagibig = +((regPay * piRate)).toFixed(2);
+            const philhealth = +((regPay * phRate)).toFixed(2);
             const sssFull = (_sssFn ? _sssFn(monthly) : 0);
             const sss = +(sssFull / div).toFixed(2);
             const sssLoan = +(lSSS / div).toFixed(2);
