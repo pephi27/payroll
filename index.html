@@ -1210,7 +1210,7 @@ window.addEventListener('load', dashReports);
 </script>
 
   <!-- Mobile menu button for smaller screens -->
-  <button class="mobile-menu-btn" onclick="toggleSidebar()">
+  <button id="mobileMenuBtn" class="mobile-menu-btn">
     <span style="font-size: 20px;">â˜°</span>
   </button>
   <!-- Begin App Container with Sidebar and Main Content -->
@@ -5806,6 +5806,11 @@ rows += `<tr class="allowance">
       });
       // Initial set from the currently active tab
       const active = document.querySelector('.nav-link.active');
+      const mobileMenuBtn = document.getElementById('mobileMenuBtn');
+      if (mobileMenuBtn && !mobileMenuBtn.__sidebarBound) {
+        mobileMenuBtn.addEventListener('click', toggleSidebar);
+        mobileMenuBtn.__sidebarBound = true;
+      }
       if (active) setTitleFrom(active);
     })();
     function toggleSidebar(){
@@ -5814,7 +5819,7 @@ rows += `<tr class="allowance">
     }
     document.addEventListener('click', function(e){
         var sidebar = document.getElementById('sidebar');
-        var mobileBtn = document.querySelector('.mobile-menu-btn');
+        var mobileBtn = document.getElementById('mobileMenuBtn');
         if(window.innerWidth <= 768 && sidebar && sidebar.classList.contains('active') && !sidebar.contains(e.target) && mobileBtn && !mobileBtn.contains(e.target)){
             sidebar.classList.remove('active');
         }
@@ -7156,7 +7161,7 @@ let otMins = 0;
           htmlSeg += '<td>' + formatHours(regDecSeg) + '</td>';
           htmlSeg += '<td>' + formatHours(otDecSeg) + '</td>';
           htmlSeg += '<td>' + formatHours(String((parseFloat(regDecSeg)||0)+(parseFloat(otDecSeg)||0))) + '</td>';
-          htmlSeg += '<td><button type="button" class="btn-unsplit" data-key="' + splitKey + '" onclick="unsplitRecord(this.dataset.key)">Unsplit</button></td>';
+          htmlSeg += '<td><button type="button" class="btn-unsplit" data-key="' + splitKey + '">Unsplit</button></td>';
           // Ensure Actions column always has a Delete button for split rows
           htmlSeg += '<td class="actions-cell"><button type="button" class="dtr-del-btn">Delete</button></td>';
           trSeg.innerHTML = htmlSeg;
@@ -7207,7 +7212,7 @@ let otMins = 0;
           (merged.otIn ? '<td>'+__fmt12Clock(merged.otIn)+'</td>' : '<td class="missing">-</td>') +
           (merged.otOut ? '<td>'+__fmt12Clock(merged.otOut)+'</td>' : '<td class="missing">-</td>') +
           '<td>'+formatHours(regDec)+'</td><td>'+formatHours(otDec)+'</td><td>'+formatHours(minsToDecimal(merged.regMins + merged.otMins))+'</td>' +
-          '<td><button type="button" class="btn-split" data-key="'+splitKey+'" onclick="splitRecord(this.dataset.key)">Split</button></td>';
+          '<td><button type="button" class="btn-split" data-key="'+splitKey+'">Split</button></td>';
         if(overridesSchedules[overrideKey] || overridesProjects[overrideKeyProj] !== undefined){ tr.style.backgroundColor='#fff3cd'; }
         try{
           if (typeof manualKeys !== 'undefined' && manualKeys.has(splitKey)) {
@@ -7244,8 +7249,8 @@ let otMins = 0;
       (otInCalc ? '<td>' + __fmt12Clock(otInCalc) + '</td>' : '<td class=\"missing\">-</td>') +
       (otOutCalc ? '<td>' + __fmt12Clock(otOutCalc) + '</td>' : '<td class=\"missing\">-</td>') +
       '<td>'+formatHours(totalRegularDecimal)+'</td><td>'+formatHours(otDecimal)+'</td><td>'+formatHours(__tot)+'</td>' +
-      // Use a named handler with a data-key attribute instead of an inline IIFE.
-      '<td><button type="button" class="btn-split" data-key="' + empId + '___' + date + '" onclick="splitRecord(this.dataset.key)">Split</button></td>' +
+      // Delegated click handling reads the data-key to trigger split actions.
+      '<td><button type="button" class="btn-split" data-key="' + empId + '___' + date + '">Split</button></td>' +
       // Ensure Actions column always has a Delete button for unsplit rows
       '<td class="actions-cell"><button type="button" class="dtr-del-btn">Delete</button></td>';
     if(overridesSchedules[overrideKey] || overridesProjects[overrideKeyProj] !== undefined){
@@ -7944,7 +7949,27 @@ function restoreData(file) {
     const table = document.getElementById('resultsTable');
     if (!table || table.__dtrDelBound) return;
     table.addEventListener('click', function(ev){
-      const btn = ev.target && ev.target.closest ? ev.target.closest('.dtr-del-btn') : null;
+      if (!ev.target || typeof ev.target.closest !== 'function') return;
+
+      const splitBtn = ev.target.closest('.btn-split');
+      if (splitBtn) {
+        const key = splitBtn.dataset ? splitBtn.dataset.key : splitBtn.getAttribute('data-key');
+        if (key) {
+          try { splitRecord(key); } catch (e) { console.warn('splitRecord failed', e); }
+        }
+        return;
+      }
+
+      const unsplitBtn = ev.target.closest('.btn-unsplit');
+      if (unsplitBtn) {
+        const key = unsplitBtn.dataset ? unsplitBtn.dataset.key : unsplitBtn.getAttribute('data-key');
+        if (key) {
+          try { unsplitRecord(key); } catch (e) { console.warn('unsplitRecord failed', e); }
+        }
+        return;
+      }
+
+      const btn = ev.target.closest('.dtr-del-btn');
       if (!btn) return;
       const tr = btn.closest('tr');
       if (!tr) return;
