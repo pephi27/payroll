@@ -1210,7 +1210,7 @@ window.addEventListener('load', dashReports);
 </script>
 
   <!-- Mobile menu button for smaller screens -->
-  <button id="mobileMenuBtn" class="mobile-menu-btn">
+  <button class="mobile-menu-btn" onclick="toggleSidebar()">
     <span style="font-size: 20px;">â˜°</span>
   </button>
   <!-- Begin App Container with Sidebar and Main Content -->
@@ -2889,7 +2889,7 @@ document.addEventListener('click', (e)=>{
     if (!file) return;
     
     const reader = new FileReader();
-    reader.onload = async function(e) {
+    reader.onload = function(e) {
       try {
         let rows = [];
         
@@ -2922,17 +2922,12 @@ document.addEventListener('click', (e)=>{
             out.push(cur);
             return out.map(cell => cell.trim());
           });
-        } else {
-          const xlsx = await ensureXLSX();
-          if (!xlsx || !xlsx.utils) {
-            alert('Excel library not available');
-            return;
-          }
+    } else {
           // Handle Excel files
           const data = new Uint8Array(e.target.result);
-          const workbook = xlsx.read(data, { type: 'array' });
+          const workbook = XLSX.read(data, { type: 'array' });
           const sheet = workbook.Sheets[workbook.SheetNames[0]];
-          rows = xlsx.utils.sheet_to_json(sheet, { header: 1 });
+          rows = XLSX.utils.sheet_to_json(sheet, { header: 1 });
         }
         
         if (rows.length < 2) {
@@ -4126,13 +4121,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // Only export one Excel workbook with all tabs (no prints or CSVs)
     try {
       if (typeof window.rebuildReports === 'function') window.rebuildReports();
-      setTimeout(function(){
-        try {
-          if (typeof window.exportExcelAllTabs === 'function') {
-            Promise.resolve(window.exportExcelAllTabs()).catch(err => console.warn('Excel export failed', err));
-          }
-        } catch(e){}
-      }, 600);
+      setTimeout(function(){ try { if (typeof window.exportExcelAllTabs === 'function') window.exportExcelAllTabs(); } catch(e){} }, 600);
     } catch(e){}
   };
 
@@ -4598,24 +4587,11 @@ document.addEventListener('DOMContentLoaded', () => {
           try{ if (typeof calculatePayrollFromResultsTable==='function') calculatePayrollFromResultsTable(); else if (typeof calculatePayrollFromRecords==='function') calculatePayrollFromRecords(); }catch(e){}
           try{ if (typeof window.rebuildReports === 'function') window.rebuildReports(); }catch(e){}
           setTimeout(function(){
-            const restore = () => {
-              setTimeout(function(){
-                try{ if (ws) ws.value = prevS; if (we) we.value = prevE; if (typeof window.rebuildReports==='function') window.rebuildReports(); }catch(e){}
-              }, 0);
-            };
-            try{
-              if (typeof window.exportExcelAllTabs === 'function') {
-                Promise.resolve(window.exportExcelAllTabs()).then(
-                  () => restore(),
-                  err => { console.warn('Excel export failed', err); restore(); }
-                );
-              } else {
-                restore();
-              }
-            } catch(e){
-              console.warn(e);
-              restore();
-            }
+            try{ window.exportExcelAllTabs(); }catch(e){}
+            // Restore previous range and rebuild
+            setTimeout(function(){
+              try{ if (ws) ws.value = prevS; if (we) we.value = prevE; if (typeof window.rebuildReports==='function') window.rebuildReports(); }catch(e){}
+            }, 0);
           }, 300);
         }
       } catch(e){}
@@ -5095,6 +5071,15 @@ document.addEventListener('DOMContentLoaded', () => {
     #panelReports .tab-btn, #panelReports .subtab-btn { padding:8px 12px; border:1px solid var(--border); background:#fff; border-radius:8px; cursor:pointer }
     #panelProjectTotals .tab-btn.active, #panelProjectTotals .subtab-btn.active,
     #panelReports .tab-btn.active, #panelReports .subtab-btn.active { background:var(--accent); color:#fff; border-color:var(--accent) }
+    #panelProjectTotals .subtab-panel{ display:none }
+    #panelProjectTotals .subtab-panel.active{ display:block }
+    /* Master Report table styling */
+    #panelProjectTotals .mr h2{ text-align:center; margin:8px 0 14px 0; font-size:20px }
+    #panelProjectTotals .mr h4{ margin:10px 0 6px 0 }
+    #panelProjectTotals .mr-table{ width:100%; border-collapse:collapse; font-size:12px }
+    #panelProjectTotals .mr-table th, #panelProjectTotals .mr-table td{ border:1px solid #dbe3ef; padding:6px 8px; text-align:right }
+    #panelProjectTotals .mr-table th.left, #panelProjectTotals .mr-table td.left{ text-align:left }
+    #panelProjectTotals .mr-table tfoot td{ font-weight:700; background:#fff7ed }
     /* Print: one sheet per project, repeat header; hide grand total (redundant) */
     @media print{
       header,.header,.controls{display:none!important}
@@ -5104,18 +5089,36 @@ document.addEventListener('DOMContentLoaded', () => {
       #r_table tbody.proj-page{display:table-row-group;break-inside:avoid;page-break-inside:avoid}
       #r_table tbody.proj-page{break-before:page;page-break-before:always}
       #r_table tbody.proj-page:first-of-type{break-before:auto;page-break-before:auto}
+      /* Master report print tweaks */
+      #masterReportContainer .mr-table thead{display:table-header-group}
     }
   </style>
 
   <div class="card">
     <h3 style="margin:0 0 8px 0;">Reports</h3>
-    <div class="controls">
-      <button id="r_print">Print</button>
-      <button id="r_csv">CSV (All)</button>
-      <span id="r_range_hint" style="font-size:12px;color:#64748b;margin-left:auto;"></span>
+    <div class="subtab-nav">
+      <button class="tab-btn subtab-btn active" data-subtab="reportsDetailedTab" id="btnReportsDetailed">Detailed</button>
+      <button class="tab-btn subtab-btn" data-subtab="masterReportTab" id="btnMasterReport">Master Report</button>
     </div>
-    <div id="r_msg" style="font-size:13px;color:#64748b;display:none;"></div>
-    <table id="r_table" aria-live="polite"></table>
+
+    <!-- Detailed (existing) reports view -->
+    <div id="reportsDetailedTab" class="subtab-panel active">
+      <div class="controls">
+        <button id="r_print">Print</button>
+        <button id="r_csv">CSV (All)</button>
+        <span id="r_range_hint" style="font-size:12px;color:#64748b;margin-left:auto;"></span>
+      </div>
+      <div id="r_msg" style="font-size:13px;color:#64748b;display:none;"></div>
+      <table id="r_table" aria-live="polite"></table>
+    </div>
+
+    <!-- New Master Report view -->
+    <div id="masterReportTab" class="subtab-panel">
+      <div class="controls">
+        <button id="mr_print">Print</button>
+      </div>
+      <div id="masterReportContainer" class="mr"></div>
+    </div>
   </div>
 
   <script>
@@ -5507,14 +5510,13 @@ rows += `<tr class="allowance">
     }
 
     // Export an Excel workbook with one sheet per project
-    async function exportExcelAllSheets(){
+    function exportExcelAllSheets(){
       try{
-        const xlsx = await ensureXLSX();
-        if (!xlsx || !xlsx.utils) { alert('Excel library not available'); return; }
+        if (typeof XLSX === 'undefined' || !XLSX || !XLSX.utils) { alert('Excel library not available'); return; }
         if (!__report) { if (typeof window.rebuildReports==='function') window.rebuildReports(); }
         if (!__report) { alert('No report to export yet.'); return; }
         const { data, dates, from, to } = __report;
-        const wb = xlsx.utils.book_new();
+        const wb = XLSX.utils.book_new();
         // Helper: build headers
         const dayHeader = dates.map(d=>{
           const lbl = d.toLocaleDateString(undefined,{day:'2-digit',month:'short'});
@@ -5576,16 +5578,16 @@ rows += `<tr class="allowance">
           const dayTotalsCells = dayTotals.flatMap(dt=>[to2(dt.rwh), to2(dt.oth)]);
           rows.push(['Project Total',''].concat(dayTotalsCells, [to2(pReg), to2(pOT), to2(pReg+pOT), to2(pGross)]));
           summaryRows.push([proj,'Project Total',''].concat(dayTotalsCells,[to2(pReg), to2(pOT), to2(pReg+pOT), to2(pGross)]));
-          const ws = xlsx.utils.aoa_to_sheet(rows);
-          xlsx.utils.book_append_sheet(wb, ws, (proj || 'Project').toString().substring(0,31));
+          const ws = XLSX.utils.aoa_to_sheet(rows);
+          XLSX.utils.book_append_sheet(wb, ws, (proj || 'Project').toString().substring(0,31));
         });
         // Summary sheet with grand totals
         const gDayTotalsCells = gDayTotals.flatMap(dt=>[to2(dt.rwh), to2(dt.oth)]);
         summaryRows.push(['','Grand Total',''].concat(gDayTotalsCells, [to2(gReg), to2(gOT), to2(gReg+gOT), to2(gGross)]));
-        const wsSummary = xlsx.utils.aoa_to_sheet(summaryRows);
-        xlsx.utils.book_append_sheet(wb, wsSummary, 'Summary');
+        const wsSummary = XLSX.utils.aoa_to_sheet(summaryRows);
+        XLSX.utils.book_append_sheet(wb, wsSummary, 'Summary');
         const fname = `reports_all_${from}_to_${to}.xlsx`;
-        xlsx.writeFile(wb, fname);
+        XLSX.writeFile(wb, fname);
       }catch(e){ console.warn('Excel export failed', e); alert('Excel export failed.'); }
     }
 
@@ -5594,14 +5596,13 @@ rows += `<tr class="allowance">
 
     // Export a single workbook that includes sheets for: DTR, Employees, Payroll,
     // and per-project Reports (plus Summary)
-    async function exportExcelAllTabs(){
+    function exportExcelAllTabs(){
       try{
-        const xlsx = await ensureXLSX();
-        if (!xlsx || !xlsx.utils) { alert('Excel library not available'); return; }
+        if (typeof XLSX === 'undefined' || !XLSX || !XLSX.utils) { alert('Excel library not available'); return; }
         if (typeof window.rebuildReports === 'function') window.rebuildReports();
         if (!__report) { alert('No report to export yet.'); return; }
         const { data, dates, from, to } = __report;
-        const wb = xlsx.utils.book_new();
+        const wb = XLSX.utils.book_new();
 
         // 1) DTR sheet from #resultsTable (excluding actions)
         try{
@@ -5617,7 +5618,7 @@ rows += `<tr class="allowance">
             });
             rows.push(row);
           });
-          xlsx.utils.book_append_sheet(wb, xlsx.utils.aoa_to_sheet(rows), 'DTR');
+          XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(rows), 'DTR');
         }catch(e){}
 
         // 2) Employees sheet from store
@@ -5638,7 +5639,7 @@ rows += `<tr class="allowance">
             const fSSS= (fl.sss !== false) ? 'Yes' : 'No';
             rows.push([id, emp.name||'', emp.hourlyRate||'', bank, schedName, schedId, projName, projId, fPI, fPH, fSSS]);
           });
-          xlsx.utils.book_append_sheet(wb, xlsx.utils.aoa_to_sheet(rows), 'Employees');
+          XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(rows), 'Employees');
         }catch(e){}
 
         // 3) Payroll sheet from #payrollTable (inputs → values, drop Payslip)
@@ -5657,7 +5658,7 @@ rows += `<tr class="allowance">
           const foot = [];
           const tfr = clone.querySelector('tfoot tr'); if (tfr){ foot.push(Array.from(tfr.querySelectorAll('td')).map(td=> (td.textContent||'').trim())); }
           const aoa = head.concat(body).concat(foot);
-          xlsx.utils.book_append_sheet(wb, xlsx.utils.aoa_to_sheet(aoa), 'Payroll');
+          XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(aoa), 'Payroll');
         }catch(e){}
 
         // 4) Reports: reuse per-project builder to append sheets + Summary
@@ -5693,17 +5694,17 @@ rows += `<tr class="allowance">
               dayTotals.forEach((dt,i)=>{ gDayTotals[i].rwh += dt.rwh; gDayTotals[i].oth += dt.oth; });
               const dayTotalsCells = dayTotals.flatMap(dt=>[to2(dt.rwh), to2(dt.oth)]);
               rows.push(['Project Total',''].concat(dayTotalsCells, [to2(pReg), to2(pOT), to2(pReg+pOT), to2(pGross)]));
-              xlsx.utils.book_append_sheet(wb2, xlsx.utils.aoa_to_sheet(rows), (proj||'Project').toString().substring(0,31));
+              XLSX.utils.book_append_sheet(wb2, XLSX.utils.aoa_to_sheet(rows), (proj||'Project').toString().substring(0,31));
             });
             const gDayTotalsCells = gDayTotals.flatMap(dt=>[to2(dt.rwh), to2(dt.oth)]);
             summaryRows.push(['','Grand Total',''].concat(gDayTotalsCells, [to2(gReg), to2(gOT), to2(gReg+gOT), to2(gGross)]));
-            xlsx.utils.book_append_sheet(wb2, xlsx.utils.aoa_to_sheet(summaryRows), 'Summary');
+            XLSX.utils.book_append_sheet(wb2, XLSX.utils.aoa_to_sheet(summaryRows), 'Summary');
           };
           addReportSheets(wb);
         }catch(e){}
 
         const fname = `all_tabs_${from}_to_${to}.xlsx`;
-        xlsx.writeFile(wb, fname);
+        XLSX.writeFile(wb, fname);
       }catch(e){ console.warn('Excel export failed', e); alert('Excel export failed'); }
     }
 
@@ -5711,7 +5712,7 @@ rows += `<tr class="allowance">
     // Bind UI button for Excel (All Tabs)
     try {
       var xBtn = document.getElementById('r_xlsx');
-      if (xBtn && !xBtn.__xlsxBound){ xBtn.addEventListener('click', function(ev){ ev.preventDefault(); exportExcelAllTabs().catch(err => console.warn('Excel export failed', err)); }); xBtn.__xlsxBound = true; }
+      if (xBtn && !xBtn.__xlsxBound){ xBtn.addEventListener('click', function(ev){ ev.preventDefault(); exportExcelAllTabs(); }); xBtn.__xlsxBound = true; }
     } catch(e){}
 
     // Export for a specific date range (used by Payroll History actions)
@@ -5723,22 +5724,7 @@ rows += `<tr class="allowance">
         if (ws) ws.value = from || prevS; if (we) we.value = to || prevE;
         try{ if (typeof calculatePayrollFromResultsTable==='function') calculatePayrollFromResultsTable(); else if (typeof calculatePayrollFromRecords==='function') calculatePayrollFromRecords(); }catch(e){}
         try{ if (typeof window.rebuildReports==='function') window.rebuildReports(); }catch(e){}
-        setTimeout(function(){
-          const restore = () => {
-            try{ if (ws) ws.value = prevS; if (we) we.value = prevE; if (typeof window.rebuildReports==='function') window.rebuildReports(); }catch(e){}
-          };
-          try{
-            const result = exportExcelAllTabs();
-            if (result && typeof result.then === 'function') {
-              result.then(() => restore(), err => { console.warn('Excel export failed', err); restore(); });
-            } else {
-              restore();
-            }
-          } catch(err) {
-            console.warn('Excel export failed', err);
-            restore();
-          }
-        }, 300);
+        setTimeout(function(){ try{ exportExcelAllTabs(); } finally { try{ if (ws) ws.value = prevS; if (we) we.value = prevE; if (typeof window.rebuildReports==='function') window.rebuildReports(); }catch(e){} } }, 300);
       }catch(e){ console.warn('Export for range failed', e); }
     }
     try { window.exportExcelAllTabsForRange = exportExcelAllTabsForRange; } catch(e){}
@@ -5800,20 +5786,224 @@ rows += `<tr class="allowance">
 
   // Use the clean per-project print handler defined later; avoid double-binding here.
   // $('#r_print')?.addEventListener('click', ()=> safePrint());
+    // Subtab wiring for Detailed/Master
+    (function(){
+      const btns = Array.from(document.querySelectorAll('#panelProjectTotals .subtab-btn'));
+      function show(id){
+        btns.forEach(b=>b.classList.remove('active'));
+        document.querySelectorAll('#panelProjectTotals .subtab-panel').forEach(p=>p.classList.remove('active'));
+        const target = document.getElementById(id);
+        if (target) target.classList.add('active');
+        const activator = document.querySelector(`#panelProjectTotals .subtab-btn[data-subtab="${id}"]`);
+        if (activator) activator.classList.add('active');
+        if (id === 'masterReportTab') { try{ renderMasterReport(); }catch(e){} }
+      }
+      btns.forEach(b=>{ if (b._wired) return; b._wired = true; b.addEventListener('click', ()=> show(b.getAttribute('data-subtab'))); });
+    })();
+
     $('#r_csv')?.addEventListener('click', exportCSVAll);const dtr = document.getElementById('resultsTable');
     if (dtr && 'MutationObserver' in window){
-      const mo = new MutationObserver(()=> { buildTable(); });
+      const mo = new MutationObserver(()=> { buildTable(); try{ renderMasterReport(); }catch(e){} });
       mo.observe(dtr, { childList:true, subtree:true });
     }
     // Expose a global rebuild hook so other tabs (e.g., Payroll bantay edits)
     // can refresh the report without a full page reload.
-    try { window.rebuildReports = buildTable; } catch(e){}
+    try { window.rebuildReports = function(){ try{ buildTable(); }catch(e){} try{ renderMasterReport(); }catch(e){} }; } catch(e){}
     if (document.readyState === 'loading'){
-      document.addEventListener('DOMContentLoaded', buildTable, { once:true });
-    } else { buildTable(); }
+      document.addEventListener('DOMContentLoaded', function(){ buildTable(); try{ renderMasterReport(); }catch(e){} }, { once:true });
+    } else { buildTable(); try{ renderMasterReport(); }catch(e){} }
   })();
   </script>
 </section>
+<!-- Master Report builder (contributions summary + per-project totals) -->
+<script>
+(function(){
+  // Utilities
+  function num(v){ const n=parseFloat(String(v||'').replace(/,/g,'')); return isNaN(n)?0:n; }
+  function f2(n){ const x=Number(n)||0; return x.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2}); }
+  function safe(val){ return String(val==null?'':val); }
+
+  function getPayrollRange(){
+    try{
+      const ws = document.getElementById('weekStart')?.value;
+      const we = document.getElementById('weekEnd')?.value;
+      if (ws && we) return [ws,we];
+    }catch(e){}
+    return ['', ''];
+  }
+
+  // Compute contribution totals across employees for the active period
+  function computeContributionTotals(){
+    try{ if (typeof syncPeriodScopedData==='function') syncPeriodScopedData(); }catch(e){}
+    const sums = { piEE:0, piER:0, phEE:0, phER:0, sssEE:0, sssER:0, loanSSS:0, loanPI:0 };
+    try{
+      const list = (typeof employeeList!=='undefined' && employeeList) ? employeeList : [];
+      const rates = (typeof payrollRates!=='undefined' && payrollRates) ? payrollRates : {};
+      const se = (typeof storedEmployees!=='undefined' && storedEmployees) ? storedEmployees : {};
+      const rHours = (typeof regHours!=='undefined' && regHours) ? regHours : {};
+      const flagsAll = (typeof contribFlags!=='undefined' && contribFlags) ? contribFlags : {};
+      const div = Number(typeof divisor!=='undefined' ? divisor : 1) || 1;
+      const lSSS = (typeof loanSSS!=='undefined' && loanSSS) ? loanSSS : {};
+      const lPI  = (typeof loanPI!=='undefined'  && loanPI ) ? loanPI  : {};
+      list.forEach(emp=>{
+        const id = emp.id;
+        const rH = num(rHours[id]);
+        const rate = num(se?.[id]?.hourlyRate ?? rates?.[id]);
+        const regPay = +(rH * rate).toFixed(2);
+        const monthly = rate * 8 * 24;
+        const piRate = (typeof pagibigRateByMonthly==='function') ? pagibigRateByMonthly(monthly) : 0;
+        const phRate = (typeof philhealthRateByMonthly==='function') ? philhealthRateByMonthly(monthly) : 0;
+        const sssFull = (typeof sssShareByMonthly==='function') ? sssShareByMonthly(monthly) : 0;
+        const flags = flagsAll[id] || {};
+        const pi = (flags.pagibig===false) ? 0 : +(regPay * piRate).toFixed(2);
+        const ph = (flags.philhealth===false) ? 0 : +(regPay * phRate).toFixed(2);
+        const sss = (flags.sss===false) ? 0 : +(sssFull/div).toFixed(2);
+        sums.piEE += pi; sums.piER += pi;
+        sums.phEE += ph; sums.phER += ph;
+        sums.sssEE += sss; sums.sssER += sss;
+        sums.loanSSS += +(num(lSSS[id]) / div).toFixed(2);
+        sums.loanPI  += +(num(lPI[id])  / div).toFixed(2);
+      });
+    }catch(e){}
+    return sums;
+  }
+
+  // Read per-project totals by copying values from the Detailed reports table
+  function computeProjectTotalsFromDetailed(){
+    const rows = [];
+    try{
+      const tbl = document.getElementById('r_table');
+      if (!tbl) return rows;
+      const blocks = Array.from(tbl.querySelectorAll('tbody.proj-page'));
+      blocks.forEach(tb => {
+        const name = (tb.querySelector('.proj-break td')?.textContent || '').trim();
+        let tot = tb.querySelector('tr.totals:last-child');
+        if (!tot) {
+          const trs = Array.from(tb.querySelectorAll('tr'));
+          tot = trs.reverse().find(tr => (tr.cells[0]?.textContent||'').trim().toLowerCase() === 'project total');
+        }
+        if (!tot) return;
+        const cells = tot.querySelectorAll('td');
+        if (!cells || cells.length < 2) return;
+        const gross = num(cells[cells.length-1].textContent);
+        const hrs   = num(cells[cells.length-2].textContent);
+        rows.push({ name, hrs, total: gross });
+      });
+      rows.sort((a,b)=> a.name.localeCompare(b.name));
+    }catch(e){}
+    return rows;
+  }
+
+  // Fallback: compute from DTR if detailed table isn’t available
+  function computeProjectTotalsFromDTR(){
+    const rows = [];
+    try{
+      const projMap = {};
+      const trs = Array.from(document.querySelectorAll('#resultsTable tbody tr'));
+      trs.forEach(tr=>{
+        const id = (tr.cells[0]?.textContent||'').trim();
+        const name = (tr.cells[1]?.textContent||'').trim();
+        let proj = '';
+        try{
+          const sel = tr.cells[2]?.querySelector('select');
+          if (sel){ const opt = sel.options[sel.selectedIndex]; proj = (opt && (opt.textContent||opt.label)) || sel.value || ''; }
+          else { proj = (tr.cells[2]?.dataset?.project) || (tr.cells[2]?.textContent||''); }
+        }catch(_){ proj = (tr.cells[2]?.textContent||''); }
+        proj = String(proj||'').trim();
+        const rwh = num(tr.cells[11]?.textContent) || num(tr.querySelector('.regHrs')?.value);
+        const oth = num(tr.cells[12]?.textContent) || num(tr.querySelector('.otHrs')?.value);
+        if (!proj) return;
+        const rec = (projMap[proj] = projMap[proj] || { emp:{} });
+        const er = (rec.emp[id] = rec.emp[id] || { name, rwh:0, oth:0 });
+        er.rwh += rwh; er.oth += oth;
+      });
+      const otMult = num(document.getElementById('otMultiplier')?.value) || 1.5;
+      const rates = (typeof payrollRates!=='undefined' && payrollRates) ? payrollRates : {};
+      const se = (typeof storedEmployees!=='undefined' && storedEmployees) ? storedEmployees : {};
+      Object.keys(projMap).forEach(p=>{
+        const rec = projMap[p]; let hrs=0, gross=0;
+        Object.keys(rec.emp).forEach(id=>{
+          const e = rec.emp[id];
+          const rate = num(se?.[id]?.hourlyRate ?? rates?.[id]);
+          hrs += (e.rwh + e.oth);
+          gross += (e.rwh * rate) + (e.oth * rate * otMult);
+        });
+        try{
+          const allow = Object.keys((window.bantay||{})).reduce((sum, empId)=>{
+            const assigned = (window.bantayProj||{})[empId]; if(!assigned) return sum;
+            const sp = (typeof storedProjects!=='undefined' && storedProjects) ? storedProjects : {};
+            const matchesById = (assigned === p);
+            const matchesByName = (sp[assigned]?.name === p);
+            const amt = num((window.bantay||{})[empId]);
+            return (matchesById || matchesByName) ? (sum + amt) : sum;
+          }, 0);
+          gross += allow;
+        }catch(_){ }
+        rows.push({ name:p, hrs:hrs, total:gross });
+      });
+      rows.sort((a,b)=> a.name.localeCompare(b.name));
+    }catch(e){}
+    return rows;
+  }
+
+  function computeProjectTotals(){
+    const fromDetailed = computeProjectTotalsFromDetailed();
+    if (fromDetailed.length) return fromDetailed;
+    return computeProjectTotalsFromDTR();
+  }
+
+  function renderMasterReport(){
+    const host = document.getElementById('masterReportContainer'); if(!host) return;
+    const sums = computeContributionTotals();
+    const prows = computeProjectTotals();
+    const g = prows.reduce((acc,r)=>{ acc.h += r.hrs; acc.t += r.total; return acc; }, {h:0,t:0});
+    let html = '';
+    html += '<h2>PAYROLL REPORT</h2>';
+    html += '<div class="mr-section">';
+    html += '<h4>SITE PAYROLL</h4>';
+    html += '<table class="mr-table"><thead>'+
+            '<tr><th colspan="2">PAG-IBIG</th><th colspan="2">PHILHEALTH</th><th colspan="2">SSS</th><th rowspan="2">SSS LOAN</th><th rowspan="2">PAG-IBIG LOAN</th></tr>'+
+            '<tr><th>EE</th><th>ER</th><th>EE</th><th>ER</th><th>EE</th><th>ER</th></tr>'+
+            '</thead><tbody>'+
+            `<tr><td>${f2(sums.piEE)}</td><td>${f2(sums.piER)}</td><td>${f2(sums.phEE)}</td><td>${f2(sums.phER)}</td><td>${f2(sums.sssEE)}</td><td>${f2(sums.sssER)}</td><td>${f2(sums.loanSSS)}</td><td>${f2(sums.loanPI)}</td></tr>`+
+            '</tbody></table>';
+    html += '</div>';
+
+    html += '<div class="mr-section" style="margin-top:16px;">';
+    html += '<h4>PROJECT</h4>';
+    html += '<table class="mr-table"><thead><tr><th class="left">NAME</th><th>HRS</th><th>GRAND TOTAL</th></tr></thead><tbody>';
+    prows.forEach(r=>{ html += `<tr><td class="left">${safe(r.name)}</td><td>${f2(r.hrs)}</td><td>${f2(r.total)}</td></tr>`; });
+    html += `</tbody><tfoot><tr><td class="left">Grand Total</td><td>${f2(g.h)}</td><td>${f2(g.t)}</td></tr></tfoot></table>`;
+    html += '</div>';
+
+    host.innerHTML = html;
+  }
+
+  function attachMasterPrint(){
+    const btn = document.getElementById('mr_print');
+    if (!btn || btn.__wired) return; btn.__wired = true;
+    btn.addEventListener('click', function(ev){
+      ev.preventDefault();
+      try{
+        const node = document.getElementById('masterReportContainer');
+        if (!node) return; const html = '<!doctype html><html><head><meta charset="utf-8"><title>Master Report</title>'+
+          '<style>body{font-family:Arial,Helvetica,sans-serif;padding:10px} table{width:100%;border-collapse:collapse;font-size:12px} th,td{border:0.6pt solid #000;padding:4px 6px} h2{text-align:center;margin:0 0 10px 0}</style>'+
+          '</head><body>'+ node.innerHTML +'</body></html>';
+        const w = window.open('', '', 'width=1024,height=768'); if (!w) return; w.document.open(); w.document.write(html); w.document.close(); w.focus(); setTimeout(()=>{ try{ w.print(); }catch(_){} }, 0);
+      }catch(_){ window.print(); }
+    });
+  }
+
+  function init(){ renderMasterReport(); attachMasterPrint(); }
+  if (document.readyState === 'loading'){ document.addEventListener('DOMContentLoaded', init, { once:true }); }
+  else { init(); }
+
+  try{
+    const old = window.rebuildReports;
+    window.rebuildReports = function(){ try{ old && old(); }catch(e){} try{ renderMasterReport(); }catch(e){} };
+  }catch(e){}
+})();
+</script>
       </main>
     </div>
     <!-- Sidebar navigation behaviour -->
@@ -5847,11 +6037,6 @@ rows += `<tr class="allowance">
       });
       // Initial set from the currently active tab
       const active = document.querySelector('.nav-link.active');
-      const mobileMenuBtn = document.getElementById('mobileMenuBtn');
-      if (mobileMenuBtn && !mobileMenuBtn.__sidebarBound) {
-        mobileMenuBtn.addEventListener('click', toggleSidebar);
-        mobileMenuBtn.__sidebarBound = true;
-      }
       if (active) setTitleFrom(active);
     })();
     function toggleSidebar(){
@@ -5860,25 +6045,13 @@ rows += `<tr class="allowance">
     }
     document.addEventListener('click', function(e){
         var sidebar = document.getElementById('sidebar');
-        var mobileBtn = document.getElementById('mobileMenuBtn');
+        var mobileBtn = document.querySelector('.mobile-menu-btn');
         if(window.innerWidth <= 768 && sidebar && sidebar.classList.contains('active') && !sidebar.contains(e.target) && mobileBtn && !mobileBtn.contains(e.target)){
             sidebar.classList.remove('active');
         }
     });
     </script>
-    <script type="module">
-      window.XLSXReady = import('https://esm.sh/xlsx@0.18.5?bundle')
-        .then(mod => {
-          window.XLSX = mod;
-          try { window.dispatchEvent(new Event('xlsx-ready')); } catch (_) {}
-          return mod;
-        })
-        .catch(err => {
-          console.error('Failed to load XLSX module', err);
-          try { window.dispatchEvent(new Event('xlsx-ready')); } catch (_) {}
-          return null;
-        });
-    </script>
+    <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
   <script>
    
 const LS_RECORDS = 'att_records_v2';
@@ -5905,31 +6078,6 @@ try {
 } catch (e) {
   splits = {};
 }
-
-async function ensureXLSX() {
-  if (window.XLSX && window.XLSX.utils) return window.XLSX;
-  if (!window.XLSXReady) {
-    window.XLSXReady = new Promise(resolve => {
-      const handler = () => {
-        window.removeEventListener('xlsx-ready', handler);
-        resolve(window.XLSX && window.XLSX.utils ? window.XLSX : null);
-      };
-      window.addEventListener('xlsx-ready', handler, { once: true });
-    });
-  }
-  const ready = window.XLSXReady;
-  if (ready && typeof ready.then === 'function') {
-    try {
-      const mod = await ready;
-      if (mod && mod.utils) return mod;
-    } catch (err) {
-      console.warn('XLSX module failed to load', err);
-      return null;
-    }
-  }
-  return (window.XLSX && window.XLSX.utils) ? window.XLSX : null;
-}
-
 function saveSplits() {
   try {
     localStorage.setItem(LS_SPLITS, JSON.stringify(splits));
@@ -6614,41 +6762,37 @@ document.getElementById('clearEmployeesBtn').addEventListener('click', ()=>{
 document.getElementById('empFileInput').addEventListener('change', (evt) => {
   const file = evt.target.files && evt.target.files[0]; if (!file) return;
   const reader = new FileReader();
-  reader.onload = async function(e) {
+  reader.onload = function(e) {
     try {
       const data = new Uint8Array(e.target.result);
-      const xlsx = await ensureXLSX();
-      if (!xlsx || !xlsx.utils) {
-        alert('Excel library not available');
-        return;
-      }
-      const workbook = xlsx.read(data, { type: 'array' });
+      const workbook = XLSX.read(data, { type: 'array' });
       const sheet = workbook.Sheets[workbook.SheetNames[0]];
-      const rows = xlsx.utils.sheet_to_json(sheet, { header: 1 });
-      let added = 0, updated = 0;
-      rows.slice(1).forEach(row => {
-        if (row && row.length >= 2) {
-          const id = String(row[0] ?? '').trim();
-          const name = String(row[1] ?? '').trim();
-          const rate = row.length >= 3 ? parseFloat(row[2]) || 0 : 0;
-          const schedName = row.length >= 4 ? String(row[3] ?? '').trim().toLowerCase() : '';
-          const projName = row.length >= 5 ? String(row[4] ?? '').trim().toLowerCase() : '';
+      
+const rows = XLSX.utils.sheet_to_json(sheet, { header: 1 });
+let added = 0, updated = 0;
+rows.slice(1).forEach(row => {
+  if (row && row.length >= 2) {
+    const id = String(row[0] ?? '').trim();
+    const name = String(row[1] ?? '').trim();
+    const rate = row.length >= 3 ? parseFloat(row[2]) || 0 : 0;
+    const schedName = row.length >= 4 ? String(row[3] ?? '').trim().toLowerCase() : '';
+    const projName = row.length >= 5 ? String(row[4] ?? '').trim().toLowerCase() : '';
 
-          const bank = row.length >= 6 ? String(row[5] ?? '').trim() : '';
-          if (id && name) {
-            if (!storedEmployees[id]) { added++; } else { updated++; }
-            let scheduleId = Object.keys(storedSchedules).find(k => storedSchedules[k].name.toLowerCase() === schedName) || defaultScheduleId;
-            let projectId = Object.keys(storedProjects).find(k => storedProjects[k].name.toLowerCase() === projName) || null;
+    const bank = row.length >= 6 ? String(row[5] ?? '').trim() : '';
+    if (id && name) {
+      if (!storedEmployees[id]) { added++; } else { updated++; }
+      let scheduleId = Object.keys(storedSchedules).find(k => storedSchedules[k].name.toLowerCase() === schedName) || defaultScheduleId;
+      let projectId = Object.keys(storedProjects).find(k => storedProjects[k].name.toLowerCase() === projName) || null;
 
-            storedEmployees[id] = { name: name, hourlyRate: rate, bankAccount: bank, scheduleId: scheduleId, projectId: projectId };
-          }
-        }
-      });
-      saveEmployeesToLS();
-      renderEmployees();
-      renderResults();
-      if (added || updated) alert(`Imported: ${added}, Updated: ${updated}`);
-      renderResults();
+      storedEmployees[id] = { name: name, hourlyRate: rate, bankAccount: bank, scheduleId: scheduleId, projectId: projectId };
+    }
+  }
+});
+saveEmployeesToLS();
+renderEmployees();
+renderResults();
+if (added || updated) alert(`Imported: ${added}, Updated: ${updated}`);
+ renderResults();
       if(added || updated) alert('Imported: ' + added + ' added, ' + updated + ' updated.');
     } catch (err) { console.error(err); alert('Error reading file.'); }
     finally { evt.target.value = ''; }
@@ -7243,7 +7387,7 @@ let otMins = 0;
           htmlSeg += '<td>' + formatHours(regDecSeg) + '</td>';
           htmlSeg += '<td>' + formatHours(otDecSeg) + '</td>';
           htmlSeg += '<td>' + formatHours(String((parseFloat(regDecSeg)||0)+(parseFloat(otDecSeg)||0))) + '</td>';
-          htmlSeg += '<td><button type="button" class="btn-unsplit" data-key="' + splitKey + '">Unsplit</button></td>';
+          htmlSeg += '<td><button type="button" class="btn-unsplit" data-key="' + splitKey + '" onclick="unsplitRecord(this.dataset.key)">Unsplit</button></td>';
           // Ensure Actions column always has a Delete button for split rows
           htmlSeg += '<td class="actions-cell"><button type="button" class="dtr-del-btn">Delete</button></td>';
           trSeg.innerHTML = htmlSeg;
@@ -7294,7 +7438,7 @@ let otMins = 0;
           (merged.otIn ? '<td>'+__fmt12Clock(merged.otIn)+'</td>' : '<td class="missing">-</td>') +
           (merged.otOut ? '<td>'+__fmt12Clock(merged.otOut)+'</td>' : '<td class="missing">-</td>') +
           '<td>'+formatHours(regDec)+'</td><td>'+formatHours(otDec)+'</td><td>'+formatHours(minsToDecimal(merged.regMins + merged.otMins))+'</td>' +
-          '<td><button type="button" class="btn-split" data-key="'+splitKey+'">Split</button></td>';
+          '<td><button type="button" class="btn-split" data-key="'+splitKey+'" onclick="splitRecord(this.dataset.key)">Split</button></td>';
         if(overridesSchedules[overrideKey] || overridesProjects[overrideKeyProj] !== undefined){ tr.style.backgroundColor='#fff3cd'; }
         try{
           if (typeof manualKeys !== 'undefined' && manualKeys.has(splitKey)) {
@@ -7331,8 +7475,8 @@ let otMins = 0;
       (otInCalc ? '<td>' + __fmt12Clock(otInCalc) + '</td>' : '<td class=\"missing\">-</td>') +
       (otOutCalc ? '<td>' + __fmt12Clock(otOutCalc) + '</td>' : '<td class=\"missing\">-</td>') +
       '<td>'+formatHours(totalRegularDecimal)+'</td><td>'+formatHours(otDecimal)+'</td><td>'+formatHours(__tot)+'</td>' +
-      // Delegated click handling reads the data-key to trigger split actions.
-      '<td><button type="button" class="btn-split" data-key="' + empId + '___' + date + '">Split</button></td>' +
+      // Use a named handler with a data-key attribute instead of an inline IIFE.
+      '<td><button type="button" class="btn-split" data-key="' + empId + '___' + date + '" onclick="splitRecord(this.dataset.key)">Split</button></td>' +
       // Ensure Actions column always has a Delete button for unsplit rows
       '<td class="actions-cell"><button type="button" class="dtr-del-btn">Delete</button></td>';
     if(overridesSchedules[overrideKey] || overridesProjects[overrideKeyProj] !== undefined){
@@ -8031,27 +8175,7 @@ function restoreData(file) {
     const table = document.getElementById('resultsTable');
     if (!table || table.__dtrDelBound) return;
     table.addEventListener('click', function(ev){
-      if (!ev.target || typeof ev.target.closest !== 'function') return;
-
-      const splitBtn = ev.target.closest('.btn-split');
-      if (splitBtn) {
-        const key = splitBtn.dataset ? splitBtn.dataset.key : splitBtn.getAttribute('data-key');
-        if (key) {
-          try { splitRecord(key); } catch (e) { console.warn('splitRecord failed', e); }
-        }
-        return;
-      }
-
-      const unsplitBtn = ev.target.closest('.btn-unsplit');
-      if (unsplitBtn) {
-        const key = unsplitBtn.dataset ? unsplitBtn.dataset.key : unsplitBtn.getAttribute('data-key');
-        if (key) {
-          try { unsplitRecord(key); } catch (e) { console.warn('unsplitRecord failed', e); }
-        }
-        return;
-      }
-
-      const btn = ev.target.closest('.dtr-del-btn');
+      const btn = ev.target && ev.target.closest ? ev.target.closest('.dtr-del-btn') : null;
       if (!btn) return;
       const tr = btn.closest('tr');
       if (!tr) return;
