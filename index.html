@@ -1306,6 +1306,50 @@ window.addEventListener('load', dashReports);
           <select id="activePayrollSelect" class="date-input activeWeekSelect" style="min-width:260px;"></select>
           <button id="newPayrollPeriod" type="button" class="date-input">New period</button>
         </div>
+        <!-- New Period Modal (pre-rendered for instant open) -->
+        <style>
+          /* Modal overlay */
+          #newPeriodModal{display:none;position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:2000;align-items:center;justify-content:center}
+          /* Modal card */
+          #newPeriodModal .card{background:#fff;padding:18px 18px 14px;border-radius:12px;box-shadow:0 12px 34px rgba(0,0,0,.22);width:480px;max-width:96vw;font-family:inherit;box-sizing:border-box;border:1px solid #e5e7eb}
+          #newPeriodModal h3{margin:0 0 10px 0;font-size:18px}
+          #newPeriodModal label{display:block;font-size:13px;color:#374151;margin-top:8px}
+          #newPeriodModal input[type=date]{width:100%;margin-top:4px;padding:8px;border:1px solid #D1D5DB;border-radius:8px;box-sizing:border-box}
+          #newPeriodModal .row{display:flex;gap:12px;margin-top:4px;flex-wrap:wrap}
+          #newPeriodModal .row > div{flex:1 1 0;min-width:0}
+          #newPeriodModal .actions{margin-top:14px;display:flex;gap:8px;justify-content:flex-end}
+          #newPeriodModal .spinner{width:16px;height:16px;border:2px solid #e5e7eb;border-top-color:#3b82f6;border-radius:50%;animation:npSpin 0.8s linear infinite;display:none}
+          #newPeriodModal .status{font-size:12px;color:#6B7280;margin-right:auto;display:none;align-items:center;gap:6px}
+          @keyframes npSpin{to{transform:rotate(360deg)}}
+          #newPeriodModal .error{color:#b91c1c;font-size:12px;display:none;margin-top:8px}
+          @media (max-width: 520px){
+            #newPeriodModal .card{width:94vw}
+            #newPeriodModal .row > div{flex-basis:100%}
+          }
+        </style>
+        <div id="newPeriodModal">
+          <div class="card">
+            <h3>New Payroll Period</h3>
+            <div class="row">
+              <div>
+                <label>Start date
+                  <input type="date" id="newPeriodStart" />
+                </label>
+              </div>
+              <div>
+                <label>End date
+                  <input type="date" id="newPeriodEnd" />
+                </label>
+              </div>
+            </div>
+            <div class="error" id="newPeriodErr">End date must be on/after start date.</div>
+            <div class="actions">
+              <div class="status" id="newPeriodStatus"><span class="spinner" id="newPeriodSpin"></span><span>Creating snapshot…</span></div>
+              <button id="cancelNewPeriod" type="button">Cancel</button>
+              <button id="saveNewPeriod" type="button" class="primary">Create</button>
+            </div>
+          </div>
+        </div>
         <div class="warning-note">
           ðŸ’¾ Data persisted in browser (localStorage). Use Clear to remove.
         </div>
@@ -9657,62 +9701,122 @@ function updateWeekInputs(snap) {
     populateDropdowns();
   }
 
-  function onNewPeriod() {
-    const start = prompt('Enter start date (YYYY-MM-DD):');
-    const end = start ? prompt('Enter end date (YYYY-MM-DD):') : null;
+  async function createNewPeriodSnapshot(start, end){
     if (!start || !end) return;
-    // Use global payrollHistory if available to check for existing ranges
+    // Normalize to ISO (YYYY-MM-DD)
+    const toIso = (s)=>{ try{ return s && /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : (new Date(s)).toISOString().slice(0,10); } catch { return s; } };
+    let s = toIso(start), e = toIso(end);
+    if (s && e && s > e) { const t = s; s = e; e = t; }
+    // Prevent duplicates
     const hist = Array.isArray(window.payrollHistory) ? window.payrollHistory : loadHistory();
-    const exists = hist.some(s => s && s.startDate === start && s.endDate === end);
-    if (exists) {
-      alert('A payroll snapshot for this date range already exists.');
-      return;
-    }
-    if (typeof buildSnapshot === 'function') {
-      (async () => {
-        const snap = await buildSnapshot(start, end);
-        if (!snap) {
-          alert('Payroll table is missing or empty.');
-          return;
-        }
-        const json = JSON.stringify(snap);
-        const hashBuffer = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(json));
-        const hashArray = Array.from(new Uint8Array(hashBuffer));
-        const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
-        const now = new Date().toISOString();
-        const newSnap = { startDate: start, endDate: end, rows: snap.rows, totals: snap.totals, hash: hashHex, lockedAt: now, locked: false };
-        // Push into global payrollHistory if it exists; else push into local history
-        if (Array.isArray(window.payrollHistory)) {
-          window.payrollHistory.push(newSnap);
-          // Persist via existing saveHistory function if available
-          if (typeof saveHistory === 'function') saveHistory();
-        } else {
-          // Fallback: update localStorage directly
-          const localHist = loadHistory();
-          localHist.push(newSnap);
-          localStorage.setItem(PAYROLL_HIST_KEY, JSON.stringify(localHist));
-        }
-        // Refresh tables
-        if (typeof renderHistory === 'function') {
-          try { renderHistory(); } catch (err) {}
-        }
-        if (typeof renderActivePayrolls === 'function') {
-          try { renderActivePayrolls(); } catch (err) {}
-        }
-        // Compute index for active snapshot using global array or fallback local array
-        let idx;
-        if (Array.isArray(window.payrollHistory)) {
-          idx = window.payrollHistory.length - 1;
-        } else {
-          const localHist2 = loadHistory();
-          idx = localHist2.length - 1;
-        }
-        saveActiveIndex(idx);
-        populateDropdowns();
-      })();
+    const exists = hist.some(x => x && x.startDate === s && x.endDate === e);
+    if (exists) { alert('A payroll snapshot for this date range already exists.'); return; }
+    if (typeof buildSnapshot !== 'function') { alert('buildSnapshot function not available.'); return; }
+    const snap = await buildSnapshot(s, e);
+    if (!snap) { alert('Payroll table is missing or empty.'); return; }
+    const json = JSON.stringify(snap);
+    const hashBuffer = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(json));
+    const hashArray = Array.from(new Uint8Array(hashBuffer));
+    const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+    const now = new Date().toISOString();
+    const newSnap = { startDate: s, endDate: e, rows: snap.rows, totals: snap.totals, hash: hashHex, lockedAt: now, locked: false };
+    if (Array.isArray(window.payrollHistory)) {
+      window.payrollHistory.push(newSnap);
+      if (typeof saveHistory === 'function') saveHistory();
     } else {
-      alert('buildSnapshot function not available.');
+      const localHist = loadHistory();
+      localHist.push(newSnap);
+      localStorage.setItem(PAYROLL_HIST_KEY, JSON.stringify(localHist));
     }
+    // Refresh UI pieces
+    try { if (typeof renderHistory === 'function') renderHistory(); } catch {}
+    try { if (typeof renderActivePayrolls === 'function') renderActivePayrolls(); } catch {}
+    // Set new active index (last)
+    let idx;
+    if (Array.isArray(window.payrollHistory)) idx = window.payrollHistory.length - 1; else idx = (loadHistory().length - 1);
+    saveActiveIndex(idx);
+    populateDropdowns();
+  }
+
+  function validateNewPeriodForm(){
+    const sEl = document.getElementById('newPeriodStart');
+    const eEl = document.getElementById('newPeriodEnd');
+    const err = document.getElementById('newPeriodErr');
+    const saveBtn = document.getElementById('saveNewPeriod');
+    const s = sEl && sEl.value || '';
+    const e = eEl && eEl.value || '';
+    const ok = !!s && !!e && (!s || !e || s <= e);
+    if (err) err.style.display = (s && e && s > e) ? 'block' : 'none';
+    if (saveBtn) saveBtn.disabled = !ok;
+    return ok;
+  }
+
+  function setNewPeriodBusy(busy){
+    const saveBtn = document.getElementById('saveNewPeriod');
+    const cancelBtn = document.getElementById('cancelNewPeriod');
+    const status = document.getElementById('newPeriodStatus');
+    const spin = document.getElementById('newPeriodSpin');
+    if (status) status.style.display = busy ? 'inline-flex' : 'none';
+    if (spin) spin.style.display = busy ? 'inline-block' : 'none';
+    if (saveBtn) saveBtn.disabled = !!busy;
+    if (cancelBtn) cancelBtn.disabled = !!busy;
+  }
+
+  function ensureNewPeriodBindings(){
+    const modal = document.getElementById('newPeriodModal');
+    if (!modal) return;
+    if (!modal.__bound){
+      modal.addEventListener('click', (e)=>{ if (e.target === modal) { modal.style.display = 'none'; } });
+      document.getElementById('cancelNewPeriod')?.addEventListener('click', ()=>{ if (!document.getElementById('cancelNewPeriod').disabled) modal.style.display='none'; });
+      const saveBtn = document.getElementById('saveNewPeriod');
+      if (saveBtn){
+        saveBtn.addEventListener('click', async ()=>{
+          if (!validateNewPeriodForm()) return;
+          setNewPeriodBusy(true);
+          // allow spinner to render
+          await new Promise(r=>setTimeout(r,0));
+          const s = (document.getElementById('newPeriodStart')||{}).value || '';
+          const e = (document.getElementById('newPeriodEnd')||{}).value || '';
+          await createNewPeriodSnapshot(s, e);
+          setNewPeriodBusy(false);
+          modal.style.display = 'none';
+        });
+      }
+      const sEl = document.getElementById('newPeriodStart');
+      const eEl = document.getElementById('newPeriodEnd');
+      const syncMins = ()=>{ try{ if (eEl) eEl.min = sEl && sEl.value ? sEl.value : ''; } catch{} };
+      sEl?.addEventListener('input', ()=>{ syncMins(); validateNewPeriodForm(); });
+      eEl?.addEventListener('input', ()=>{ validateNewPeriodForm(); });
+      syncMins();
+      // Keyboard shortcuts
+      modal.addEventListener('keydown', async (ev)=>{
+        if (ev.key === 'Escape') { ev.preventDefault(); if (!document.getElementById('cancelNewPeriod').disabled) modal.style.display='none'; }
+        if (ev.key === 'Enter') { ev.preventDefault(); if (validateNewPeriodForm()) document.getElementById('saveNewPeriod').click(); }
+      });
+      modal.__bound = true;
+    }
+  }
+
+  function onNewPeriod() {
+    const modal = document.getElementById('newPeriodModal');
+    ensureNewPeriodBindings();
+    if (!modal) return;
+    // Prefill from existing inputs
+    const ws = document.getElementById('weekStart');
+    const we = document.getElementById('weekEnd');
+    const sEl = document.getElementById('newPeriodStart');
+    const eEl = document.getElementById('newPeriodEnd');
+    if (sEl) sEl.value = (ws && ws.value) || '';
+    if (eEl) eEl.value = (we && we.value) || '';
+    // Reset UI state
+    const err = document.getElementById('newPeriodErr');
+    if (err) err.style.display = 'none';
+    setNewPeriodBusy(false);
+    validateNewPeriodForm();
+    modal.style.display = 'flex';
+    try { modal.setAttribute('tabindex','-1'); modal.focus(); } catch{}
+    // Focus start date without forcing the picker to open (avoids jank)
+    setTimeout(()=>{ try{ sEl?.focus(); } catch{} }, 0);
   }
 
   function onPanelApply(e) {
@@ -9732,6 +9836,8 @@ function updateWeekInputs(snap) {
     if (newBtn) {
       newBtn.addEventListener('click', onNewPeriod);
     }
+    // Bind modal controls once DOM is ready for instant usage
+    try { ensureNewPeriodBindings(); } catch(_){ }
     document.addEventListener('click', (e) => {
       if (e.target && e.target.classList && e.target.classList.contains('refreshActiveWeek')) {
         onPanelApply(e);
