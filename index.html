@@ -5979,6 +5979,8 @@ rows += `<tr class="allowance">
     host.innerHTML = html;
   }
 
+  try { window.renderMasterReport = renderMasterReport; } catch (e) {}
+
   function attachMasterPrint(){
     const btn = document.getElementById('mr_print');
     if (!btn || btn.__wired) return; btn.__wired = true;
