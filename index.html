@@ -5897,15 +5897,30 @@ rows += `<tr class="allowance">
   const renderContributionTable = (bucket, opts = {}) => {
     const data = bucket || makeContributionBucket();
     const rowClassAttr = opts.rowClass ? ` class="${opts.rowClass}"` : '';
-    const tableHead = '<tr><th>PAG-IBIG</th><th>PHILHEALTH</th><th>SSS</th><th>SSS LOAN</th><th>PAG-IBIG LOAN</th></tr>';
+    const tableHead = '<tr><th colspan="2">PAG-IBIG</th><th colspan="2">PHILHEALTH</th><th colspan="2">SSS</th><th rowspan="2">SSS LOAN</th><th rowspan="2">PAG-IBIG LOAN</th></tr>'+
+      '<tr><th>EE</th><th>ER</th><th>EE</th><th>ER</th><th>EE</th><th>ER</th></tr>';
     const cell = (value, extraAttrs = '', { bold } = {}) => {
       let attrs = extraAttrs || '';
       const useBold = (bold !== undefined) ? bold : !!opts.bold;
       if (useBold) attrs += ' style="font-weight:600;"';
       return `<td${attrs}>${f2(value)}</td>`;
     };
-    const rows = [`<tr${rowClassAttr}>${cell(data.piEE + data.piER)}${cell(data.phEE + data.phER)}${cell(data.sssEE + data.sssER)}${cell(data.loanSSS)}${cell(data.loanPI)}</tr>`];
-    return `<table class="mr-table"><thead>${tableHead}</thead><tbody>${rows.join('')}</tbody></table>`;
+    const rows = [`<tr${rowClassAttr}>${cell(data.piEE)}${cell(data.piER)}${cell(data.phEE)}${cell(data.phER)}${cell(data.sssEE)}${cell(data.sssER)}${cell(data.loanSSS)}${cell(data.loanPI)}</tr>`];
+    let foot = '';
+    if (opts.combineShares) {
+      const combinedBold = opts.combineBold !== undefined ? opts.combineBold : true;
+      const totalRowClassAttr = opts.combineRowClass ? ` class="${opts.combineRowClass}"` : '';
+      const label = opts.combineLabel != null ? opts.combineLabel : 'Total (Employee + Employer)';
+      const totalCells = [
+        cell(data.piEE + data.piER, ' colspan="2"', { bold: combinedBold }),
+        cell(data.phEE + data.phER, ' colspan="2"', { bold: combinedBold }),
+        cell(data.sssEE + data.sssER, ' colspan="2"', { bold: combinedBold }),
+        cell(data.loanSSS, '', { bold: combinedBold }),
+        cell(data.loanPI, '', { bold: combinedBold })
+      ].join('');
+      foot = `<tfoot><tr><td colspan="8" style="font-weight:600;text-align:left;">${safe(label)}</td></tr><tr${totalRowClassAttr}>${totalCells}</tr></tfoot>`;
+    }
+    return `<table class="mr-table"><thead>${tableHead}</thead><tbody>${rows.join('')}</tbody>${foot}</table>`;
   };
 
   function getPayrollRange(){
@@ -6205,7 +6220,7 @@ rows += `<tr class="allowance">
     if (orderedCompanies.length){
       html += '<div class="mr-section mr-grand-contributions">';
       html += '<h4>GRAND TOTAL - CONTRIBUTIONS</h4>';
-      html += renderContributionTable(overallBucket, { bold: true });
+      html += renderContributionTable(overallBucket, { bold: true, combineShares: true, combineLabel: 'TOTAL CONTRIBUTIONS (Employee + Employer)' });
       html += '</div>';
     }
 
