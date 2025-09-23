@@ -5210,7 +5210,8 @@ document.addEventListener('DOMContentLoaded', () => {
     #panelProjectTotals .mr h4{ margin:10px 0 6px 0 }
     #panelProjectTotals .mr .mr-project-title{ text-align:center }
     #panelProjectTotals .mr-table{ width:100%; border-collapse:collapse; font-size:12px }
-    #panelProjectTotals .mr-table th, #panelProjectTotals .mr-table td{ border:1px solid #dbe3ef; padding:6px 8px; text-align:right }
+    #panelProjectTotals .mr-table th, #panelProjectTotals .mr-table td{ border:1px solid #dbe3ef; padding:6px 8px; text-align:left }
+    #panelProjectTotals .mr-table .mr-num{ text-align:right; font-variant-numeric:tabular-nums; white-space:nowrap }
     #panelProjectTotals .mr-contrib-table th, #panelProjectTotals .mr-contrib-table td{ text-align:center }
     #panelProjectTotals .mr-table th.left, #panelProjectTotals .mr-table td.left{ text-align:left }
     #panelProjectTotals .mr-table tfoot td{ font-weight:700; background:#fff7ed }
@@ -6344,12 +6345,12 @@ rows += `<tr class="allowance">
 
     html += '<div class="mr-section" style="margin-top:16px;">';
     html += '<h4 class="mr-project-title">PROJECT</h4>';
-    html += '<table class="mr-table"><thead><tr><th class="left">NAME</th><th>HRS</th><th>GRAND TOTAL</th></tr></thead><tbody>';
+    html += '<table class="mr-table"><thead><tr><th class="left">NAME</th><th class="mr-num">HRS</th><th class="mr-num">GRAND TOTAL</th></tr></thead><tbody>';
     if (!projectOrder.length){
       if (!prows.length){
         html += '<tr><td class="left" colspan="3">No project totals available.</td></tr>';
       } else {
-        prows.forEach(r=>{ html += `<tr><td class="left">${safe(r.name)}</td><td>${f2(r.hrs)}</td><td>${f2(r.total)}</td></tr>`; });
+        prows.forEach(r=>{ html += `<tr><td class="left">${safe(r.name)}</td><td class="mr-num">${f2(r.hrs)}</td><td class="mr-num">${f2(r.total)}</td></tr>`; });
       }
     } else {
       projectOrder.forEach(companyName => {
@@ -6359,12 +6360,12 @@ rows += `<tr class="allowance">
         html += `<tr class="mr-company"><th colspan="3">${safe(companyLabel)}</th></tr>`;
         const sortedRows = group.rows.slice().sort((a,b)=> safe(a && a.name).localeCompare(safe(b && b.name)));
         sortedRows.forEach(r=>{
-          html += `<tr><td class="left">${safe(r && r.name)}</td><td>${f2(r && r.hrs)}</td><td>${f2(r && r.total)}</td></tr>`;
+          html += `<tr><td class="left">${safe(r && r.name)}</td><td class="mr-num">${f2(r && r.hrs)}</td><td class="mr-num">${f2(r && r.total)}</td></tr>`;
         });
-        html += `<tr class="mr-subtotal"><td class="left" style="font-weight:600;">Subtotal - ${safe(companyLabel)}</td><td style="font-weight:600;">${f2(group.hrs)}</td><td style="font-weight:600;">${f2(group.total)}</td></tr>`;
+        html += `<tr class="mr-subtotal"><td class="left" style="font-weight:600;">Subtotal - ${safe(companyLabel)}</td><td class="mr-num" style="font-weight:600;">${f2(group.hrs)}</td><td class="mr-num" style="font-weight:600;">${f2(group.total)}</td></tr>`;
       });
     }
-    html += `</tbody><tfoot><tr><td class="left">Grand Total</td><td>${f2(g.h)}</td><td>${f2(g.t)}</td></tr></tfoot></table>`;
+    html += `</tbody><tfoot><tr><td class="left">Grand Total</td><td class="mr-num">${f2(g.h)}</td><td class="mr-num">${f2(g.t)}</td></tr></tfoot></table>`;
     html += '</div>';
 
     host.innerHTML = html;
@@ -6380,7 +6381,7 @@ rows += `<tr class="allowance">
       try{
         const node = document.getElementById('masterReportContainer');
         if (!node) return; const html = '<!doctype html><html><head><meta charset="utf-8"><title>Master Report</title>'+
-          '<style>body{font-family:Arial,Helvetica,sans-serif;padding:10px} table{width:100%;border-collapse:collapse;font-size:12px} th,td{border:0.6pt solid #000;padding:4px 6px} h2{text-align:center;margin:0 0 10px 0}</style>'+
+          '<style>body{font-family:Arial,Helvetica,sans-serif;padding:10px} table{width:100%;border-collapse:collapse;font-size:12px} th,td{border:0.6pt solid #000;padding:4px 6px;text-align:left} .mr-num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap} .mr-company th{text-align:center} h2{text-align:center;margin:0 0 10px 0}</style>'+
           '</head><body>'+ node.innerHTML +'</body></html>';
         const w = window.open('', '', 'width=1024,height=768'); if (!w) return; w.document.open(); w.document.write(html); w.document.close(); w.focus(); setTimeout(()=>{ try{ w.print(); }catch(_){} }, 0);
       }catch(_){ window.print(); }
