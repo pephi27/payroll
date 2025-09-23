@@ -12072,11 +12072,15 @@ document.addEventListener('DOMContentLoaded', async function () {
   document.addEventListener('click', function(ev){
     const btn = ev.target && ev.target.closest && ev.target.closest('#panelPayroll .tabs .tab-btn');
     if (btn && btn.dataset && btn.dataset.tab === 'deductionsTab'){
-      if (window.__deductionsDirty && typeof window.renderDeductionsTable === 'function'){
-        try { window.renderDeductionsTable(); } catch(e){}
-      }
+      if (!window.__deductionsDirty || typeof window.renderDeductionsTable !== 'function') return;
+      const schedule = window.requestAnimationFrame ? window.requestAnimationFrame.bind(window) : function(cb){ return setTimeout(cb, 0); };
+      schedule(function(){
+        if (window.__deductionsDirty && typeof window.renderDeductionsTable === 'function' && isDeductionsVisible()){
+          try { window.renderDeductionsTable(); } catch(e){}
+        }
+      });
     }
-  }, true);
+  });
 })();
 </script>
 <script>
