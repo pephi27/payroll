@@ -5911,69 +5911,6 @@ rows += `<tr class="allowance">
     return sums;
   }
 
-  function resolveProjectDetails(projectIdHint, projectLabel){
-    const sp = (typeof storedProjects !== 'undefined' && storedProjects) ? storedProjects : {};
-    const clean = (val) => {
-      if (val == null) return '';
-      return String(val).trim();
-    };
-    const id = clean(projectIdHint);
-    const label = clean(projectLabel);
-    const fallbackName = label || id;
-
-    if (id && sp[id]){
-      const rec = sp[id] || {};
-      return {
-        id,
-        name: clean(rec.name) || fallbackName,
-        company: clean(rec.company)
-      };
-    }
-
-    if (label && sp[label]){
-      const rec = sp[label] || {};
-      return {
-        id: label,
-        name: clean(rec.name) || fallbackName,
-        company: clean(rec.company)
-      };
-    }
-
-    const lowerLabel = label.toLowerCase();
-    if (lowerLabel){
-      for (const [pid, proj] of Object.entries(sp)){
-        const projName = clean(proj && proj.name);
-        if (projName && projName.toLowerCase() === lowerLabel){
-          return {
-            id: clean(pid),
-            name: projName,
-            company: clean(proj && proj.company)
-          };
-        }
-      }
-    }
-
-    const lowerId = id.toLowerCase();
-    if (lowerId){
-      for (const [pid, proj] of Object.entries(sp)){
-        const projName = clean(proj && proj.name);
-        if (projName && projName.toLowerCase() === lowerId){
-          return {
-            id: clean(pid),
-            name: projName,
-            company: clean(proj && proj.company)
-          };
-        }
-      }
-    }
-
-    return {
-      id,
-      name: fallbackName,
-      company: ''
-    };
-  }
-
   // Read per-project totals by copying values from the Detailed reports table
   function computeProjectTotalsFromDetailed(){
     const rows = [];
@@ -5982,7 +5919,7 @@ rows += `<tr class="allowance">
       if (!tbl) return rows;
       const blocks = Array.from(tbl.querySelectorAll('tbody.proj-page'));
       blocks.forEach(tb => {
-        const rawName = (tb.querySelector('.proj-break td')?.textContent || '').trim();
+        const name = (tb.querySelector('.proj-break td')?.textContent || '').trim();
         let tot = tb.querySelector('tr.totals:last-child');
         if (!tot) {
           const trs = Array.from(tb.querySelectorAll('tr'));
@@ -5993,16 +5930,9 @@ rows += `<tr class="allowance">
         if (!cells || cells.length < 2) return;
         const gross = num(cells[cells.length-1].textContent);
         const hrs   = num(cells[cells.length-2].textContent);
-        const meta = resolveProjectDetails('', rawName);
-        const displayName = meta.name || rawName;
-        const company = meta.company || '';
-        rows.push({ name: displayName, hrs, total: gross, company });
+        rows.push({ name, hrs, total: gross });
       });
-      rows.sort((a,b)=>{
-        const aComp = (a.company || '').localeCompare(b.company || '');
-        if (aComp) return aComp;
-        return (a.name || '').localeCompare(b.name || '');
-      });
+      rows.sort((a,b)=> a.name.localeCompare(b.name));
     }catch(e){}
     return rows;
   }
@@ -6016,42 +5946,17 @@ rows += `<tr class="allowance">
       trs.forEach(tr=>{
         const id = (tr.cells[0]?.textContent||'').trim();
         const name = (tr.cells[1]?.textContent||'').trim();
-        const cell = tr.cells[2];
         let proj = '';
-        let projIdHint = '';
         try{
-          const sel = cell?.querySelector('select');
-          if (sel){
-            const opt = sel.options[sel.selectedIndex];
-            proj = (opt && (opt.textContent||opt.label)) || sel.value || '';
-            projIdHint = sel.value || sel.getAttribute('data-project-id') || '';
-            if (!proj) {
-              proj = cell?.dataset?.projectName || cell?.dataset?.project || '';
-            }
-          }
-          else {
-            proj = cell?.dataset?.projectName || cell?.dataset?.project || (cell?.textContent||'');
-            projIdHint = cell?.dataset?.projectId || cell?.dataset?.project || '';
-          }
-        }catch(_){
-          proj = (cell?.textContent||'');
-          projIdHint = cell?.dataset?.projectId || cell?.dataset?.project || '';
-        }
+          const sel = tr.cells[2]?.querySelector('select');
+          if (sel){ const opt = sel.options[sel.selectedIndex]; proj = (opt && (opt.textContent||opt.label)) || sel.value || ''; }
+          else { proj = (tr.cells[2]?.dataset?.project) || (tr.cells[2]?.textContent||''); }
+        }catch(_){ proj = (tr.cells[2]?.textContent||''); }
         proj = String(proj||'').trim();
-        projIdHint = String(projIdHint||'').trim();
-        if (!proj && projIdHint) proj = projIdHint;
         const rwh = num(tr.cells[11]?.textContent) || num(tr.querySelector('.regHrs')?.value);
         const oth = num(tr.cells[12]?.textContent) || num(tr.querySelector('.otHrs')?.value);
         if (!proj) return;
-        const meta = resolveProjectDetails(projIdHint, proj);
-        const rec = (projMap[proj] = projMap[proj] || { emp:{}, meta:null });
-        if (!rec.meta){
-          rec.meta = { ...meta };
-        } else {
-          if (meta.company && !rec.meta.company) rec.meta.company = meta.company;
-          if (meta.id && !rec.meta.id) rec.meta.id = meta.id;
-          if (meta.name && (!rec.meta.name || rec.meta.name === proj || rec.meta.name === rec.meta.id)) rec.meta.name = meta.name;
-        }
+        const rec = (projMap[proj] = projMap[proj] || { emp:{} });
         const er = (rec.emp[id] = rec.emp[id] || { name, rwh:0, oth:0 });
         er.rwh += rwh; er.oth += oth;
       });
@@ -6077,19 +5982,13 @@ rows += `<tr class="allowance">
           }, 0);
           gross += allow;
         }catch(_){ }
-        const meta = rec.meta || resolveProjectDetails('', p);
-        const displayName = meta.name || p;
-        const company = meta.company || '';
-        rows.push({ name:displayName, hrs:hrs, total:gross, company });
+        rows.push({ name:p, hrs:hrs, total:gross });
       });
-      rows.sort((a,b)=>{
-        const aComp = (a.company || '').localeCompare(b.company || '');
-        if (aComp) return aComp;
-        return (a.name || '').localeCompare(b.name || '');
-      });
+      rows.sort((a,b)=> a.name.localeCompare(b.name));
     }catch(e){}
     return rows;
   }
+
   function computeProjectTotals(){
     const fromDetailed = computeProjectTotalsFromDetailed();
     if (fromDetailed.length) return fromDetailed;
@@ -6100,11 +5999,7 @@ rows += `<tr class="allowance">
     const host = document.getElementById('masterReportContainer'); if(!host) return;
     const totalsByCompany = computeContributionTotals();
     const prows = computeProjectTotals();
-    const g = prows.reduce((acc,r)=>{
-      acc.h += Number((r && r.hrs != null) ? r.hrs : 0);
-      acc.t += Number((r && r.total != null) ? r.total : 0);
-      return acc;
-    }, {h:0,t:0});
+    const g = prows.reduce((acc,r)=>{ acc.h += r.hrs; acc.t += r.total; return acc; }, {h:0,t:0});
     let html = '';
     html += '<h2>PAYROLL REPORT</h2>';
     const makeBucket = () => ({ piEE:0, piER:0, phEE:0, phER:0, sssEE:0, sssER:0, loanSSS:0, loanPI:0 });
@@ -6112,10 +6007,6 @@ rows += `<tr class="allowance">
     const defaults = hasCompanyOptions
       ? COMPANY_OPTIONS.filter(name => typeof name === 'string' && name.trim().length)
       : ['Edifice','Portafolio'];
-    const normalizeCompanyLabel = (val) => {
-      const label = safe(val).trim();
-      return label.length ? label : 'Unassigned';
-    };
     const seen = new Set();
     const orderedCompanies = [];
     const pushCompany = (name) => {
@@ -6141,65 +6032,16 @@ rows += `<tr class="allowance">
       html += '</div>';
     });
 
-    const projectGroups = {};
-    const ensureProjectGroup = (companyName) => {
-      const label = normalizeCompanyLabel(companyName);
-      if (!projectGroups[label]) projectGroups[label] = { label, rows: [], hrs:0, total:0 };
-      return projectGroups[label];
-    };
-    prows.forEach(row => {
-      const group = ensureProjectGroup(row && row.company);
-      group.rows.push(row);
-      group.hrs += Number((row && row.hrs != null) ? row.hrs : 0);
-      group.total += Number((row && row.total != null) ? row.total : 0);
-    });
-    const projectSeen = new Set();
-    const projectOrder = [];
-    const pushProjectCompany = (name) => {
-      const label = normalizeCompanyLabel(name);
-      if (projectSeen.has(label)) return;
-      const grp = projectGroups[label];
-      if (!grp || !grp.rows.length) return;
-      projectSeen.add(label);
-      projectOrder.push(label);
-    };
-    const defaultOrder = (defaults.length ? defaults : ['Edifice','Portafolio']).map(normalizeCompanyLabel);
-    defaultOrder.forEach(pushProjectCompany);
-    Object.keys(projectGroups).sort((a,b)=>{
-      const aUn = (a === 'Unassigned');
-      const bUn = (b === 'Unassigned');
-      if (aUn && !bUn) return 1;
-      if (!aUn && bUn) return -1;
-      return a.localeCompare(b);
-    }).forEach(pushProjectCompany);
-
     html += '<div class="mr-section" style="margin-top:16px;">';
     html += '<h4>PROJECT</h4>';
     html += '<table class="mr-table"><thead><tr><th class="left">NAME</th><th>HRS</th><th>GRAND TOTAL</th></tr></thead><tbody>';
-    if (!projectOrder.length){
-      if (!prows.length){
-        html += '<tr><td class="left" colspan="3">No project totals available.</td></tr>';
-      } else {
-        prows.forEach(r=>{ html += `<tr><td class="left">${safe(r.name)}</td><td>${f2(r.hrs)}</td><td>${f2(r.total)}</td></tr>`; });
-      }
-    } else {
-      projectOrder.forEach(companyName => {
-        const group = projectGroups[companyName];
-        if (!group || !group.rows.length) return;
-        const companyLabel = normalizeCompanyLabel(companyName);
-        html += `<tr class="mr-company"><td class="left" colspan="3" style="font-weight:600;">${safe(companyLabel)}</td></tr>`;
-        const sortedRows = group.rows.slice().sort((a,b)=> safe(a && a.name).localeCompare(safe(b && b.name)));
-        sortedRows.forEach(r=>{
-          html += `<tr><td class="left">${safe(r && r.name)}</td><td>${f2(r && r.hrs)}</td><td>${f2(r && r.total)}</td></tr>`;
-        });
-        html += `<tr class="mr-subtotal"><td class="left" style="font-weight:600;">Subtotal - ${safe(companyLabel)}</td><td style="font-weight:600;">${f2(group.hrs)}</td><td style="font-weight:600;">${f2(group.total)}</td></tr>`;
-      });
-    }
+    prows.forEach(r=>{ html += `<tr><td class="left">${safe(r.name)}</td><td>${f2(r.hrs)}</td><td>${f2(r.total)}</td></tr>`; });
     html += `</tbody><tfoot><tr><td class="left">Grand Total</td><td>${f2(g.h)}</td><td>${f2(g.t)}</td></tr></tfoot></table>`;
     html += '</div>';
 
     host.innerHTML = html;
   }
+
   try { window.renderMasterReport = renderMasterReport; } catch (e) {}
 
   function attachMasterPrint(){
