@@ -5145,11 +5145,13 @@ document.addEventListener('DOMContentLoaded', () => {
     /* Master Report table styling */
     #panelProjectTotals .mr h2{ text-align:center; margin:8px 0 14px 0; font-size:20px }
     #panelProjectTotals .mr h4{ margin:10px 0 6px 0 }
+    #panelProjectTotals .mr .mr-project-title{ text-align:center }
     #panelProjectTotals .mr-table{ width:100%; border-collapse:collapse; font-size:12px }
     #panelProjectTotals .mr-table th, #panelProjectTotals .mr-table td{ border:1px solid #dbe3ef; padding:6px 8px; text-align:right }
     #panelProjectTotals .mr-contrib-table th, #panelProjectTotals .mr-contrib-table td{ text-align:center }
     #panelProjectTotals .mr-table th.left, #panelProjectTotals .mr-table td.left{ text-align:left }
     #panelProjectTotals .mr-table tfoot td{ font-weight:700; background:#fff7ed }
+    #panelProjectTotals .mr-table tr.mr-company th{ text-align:center; background:#eef4fb; font-size:13px }
     /* Print: one sheet per project, repeat header; hide grand total (redundant) */
     @media print{
       header,.header,.controls{display:none!important}
@@ -6249,7 +6251,7 @@ rows += `<tr class="allowance">
     }).forEach(pushProjectCompany);
 
     html += '<div class="mr-section" style="margin-top:16px;">';
-    html += '<h4>PROJECT</h4>';
+    html += '<h4 class="mr-project-title">PROJECT</h4>';
     html += '<table class="mr-table"><thead><tr><th class="left">NAME</th><th>HRS</th><th>GRAND TOTAL</th></tr></thead><tbody>';
     if (!projectOrder.length){
       if (!prows.length){
@@ -6262,7 +6264,7 @@ rows += `<tr class="allowance">
         const group = projectGroups[companyName];
         if (!group || !group.rows.length) return;
         const companyLabel = normalizeCompanyLabel(companyName);
-        html += `<tr class="mr-company"><td class="left" colspan="3" style="font-weight:600;">${safe(companyLabel)}</td></tr>`;
+        html += `<tr class="mr-company"><th colspan="3">${safe(companyLabel)}</th></tr>`;
         const sortedRows = group.rows.slice().sort((a,b)=> safe(a && a.name).localeCompare(safe(b && b.name)));
         sortedRows.forEach(r=>{
           html += `<tr><td class="left">${safe(r && r.name)}</td><td>${f2(r && r.hrs)}</td><td>${f2(r && r.total)}</td></tr>`;
