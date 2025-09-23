@@ -5892,6 +5892,19 @@ rows += `<tr class="allowance">
   function f2(n){ const x=Number(n)||0; return x.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2}); }
   function safe(val){ return String(val==null?'':val); }
 
+  const CONTRIBUTION_FIELDS = ['piEE','piER','phEE','phER','sssEE','sssER','loanSSS','loanPI'];
+  const makeContributionBucket = () => ({ piEE:0, piER:0, phEE:0, phER:0, sssEE:0, sssER:0, loanSSS:0, loanPI:0 });
+  const renderContributionTable = (bucket, opts = {}) => {
+    const data = bucket || makeContributionBucket();
+    const rowClassAttr = opts.rowClass ? ` class="${opts.rowClass}"` : '';
+    const cellStyleAttr = opts.bold ? ' style="font-weight:600;"' : '';
+    const cell = (value) => `<td${cellStyleAttr}>${f2(value)}</td>`;
+    return '<table class="mr-table"><thead>'+
+      '<tr><th colspan="2">PAG-IBIG</th><th colspan="2">PHILHEALTH</th><th colspan="2">SSS</th><th rowspan="2">SSS LOAN</th><th rowspan="2">PAG-IBIG LOAN</th></tr>'+
+      '<tr><th>EE</th><th>ER</th><th>EE</th><th>ER</th><th>EE</th><th>ER</th></tr>'+
+      `</thead><tbody><tr${rowClassAttr}>${cell(data.piEE)}${cell(data.piER)}${cell(data.phEE)}${cell(data.phER)}${cell(data.sssEE)}${cell(data.sssER)}${cell(data.loanSSS)}${cell(data.loanPI)}</tr></tbody></table>`;
+  };
+
   function getPayrollRange(){
     try{
       const ws = document.getElementById('weekStart')?.value;
@@ -5908,7 +5921,7 @@ rows += `<tr class="allowance">
     const defaults = hasCompanyOptions
       ? COMPANY_OPTIONS.filter(name => typeof name === 'string' && name.trim().length)
       : ['Edifice','Portafolio'];
-    const makeBucket = () => ({ piEE:0, piER:0, phEE:0, phER:0, sssEE:0, sssER:0, loanSSS:0, loanPI:0 });
+    const makeBucket = makeContributionBucket;
     const sums = {};
     const ensureBucket = (companyName) => {
       const label = (typeof companyName === 'string' && companyName.trim().length) ? companyName.trim() : 'Unassigned';
@@ -6147,7 +6160,7 @@ rows += `<tr class="allowance">
     }, {h:0,t:0});
     let html = '';
     html += '<h2>PAYROLL REPORT</h2>';
-    const makeBucket = () => ({ piEE:0, piER:0, phEE:0, phER:0, sssEE:0, sssER:0, loanSSS:0, loanPI:0 });
+    const makeBucket = makeContributionBucket;
     const hasCompanyOptions = (typeof COMPANY_OPTIONS !== 'undefined') && Array.isArray(COMPANY_OPTIONS);
     const defaults = hasCompanyOptions
       ? COMPANY_OPTIONS.filter(name => typeof name === 'string' && name.trim().length)
@@ -6172,14 +6185,26 @@ rows += `<tr class="allowance">
       const label = companyName || 'Unassigned';
       html += '<div class="mr-section">';
       html += `<h4>SITE PAYROLL - ${safe(label)}</h4>`;
-      html += '<table class="mr-table"><thead>'+
-              '<tr><th colspan="2">PAG-IBIG</th><th colspan="2">PHILHEALTH</th><th colspan="2">SSS</th><th rowspan="2">SSS LOAN</th><th rowspan="2">PAG-IBIG LOAN</th></tr>'+
-              '<tr><th>EE</th><th>ER</th><th>EE</th><th>ER</th><th>EE</th><th>ER</th></tr>'+
-              '</thead><tbody>'+
-              `<tr><td>${f2(bucket.piEE)}</td><td>${f2(bucket.piER)}</td><td>${f2(bucket.phEE)}</td><td>${f2(bucket.phER)}</td><td>${f2(bucket.sssEE)}</td><td>${f2(bucket.sssER)}</td><td>${f2(bucket.loanSSS)}</td><td>${f2(bucket.loanPI)}</td></tr>`+
-              '</tbody></table>';
+      html += renderContributionTable(bucket);
       html += '</div>';
     });
+
+    const allCompanyBuckets = (totalsByCompany && typeof totalsByCompany === 'object')
+      ? Object.values(totalsByCompany)
+      : [];
+    const overallBucket = allCompanyBuckets.reduce((acc, bucket) => {
+      CONTRIBUTION_FIELDS.forEach(key => {
+        const val = Number(bucket && bucket[key] != null ? bucket[key] : 0);
+        acc[key] += val;
+      });
+      return acc;
+    }, makeBucket());
+    if (orderedCompanies.length){
+      html += '<div class="mr-section mr-grand-contributions">';
+      html += '<h4>GRAND TOTAL - CONTRIBUTIONS</h4>';
+      html += renderContributionTable(overallBucket, { bold: true });
+      html += '</div>';
+    }
 
     const projectGroups = {};
     const ensureProjectGroup = (companyName) => {
