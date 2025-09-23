@@ -5856,11 +5856,44 @@ rows += `<tr class="allowance">
       try{
         const ws = document.getElementById('weekStart');
         const we = document.getElementById('weekEnd');
-        const prevS = ws && ws.value; const prevE = we && we.value;
-        if (ws) ws.value = from || prevS; if (we) we.value = to || prevE;
-        try{ if (typeof calculatePayrollFromResultsTable==='function') calculatePayrollFromResultsTable(); else if (typeof calculatePayrollFromRecords==='function') calculatePayrollFromRecords(); }catch(e){}
-        try{ if (typeof window.rebuildReports==='function') window.rebuildReports(); }catch(e){}
-        setTimeout(function(){ try{ exportExcelAllTabs(); } finally { try{ if (ws) ws.value = prevS; if (we) we.value = prevE; if (typeof window.rebuildReports==='function') window.rebuildReports(); }catch(e){} } }, 300);
+        const prevS = ws && ws.value;
+        const prevE = we && we.value;
+        const targetS = from || prevS;
+        const targetE = to || prevE;
+        const changed = (targetS !== prevS) || (targetE !== prevE);
+
+        function recalcForActiveRange(){
+          try{ if (typeof syncPeriodScopedData === 'function') syncPeriodScopedData(); }catch(e){}
+          try{
+            if (typeof calculatePayrollFromResultsTable === 'function') {
+              calculatePayrollFromResultsTable();
+            } else if (typeof calculatePayrollFromRecords === 'function') {
+              calculatePayrollFromRecords();
+            }
+          }catch(e){}
+          try{ if (typeof checkAndToggleEditState === 'function') checkAndToggleEditState(); }catch(e){}
+          try{ if (typeof window.rebuildReports === 'function') window.rebuildReports(); }catch(e){}
+        }
+
+        if (ws) ws.value = targetS;
+        if (we) we.value = targetE;
+
+        recalcForActiveRange();
+
+        setTimeout(function(){
+          try{
+            exportExcelAllTabs();
+          } finally {
+            if (ws) ws.value = prevS;
+            if (we) we.value = prevE;
+            if (changed) {
+              recalcForActiveRange();
+            } else {
+              try{ if (typeof checkAndToggleEditState === 'function') checkAndToggleEditState(); }catch(e){}
+              try{ if (typeof window.rebuildReports === 'function') window.rebuildReports(); }catch(e){}
+            }
+          }
+        }, 300);
       }catch(e){ console.warn('Export for range failed', e); }
     }
     try { window.exportExcelAllTabsForRange = exportExcelAllTabsForRange; } catch(e){}
