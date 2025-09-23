@@ -3264,6 +3264,7 @@ function attachRowEvents(){
         localStorage.setItem(LS_OT_HRS, JSON.stringify(otHours));
         localStorage.setItem(LS_RATES, JSON.stringify(payrollRates));
         saveCurrentPeriodDeductions();
+        if (typeof renderDeductionsTable === 'function') renderDeductionsTable();
         calculateRow(row);
       });
     });
