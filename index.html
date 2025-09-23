@@ -5865,7 +5865,19 @@ rows += `<tr class="allowance">
   // Compute contribution totals across employees for the active period
   function computeContributionTotals(){
     try{ if (typeof syncPeriodScopedData==='function') syncPeriodScopedData(); }catch(e){}
-    const sums = { piEE:0, piER:0, phEE:0, phER:0, sssEE:0, sssER:0, loanSSS:0, loanPI:0 };
+    const hasCompanyOptions = (typeof COMPANY_OPTIONS !== 'undefined') && Array.isArray(COMPANY_OPTIONS);
+    const defaults = hasCompanyOptions
+      ? COMPANY_OPTIONS.filter(name => typeof name === 'string' && name.trim().length)
+      : ['Edifice','Portafolio'];
+    const makeBucket = () => ({ piEE:0, piER:0, phEE:0, phER:0, sssEE:0, sssER:0, loanSSS:0, loanPI:0 });
+    const sums = {};
+    const ensureBucket = (companyName) => {
+      const label = (typeof companyName === 'string' && companyName.trim().length) ? companyName.trim() : 'Unassigned';
+      if (!sums[label]) sums[label] = makeBucket();
+      return sums[label];
+    };
+    const seeds = defaults.length ? defaults : ['Edifice','Portafolio'];
+    seeds.forEach(name => ensureBucket(name));
     try{
       const list = (typeof employeeList!=='undefined' && employeeList) ? employeeList : [];
       const rates = (typeof payrollRates!=='undefined' && payrollRates) ? payrollRates : {};
@@ -5877,6 +5889,7 @@ rows += `<tr class="allowance">
       const lPI  = (typeof loanPI!=='undefined'  && loanPI ) ? loanPI  : {};
       list.forEach(emp=>{
         const id = emp.id;
+        const bucket = ensureBucket(se?.[id]?.company);
         const rH = num(rHours[id]);
         const rate = num(se?.[id]?.hourlyRate ?? rates?.[id]);
         const regPay = +(rH * rate).toFixed(2);
@@ -5888,11 +5901,11 @@ rows += `<tr class="allowance">
         const pi = (flags.pagibig===false) ? 0 : +(regPay * piRate).toFixed(2);
         const ph = (flags.philhealth===false) ? 0 : +(regPay * phRate).toFixed(2);
         const sss = (flags.sss===false) ? 0 : +(sssFull/div).toFixed(2);
-        sums.piEE += pi; sums.piER += pi;
-        sums.phEE += ph; sums.phER += ph;
-        sums.sssEE += sss; sums.sssER += sss;
-        sums.loanSSS += +(num(lSSS[id]) / div).toFixed(2);
-        sums.loanPI  += +(num(lPI[id])  / div).toFixed(2);
+        bucket.piEE += pi; bucket.piER += pi;
+        bucket.phEE += ph; bucket.phER += ph;
+        bucket.sssEE += sss; bucket.sssER += sss;
+        bucket.loanSSS += +(num(lSSS[id]) / div).toFixed(2);
+        bucket.loanPI  += +(num(lPI[id])  / div).toFixed(2);
       });
     }catch(e){}
     return sums;
@@ -5984,20 +5997,40 @@ rows += `<tr class="allowance">
 
   function renderMasterReport(){
     const host = document.getElementById('masterReportContainer'); if(!host) return;
-    const sums = computeContributionTotals();
+    const totalsByCompany = computeContributionTotals();
     const prows = computeProjectTotals();
     const g = prows.reduce((acc,r)=>{ acc.h += r.hrs; acc.t += r.total; return acc; }, {h:0,t:0});
     let html = '';
     html += '<h2>PAYROLL REPORT</h2>';
-    html += '<div class="mr-section">';
-    html += '<h4>SITE PAYROLL</h4>';
-    html += '<table class="mr-table"><thead>'+
-            '<tr><th colspan="2">PAG-IBIG</th><th colspan="2">PHILHEALTH</th><th colspan="2">SSS</th><th rowspan="2">SSS LOAN</th><th rowspan="2">PAG-IBIG LOAN</th></tr>'+
-            '<tr><th>EE</th><th>ER</th><th>EE</th><th>ER</th><th>EE</th><th>ER</th></tr>'+
-            '</thead><tbody>'+
-            `<tr><td>${f2(sums.piEE)}</td><td>${f2(sums.piER)}</td><td>${f2(sums.phEE)}</td><td>${f2(sums.phER)}</td><td>${f2(sums.sssEE)}</td><td>${f2(sums.sssER)}</td><td>${f2(sums.loanSSS)}</td><td>${f2(sums.loanPI)}</td></tr>`+
-            '</tbody></table>';
-    html += '</div>';
+    const makeBucket = () => ({ piEE:0, piER:0, phEE:0, phER:0, sssEE:0, sssER:0, loanSSS:0, loanPI:0 });
+    const hasCompanyOptions = (typeof COMPANY_OPTIONS !== 'undefined') && Array.isArray(COMPANY_OPTIONS);
+    const defaults = hasCompanyOptions
+      ? COMPANY_OPTIONS.filter(name => typeof name === 'string' && name.trim().length)
+      : ['Edifice','Portafolio'];
+    const seen = new Set();
+    const orderedCompanies = [];
+    const pushCompany = (name) => {
+      const label = (typeof name === 'string' && name.trim().length) ? name.trim() : 'Unassigned';
+      if (seen.has(label)) return;
+      seen.add(label);
+      orderedCompanies.push(label);
+    };
+    (defaults.length ? defaults : ['Edifice','Portafolio']).forEach(pushCompany);
+    Object.keys(totalsByCompany || {}).forEach(pushCompany);
+    if (!orderedCompanies.length) pushCompany('Unassigned');
+    orderedCompanies.forEach(companyName => {
+      const bucket = (totalsByCompany && totalsByCompany[companyName]) ? totalsByCompany[companyName] : makeBucket();
+      const label = companyName || 'Unassigned';
+      html += '<div class="mr-section">';
+      html += `<h4>SITE PAYROLL - ${safe(label)}</h4>`;
+      html += '<table class="mr-table"><thead>'+
+              '<tr><th colspan="2">PAG-IBIG</th><th colspan="2">PHILHEALTH</th><th colspan="2">SSS</th><th rowspan="2">SSS LOAN</th><th rowspan="2">PAG-IBIG LOAN</th></tr>'+
+              '<tr><th>EE</th><th>ER</th><th>EE</th><th>ER</th><th>EE</th><th>ER</th></tr>'+
+              '</thead><tbody>'+
+              `<tr><td>${f2(bucket.piEE)}</td><td>${f2(bucket.piER)}</td><td>${f2(bucket.phEE)}</td><td>${f2(bucket.phER)}</td><td>${f2(bucket.sssEE)}</td><td>${f2(bucket.sssER)}</td><td>${f2(bucket.loanSSS)}</td><td>${f2(bucket.loanPI)}</td></tr>`+
+              '</tbody></table>';
+      html += '</div>';
+    });
 
     html += '<div class="mr-section" style="margin-top:16px;">';
     html += '<h4>PROJECT</h4>';
