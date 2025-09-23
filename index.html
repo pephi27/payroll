@@ -2032,7 +2032,7 @@ window.addEventListener('load', dashReports);
       <div style="flex:1 1 auto">
       </div>
       <button class="primary" id="downloadPayrollCSV">
-       Download Payroll CSV
+       Download Payroll XLS
       </button>
       <button id="printPayrollBtn" type="button">
        Print Report
@@ -3785,7 +3785,7 @@ function updateContributionNote() {
     'SSS = (Employee Share by Monthly Income) &divide; Divisor. SSS Loan and Pag-IBIG Loan are divided by the Divisor. Vales are manual (not divided).';
 }
   document.getElementById('downloadPayrollCSV').addEventListener('click', ()=>{
-  // Include Adjustments column before Bantay in payroll CSV export
+  // Include Adjustments column before Bantay in payroll export and emit an XLS worksheet
   const header = ['Week Start','Week End','OT Multiplier','Divisor','ID','Name','Regular Hours','OT Hours','Hourly Rate','Regular Pay','OT Pay','Adjustments','Bantay','Gross Pay','Pag-IBIG','PhilHealth','SSS','SSS Loan','Pag-IBIG Loan','Account','Wed Vale','Total Deductions','Net Pay'];
   const rows=[header];
   const ws = weekStartEl.value||''; const we = weekEndEl.value||''; const otm = String(otMultiplierEl.value||''); const div = String(divisorEl.value||'1');
@@ -3807,13 +3807,27 @@ function updateContributionNote() {
     const net   = tr.querySelector('.netPay').textContent.trim();
     rows.push([ws,we,otm,div,id,name,regI.value,otI.value,rateI.value,regPay,otPay,adj,bantayVal,grossPay,pagibig,philhealth,sss,lSSS,lPI,v,vW,total,net]);
   });
-  const csv = rows.map(r=>r.map(s=>{
-    s = String(s ?? '');
-    return /[",\n]/.test(s) ? '"' + s.replace(/"/g,'""') + '"' : s;
-  }).join(',')).join('\n');
-  const blob = new Blob([csv], {type:'text/csv'});
+  const escapeHtml = (value) => {
+    return String(value ?? '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  };
+  const normalizedRows = rows.length === 1
+    ? rows.concat([new Array(header.length).fill('')])
+    : rows;
+  const tableRows = normalizedRows.map((row, index) => {
+    const cellTag = index === 0 ? 'th' : 'td';
+    const cells = row.map(cell => `<${cellTag}>${escapeHtml(cell)}</${cellTag}>`).join('');
+    return `<tr>${cells}</tr>`;
+  }).join('');
+  const workbook = `<!DOCTYPE html><html><head><meta charset="utf-8"></head><body><table>${tableRows}</table></body></html>`;
+  const blob = new Blob([workbook], {type:'application/vnd.ms-excel'});
   const url = URL.createObjectURL(blob);
-  const a = document.createElement('a'); a.href=url; a.download='payroll.csv'; document.body.appendChild(a); a.click(); a.remove();
+  const a = document.createElement('a'); a.href=url; a.download='payroll.xls'; document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(()=>{ URL.revokeObjectURL(url); }, 1000);
 });
 renderTable();
 renderSssTable();
@@ -9488,7 +9502,7 @@ document.addEventListener('DOMContentLoaded', function(){
 })();</script>
 
 <script>
-// Custom Payroll CSV export: Last name, First Name, Middle Name, Employee Account Number, Amount (Net Pay)
+// Custom Payroll XLS export: Last name, First Name, Middle Name, Employee Account Number, Amount (Net Pay)
 (function(){
   function splitName(full){
     full = String(full||'').trim();
@@ -9516,16 +9530,32 @@ document.addEventListener('DOMContentLoaded', function(){
     var n = parseFloat(String(s||'').replace(/[^0-9.\-]/g,''));
     return isNaN(n) ? 0 : n;
   }
-  function csvEscape(val){
-    var s = String(val==null?'':val);
-    var needs = /[",\n]/.test(s);
-    if (needs) s = '"' + s.replace(/"/g,'""') + '"';
-    return s;
+  function rowsToExcelHtml(rows){
+    var normalized = rows.slice();
+    if (normalized.length === 1) {
+      normalized.push(new Array(normalized[0].length).fill(''));
+    }
+    var escapeHtml = function(value){
+      return String(value==null?'':value)
+        .replace(/&/g,'&amp;')
+        .replace(/</g,'&lt;')
+        .replace(/>/g,'&gt;')
+        .replace(/"/g,'&quot;')
+        .replace(/'/g,'&#39;');
+    };
+    var htmlRows = normalized.map(function(row, index){
+      var cellTag = index === 0 ? 'th' : 'td';
+      var cells = row.map(function(cell){
+        return '<' + cellTag + '>' + escapeHtml(cell) + '</' + cellTag + '>';
+      }).join('');
+      return '<tr>' + cells + '</tr>';
+    }).join('');
+    return '<!DOCTYPE html><html><head><meta charset="utf-8"></head><body><table>' + htmlRows + '</table></body></html>';
   }
-  function buildPayrollCSV(){
+  function buildPayrollWorkbook(){
     var rows = [['Last name','First Name','Middle Name','Employee Account Number','Amount']];
     var tb = document.querySelector('#payrollTable tbody');
-    if (!tb) return rows.map(r=>r.join(',')).join('\n');
+    if (!tb) return rowsToExcelHtml(rows);
     var empMap = (typeof storedEmployees !== 'undefined' && storedEmployees) ? storedEmployees : {};
     tb.querySelectorAll('tr').forEach(function(tr){
       var id = (tr.cells[0] && tr.cells[0].textContent.trim()) || '';
@@ -9537,26 +9567,26 @@ document.addEventListener('DOMContentLoaded', function(){
       rows.push([nm.last, nm.first, nm.middle, bank, amount]);
     });
     // Serialize
-    return rows.map(function(r){ return r.map(csvEscape).join(','); }).join('\n');
+    return rowsToExcelHtml(rows);
   }
   function attachPayrollCsv(){
     var btn = document.getElementById('downloadPayrollCSV');
     if (!btn) return;
     btn.addEventListener('click', function(){
       try{
-        var csv = buildPayrollCSV();
-        var blob = new Blob([csv], {type:'text/csv'});
+        var workbook = buildPayrollWorkbook();
+        var blob = new Blob([workbook], {type:'application/vnd.ms-excel'});
         var url = URL.createObjectURL(blob);
         var a = document.createElement('a');
         a.href = url;
-        a.download = 'Payroll_NetPay.csv';
+        a.download = 'Payroll_NetPay.xls';
         document.body.appendChild(a);
         a.click();
         a.remove();
         setTimeout(function(){ URL.revokeObjectURL(url); }, 1000);
       }catch(e){
-        console.error('Payroll CSV export failed', e);
-        alert('Failed to build Payroll CSV.');
+        console.error('Payroll XLS export failed', e);
+        alert('Failed to build Payroll XLS.');
       }
     });
   }
@@ -9569,7 +9599,7 @@ document.addEventListener('DOMContentLoaded', function(){
 </script>
 
 <script>
-// === Override Payroll CSV to: Last name, First Name, Middle Name, Employee Account Number, Amount (Net Pay) ===
+// === Override Payroll XLS to: Last name, First Name, Middle Name, Employee Account Number, Amount (Net Pay) ===
 (function(){
   function splitName(full){
     full = String(full||'').trim();
@@ -9594,12 +9624,33 @@ document.addEventListener('DOMContentLoaded', function(){
     return {last, first, middle};
   }
   function parseNum(s){ var n = parseFloat(String(s||'').replace(/[^0-9.\-]/g,'')); return isNaN(n)?0:n; }
-  function csvEscape(val){ var s=String(val==null?'':val); return /[",\n]/.test(s) ? ('"'+s.replace(/"/g,'""')+'"') : s; }
+  function rowsToExcelHtml(rows){
+    var normalized = rows.slice();
+    if (normalized.length === 1) {
+      normalized.push(new Array(normalized[0].length).fill(''));
+    }
+    var escapeHtml = function(value){
+      return String(value==null?'':value)
+        .replace(/&/g,'&amp;')
+        .replace(/</g,'&lt;')
+        .replace(/>/g,'&gt;')
+        .replace(/"/g,'&quot;')
+        .replace(/'/g,'&#39;');
+    };
+    var htmlRows = normalized.map(function(row, index){
+      var cellTag = index === 0 ? 'th' : 'td';
+      var cells = row.map(function(cell){
+        return '<' + cellTag + '>' + escapeHtml(cell) + '</' + cellTag + '>';
+      }).join('');
+      return '<tr>' + cells + '</tr>';
+    }).join('');
+    return '<!DOCTYPE html><html><head><meta charset="utf-8"></head><body><table>' + htmlRows + '</table></body></html>';
+  }
 
-  function buildPayrollCSV(){
+  function buildPayrollWorkbook(){
     var rows = [['Last name','First Name','Middle Name','Employee Account Number','Amount']];
     var tb = document.querySelector('#payrollTable tbody');
-    if (!tb) return rows.map(r=>r.join(',')).join('\n');
+    if (!tb) return rowsToExcelHtml(rows);
     var empMap = (typeof storedEmployees !== 'undefined' && storedEmployees) ? storedEmployees : {};
 
     tb.querySelectorAll('tr').forEach(function(tr){
@@ -9612,7 +9663,7 @@ document.addEventListener('DOMContentLoaded', function(){
       rows.push([nm.last, nm.first, nm.middle, bank, amount]);
     });
 
-    return rows.map(r => r.map(csvEscape).join(',')).join('\n');
+    return rowsToExcelHtml(rows);
   }
 
   function overridePayrollCsv(){
@@ -9624,19 +9675,19 @@ document.addEventListener('DOMContentLoaded', function(){
     clone.addEventListener('click', function(e){
       e.preventDefault(); e.stopPropagation();
       try{
-        var csv = buildPayrollCSV();
-        var blob = new Blob([csv], {type:'text/csv'});
+        var workbook = buildPayrollWorkbook();
+        var blob = new Blob([workbook], {type:'application/vnd.ms-excel'});
         var url = URL.createObjectURL(blob);
         var a = document.createElement('a');
         a.href = url;
-        a.download = 'Payroll_NetPay.csv';
+        a.download = 'Payroll_NetPay.xls';
         document.body.appendChild(a);
         a.click();
         a.remove();
         setTimeout(function(){ URL.revokeObjectURL(url); }, 1000);
       }catch(err){
-        console.error('Payroll CSV export failed', err);
-        alert('Failed to build Payroll CSV.');
+        console.error('Payroll XLS export failed', err);
+        alert('Failed to build Payroll XLS.');
       }
     });
   }
