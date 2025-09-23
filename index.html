@@ -5144,6 +5144,9 @@ document.addEventListener('DOMContentLoaded', () => {
     #panelProjectTotals .subtab-panel.active{ display:block }
     /* Master Report table styling */
     #panelProjectTotals .mr h2{ text-align:center; margin:8px 0 14px 0; font-size:20px }
+    #panelProjectTotals .mr-period{ text-align:center; margin:0 0 18px 0; font-size:13px; color:#475569 }
+    #panelProjectTotals .mr-period span{ font-weight:600 }
+    #panelProjectTotals .mr-period .mr-period-missing{ font-weight:400; color:#94a3b8; font-style:italic }
     #panelProjectTotals .mr h4{ margin:10px 0 6px 0 }
     #panelProjectTotals .mr .mr-project-title{ text-align:center }
     #panelProjectTotals .mr-table{ width:100%; border-collapse:collapse; font-size:12px }
@@ -5919,11 +5922,31 @@ rows += `<tr class="allowance">
 
   function getPayrollRange(){
     try{
-      const ws = document.getElementById('weekStart')?.value;
-      const we = document.getElementById('weekEnd')?.value;
-      if (ws && we) return [ws,we];
+      const ws = document.getElementById('weekStart')?.value || '';
+      const we = document.getElementById('weekEnd')?.value || '';
+      if (ws || we) return [ws, we];
     }catch(e){}
     return ['', ''];
+  }
+
+  function formatDateLong(value){
+    if (!value) return '';
+    try{
+      const dt = new Date(value);
+      if (!(dt instanceof Date) || isNaN(dt.getTime())) return String(value || '');
+      return dt.toLocaleDateString(undefined,{ year:'numeric', month:'long', day:'numeric' });
+    }catch(e){
+      return String(value || '');
+    }
+  }
+
+  function formatPayrollPeriodLabel(start, end){
+    const startLabel = formatDateLong(start);
+    const endLabel = formatDateLong(end);
+    if (startLabel && endLabel){
+      return (startLabel === endLabel) ? startLabel : `${startLabel} – ${endLabel}`;
+    }
+    return startLabel || endLabel || '';
   }
 
   // Compute contribution totals across employees for the active period
@@ -6172,6 +6195,13 @@ rows += `<tr class="allowance">
     }, {h:0,t:0});
     let html = '';
     html += '<h2>PAYROLL REPORT</h2>';
+    const [rangeStart, rangeEnd] = getPayrollRange();
+    const periodLabel = formatPayrollPeriodLabel(rangeStart, rangeEnd);
+    if (periodLabel){
+      html += `<div class="mr-period">Payroll Period: <span>${safe(periodLabel)}</span></div>`;
+    } else {
+      html += '<div class="mr-period">Payroll Period: <span class="mr-period-missing">Not set</span></div>';
+    }
     const makeBucket = makeContributionBucket;
     const hasCompanyOptions = (typeof COMPANY_OPTIONS !== 'undefined') && Array.isArray(COMPANY_OPTIONS);
     const defaults = hasCompanyOptions
