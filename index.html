@@ -3114,7 +3114,7 @@ function renderTable(){
         <td><input class="cell loanSSS" type="number" step="0.01" value="${lSSS}"></td>
         <td><input class="cell loanPI" type="number" step="0.01" value="${lPI}"></td>
         <td><input class="cell vale" type="number" step="0.01" value="${v}"></td>
-        <td class="valeWed num">${vW}</td>
+        <td><input class="cell valeWed" type="number" step="0.01" value="${vW}"></td>
         <td class="totalDed num">0.00</td>
         <td class="netPay num">0.00</td>
         <td><button type="button" class="payslipBtn">Payslip</button></td>`;
@@ -3246,7 +3246,10 @@ function attachRowEvents(){
     const lPII = row.querySelector('.loanPI');
     const vI = row.querySelector('.vale');
     const vWI = row.querySelector('.valeWed');
-    [regI, otI, rateI, lSSSI, lPII, vI, vWI].forEach(inp=>{
+    const watchedInputs = [regI, otI, rateI, lSSSI, lPII, vI];
+    if (vWI && typeof vWI.value !== 'undefined') watchedInputs.push(vWI);
+    watchedInputs.forEach(inp=>{
+      if (!inp || typeof inp.addEventListener !== 'function') return;
       inp.addEventListener('input', ()=>{
         regHours[id] = +(Number(regI.value)||0).toFixed(2);
         otHours[id] = +(Number(otI.value)||0).toFixed(2);
@@ -3254,7 +3257,9 @@ function attachRowEvents(){
         loanSSS[id] = +(Number(lSSSI.value)||0).toFixed(2);
         loanPI[id] = +(Number(lPII.value)||0).toFixed(2);
         vale[id] = +(Number(vI.value)||0).toFixed(2);
-        valeWed[id] = +(Number(vWI.value)||0).toFixed(2);
+        if (vWI && typeof vWI.value !== 'undefined') {
+          valeWed[id] = +(Number(vWI.value)||0).toFixed(2);
+        }
         localStorage.setItem(LS_REG_HRS, JSON.stringify(regHours));
         localStorage.setItem(LS_OT_HRS, JSON.stringify(otHours));
         localStorage.setItem(LS_RATES, JSON.stringify(payrollRates));
@@ -3581,7 +3586,8 @@ function calculateRow(tr){  const readNum = sel => { const el = tr.querySelector
   const lSSS = Number(tr.querySelector('.loanSSS').value)||0;
   const lPI = Number(tr.querySelector('.loanPI').value)||0;
   const v = Number(tr.querySelector('.vale').value)||0;
-  const vW = Number(readNum('.valeWed'))||0;
+  const vWEl = tr.querySelector('.valeWed');
+  const vW = Number((vWEl && typeof vWEl.value !== 'undefined') ? vWEl.value : readNum('.valeWed'))||0;
 
   // Adjustment amount for this employee (may be positive or negative)
   const adj = Number(adjustments[id] || 0);
