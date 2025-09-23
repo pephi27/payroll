@@ -2835,12 +2835,12 @@ function renderDeductionsTable(){
     const rH = Number(regHours[emp.id] ?? 0);
     const rate = Number((storedEmployees[emp.id]?.hourlyRate) ?? (payrollRates[emp.id] ?? 0));
     payrollRates[emp.id] = isNaN(rate) ? 0 : rate;
-const lSSS = Number(loanSSS[emp.id] ?? 0);
+    const lSSS = Number(loanSSS[emp.id] ?? 0);
     const lPI = Number(loanPI[emp.id] ?? 0);
     const v = Number(vale[emp.id] ?? 0);
     const vW = Number(valeWed[emp.id] ?? 0);
     const regPay = +(rH * rate).toFixed(2);
-    // Use dynamic contribution tables for Pagâ€‘IBIG and PhilHealth.  Determine the
+    // Use dynamic contribution tables for Pag-IBIG and PhilHealth.  Determine the
     // applicable rate based on monthly income and multiply by regular pay.
     const monthly = rate * 8 * 24;
     const piRate = pagibigRateByMonthly(monthly);
@@ -2854,15 +2854,18 @@ const lSSS = Number(loanSSS[emp.id] ?? 0);
     const piLoan = +(lPI / div).toFixed(2);
     const total = +(pagibig + philhealth + sss + sssLoan + piLoan + v + vW).toFixed(2);
     const tr = document.createElement('tr');
-    tr.innerHTML = `<td>${emp.id}</td><td class="wrap">${emp.name}</td>
-      <td class="num">${pagibig.toFixed(2)}</td>
-      <td class="num">${philhealth.toFixed(2)}</td>
-      <td class="num">${sss.toFixed(2)}</td>
-      <td class="num">${sssLoan.toFixed(2)}</td>
-      <td class="num">${piLoan.toFixed(2)}</td>
-      <td class="num">${v.toFixed(2)}</td>
-      <td class="num">${vW.toFixed(2)}</td>
-      <td class="num">${total.toFixed(2)}</td>`;
+    tr.innerHTML = [
+      `<td>${emp.id}</td>`,
+      `<td class="wrap">${emp.name}</td>`,
+      `<td class="num">${pagibig.toFixed(2)}</td>`,
+      `<td class="num">${philhealth.toFixed(2)}</td>`,
+      `<td class="num">${sss.toFixed(2)}</td>`,
+      `<td class="num">${sssLoan.toFixed(2)}</td>`,
+      `<td class="num">${piLoan.toFixed(2)}</td>`,
+      `<td class="num">${v.toFixed(2)}</td>`,
+      `<td class="num">${vW.toFixed(2)}</td>`,
+      `<td class="num">${total.toFixed(2)}</td>`
+    ].join('');
     dtbody.appendChild(tr);
   });
 }
