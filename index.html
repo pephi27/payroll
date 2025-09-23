@@ -5147,6 +5147,7 @@ document.addEventListener('DOMContentLoaded', () => {
     #panelProjectTotals .mr h4{ margin:10px 0 6px 0 }
     #panelProjectTotals .mr-table{ width:100%; border-collapse:collapse; font-size:12px }
     #panelProjectTotals .mr-table th, #panelProjectTotals .mr-table td{ border:1px solid #dbe3ef; padding:6px 8px; text-align:right }
+    #panelProjectTotals .mr-contrib-table th, #panelProjectTotals .mr-contrib-table td{ text-align:center }
     #panelProjectTotals .mr-table th.left, #panelProjectTotals .mr-table td.left{ text-align:left }
     #panelProjectTotals .mr-table tfoot td{ font-weight:700; background:#fff7ed }
     /* Print: one sheet per project, repeat header; hide grand total (redundant) */
@@ -5904,11 +5905,11 @@ rows += `<tr class="allowance">
       const piTotal = toNum(data.piEE) + toNum(data.piER);
       const phTotal = toNum(data.phEE) + toNum(data.phER);
       const sssTotal = toNum(data.sssEE) + toNum(data.sssER);
-      return '<table class="mr-table"><thead>'+
+      return '<table class="mr-table mr-contrib-table"><thead>'+
         '<tr><th>PAG-IBIG</th><th>PHILHEALTH</th><th>SSS</th><th>SSS LOAN</th><th>PAG-IBIG LOAN</th></tr>'+
         `</thead><tbody><tr${rowClassAttr}>${cell(piTotal)}${cell(phTotal)}${cell(sssTotal)}${cell(data.loanSSS)}${cell(data.loanPI)}</tr></tbody></table>`;
     }
-    return '<table class="mr-table"><thead>'+
+    return '<table class="mr-table mr-contrib-table"><thead>'+
       '<tr><th colspan="2">PAG-IBIG</th><th colspan="2">PHILHEALTH</th><th colspan="2">SSS</th><th rowspan="2">SSS LOAN</th><th rowspan="2">PAG-IBIG LOAN</th></tr>'+
       '<tr><th>EE</th><th>ER</th><th>EE</th><th>ER</th><th>EE</th><th>ER</th></tr>'+
       `</thead><tbody><tr${rowClassAttr}>${cell(data.piEE)}${cell(data.piER)}${cell(data.phEE)}${cell(data.phER)}${cell(data.sssEE)}${cell(data.sssER)}${cell(data.loanSSS)}${cell(data.loanPI)}</tr></tbody></table>`;
