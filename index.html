@@ -5899,6 +5899,15 @@ rows += `<tr class="allowance">
     const rowClassAttr = opts.rowClass ? ` class="${opts.rowClass}"` : '';
     const cellStyleAttr = opts.bold ? ' style="font-weight:600;"' : '';
     const cell = (value) => `<td${cellStyleAttr}>${f2(value)}</td>`;
+    const toNum = (v) => Number(v || 0);
+    if (opts.combineEEER) {
+      const piTotal = toNum(data.piEE) + toNum(data.piER);
+      const phTotal = toNum(data.phEE) + toNum(data.phER);
+      const sssTotal = toNum(data.sssEE) + toNum(data.sssER);
+      return '<table class="mr-table"><thead>'+
+        '<tr><th>PAG-IBIG</th><th>PHILHEALTH</th><th>SSS</th><th>SSS LOAN</th><th>PAG-IBIG LOAN</th></tr>'+
+        `</thead><tbody><tr${rowClassAttr}>${cell(piTotal)}${cell(phTotal)}${cell(sssTotal)}${cell(data.loanSSS)}${cell(data.loanPI)}</tr></tbody></table>`;
+    }
     return '<table class="mr-table"><thead>'+
       '<tr><th colspan="2">PAG-IBIG</th><th colspan="2">PHILHEALTH</th><th colspan="2">SSS</th><th rowspan="2">SSS LOAN</th><th rowspan="2">PAG-IBIG LOAN</th></tr>'+
       '<tr><th>EE</th><th>ER</th><th>EE</th><th>ER</th><th>EE</th><th>ER</th></tr>'+
@@ -6202,7 +6211,7 @@ rows += `<tr class="allowance">
     if (orderedCompanies.length){
       html += '<div class="mr-section mr-grand-contributions">';
       html += '<h4>GRAND TOTAL - CONTRIBUTIONS</h4>';
-      html += renderContributionTable(overallBucket, { bold: true });
+      html += renderContributionTable(overallBucket, { bold: true, combineEEER: true });
       html += '</div>';
     }
 
