@@ -1866,6 +1866,11 @@ window.addEventListener('load', dashReports);
     <input class="cell" id="empRateInput" min="0" placeholder="Hourly Rate" step="0.01" style="width:140px" type="number"/>
     <input class="cell" id="empBankInput" placeholder="Bank Account" style="width:220px"/>
     <label>
+     Company:
+     <select id="empCompanySelect">
+     </select>
+    </label>
+    <label>
      Schedule:
      <select id="empScheduleSelect">
      </select>
@@ -1891,7 +1896,7 @@ window.addEventListener('load', dashReports);
      Download Employees CSV
     </button>
     <div class="muted">
-     Cols: A = ID, B = Name, C = Hourly Rate (optional), D = Schedule Name (optional), E = Project Name (optional), F = Bank Account (optional). Imported employees get default schedule and no project unless set.
+     Cols: A = ID, B = Name, C = Hourly Rate (optional), D = Company (optional), E = Schedule Name (optional), F = Project Name (optional), G = Bank Account (optional). Older files without Company still import (defaulting to the first option).
     </div>
    </div>
 
@@ -1914,7 +1919,24 @@ window.addEventListener('load', dashReports);
       <th>
        Project
       </th>
-      <th>Bank Account</th><th>Pag-IBIG</th><th>PhilHealth</th><th>SSS</th><th>Action</th>
+      <th>
+       Company
+      </th>
+      <th>
+       Bank Account
+      </th>
+      <th>
+       Pag-IBIG
+      </th>
+      <th>
+       PhilHealth
+      </th>
+      <th>
+       SSS
+      </th>
+      <th>
+       Action
+      </th>
      </tr>
     </thead>
     <tbody>
@@ -1928,6 +1950,11 @@ window.addEventListener('load', dashReports);
    </h3>
    <div class="controls">
     <input class="cell" id="projectNameInput" placeholder="Project Name" style="width:220px"/>
+    <label>
+     Company:
+     <select id="projectCompanySelect">
+     </select>
+    </label>
     <button id="addProjectBtn">
      Add
     </button>
@@ -1940,6 +1967,9 @@ window.addEventListener('load', dashReports);
      <tr>
       <th>
        Project Name
+      </th>
+      <th>
+       Company
       </th>
       <th>
        Action
@@ -6066,6 +6096,7 @@ const LS_FILTER_PROJECT = 'att_filter_project_v1';
 const LS_OVERRIDES_SCHEDULES = 'att_overrides_schedules';
 const LS_OVERRIDES_PROJECTS = 'att_overrides_projects';
 const SPLIT_OVERRIDES_TABLE = 'split_overrides';
+const COMPANY_OPTIONS = ['Edifice', 'Portafolio'];
 
 let overridesSchedules = JSON.parse(localStorage.getItem(LS_OVERRIDES_SCHEDULES) || '{}');
 let overridesProjects = JSON.parse(localStorage.getItem(LS_OVERRIDES_PROJECTS) || '{}');
@@ -6282,7 +6313,7 @@ let storedSchedules = JSON.parse(localStorage.getItem(LS_SCHEDULES) || 'null');
 let defaultScheduleId = localStorage.getItem(LS_SCHEDULES_DEFAULT) || null;
 let storedProjects = JSON.parse(localStorage.getItem(LS_PROJECTS) || '{}');
 document.getElementById('downloadEmployeesCSV').addEventListener('click', () => {
-  const header = ['ID','Name','Hourly Rate','Bank Account','Schedule Name','Schedule ID','Project Name','Project ID','Deduct Pag-IBIG','Deduct PhilHealth','Deduct SSS'];
+  const header = ['ID','Name','Hourly Rate','Company','Bank Account','Schedule Name','Schedule ID','Project Name','Project ID','Deduct Pag-IBIG','Deduct PhilHealth','Deduct SSS'];
   const rows = [header];
   Object.keys(storedEmployees).forEach(id => {
     const emp = storedEmployees[id] || {};
@@ -6291,11 +6322,12 @@ document.getElementById('downloadEmployeesCSV').addEventListener('click', () => 
     const projId = emp.projectId || '';
     const projName = (storedProjects && storedProjects[projId]?.name) || '';
     const bank = emp.bankAccount || '';
+    const company = emp.company || COMPANY_OPTIONS[0] || '';
     const flags = (typeof contribFlags !== 'undefined' && contribFlags[id]) || {};
     const fPI = (flags.pagibig !== false) ? 'Yes' : 'No';
     const fPH = (flags.philhealth !== false) ? 'Yes' : 'No';
     const fSSS = (flags.sss !== false) ? 'Yes' : 'No';
-    rows.push([id, emp.name || '', emp.hourlyRate || '', bank, schedName, schedId, projName, projId, fPI, fPH, fSSS]);
+    rows.push([id, emp.name || '', emp.hourlyRate || '', company, bank, schedName, schedId, projName, projId, fPI, fPH, fSSS]);
   });
 
   const csv = rows.map(r => r.map(v => {
@@ -6579,15 +6611,37 @@ function renderEmpScheduleDropdownsInTable(){
   });
 }
 
-function saveProjectsToLS(){ localStorage.setItem(LS_PROJECTS, JSON.stringify(storedProjects)); renderProjects(); renderProjectDropdowns(); renderProjectFilterOptions(); renderResults(); }
+function saveProjectsToLS(options = {}){
+  localStorage.setItem(LS_PROJECTS, JSON.stringify(storedProjects));
+  if(!(options && options.skipRender)){
+    renderProjects();
+  }
+  renderProjectDropdowns();
+  renderProjectFilterOptions();
+  renderResults();
+}
 function renderProjects(){
   const tbody = document.querySelector('#projectsTable tbody'); tbody.innerHTML = '';
+  const projectCompanySel = document.getElementById('projectCompanySelect');
+  const prevCompany = projectCompanySel ? projectCompanySel.value : '';
+  populateCompanySelect(projectCompanySel, prevCompany);
+  let needsSave = false;
   Object.keys(storedProjects).forEach(pid=>{
+    const project = storedProjects[pid];
+    let company = project.company;
+    if (!COMPANY_OPTIONS.includes(company)) {
+      company = COMPANY_OPTIONS[0] || '';
+      project.company = company;
+      needsSave = true;
+    }
+    const companyOptionsHtml = buildCompanyOptionsHtml(company);
     const tr = document.createElement('tr');
-    tr.innerHTML = `<td><input class="cell proj-name-input" data-id="${pid}" value="${storedProjects[pid].name}"></td>
+    tr.innerHTML = `<td><input class="cell proj-name-input" data-id="${pid}" value="${project.name}"></td>
+      <td><select class="proj-company-select" data-id="${pid}">${companyOptionsHtml}</select></td>
       <td><button class="del-proj" data-id="${pid}">Delete</button></td>`;
     tbody.appendChild(tr);
   });
+  if (needsSave) saveProjectsToLS({ skipRender: true });
   document.querySelectorAll('.del-proj').forEach(btn=>{
     btn.addEventListener('click', e=>{
       const id = e.target.dataset.id;
@@ -6602,6 +6656,19 @@ function renderProjects(){
     inp.addEventListener('change', e => {
       const id = e.target.dataset.id;
       storedProjects[id].name = e.target.value;
+      saveProjectsToLS();
+    });
+  });
+  document.querySelectorAll('.proj-company-select').forEach(sel => {
+    sel.addEventListener('change', e => {
+      const id = e.target.dataset.id;
+      if (!storedProjects[id]) return;
+      let value = e.target.value;
+      if (!COMPANY_OPTIONS.includes(value)) {
+        value = COMPANY_OPTIONS[0] || '';
+        e.target.value = value;
+      }
+      storedProjects[id].company = value;
       saveProjectsToLS();
     });
   });
@@ -6652,17 +6719,49 @@ filterProjectSel && filterProjectSel.addEventListener('change', ()=>{
   renderResults();
 });
 
+function buildCompanyOptionsHtml(selectedValue){
+  const value = (selectedValue && COMPANY_OPTIONS.includes(selectedValue))
+    ? selectedValue
+    : (COMPANY_OPTIONS[0] || '');
+  return COMPANY_OPTIONS.map(option =>
+    `<option value="${option}" ${option === value ? 'selected' : ''}>${option}</option>`
+  ).join('');
+}
+
+function populateCompanySelect(selectEl, selectedValue){
+  if (!selectEl) return;
+  const value = (selectedValue && COMPANY_OPTIONS.includes(selectedValue))
+    ? selectedValue
+    : (COMPANY_OPTIONS[0] || '');
+  selectEl.innerHTML = buildCompanyOptionsHtml(value);
+  if (value || value === '') {
+    selectEl.value = value;
+  }
+}
+
 function renderEmployees(){
   renderEmpScheduleDropdowns();
   renderProjectDropdowns();
+  const empCompanySel = document.getElementById('empCompanySelect');
+  const prevCompany = empCompanySel ? empCompanySel.value : '';
+  populateCompanySelect(empCompanySel, prevCompany);
   const tbody = document.querySelector('#employeesTable tbody'); tbody.innerHTML = '';
   const ids = Object.keys(storedEmployees).sort((a,b)=>{
     const na = /^\d+$/.test(a), nb = /^\d+$/.test(b);
     if (na && nb) return Number(a) - Number(b);
     return String(a).localeCompare(String(b));
   });
-ids.forEach(id => {
+  let needsSave = false;
+  ids.forEach(id => {
     const emp = storedEmployees[id];
+    let company = emp.company;
+    if (!COMPANY_OPTIONS.includes(company)) {
+      company = COMPANY_OPTIONS[0] || '';
+      if (company !== undefined) {
+        emp.company = company;
+        needsSave = true;
+      }
+    }
     let scheduleOptionsHtml = '';
     Object.keys(storedSchedules).forEach(sid=>{
       const label = storedSchedules[sid].name + (sid===defaultScheduleId ? ' (Default)' : '');
@@ -6672,12 +6771,14 @@ ids.forEach(id => {
     Object.keys(storedProjects).forEach(pid=>{
       projectOptionsHtml += `<option value="${pid}" ${emp.projectId===pid ? 'selected' : ''}>${storedProjects[pid].name}</option>`;
     });
+    const companyOptionsHtml = buildCompanyOptionsHtml(company);
     const tr = document.createElement('tr');
     tr.innerHTML = `<td>${id}</td>
       <td><input class="cell emp-name-input" data-id="${id}" value="${emp.name}"></td>
       <td><input class="cell emp-rate-input" type="number" step="0.01" min="0" data-id="${id}" value="${emp.hourlyRate != null ? emp.hourlyRate : ''}" disabled></td>
       <td><select class="emp-sel-schedule" data-id="${id}">${scheduleOptionsHtml}</select></td>
       <td><select class="emp-sel-project" data-id="${id}">${projectOptionsHtml}</select></td>
+      <td><select class="emp-company-select" data-id="${id}">${companyOptionsHtml}</select></td>
       <td><input class="cell emp-bank-input" data-id="${id}" value="${emp.bankAccount != null ? emp.bankAccount : ''}"></td>
       <td><input type="checkbox" class="emp-pagibig" data-id="${id}" ${ (contribFlags[id] && contribFlags[id].pagibig === false) ? '' : 'checked'}></td>
       <td><input type="checkbox" class="emp-philhealth" data-id="${id}" ${ (contribFlags[id] && contribFlags[id].philhealth === false) ? '' : 'checked'}></td>
@@ -6714,6 +6815,8 @@ ids.forEach(id => {
     }
   });
 
+  if (needsSave) saveEmployeesToLS();
+
   document.querySelectorAll('.emp-name-input').forEach(inp=> inp.addEventListener('change', (e)=>{
     storedEmployees[e.target.dataset.id].name = e.target.value; saveEmployeesToLS(); renderResults();
   }));
@@ -6730,6 +6833,18 @@ document.querySelectorAll('.emp-sel-schedule').forEach(sel=> sel.addEventListene
   document.querySelectorAll('.emp-sel-project').forEach(sel=> sel.addEventListener('change', (e)=>{
     storedEmployees[e.target.dataset.id].projectId = e.target.value || null; saveEmployeesToLS(); renderResults();
   }));
+  document.querySelectorAll('.emp-company-select').forEach(sel=> sel.addEventListener('change', (e)=>{
+    const id = e.target.dataset.id;
+    if (!storedEmployees[id]) return;
+    let value = e.target.value;
+    if (!COMPANY_OPTIONS.includes(value)) {
+      value = COMPANY_OPTIONS[0] || '';
+      e.target.value = value;
+    }
+    storedEmployees[id].company = value;
+    saveEmployeesToLS();
+    renderResults();
+  }));
   document.querySelectorAll('.del-emp').forEach(btn=> btn.addEventListener('click', (e)=>{
     const id=e.target.dataset.id;
     if(confirm(`Delete employee ${id} - ${storedEmployees[id].name}?`)){
@@ -6744,9 +6859,12 @@ document.getElementById('addEmployeeBtn').addEventListener('click', ()=>{
   const rate = parseFloat(document.getElementById('empRateInput').value) || 0;
   const scheduleId = document.getElementById('empScheduleSelect').value || defaultScheduleId;
   const projectId = document.getElementById('empProjectSelect').value || null;
+  const companySelect = document.getElementById('empCompanySelect');
+  let company = companySelect ? companySelect.value : '';
+  if (!COMPANY_OPTIONS.includes(company)) company = COMPANY_OPTIONS[0] || '';
   const bank = document.getElementById('empBankInput').value.trim();
   if(!id){ alert('Enter ID'); return; } if(!name){ alert('Enter Name'); return; }
-  storedEmployees[id] = { name: name, hourlyRate: rate, bankAccount: bank, scheduleId: scheduleId, projectId: projectId };
+  storedEmployees[id] = { name: name, hourlyRate: rate, bankAccount: bank, scheduleId: scheduleId, projectId: projectId, company: company };
   // Initialize default contribution deduction flags for new employee if not already set
   if (!contribFlags[id]) {
     contribFlags[id] = { pagibig: true, philhealth: true, sss: true };
@@ -6754,6 +6872,7 @@ document.getElementById('addEmployeeBtn').addEventListener('click', ()=>{
   }
   saveEmployeesToLS();
   document.getElementById('empIdInput').value=''; document.getElementById('empNameInput').value=''; document.getElementById('empRateInput').value=''; document.getElementById('empBankInput').value='';
+  if (companySelect) companySelect.value = COMPANY_OPTIONS[0] || '';
   renderEmployees(); renderResults();
 });
 document.getElementById('clearEmployeesBtn').addEventListener('click', ()=>{
@@ -6772,30 +6891,87 @@ document.getElementById('empFileInput').addEventListener('change', (evt) => {
       
 const rows = XLSX.utils.sheet_to_json(sheet, { header: 1 });
 let added = 0, updated = 0;
-rows.slice(1).forEach(row => {
-  if (row && row.length >= 2) {
-    const id = String(row[0] ?? '').trim();
-    const name = String(row[1] ?? '').trim();
-    const rate = row.length >= 3 ? parseFloat(row[2]) || 0 : 0;
-    const schedName = row.length >= 4 ? String(row[3] ?? '').trim().toLowerCase() : '';
-    const projName = row.length >= 5 ? String(row[4] ?? '').trim().toLowerCase() : '';
+const headerRow = rows[0] || [];
+const normalizedHeader = headerRow.map(cell => String(cell ?? '').trim().toLowerCase());
+const headerLikely = normalizedHeader.some(val => val === 'id' || val === 'employee id') && normalizedHeader.some(val => val === 'name' || val === 'employee name');
+const dataRows = rows.slice(headerLikely ? 1 : 0);
+const findIndex = (labels) => {
+  for (const label of labels) {
+    const idx = normalizedHeader.indexOf(label);
+    if (idx !== -1) return idx;
+  }
+  return -1;
+};
+const companyHeaderIdx = findIndex(['company']);
+const scheduleHeaderIdx = findIndex(['schedule name','schedule']);
+const projectHeaderIdx = findIndex(['project name','project']);
+const bankHeaderIdx = findIndex(['bank account','bank']);
+const getCell = (row, idx) => (idx >= 0 && idx < row.length) ? row[idx] : '';
+const companyIdxNew = companyHeaderIdx !== -1 ? companyHeaderIdx : 3;
+const scheduleIdxNew = scheduleHeaderIdx !== -1 ? scheduleHeaderIdx : 4;
+const projectIdxNew = projectHeaderIdx !== -1 ? projectHeaderIdx : 5;
+const bankIdxNew = bankHeaderIdx !== -1 ? bankHeaderIdx : 6;
+const scheduleIdxOld = scheduleHeaderIdx !== -1 ? scheduleHeaderIdx : 3;
+const projectIdxOld = projectHeaderIdx !== -1 ? projectHeaderIdx : 4;
+const bankIdxOld = bankHeaderIdx !== -1 ? bankHeaderIdx : 5;
 
-    const bank = row.length >= 6 ? String(row[5] ?? '').trim() : '';
-    if (id && name) {
-      if (!storedEmployees[id]) { added++; } else { updated++; }
-      let scheduleId = Object.keys(storedSchedules).find(k => storedSchedules[k].name.toLowerCase() === schedName) || defaultScheduleId;
-      let projectId = Object.keys(storedProjects).find(k => storedProjects[k].name.toLowerCase() === projName) || null;
+dataRows.forEach(row => {
+  if (!row || row.length < 2) return;
+  const id = String(row[0] ?? '').trim();
+  const name = String(row[1] ?? '').trim();
+  const rate = row.length >= 3 ? parseFloat(row[2]) || 0 : 0;
+  if (!id || !name) return;
 
-      storedEmployees[id] = { name: name, hourlyRate: rate, bankAccount: bank, scheduleId: scheduleId, projectId: projectId };
+  const newCompanyCandidate = String(getCell(row, companyIdxNew) ?? '').trim();
+  const newScheduleCandidate = String(getCell(row, scheduleIdxNew) ?? '').trim();
+  const newProjectCandidate = String(getCell(row, projectIdxNew) ?? '').trim();
+  const newBankCandidate = String(getCell(row, bankIdxNew) ?? '').trim();
+
+  const oldScheduleCandidateRaw = String(getCell(row, scheduleIdxOld) ?? '').trim();
+  const oldProjectCandidateRaw = String(getCell(row, projectIdxOld) ?? '').trim();
+  const oldBankCandidate = String(getCell(row, bankIdxOld) ?? '').trim();
+
+  let useNewFormat = companyHeaderIdx !== -1;
+  if (!useNewFormat) {
+    if (COMPANY_OPTIONS.includes(newCompanyCandidate)) {
+      useNewFormat = true;
+    } else if (newCompanyCandidate && !oldScheduleCandidateRaw && newScheduleCandidate) {
+      useNewFormat = true;
+    } else if (!oldScheduleCandidateRaw && oldProjectCandidateRaw && newScheduleCandidate && oldProjectCandidateRaw === newScheduleCandidate) {
+      useNewFormat = true;
+    } else if (!oldScheduleCandidateRaw && oldBankCandidate && newProjectCandidate && oldBankCandidate === newProjectCandidate) {
+      useNewFormat = true;
+    } else if (!oldScheduleCandidateRaw && !oldProjectCandidateRaw && (newScheduleCandidate || newProjectCandidate)) {
+      useNewFormat = true;
+    } else if (row.length >= 7) {
+      useNewFormat = true;
     }
   }
+
+  let company = useNewFormat ? newCompanyCandidate : '';
+  let scheduleName = (useNewFormat ? newScheduleCandidate : oldScheduleCandidateRaw) || '';
+  let projectName = (useNewFormat ? newProjectCandidate : oldProjectCandidateRaw) || '';
+  let bank = useNewFormat ? newBankCandidate : oldBankCandidate;
+
+  if (!scheduleName && !useNewFormat) scheduleName = newScheduleCandidate || '';
+  if (!projectName && !useNewFormat) projectName = newProjectCandidate || '';
+  if (!bank && useNewFormat) bank = oldBankCandidate;
+  if (!bank && !useNewFormat) bank = newBankCandidate;
+
+  scheduleName = scheduleName.toLowerCase();
+  projectName = projectName.toLowerCase();
+  if (!COMPANY_OPTIONS.includes(company)) company = COMPANY_OPTIONS[0] || '';
+
+  if (!storedEmployees[id]) { added++; } else { updated++; }
+  let scheduleId = Object.keys(storedSchedules).find(k => (storedSchedules[k].name || '').toLowerCase() === scheduleName) || defaultScheduleId;
+  let projectId = Object.keys(storedProjects).find(k => (storedProjects[k].name || '').toLowerCase() === projectName) || null;
+
+  storedEmployees[id] = { name: name, hourlyRate: rate, bankAccount: bank, scheduleId: scheduleId, projectId: projectId, company: company };
 });
 saveEmployeesToLS();
 renderEmployees();
 renderResults();
 if (added || updated) alert(`Imported: ${added}, Updated: ${updated}`);
- renderResults();
-      if(added || updated) alert('Imported: ' + added + ' added, ' + updated + ' updated.');
     } catch (err) { console.error(err); alert('Error reading file.'); }
     finally { evt.target.value = ''; }
   };
@@ -7591,8 +7767,12 @@ document.getElementById('addProjectBtn').addEventListener('click', ()=>{
   const name = document.getElementById('projectNameInput').value.trim();
   if(!name) return alert('Enter project name');
   const id = 'proj_' + Date.now();
-  storedProjects[id] = { name };
+  const companySelect = document.getElementById('projectCompanySelect');
+  let company = companySelect ? companySelect.value : '';
+  if (!COMPANY_OPTIONS.includes(company)) company = COMPANY_OPTIONS[0] || '';
+  storedProjects[id] = { name, company };
   document.getElementById('projectNameInput').value='';
+  if (companySelect) companySelect.value = COMPANY_OPTIONS[0] || '';
   saveProjectsToLS();
 });
 document.getElementById('clearProjectsBtn').addEventListener('click', ()=>{
@@ -7620,7 +7800,7 @@ document.addEventListener('DOMContentLoaded', function () {
   const dlBtn = document.getElementById('downloadEmployeesCSV');
   if (dlBtn) {
     dlBtn.addEventListener('click', () => {
-      const header = ['ID','Name','Hourly Rate','Bank Account','Schedule Name','Schedule ID','Project Name','Project ID','Deduct Pag-IBIG','Deduct PhilHealth','Deduct SSS'];
+      const header = ['ID','Name','Hourly Rate','Company','Bank Account','Schedule Name','Schedule ID','Project Name','Project ID','Deduct Pag-IBIG','Deduct PhilHealth','Deduct SSS'];
       const rows = [header];
       Object.keys(storedEmployees).forEach(id => {
         const emp = storedEmployees[id] || {};
@@ -7629,11 +7809,12 @@ document.addEventListener('DOMContentLoaded', function () {
         const projId = emp.projectId || '';
         const projName = (storedProjects && storedProjects[projId]?.name) || '';
         const bank = emp.bankAccount || '';
+        const company = emp.company || COMPANY_OPTIONS[0] || '';
         const flags = (typeof contribFlags !== 'undefined' && contribFlags[id]) || {};
         const fPI = (flags.pagibig !== false) ? 'Yes' : 'No';
         const fPH = (flags.philhealth !== false) ? 'Yes' : 'No';
         const fSSS = (flags.sss !== false) ? 'Yes' : 'No';
-        rows.push([id, emp.name || '', emp.hourlyRate || '', bank, schedName, schedId, projName, projId, fPI, fPH, fSSS]);
+        rows.push([id, emp.name || '', emp.hourlyRate || '', company, bank, schedName, schedId, projName, projId, fPI, fPH, fSSS]);
       });
       const csv = rows.map(r => r.map(v => {
         const s = String(v ?? '');
