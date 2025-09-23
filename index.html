@@ -2685,13 +2685,25 @@ function updatePeriodLatest(map, key, data){
   }
 }
 function persistPeriodScopedMap(lsKey, map){
-  if (!isPlainObject(map)) return;
+  if (!isPlainObject(map)) return Promise.resolve();
   ensurePeriodMeta(map);
   try {
     if (isPlainObject(map.__meta)) map.__meta.lastUpdatedAt = Date.now();
   } catch(_){}
   try { localStorage.setItem(lsKey, JSON.stringify(map)); } catch(e){}
-  try { if (typeof writeKV === 'function') writeKV(lsKey, map); } catch(_){}
+  const writer = (typeof window !== 'undefined' && typeof window.writeKV === 'function')
+    ? window.writeKV
+    : (typeof writeKV === 'function' ? writeKV : null);
+  if (typeof writer === 'function') {
+    try {
+      const maybe = writer(lsKey, map);
+      if (maybe && typeof maybe.then === 'function') {
+        return maybe.catch(err=>{ console.warn('writeKV persist failed', err); });
+      }
+      return Promise.resolve(maybe);
+    } catch(err){ console.warn('writeKV persist threw', err); }
+  }
+  return Promise.resolve();
 }
 let currentPeriodKey = periodKey();
 const allLoanSSS = loadPeriodScopedMap(LS_LOAN_SSS);
@@ -2702,7 +2714,7 @@ let loanSSS = ensurePeriodData(allLoanSSS, currentPeriodKey);
 let loanPI = ensurePeriodData(allLoanPI, currentPeriodKey);
 let vale = ensurePeriodData(allVale, currentPeriodKey);
 let valeWed = ensurePeriodData(allValeWed, currentPeriodKey);
-function saveCurrentPeriodDeductions(){
+async function saveCurrentPeriodDeductions(){
   if (!currentPeriodKey) return;
   allLoanSSS[currentPeriodKey] = loanSSS || {};
   allLoanPI[currentPeriodKey] = loanPI || {};
@@ -2712,10 +2724,13 @@ function saveCurrentPeriodDeductions(){
   updatePeriodLatest(allLoanPI, currentPeriodKey, loanPI);
   updatePeriodLatest(allVale, currentPeriodKey, vale);
   updatePeriodLatest(allValeWed, currentPeriodKey, valeWed);
-  persistPeriodScopedMap(LS_LOAN_SSS, allLoanSSS);
-  persistPeriodScopedMap(LS_LOAN_PI, allLoanPI);
-  persistPeriodScopedMap(LS_VALE, allVale);
-  persistPeriodScopedMap(LS_VALE_WED, allValeWed);
+  const tasks = [
+    persistPeriodScopedMap(LS_LOAN_SSS, allLoanSSS),
+    persistPeriodScopedMap(LS_LOAN_PI, allLoanPI),
+    persistPeriodScopedMap(LS_VALE, allVale),
+    persistPeriodScopedMap(LS_VALE_WED, allValeWed)
+  ];
+  try { await Promise.all(tasks); } catch(_){ }
   try {
     window.loanSSS = loanSSS;
     window.loanPI = loanPI;
@@ -2919,7 +2934,7 @@ document.addEventListener('click', (e)=>{
     if (!file) return;
     
     const reader = new FileReader();
-    reader.onload = function(e) {
+    reader.onload = async function(e) {
       try {
         let rows = [];
         
@@ -3030,8 +3045,8 @@ for (let i = 1; i < rows.length; i++) {
           }
         }
         
-        // Save to localStorage
-        saveCurrentPeriodDeductions();
+        // Save to localStorage + Supabase (wait for persistence before alerting success)
+        await saveCurrentPeriodDeductions();
         
         // Refresh displays
         if (typeof renderDeductionsTable === 'function') renderDeductionsTable();
@@ -3045,11 +3060,11 @@ for (let i = 1; i < rows.length; i++) {
         }
         alert(message);
         
-      } catch (err) { 
-        console.error(err); 
-        alert('Error reading file. Please check the file format.'); 
-      } finally { 
-        e.target.value = ''; 
+      } catch (err) {
+        console.error(err);
+        alert('Error reading file. Please check the file format.');
+      } finally {
+        e.target.value = '';
       }
     };
     
