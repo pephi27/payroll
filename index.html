@@ -324,6 +324,123 @@ function safePrint(win){
 }
 </script>
 <script>
+(function(){
+  function toNum(val){
+    var num = parseFloat(String(val == null ? '' : val).replace(/,/g,''));
+    return isNaN(num) ? 0 : num;
+  }
+  function fmt(val){
+    return toNum(val).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  }
+  function dash(val){
+    var out = (val == null ? '' : val).toString();
+    if (!out) return '';
+    var num = parseFloat(out.replace(/,/g,''));
+    if (!isNaN(num) && num === 0) return '-';
+    return out;
+  }
+  function readCell(row, selector, mode){
+    if (!row || !selector) return '';
+    var el = row.querySelector(selector);
+    if (!el) return '';
+    if (mode === 'value'){ return (el.value != null ? String(el.value) : String(el.textContent || '')).trim(); }
+    return (el.textContent != null ? String(el.textContent) : (el.value != null ? String(el.value) : '')).trim();
+  }
+  function collectRowData(row){
+    if (!row) return null;
+    var data = {
+      id: (row.cells[0] && row.cells[0].textContent ? row.cells[0].textContent.trim() : ''),
+      name: (row.cells[1] && row.cells[1].textContent ? row.cells[1].textContent.trim() : ''),
+      rate: readCell(row, '.rate', 'value'),
+      regHours: readCell(row, '.regHrs', 'value'),
+      otHours: readCell(row, '.otHrs', 'value'),
+      adjustmentHours: readCell(row, '.adjHrs'),
+      totalHours: readCell(row, '.totalHrs'),
+      regPay: readCell(row, '.regPay'),
+      otPay: readCell(row, '.otPay'),
+      gross: readCell(row, '.grossPay'),
+      pagibig: readCell(row, '.pagibig'),
+      philhealth: readCell(row, '.philhealth'),
+      sss: readCell(row, '.sss'),
+      sssLoan: readCell(row, '.loanSSS', 'value'),
+      piLoan: readCell(row, '.loanPI', 'value'),
+      vale: readCell(row, '.vale', 'value'),
+      valeWed: readCell(row, '.valeWed', 'value') || readCell(row, '.valeWed'),
+      bantay: readCell(row, '.bantay', 'value'),
+      adjustments: readCell(row, '.adjAmt'),
+      totalDeductions: readCell(row, '.totalDed'),
+      net: readCell(row, '.netPay')
+    };
+    if (!data.totalHours){
+      var r = toNum(data.regHours);
+      var o = toNum(data.otHours);
+      var a = toNum(data.adjustmentHours);
+      var total = r + o + a;
+      data.totalHours = total ? total.toFixed(2) : '';
+    }
+    return data;
+  }
+  function formatPeriod(ws, we){
+    var start = (ws || '').trim();
+    var end = (we || '').trim();
+    if (start && end) return start + ' to ' + end;
+    return start || end || '';
+  }
+  function buildPayslip(data, periodText){
+    if (!data) return '';
+    var period = (periodText || '').trim();
+    var periodLine = period ? `<p class="meta"><strong>Period:</strong> ${period}</p>` : '';
+    var dedRows = '';
+    function addDed(label, value){
+      if (toNum(value) > 0){ dedRows += `<tr><td>${label}</td><td>${fmt(value)}</td></tr>`; }
+    }
+    addDed('Pag-IBIG', data.pagibig);
+    addDed('PhilHealth', data.philhealth);
+    addDed('SSS', data.sss);
+    addDed('SSS Loan', data.sssLoan);
+    addDed('Pag-IBIG Loan', data.piLoan);
+    addDed('Account', data.vale);
+    addDed('Wed Vale', data.valeWed);
+    var bantayRow = toNum(data.bantay) !== 0 ? `<tr><td>Bantay</td><td>${fmt(data.bantay)}</td></tr>` : '';
+    var adjRow = toNum(data.adjustments) !== 0 ? `<tr><td>Adjustments</td><td>${fmt(data.adjustments)}</td></tr>` : '';
+    var totalRow = toNum(data.totalDeductions) > 0 ? `<tr><td>Total Deductions</td><td>${fmt(data.totalDeductions)}</td></tr>` : '';
+    return `<div class="payslip">
+      <h3>Payslip</h3>
+      <p class="meta"><strong>Employee ID:</strong> ${data.id || ''}</p>
+      <p class="meta"><strong>Name:</strong> ${data.name || ''}</p>
+      ${periodLine}
+      <table>
+        <tr><th>Description</th><th>Amount</th></tr>
+        <tr><td>Total Hours</td><td>${dash(data.totalHours)}</td></tr>
+        ${bantayRow}
+        ${adjRow}
+        <tr><td>Gross Amount</td><td>${dash(data.gross)}</td></tr>
+        ${dedRows}
+        ${totalRow}
+        <tr><th>Net Pay</th><th>${dash(data.net)}</th></tr>
+      </table>
+    </div>`;
+  }
+  var styles = `@page { size: letter portrait; margin: 0.25in; }
+html, body { width: 8.5in; height: 11in; margin: 0; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+body{font-family:Arial,Helvetica,sans-serif;margin:0;padding:0 0.1in;}
+.payslip-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:0.03in;}
+.payslip-grid.single{grid-template-columns:repeat(1,1fr);max-width:3in;margin:0 auto;}
+.payslip{box-sizing:border-box;padding:0.06in;border:1px solid #e2e8f0;height:2.6in;overflow:hidden;border-radius:3px;background:#fff;}
+table{border-collapse:collapse;width:100%;font-size:8.5px;}
+th,td{border:1px solid #e2e8f0;padding:1px;text-align:left;}
+th{background:#f1f5f9;}
+.page-break{page-break-after:always;break-after:page;}
+h3{margin:0 0 3px 0;font-size:10px;}
+.payslip .meta{margin:0 0 2px 0;font-size:8px;line-height:1.15;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}`;
+
+  window.collectPayslipRowData = collectRowData;
+  window.buildCompactPayslip = buildPayslip;
+  window.formatPayslipPeriod = formatPeriod;
+  window.PAYSLIP_PRINT_STYLES = styles;
+})();
+</script>
+<script>
 document.addEventListener('DOMContentLoaded', function() {
   var multiBtn = document.getElementById('printAllPayslipsBtn');
   if (!multiBtn) return;
@@ -334,89 +451,30 @@ document.addEventListener('DOMContentLoaded', function() {
     var weEl = document.getElementById('weekEnd');
     var ws = wsEl ? (wsEl.value || '') : '';
     var we = weEl ? (weEl.value || '') : '';
-    function gv(row, sel, prop) {
-      var el = row.querySelector(sel);
-      if (!el) return '';
-      if (prop === 'value') return (el.value || '');
-      return (el.textContent || '');
-    }
-    function d(x){
-      var n = parseFloat((x||'').toString().replace(/,/g,''));
-      return (!isNaN(n) && n === 0) ? '-' : (x||'');
-    }
-    function toNum(x){ var n = parseFloat(String(x||'').replace(/,/g,'')); return isNaN(n) ? 0 : n; }
-    function fmt(x){ var n = toNum(x); return n.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2}); }
-    var html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>All Payslips</title>
-<style>
-@page { size: letter portrait; margin: 0.25in; }
+    var styles = window.PAYSLIP_PRINT_STYLES || '';
+    if (!styles){
+      styles = `@page { size: letter portrait; margin: 0.25in; }
 html, body { width: 8.5in; height: 11in; margin: 0; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
 body{font-family:Arial,Helvetica,sans-serif;margin:0;padding:0 0.1in;}
-/* 12 per page: 3 columns x 4 rows, compact spacing */
 .payslip-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:0.03in;}
+.payslip-grid.single{grid-template-columns:repeat(1,1fr);max-width:3in;margin:0 auto;}
 .payslip{box-sizing:border-box;padding:0.06in;border:1px solid #e2e8f0;height:2.6in;overflow:hidden;border-radius:3px;background:#fff;}
 table{border-collapse:collapse;width:100%;font-size:8.5px;}
 th,td{border:1px solid #e2e8f0;padding:1px;text-align:left;}
 th{background:#f1f5f9;}
 .page-break{page-break-after:always;break-after:page;}
 h3{margin:0 0 3px 0;font-size:10px;}
-.payslip .meta{margin:0 0 2px 0;font-size:8px;line-height:1.15;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
-</style></head><body><div class="payslip-grid">`;
+.payslip .meta{margin:0 0 2px 0;font-size:8px;line-height:1.15;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}`;
+    }
+    var html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>All Payslips</title>
+<style>${styles}</style></head><body><div class="payslip-grid">`;
     rows.forEach(function(row, idx){
-      var id = (row.cells[0]?.textContent || '').trim();
-      var name = (row.cells[1]?.textContent || '').trim();
-      var reg = gv(row, '.regHrs','value');
-      var ot = gv(row, '.otHrs','value');
-      var adjHrsTxt = gv(row, '.adjHrs','textContent');
-      var totHrs = gv(row, '.totalHrs','textContent');
-      var rate = gv(row, '.rate','value');
-      var regPay = gv(row, '.regPay','textContent');
-      var otPay = gv(row, '.otPay','textContent');
-      var gross = gv(row, '.grossPay','textContent');
-      var pagibig = gv(row, '.pagibig','textContent');
-      var philhealth = gv(row, '.philhealth','textContent');
-      var sss = gv(row, '.sss','textContent');
-      var sssLoan = gv(row, '.loanSSS','value');
-      var piLoan = gv(row, '.loanPI','value');
-      var v = gv(row, '.vale','value');
-      var vW = gv(row, '.valeWed','value') || gv(row, '.valeWed','textContent');
-      var bantay = gv(row, '.bantay','value');
-      var adj = gv(row, '.adjAmt','textContent');
-      var total = gv(row, '.totalDed','textContent');
-      var net = gv(row, '.netPay','textContent');
-      // Fallback compute for total hours if cell not available
-      if (!totHrs) {
-        var r = parseFloat((reg||'').toString().replace(/,/g,''))||0;
-        var o = parseFloat((ot||'').toString().replace(/,/g,''))||0;
-        var ah = parseFloat((adjHrsTxt||'').toString().replace(/,/g,''))||0;
-        totHrs = (r + o + ah).toFixed(2);
-      }
-      // Build deductions rows only when values are present (> 0)
-      var dedRows = '';
-      function addDed(label, val){ if (toNum(val) > 0) { dedRows += `<tr><td>${label}</td><td>${fmt(val)}</td></tr>`; } }
-      addDed('Pag-IBIG', pagibig);
-      addDed('PhilHealth', philhealth);
-      addDed('SSS', sss);
-      addDed('SSS Loan', sssLoan);
-      addDed('Pag-IBIG Loan', piLoan);
-      addDed('Account', v);
-      addDed('Wed Vale', vW);
-
-      html += `<div class="payslip">
-        <h3>Payslip</h3>
-        <p class="meta"><strong>Employee ID:</strong> ${id}</p>
-        <p class="meta"><strong>Name:</strong> ${name}</p>
-        <p class="meta"><strong>Period:</strong> ${ws}${we ? (' to ' + we) : ''}</p>
-        <table>
-          <tr><th>Description</th><th>Amount</th></tr>
-          <tr><td>Total Hours</td><td>${d(totHrs)}</td></tr>
-          ${toNum(bantay)!==0 ? `<tr><td>Bantay</td><td>${fmt(bantay)}</td></tr>` : ''}
-          ${toNum(adj)!==0 ? `<tr><td>Adjustments</td><td>${fmt(adj)}</td></tr>` : ''}
-          <tr><td>Gross Amount</td><td>${d(gross)}</td></tr>
-          ${dedRows}
-          ${toNum(total)>0 ? `<tr><td>Total Deductions</td><td>${fmt(total)}</td></tr>` : ''}
-          <tr><th>Net Pay</th><th>${d(net)}</th></tr>
-        </table>
-      </div>`;
+      var data = (typeof window.collectPayslipRowData === 'function') ? window.collectPayslipRowData(row) : null;
+      if (!data) return;
+      var periodText = (typeof window.formatPayslipPeriod === 'function') ? window.formatPayslipPeriod(ws, we) : ((ws && we) ? (ws + ' to ' + we) : (ws || we || ''));
+      var slip = (typeof window.buildCompactPayslip === 'function') ? window.buildCompactPayslip(data, periodText) : '';
+      if (!slip) return;
+      html += slip;
       if ((idx + 1) % 12 === 0 && idx !== rows.length - 1) {
         html += `</div><div class="page-break"></div><div class="payslip-grid">`;
       }
@@ -9950,30 +10008,58 @@ document.addEventListener('click', function(e) {
     return v.toString().trim();
   }
 
-  var id = (row.cells[0] && row.cells[0].textContent || '').trim();
-  var name = (row.cells[1] && row.cells[1].textContent || '').trim();
+  var rowData = (typeof window.collectPayslipRowData === 'function') ? window.collectPayslipRowData(row) : null;
 
-  var rate      = inputVal('.rate');
-  var regHrs    = inputVal('.regHrs');
-  var otHrs     = inputVal('.otHrs');
-  var regPay    = cellText('.regPay');
-  var otPay     = cellText('.otPay');
-  var gross     = cellText('.grossPay');
-  var pagibig   = cellText('.pagibig');
-  var philhealth= cellText('.philhealth');
-  var sss       = cellText('.sss');
-  var sssLoan   = inputVal('.loanSSS');
-  var piLoan    = inputVal('.loanPI');
-  var valeAmt   = inputVal('.vale');
-  var wedValeAmt= inputVal('.valeWed');
-  var adjAmt    = cellText('.adjAmt');
-  var totalDed  = cellText('.totalDed');
-  var net       = cellText('.netPay');
+  var id = (rowData && rowData.id) || ((row.cells[0] && row.cells[0].textContent) ? row.cells[0].textContent.trim() : '');
+  var name = (rowData && rowData.name) || ((row.cells[1] && row.cells[1].textContent) ? row.cells[1].textContent.trim() : '');
+
+  var rate      = rowData ? rowData.rate : inputVal('.rate');
+  var regHrs    = rowData ? rowData.regHours : inputVal('.regHrs');
+  var otHrs     = rowData ? rowData.otHours : inputVal('.otHrs');
+  var regPay    = rowData ? rowData.regPay : cellText('.regPay');
+  var otPay     = rowData ? rowData.otPay : cellText('.otPay');
+  var gross     = rowData ? rowData.gross : cellText('.grossPay');
+  var pagibig   = rowData ? rowData.pagibig : cellText('.pagibig');
+  var philhealth= rowData ? rowData.philhealth : cellText('.philhealth');
+  var sss       = rowData ? rowData.sss : cellText('.sss');
+  var sssLoan   = rowData ? rowData.sssLoan : inputVal('.loanSSS');
+  var piLoan    = rowData ? rowData.piLoan : inputVal('.loanPI');
+  var valeAmt   = rowData ? rowData.vale : inputVal('.vale');
+  var wedValeAmt= rowData ? rowData.valeWed : inputVal('.valeWed');
+  var adjAmt    = rowData ? rowData.adjustments : cellText('.adjAmt');
+  var totalDed  = rowData ? rowData.totalDeductions : cellText('.totalDed');
+  var net       = rowData ? rowData.net : cellText('.netPay');
 
   var ws = (document.getElementById('weekStart') || {}).value || '';
   var we = (document.getElementById('weekEnd')   || {}).value || '';
+  var periodText = (typeof window.formatPayslipPeriod === 'function') ? window.formatPayslipPeriod(ws, we) : ((ws && we) ? (ws + ' to ' + we) : (ws || we || ''));
+  var html = '';
 
-  var html = `<!DOCTYPE html>
+  if (rowData && typeof window.buildCompactPayslip === 'function'){
+    var slip = window.buildCompactPayslip(rowData, periodText);
+    if (slip){
+      var stylesSingle = window.PAYSLIP_PRINT_STYLES || '';
+      if (!stylesSingle){
+        stylesSingle = `@page { size: letter portrait; margin: 0.25in; }
+html, body { width: 8.5in; height: 11in; margin: 0; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+body{font-family:Arial,Helvetica,sans-serif;margin:0;padding:0 0.1in;}
+.payslip-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:0.03in;}
+.payslip-grid.single{grid-template-columns:repeat(1,1fr);max-width:3in;margin:0 auto;}
+.payslip{box-sizing:border-box;padding:0.06in;border:1px solid #e2e8f0;height:2.6in;overflow:hidden;border-radius:3px;background:#fff;}
+table{border-collapse:collapse;width:100%;font-size:8.5px;}
+th,td{border:1px solid #e2e8f0;padding:1px;text-align:left;}
+th{background:#f1f5f9;}
+.page-break{page-break-after:always;break-after:page;}
+h3{margin:0 0 3px 0;font-size:10px;}
+.payslip .meta{margin:0 0 2px 0;font-size:8px;line-height:1.15;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}`;
+      }
+      html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Payslip - ${name}</title><style>${stylesSingle}</style></head><body><div class="payslip-grid single">${slip}</div></body></html>`;
+    }
+  }
+
+  if (!html){
+    var legacyPeriod = (ws && we) ? `Period: ${ws} - ${we}` : '';
+    html = `<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>Payslip - ${name}</title>
 <style>
   body{font-family:Arial,Helvetica,sans-serif;padding:20px;line-height:1.4;}
@@ -9987,7 +10073,7 @@ document.addEventListener('click', function(e) {
 </style>
 </head><body>
   <h2>Payslip</h2>
-  <div class="meta">${ws && we ? `Period: ${ws} - ${we}` : ''}</div>
+  <div class="meta">${legacyPeriod}</div>
 
   <table>
     <tr><th>Employee ID</th><td>${id}</td><th>Name</th><td>${name}</td></tr>
@@ -10024,6 +10110,7 @@ document.addEventListener('click', function(e) {
     </table>
   </div>
 </body></html>`;
+  }
 
   var w = window.open('', '', 'width=800,height=900');
   if (!w) return;
