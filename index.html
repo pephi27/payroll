@@ -3989,6 +3989,34 @@ document.addEventListener('DOMContentLoaded', function() {
   lock it to prevent further edits, view past snapshots, download CSV versions, and compare (diff) two snapshots.
 -->
 <script>
+// Shared helpers for formatting dashboard dates in MM-DD-YYYY layout.
+function formatDisplayDate(value) {
+  if (!value) return '';
+  const str = String(value).trim();
+  if (!str) return '';
+  const isoMatch = str.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+  if (isoMatch) {
+    const [, year, month, day] = isoMatch;
+    return `${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}-${year}`;
+  }
+  const dt = new Date(str);
+  if (!isNaN(dt.getTime())) {
+    const month = String(dt.getMonth() + 1).padStart(2, '0');
+    const day = String(dt.getDate()).padStart(2, '0');
+    const year = dt.getFullYear();
+    return `${month}-${day}-${year}`;
+  }
+  return str;
+}
+function formatDateRange(start, end) {
+  const startText = formatDisplayDate(start);
+  const endText = formatDisplayDate(end);
+  if (startText && endText) return `${startText} - ${endText}`;
+  return startText || endText || '';
+}
+window.formatDisplayDate = formatDisplayDate;
+window.formatDateRange = formatDateRange;
+
 // Print Payroll Report: generate a print-friendly view of the payroll table and open
 // a new window for printing. Inputs are converted to plain text and the final
 // payslip column is removed to preserve confidentiality.
@@ -4114,11 +4142,13 @@ document.addEventListener('DOMContentLoaded', () => {
     payrollHistory.forEach((snap, index) => {
       if (snap.locked) return;
       const tr = document.createElement('tr');
+      const startText = formatDisplayDate(snap.startDate);
+      const endText = formatDisplayDate(snap.endDate);
       // Build the Active Payroll row. Include Edit, Lock and Delete actions. Deleting
       // prompts confirmation and removes the snapshot from payrollHistory.
       tr.innerHTML = `
-        <td>${snap.startDate || ''}</td>
-        <td>${snap.endDate || ''}</td>
+        <td>${startText}</td>
+        <td>${endText}</td>
         <td>
           <button type="button" class="editActive" data-index="${index}">Edit</button>
           <button type="button" class="lockActive" data-index="${index}">Lock</button>
@@ -4218,6 +4248,8 @@ document.addEventListener('DOMContentLoaded', () => {
     historyTableBody.innerHTML = '';
     payrollHistory.forEach((snap, index) => {
       const tr = document.createElement('tr');
+      const startText = formatDisplayDate(snap.startDate);
+      const endText = formatDisplayDate(snap.endDate);
       // Build row HTML; note small hash display for brevity
       // Build the actions column depending on lock status. Only locked snapshots show Open/Unlock buttons.
       const actions = [];
@@ -4235,8 +4267,8 @@ document.addEventListener('DOMContentLoaded', () => {
       actions.push(`<button type="button" class="downloadSnapshot" data-index="${index}">Download CSV</button>`);
       tr.innerHTML = `
         <td><input type="checkbox" class="diff-select" data-index="${index}"></td>
-        <td>${snap.startDate || ''}</td>
-        <td>${snap.endDate || ''}</td>
+        <td>${startText}</td>
+        <td>${endText}</td>
         <td>${snap.lockedAt ? new Date(snap.lockedAt).toLocaleString() : ''}</td>
         <td><span style="font-size:10px;">${snap.hash ? snap.hash.slice(0, 12) + '...' : ''}</span></td>
         <td>${actions.join(' ')}</td>
@@ -4782,7 +4814,15 @@ document.addEventListener('DOMContentLoaded', () => {
     table.style.width = '100%';
     const thead = document.createElement('thead');
     const hr = document.createElement('tr');
-    ['ID','Name',`Net (${s1.startDate} - ${s1.endDate})`,`Net (${s2.startDate} - ${s2.endDate})`,'Difference'].forEach(h => {
+    const range1 = formatDateRange(s1.startDate, s1.endDate);
+    const range2 = formatDateRange(s2.startDate, s2.endDate);
+    [
+      'ID',
+      'Name',
+      range1 ? `Net (${range1})` : 'Net',
+      range2 ? `Net (${range2})` : 'Net',
+      'Difference'
+    ].forEach(h => {
       const th = document.createElement('th');
       th.textContent = h;
       th.style.border = '1px solid #e2e8f0';
@@ -4850,7 +4890,10 @@ document.addEventListener('DOMContentLoaded', () => {
     // Set title with lock info
     if (titleEl) {
       const lockedInfo = snap.lockedAt ? ` (Locked ${new Date(snap.lockedAt).toLocaleString()})` : '';
-      titleEl.textContent = `Payroll Details: ${snap.startDate || ''} - ${snap.endDate || ''}${lockedInfo}`;
+      const startText = formatDisplayDate(snap.startDate);
+      const endText = formatDisplayDate(snap.endDate);
+      const rangeText = startText && endText ? `${startText} - ${endText}` : (startText || endText || '');
+      titleEl.textContent = `Payroll Details: ${rangeText}${lockedInfo}`;
     }
     // Hide dashboard tables and controls
     if (activeTable) activeTable.style.display = 'none';
@@ -5108,7 +5151,8 @@ document.addEventListener('DOMContentLoaded', () => {
       nameCell.style.padding = '4px';
       tr.appendChild(nameCell);
       const dateCell = document.createElement('td');
-      dateCell.textContent = row.date;
+      const dateText = formatDisplayDate(row.date);
+      dateCell.textContent = dateText;
       dateCell.style.border = '1px solid #e2e8f0';
       dateCell.style.padding = '4px';
       tr.appendChild(dateCell);
@@ -10512,7 +10556,12 @@ function updateWeekInputs(snap) {
       items.forEach(item => {
         const opt = document.createElement('option');
         opt.value = String(item.i);
-        opt.textContent = `${item.startDate || ''} - ${item.endDate || ''}${item.locked ? ' (locked)' : ''}`;
+        const rangeText = typeof window.formatDateRange === 'function'
+          ? window.formatDateRange(item.startDate, item.endDate)
+          : [item.startDate || '', item.endDate || ''].filter(Boolean).join(' - ');
+        const lockedSuffix = item.locked ? ' (locked)' : '';
+        const label = `${rangeText}${lockedSuffix}`.trim();
+        opt.textContent = label;
         selectEl.appendChild(opt);
       });
       // Always set the selected value to the saved active index so all selectors stay in sync
