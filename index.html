@@ -1576,9 +1576,6 @@ window.addEventListener('load', dashReports);
     </label>
     <button id="manualDtrBtn">Enter Manual DTR</button>
     <button id="printDtrBtn">Print DTR</button>
-    <button id="clearData">
-     Clear All Data
-    </button>
     <label>
      Project:
      <select id="filterProject" title="Filter by project">
@@ -4402,7 +4399,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // #panelMain) may escape. Explicitly disabling them ensures search fields, date filters,
     // project dropdowns and import/export buttons cannot be used once locked. These IDs
     // correspond to the manual DTR workflow and DTR filtering controls.
-    ['dtrSearchName','dtrDateFrom','dtrDateTo','dtrDateClear','filterProject','downloadCSV','fileInput','manualDtrBtn','printDtrBtn','clearData','dtrDateRangeFrom','dtrDateRangeTo'].forEach(id => {
+    ['dtrSearchName','dtrDateFrom','dtrDateTo','dtrDateClear','filterProject','downloadCSV','fileInput','manualDtrBtn','printDtrBtn','dtrDateRangeFrom','dtrDateRangeTo'].forEach(id => {
       const el = document.getElementById(id);
       if (el) el.disabled = true;
     });
@@ -4458,7 +4455,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // disablePayrollInputs(). This ensures search, date filters, project filter,
     // and import/export controls become usable again when the payroll is unlocked
     // or the date range is changed.
-    ['dtrSearchName','dtrDateFrom','dtrDateTo','dtrDateClear','filterProject','downloadCSV','fileInput','manualDtrBtn','printDtrBtn','clearData','dtrDateRangeFrom','dtrDateRangeTo'].forEach(id => {
+    ['dtrSearchName','dtrDateFrom','dtrDateTo','dtrDateClear','filterProject','downloadCSV','fileInput','manualDtrBtn','printDtrBtn','dtrDateRangeFrom','dtrDateRangeTo'].forEach(id => {
       const el = document.getElementById(id);
       if (el) el.disabled = false;
     });
@@ -7526,23 +7523,6 @@ function __inRange(d){
 });
 
 
-document.getElementById('clearData').addEventListener('click', ()=>{
-  if(!confirm('Clear all saved attendance data?')) return; // Remove the locally cached attendance data
-  localStorage.removeItem(LS_RECORDS);
-  // Persist the cleared dataset to Supabase for crossâ€‘device sync
-  try {
-    if (typeof saveDtrToCloud === 'function') saveDtrToCloud(storedRecords);
-  } catch (e) {
-    console.warn('Failed to clear DTR in Supabase', e);
-  }
-  // Show alert after clearing since both local and remote are now empty
-  try {
-    if (typeof showRemoteDtrAlert === 'function') {
-      showRemoteDtrAlert('No remote DTR data found. Import a .DAT/.TXT file to populate cloud data.');
-    }
-  } catch (e) {}
-  renderResults();
-});
 document.getElementById('downloadCSV').addEventListener('click', ()=>{
   const rows = [['ID','Name','Project','Schedule','Date','AM In','AM Out','PM In','PM Out','OT In','OT Out','Total Regular Hrs','OT Hrs']];
   document.querySelectorAll('#resultsTable tbody tr').forEach(tr=>{
