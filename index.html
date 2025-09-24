@@ -3930,10 +3930,7 @@ function updateContributionNote() {
       .replace(/"/g, '&quot;')
       .replace(/'/g, '&#39;');
   };
-  const normalizedRows = rows.length === 1
-    ? rows.concat([new Array(header.length).fill('')])
-    : rows;
-  const tableRows = normalizedRows.map((row, index) => {
+  const tableRows = rows.map((row, index) => {
     const cellTag = index === 0 ? 'th' : 'td';
     const cells = row.map(cell => `<${cellTag}>${escapeHtml(cell)}</${cellTag}>`).join('');
     return `<tr>${cells}</tr>`;
@@ -9776,10 +9773,6 @@ document.addEventListener('DOMContentLoaded', function(){
     return isNaN(n) ? 0 : n;
   }
   function rowsToExcelHtml(rows){
-    var normalized = rows.slice();
-    if (normalized.length === 1) {
-      normalized.push(new Array(normalized[0].length).fill(''));
-    }
     var escapeHtml = function(value){
       return String(value==null?'':value)
         .replace(/&/g,'&amp;')
@@ -9788,7 +9781,7 @@ document.addEventListener('DOMContentLoaded', function(){
         .replace(/"/g,'&quot;')
         .replace(/'/g,'&#39;');
     };
-    var htmlRows = normalized.map(function(row, index){
+    var htmlRows = rows.map(function(row, index){
       var cellTag = index === 0 ? 'th' : 'td';
       var cells = row.map(function(cell){
         return '<' + cellTag + '>' + escapeHtml(cell) + '</' + cellTag + '>';
@@ -9878,11 +9871,7 @@ document.addEventListener('DOMContentLoaded', function(){
         .replace(/"/g,'&quot;')
         .replace(/'/g,'&#39;');
     };
-    var normalized = rows.slice();
-    if (normalized.length === 1) {
-      normalized.push(new Array(normalized[0].length).fill(''));
-    }
-    var htmlRows = normalized.map(function(row, index){
+    var htmlRows = rows.map(function(row, index){
       var cellTag = index === 0 ? 'th' : 'td';
       var cells = row.map(function(cell){
         return '<' + cellTag + '>' + escapeHtml(cell) + '</' + cellTag + '>';
