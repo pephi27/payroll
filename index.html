@@ -332,6 +332,41 @@ function safePrint(win){
   function fmt(val){
     return toNum(val).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   }
+  function currentDivisor(){
+    var key = (typeof LS_DIVISOR !== 'undefined' ? LS_DIVISOR : 'payroll_deduction_divisor');
+    var div = 0;
+    if (typeof window !== 'undefined' && typeof window.divisor !== 'undefined'){
+      var winDiv = Number(window.divisor);
+      if (!isNaN(winDiv) && winDiv > 0) div = winDiv;
+    }
+    if (!(div > 0)){
+      try {
+        if (typeof localStorage !== 'undefined' && localStorage){
+          var stored = localStorage.getItem(key);
+          if (stored != null){
+            var parsed = parseInt(stored, 10);
+            if (!isNaN(parsed) && parsed > 0) div = parsed;
+          }
+        }
+      } catch (e){}
+    }
+    if (!(div > 0)) div = 1;
+    return div;
+  }
+  function loanSharePerPeriod(raw){
+    var amount = toNum(raw);
+    var div = currentDivisor();
+    if (!(div > 0)) div = 1;
+    var per = amount / div;
+    if (!isFinite(per)) per = 0;
+    return per.toFixed(2);
+  }
+  try {
+    if (typeof window !== 'undefined'){
+      window.getCurrentDeductionDivisor = currentDivisor;
+      window.computeLoanPerPeriodShare = loanSharePerPeriod;
+    }
+  } catch(e){}
   function dash(val){
     var out = (val == null ? '' : val).toString();
     if (!out) return '';
@@ -371,6 +406,12 @@ function safePrint(win){
       totalDeductions: readCell(row, '.totalDed'),
       net: readCell(row, '.netPay')
     };
+    var sssLoanRaw = toNum(data.sssLoan);
+    var piLoanRaw = toNum(data.piLoan);
+    data.sssLoanRaw = sssLoanRaw;
+    data.piLoanRaw = piLoanRaw;
+    data.sssLoan = loanSharePerPeriod(sssLoanRaw);
+    data.piLoan = loanSharePerPeriod(piLoanRaw);
     if (!data.totalHours){
       var r = toNum(data.regHours);
       var o = toNum(data.otHours);
@@ -9976,6 +10017,34 @@ document.addEventListener('click', function(e) {
     var v = el ? (el.value || el.textContent || '') : '';
     return v.toString().trim();
   }
+  function perLoanShare(raw){
+    if (typeof window !== 'undefined' && typeof window.computeLoanPerPeriodShare === 'function'){
+      return window.computeLoanPerPeriodShare(raw);
+    }
+    var amt = parseFloat((raw == null ? '' : raw).toString().replace(/,/g,''));
+    if (!isFinite(amt)) amt = 0;
+    var key = (typeof LS_DIVISOR !== 'undefined' ? LS_DIVISOR : 'payroll_deduction_divisor');
+    var div = 0;
+    if (typeof window !== 'undefined' && typeof window.divisor !== 'undefined'){
+      var winDiv = Number(window.divisor);
+      if (!isNaN(winDiv) && winDiv > 0) div = winDiv;
+    }
+    if (!(div > 0)){
+      try {
+        if (typeof localStorage !== 'undefined' && localStorage){
+          var stored = localStorage.getItem(key);
+          if (stored != null){
+            var parsed = parseInt(stored, 10);
+            if (!isNaN(parsed) && parsed > 0) div = parsed;
+          }
+        }
+      } catch(err){}
+    }
+    if (!(div > 0)) div = 1;
+    var per = amt / div;
+    if (!isFinite(per)) per = 0;
+    return per.toFixed(2);
+  }
 
   var rowData = (typeof window.collectPayslipRowData === 'function') ? window.collectPayslipRowData(row) : null;
 
@@ -9991,8 +10060,8 @@ document.addEventListener('click', function(e) {
   var pagibig   = rowData ? rowData.pagibig : cellText('.pagibig');
   var philhealth= rowData ? rowData.philhealth : cellText('.philhealth');
   var sss       = rowData ? rowData.sss : cellText('.sss');
-  var sssLoan   = rowData ? rowData.sssLoan : inputVal('.loanSSS');
-  var piLoan    = rowData ? rowData.piLoan : inputVal('.loanPI');
+  var sssLoan   = rowData ? rowData.sssLoan : perLoanShare(inputVal('.loanSSS'));
+  var piLoan    = rowData ? rowData.piLoan : perLoanShare(inputVal('.loanPI'));
   var valeAmt   = rowData ? rowData.vale : inputVal('.vale');
   var wedValeAmt= rowData ? rowData.valeWed : inputVal('.valeWed');
   var adjAmt    = rowData ? rowData.adjustments : cellText('.adjAmt');
