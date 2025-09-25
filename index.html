@@ -5693,8 +5693,8 @@ rows += `<tr class="allowance">
     }
     function to2(n){ n = parseFloat(String(n).replace(/,/g,'')); if (isNaN(n)) n = 0; return (Math.round(n*100)/100).toFixed(2); }
 
-    function exportCSVAll(){
-      if (!__report){ alert('No report to export yet.'); return; }
+    function buildDetailedReportRows(){
+      if (!__report) return null;
       const { data, dates, from, to } = __report;
 
       const dayHeader = dates.map(d=>{
@@ -5775,11 +5775,168 @@ rows += `<tr class="allowance">
         [to2(gReg), to2(gOT), to2(gReg+gOT), to2(gGross)]
       ));
 
+      return { rows, from, to };
+    }
+
+    function exportCSVAll(){
+      const bundle = buildDetailedReportRows();
+      if (!bundle){ alert('No report to export yet.'); return; }
+      const { rows, from, to } = bundle;
       const csv = rows.map(r=>r.map(csvEscape).join(',')).join('\n');
       const a=document.createElement('a');
       a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'}));
       a.download=`reports_all_${from}_to_${to}.csv`;
       a.click(); URL.revokeObjectURL(a.href);
+    }
+
+    function tableToAoA(tbl){
+      const rows = [];
+      if (!tbl) return rows;
+      const pushRow = (tr) => {
+        if (!tr || !tr.cells) return;
+        const arr = [];
+        for (let i = 0; i < tr.cells.length; i++){
+          const cell = tr.cells[i];
+          arr.push((cell.textContent || '').trim());
+        }
+        rows.push(arr);
+      };
+      if (tbl.tHead){ Array.from(tbl.tHead.rows || []).forEach(pushRow); }
+      Array.from(tbl.tBodies || []).forEach(tb => { Array.from(tb.rows || []).forEach(pushRow); });
+      if (tbl.tFoot){ Array.from(tbl.tFoot.rows || []).forEach(pushRow); }
+      return rows;
+    }
+
+    function buildDtrAoA(){
+      const table = document.getElementById('resultsTable');
+      if (!table) return null;
+
+      const selectedTexts = [];
+      table.querySelectorAll('select').forEach(sel => {
+        let txt = '';
+        try {
+          const idx = sel.selectedIndex;
+          if (idx >= 0 && sel.options && sel.options[idx]){
+            const opt = sel.options[idx];
+            txt = (opt.textContent || opt.innerText || opt.value || '');
+          }
+        } catch(e){}
+        selectedTexts.push((txt || '').trim());
+      });
+
+      const clone = table.cloneNode(true);
+      clone.querySelectorAll('select').forEach((sel, idx) => {
+        const td = sel.closest('td');
+        if (td){ td.textContent = selectedTexts[idx] || ''; }
+      });
+      clone.querySelectorAll('button').forEach(btn => btn.remove());
+
+      const dropIdx = [];
+      if (clone.tHead && clone.tHead.rows && clone.tHead.rows[0]){
+        const headerRow = clone.tHead.rows[0];
+        for (let i = 0; i < headerRow.cells.length; i++){
+          const txt = (headerRow.cells[i].textContent || '').trim().toLowerCase();
+          if (txt === 'split' || txt === 'actions' || txt === 'editor'){ dropIdx.push(i); }
+        }
+      }
+      if (dropIdx.length){
+        const unique = Array.from(new Set(dropIdx)).sort((a,b)=> b - a);
+        const removeCols = (tr) => {
+          if (!tr || !tr.cells) return;
+          unique.forEach(idx => {
+            try { if (idx >=0 && idx < tr.cells.length) tr.deleteCell(idx); } catch(e){}
+          });
+        };
+        if (clone.tHead){ Array.from(clone.tHead.rows || []).forEach(removeCols); }
+        Array.from(clone.tBodies || []).forEach(tb => { Array.from(tb.rows || []).forEach(removeCols); });
+        if (clone.tFoot){ Array.from(clone.tFoot.rows || []).forEach(removeCols); }
+      }
+
+      const aoa = tableToAoA(clone);
+      return (aoa && aoa.length) ? aoa : null;
+    }
+
+    function buildPayrollAoA(){
+      const src = document.getElementById('payrollTable');
+      if (!src) return null;
+      const clone = src.cloneNode(true);
+      const removeLastCell = (row) => { if (row && row.lastElementChild) row.removeChild(row.lastElementChild); };
+      if (clone.tHead){ Array.from(clone.tHead.rows || []).forEach(removeLastCell); }
+      Array.from(clone.tBodies || []).forEach(tb => { Array.from(tb.rows || []).forEach(removeLastCell); });
+      if (clone.tFoot){ Array.from(clone.tFoot.rows || []).forEach(removeLastCell); }
+
+      const key = (typeof LS_DIVISOR !== 'undefined') ? LS_DIVISOR : 'payroll_deduction_divisor';
+      let div = 1;
+      try {
+        if (typeof window !== 'undefined' && typeof window.divisor !== 'undefined'){ div = Number(window.divisor) || 1; }
+        if (!div){ div = Number(localStorage.getItem(key)) || 1; }
+      } catch(e){}
+      if (!div) div = 1;
+
+      clone.querySelectorAll('input').forEach(inp => {
+        const td = inp.parentElement;
+        if (!td) return;
+        const cls = inp.classList || { contains: () => false };
+        if (cls.contains('loanSSS') || cls.contains('loanPI')){
+          const raw = parseFloat((inp.value || '').toString().replace(/,/g,'')) || 0;
+          td.textContent = (raw / div).toFixed(2);
+        } else {
+          const val = (inp.value || inp.textContent || '').toString();
+          td.textContent = val;
+        }
+      });
+
+      clone.querySelectorAll('td').forEach(td => {
+        if (td.querySelector('input')) return;
+        const raw = (td.textContent || '').replace(/,/g,'').trim();
+        if (!raw) return;
+        const num = parseFloat(raw);
+        if (!isNaN(num) && num === 0){ td.textContent = '-'; }
+      });
+
+      const startDate = document.getElementById('weekStart')?.value || '';
+      const endDate = document.getElementById('weekEnd')?.value || '';
+      const title = (startDate && endDate) ? `Payroll Report (${startDate} to ${endDate})` : 'Payroll Report';
+      const aoa = [[title], ['']];
+      tableToAoA(clone).forEach(row => aoa.push(row));
+      return (aoa && aoa.length > 2) ? aoa : null;
+    }
+
+    function buildMasterReportAoA(){
+      try { if (typeof window.renderMasterReport === 'function') window.renderMasterReport(); } catch(e){}
+      const container = document.getElementById('masterReportContainer');
+      if (!container) return null;
+      const aoa = [];
+      const pushRow = (cells) => {
+        if (!cells) return;
+        aoa.push(cells.map(val => {
+          if (val == null) return '';
+          return String(val).trim();
+        }));
+      };
+
+      const title = container.querySelector('h2');
+      if (title) pushRow([title.textContent.trim()]);
+      const period = container.querySelector('.mr-period');
+      if (period) pushRow([period.textContent.trim()]);
+
+      let firstSection = true;
+      container.querySelectorAll('.mr-section').forEach(section => {
+        const heading = section.querySelector('h4');
+        const tables = Array.from(section.querySelectorAll('table'));
+        if (!heading && !tables.length) return;
+        if (!firstSection) pushRow(['']);
+        firstSection = false;
+        if (heading) pushRow([heading.textContent.trim()]);
+        tables.forEach((table, idx) => {
+          const before = aoa.length;
+          tableToAoA(table).forEach(row => pushRow(row));
+          if (idx !== tables.length - 1 && aoa.length > before) pushRow(['']);
+        });
+      });
+
+      while (aoa.length && aoa[aoa.length-1].every(cell => !String(cell || '').trim())) aoa.pop();
+      return (aoa && aoa.length) ? aoa : null;
     }
 
     // Export an Excel workbook with one sheet per project
@@ -5867,116 +6024,51 @@ rows += `<tr class="allowance">
     // Expose for external triggers (lock automation)
     try { window.exportExcelAllSheets = exportExcelAllSheets; } catch(e){}
 
-    // Export a single workbook that includes sheets for: DTR, Employees, Payroll,
-    // and per-project Reports (plus Summary)
+    // Export a single workbook that includes sheets for DTR, Payroll, detailed reports, and the Master Report
     function exportExcelAllTabs(){
       try{
         if (typeof XLSX === 'undefined' || !XLSX || !XLSX.utils) { alert('Excel library not available'); return; }
         if (typeof window.rebuildReports === 'function') window.rebuildReports();
-        if (!__report) { alert('No report to export yet.'); return; }
-        const { data, dates, from, to } = __report;
+        const detailBundle = buildDetailedReportRows();
+        if (!detailBundle){ alert('No report to export yet.'); return; }
+        const { rows: detailedRows, from, to } = detailBundle;
         const wb = XLSX.utils.book_new();
 
-        // 1) DTR sheet from #resultsTable (excluding actions)
-        try{
-          const tbl = document.getElementById('resultsTable');
-          const head = Array.from(tbl.querySelectorAll('thead th')).map(th=> (th.textContent||'').trim()).filter(t=>t.toLowerCase()!=='actions' && t.toLowerCase()!=='split');
-          const rows = [head];
-          Array.from(tbl.querySelectorAll('tbody tr')).forEach(tr=>{
-            const tds = Array.from(tr.querySelectorAll('td')).filter(td=>!td.classList.contains('actions-cell'));
-            const row = tds.map(td=>{
-              const sel = td.querySelector && td.querySelector('select');
-              if (sel && sel.options && sel.selectedIndex>=0){ const opt=sel.options[sel.selectedIndex]; return (opt && (opt.textContent||opt.innerText||opt.value))||''; }
-              return (td.textContent||'').trim();
-            });
-            rows.push(row);
-          });
-          XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(rows), 'DTR');
-        }catch(e){}
+        try {
+          const dtrAoA = buildDtrAoA();
+          if (dtrAoA && dtrAoA.length){
+            XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(dtrAoA), 'DTR');
+          }
+        } catch(e){ console.warn('Failed to build DTR sheet', e); }
 
-        // 2) Employees sheet from store
-        try{
-          const header = ['ID','Name','Hourly Rate','Bank Account','Schedule Name','Schedule ID','Project Name','Project ID','Deduct Pag-IBIG','Deduct PhilHealth','Deduct SSS'];
-          const rows = [header];
-          const flagsAll = (typeof contribFlags!=='undefined' && contribFlags) || {};
-          Object.keys(storedEmployees||{}).forEach(id=>{
-            const emp = (storedEmployees||{})[id]||{};
-            const schedId = emp.scheduleId || '';
-            const schedName = (storedSchedules && storedSchedules[schedId]?.name) || '';
-            const projId = emp.projectId || '';
-            const projName = (storedProjects && storedProjects[projId]?.name) || '';
-            const bank = emp.bankAccount || '';
-            const fl = flagsAll[id] || {};
-            const fPI = (fl.pagibig !== false) ? 'Yes' : 'No';
-            const fPH = (fl.philhealth !== false) ? 'Yes' : 'No';
-            const fSSS= (fl.sss !== false) ? 'Yes' : 'No';
-            rows.push([id, emp.name||'', emp.hourlyRate||'', bank, schedName, schedId, projName, projId, fPI, fPH, fSSS]);
-          });
-          XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(rows), 'Employees');
-        }catch(e){}
+        try {
+          const payrollAoA = buildPayrollAoA();
+          if (payrollAoA && payrollAoA.length){
+            XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(payrollAoA), 'Payroll');
+          }
+        } catch(e){ console.warn('Failed to build Payroll sheet', e); }
 
-        // 3) Payroll sheet from #payrollTable (inputs → values, drop Payslip)
-        try{
-          const src = document.getElementById('payrollTable');
-          const clone = src.cloneNode(true);
-          // Remove Payslip last column
-          const removeLastCell = row => { if (row && row.lastElementChild) row.removeChild(row.lastElementChild); };
-          clone.querySelectorAll('thead tr').forEach(removeLastCell);
-          clone.querySelectorAll('tbody tr').forEach(removeLastCell);
-          clone.querySelectorAll('tfoot tr').forEach(removeLastCell);
-          // Convert inputs to text
-          clone.querySelectorAll('input').forEach(inp=>{ const td=inp.parentElement; td.textContent = (inp.value||inp.textContent||''); });
-          const head = [Array.from(clone.querySelectorAll('thead th')).map(th=> (th.textContent||'').trim())];
-          const body = Array.from(clone.querySelectorAll('tbody tr')).map(tr=> Array.from(tr.querySelectorAll('td')).map(td=> (td.textContent||'').trim()));
-          const foot = [];
-          const tfr = clone.querySelector('tfoot tr'); if (tfr){ foot.push(Array.from(tfr.querySelectorAll('td')).map(td=> (td.textContent||'').trim())); }
-          const aoa = head.concat(body).concat(foot);
-          XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(aoa), 'Payroll');
-        }catch(e){}
+        if (detailedRows && detailedRows.length){
+          try {
+            XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(detailedRows), 'Reports Detailed');
+          } catch(e){ console.warn('Failed to build Reports sheet', e); }
+        }
 
-        // 4) Reports: reuse per-project builder to append sheets + Summary
-        try{
-          // Build using existing function by temporarily overriding writeFile
-          // but here we inline the same logic as exportExcelAllSheets to append to wb
-          const addReportSheets = (wb2)=>{
-            const dayHeader = dates.map(d=>{ const lbl=d.toLocaleDateString(undefined,{day:'2-digit',month:'short'}); return [`RWH ${lbl}`, `OTH ${lbl}`]; }).flat();
-            const header = ['PERSONNEL','RATE'].concat(dayHeader, ['TOTAL REG HRS','TOTAL OT HRS','GRAND TOTAL HOURS','GROSS']);
-            const projects = Object.keys(data).sort();
-            let gReg=0,gOT=0,gGross=0;
-            const gDayTotals = dates.map(()=>({rwh:0, oth:0}));
-            const summaryRows = [['PROJECT'].concat(header)];
-            projects.forEach(proj=>{
-              const empMap = data[proj];
-              const rows = [header.slice()];
-              let pReg=0,pOT=0,pGross=0;
-              const dayTotals = dates.map(()=>({rwh:0, oth:0}));
-              Object.keys(empMap).sort((a,b)=>{ const A=(empMap[a].name||a).toUpperCase(); const B=(empMap[b].name||b).toUpperCase(); return A.localeCompare(B); }).forEach(empId=>{
-                const rec = empMap[empId]; const display = rec.name || empId; const rate = getRate(empId, display);
-                let rReg=0,rOT=0; const dayCells=[]; dates.forEach((d,i)=>{ const key=d.setHours(0,0,0,0); const v=rec.days[key]||{rwh:0,oth:0}; rReg+=v.rwh; rOT+=v.oth; dayTotals[i].rwh+=v.rwh; dayTotals[i].oth+=v.oth; dayCells.push(to2(v.rwh), to2(v.oth)); });
-                const otMult = toNum(document.querySelector('#otMultiplier')?.value || 1.5);
-                const gross = (rReg*rate) + (rOT*rate*otMult); pReg+=rReg; pOT+=rOT; pGross+=gross;
-                rows.push([display, to2(rate)].concat(dayCells, [to2(rReg), to2(rOT), to2(rReg+rOT), to2(gross)]));
-                summaryRows.push([proj, display, to2(rate)].concat(dayCells, [to2(rReg), to2(rOT), to2(rReg+rOT), to2(gross)]));
-              });
-              // Allowance row
-              try{
-                const allow = Object.keys(bantay||{}).reduce((sum, empId)=>{ const assigned=(bantayProj||{})[empId]; if(!assigned) return sum; const matchesById=(assigned===proj); const matchesByName=((typeof storedProjects!=='undefined'&&storedProjects&&storedProjects[assigned]?.name)===proj); const amt=parseFloat((bantay&&bantay[empId])||0)||0; return (matchesById||matchesByName)?(sum+amt):sum; },0);
-                if(allow>0){ const zeros=new Array(dates.length*2).fill('0.00'); rows.push(['Allowance',''].concat(zeros,['0.00','0.00','0.00', to2(allow)])); summaryRows.push([proj,'Allowance',''].concat(zeros,['0.00','0.00','0.00', to2(allow)])); pGross+=allow; }
-              }catch(e){}
-              gReg+=pReg; gOT+=pOT; gGross+=pGross;
-              dayTotals.forEach((dt,i)=>{ gDayTotals[i].rwh += dt.rwh; gDayTotals[i].oth += dt.oth; });
-              const dayTotalsCells = dayTotals.flatMap(dt=>[to2(dt.rwh), to2(dt.oth)]);
-              rows.push(['Project Total',''].concat(dayTotalsCells, [to2(pReg), to2(pOT), to2(pReg+pOT), to2(pGross)]));
-              XLSX.utils.book_append_sheet(wb2, XLSX.utils.aoa_to_sheet(rows), (proj||'Project').toString().substring(0,31));
-            });
-            const gDayTotalsCells = gDayTotals.flatMap(dt=>[to2(dt.rwh), to2(dt.oth)]);
-            summaryRows.push(['','Grand Total',''].concat(gDayTotalsCells, [to2(gReg), to2(gOT), to2(gReg+gOT), to2(gGross)]));
-            XLSX.utils.book_append_sheet(wb2, XLSX.utils.aoa_to_sheet(summaryRows), 'Summary');
-          };
-          addReportSheets(wb);
-        }catch(e){}
+        try {
+          const masterAoA = buildMasterReportAoA();
+          if (masterAoA && masterAoA.length){
+            XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(masterAoA), 'Master Report');
+          }
+        } catch(e){ console.warn('Failed to build Master Report sheet', e); }
 
-        const fname = `all_tabs_${from}_to_${to}.xlsx`;
+        if (!wb.SheetNames.length){
+          alert('Nothing to export.');
+          return;
+        }
+
+        const safeFrom = (from && String(from).trim()) || 'start';
+        const safeTo = (to && String(to).trim()) || 'end';
+        const fname = (from || to) ? `all_tabs_${safeFrom}_to_${safeTo}.xlsx` : 'all_tabs.xlsx';
         XLSX.writeFile(wb, fname);
       }catch(e){ console.warn('Excel export failed', e); alert('Excel export failed'); }
     }
