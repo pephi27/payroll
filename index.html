@@ -12510,25 +12510,63 @@ document.addEventListener('DOMContentLoaded', async function () {
   function serializeTableById(id){
     const tbl = document.getElementById(id);
     if (!tbl) return null;
+
     const headers = [];
-    try { tbl.querySelectorAll('thead tr th').forEach(th=> headers.push((th.textContent||'').trim())); } catch {}
-    const rows = [];
-    const cellsSel = 'td,th';
-    tbl.querySelectorAll('tbody tr').forEach(tr=>{
-      const arr = [];
-      tr.querySelectorAll(cellsSel).forEach(td=>{
-        const el = td.querySelector('input,select,textarea');
-        if (el) {
-          if (el.tagName && el.tagName.toUpperCase()==='SELECT'){
-            const opt = el.options && el.selectedIndex>=0 ? el.options[el.selectedIndex] : null;
-            arr.push(String((opt && (opt.textContent||opt.label)) || el.value || '').trim());
-          } else {
-            arr.push(String((typeof el.value!== 'undefined' ? el.value : el.textContent)||'').trim());
+    try {
+      const thead = tbl.tHead;
+      if (thead && thead.rows){
+        for (let i = 0; i < thead.rows.length; i++){
+          const cells = thead.rows[i].cells;
+          for (let j = 0; j < cells.length; j++){
+            headers.push((cells[j].textContent || '').trim());
           }
-        } else arr.push((td.textContent||'').trim());
-      });
-      rows.push(arr);
-    });
+        }
+      } else {
+        tbl.querySelectorAll('thead tr th').forEach(th=> headers.push((th.textContent||'').trim()));
+      }
+    } catch {}
+
+    function findControl(td){
+      let el = td.firstElementChild;
+      while (el){
+        const tag = el.tagName && el.tagName.toUpperCase();
+        if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return el;
+        if (el.firstElementChild){
+          const nested = el.querySelector && el.querySelector('input,select,textarea');
+          if (nested) return nested;
+        }
+        el = el.nextElementSibling;
+      }
+      return td.querySelector('input,select,textarea');
+    }
+
+    const rows = [];
+    const bodies = tbl.tBodies;
+    for (let b = 0; b < bodies.length; b++){
+      const body = bodies[b];
+      const trs = body.rows;
+      for (let r = 0; r < trs.length; r++){
+        const tr = trs[r];
+        const arr = [];
+        const cells = tr.cells;
+        for (let c = 0; c < cells.length; c++){
+          const td = cells[c];
+          const el = findControl(td);
+          if (el) {
+            const tag = el.tagName && el.tagName.toUpperCase();
+            if (tag === 'SELECT'){
+              const opt = el.options && el.selectedIndex>=0 ? el.options[el.selectedIndex] : null;
+              arr.push(String((opt && (opt.textContent||opt.label)) || el.value || '').trim());
+            } else {
+              arr.push(String((typeof el.value!== 'undefined' ? el.value : el.textContent)||'').trim());
+            }
+          } else {
+            arr.push((td.textContent||'').trim());
+          }
+        }
+        rows.push(arr);
+      }
+    }
     return { headers, rows };
   }
   function renderSimpleTableSnapshot(id, snap){
