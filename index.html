@@ -6278,10 +6278,126 @@ rows += `<tr class="allowance">
     try { window.exportExcelAllSheets = exportExcelAllSheets; } catch(e){}
 
     // Export a single workbook that includes sheets for DTR, Payroll, detailed reports, and the Master Report
+    function prepareReportsContext(){
+      const cleanupActions = [];
+      try {
+        const searchInput = document.getElementById('dtrSearchName');
+        const projectSelect = document.getElementById('filterProject');
+        const dtrStartEls = [];
+        const dtrEndEls = [];
+        const addDateEl = (arr, el) => { if (el && !arr.includes(el)) arr.push(el); };
+        addDateEl(dtrStartEls, document.getElementById('filterStart'));
+        addDateEl(dtrStartEls, document.getElementById('dtrDateFrom'));
+        addDateEl(dtrEndEls, document.getElementById('filterEnd'));
+        addDateEl(dtrEndEls, document.getElementById('dtrDateTo'));
+
+        const savedSearch = searchInput ? searchInput.value : null;
+        const savedProject = projectSelect ? projectSelect.value : null;
+        const savedProjectFilter = (typeof currentProjectFilter !== 'undefined') ? currentProjectFilter : null;
+        let savedLsFilter = null;
+        let hadLsFilter = false;
+        try {
+          if (typeof LS_FILTER_PROJECT !== 'undefined' && typeof localStorage !== 'undefined') {
+            savedLsFilter = localStorage.getItem(LS_FILTER_PROJECT);
+            hadLsFilter = savedLsFilter !== null;
+          }
+        } catch (_) {}
+        let savedLsFrom = null;
+        let hadLsFrom = false;
+        let savedLsTo = null;
+        let hadLsTo = false;
+        try {
+          if (typeof LS_FROM !== 'undefined' && typeof localStorage !== 'undefined') {
+            savedLsFrom = localStorage.getItem(LS_FROM);
+            hadLsFrom = savedLsFrom !== null;
+          }
+        } catch (_) {}
+        try {
+          if (typeof LS_TO !== 'undefined' && typeof localStorage !== 'undefined') {
+            savedLsTo = localStorage.getItem(LS_TO);
+            hadLsTo = savedLsTo !== null;
+          }
+        } catch (_) {}
+        const savedDates = [];
+        dtrStartEls.forEach((el) => { savedDates.push({ el, type: 'start', value: el ? el.value : '' }); });
+        dtrEndEls.forEach((el) => { savedDates.push({ el, type: 'end', value: el ? el.value : '' }); });
+
+        const range = (typeof getPayrollRange === 'function') ? getPayrollRange() : [null, null];
+        const rangeStart = Array.isArray(range) ? range[0] : null;
+        const rangeEnd = Array.isArray(range) ? range[1] : null;
+
+        if (searchInput) searchInput.value = '';
+        if (projectSelect) projectSelect.value = 'all';
+        if (typeof currentProjectFilter !== 'undefined') currentProjectFilter = 'all';
+        try {
+          if (typeof LS_FILTER_PROJECT !== 'undefined' && typeof localStorage !== 'undefined') {
+            localStorage.setItem(LS_FILTER_PROJECT, 'all');
+          }
+        } catch (_) {}
+        savedDates.forEach(({ el, type }) => {
+          if (!el) return;
+          if (type === 'start' && rangeStart) el.value = rangeStart;
+          if (type === 'end' && rangeEnd) el.value = rangeEnd;
+        });
+        try {
+          if (rangeStart && typeof LS_FROM !== 'undefined' && typeof localStorage !== 'undefined') {
+            localStorage.setItem(LS_FROM, rangeStart);
+          }
+        } catch (_) {}
+        try {
+          if (rangeEnd && typeof LS_TO !== 'undefined' && typeof localStorage !== 'undefined') {
+            localStorage.setItem(LS_TO, rangeEnd);
+          }
+        } catch (_) {}
+        try { if (typeof renderResults === 'function') renderResults(); } catch (_) {}
+
+        cleanupActions.push(() => {
+          if (searchInput) searchInput.value = savedSearch;
+          if (projectSelect && savedProject !== null) projectSelect.value = savedProject;
+          if (typeof currentProjectFilter !== 'undefined') {
+            if (savedProjectFilter !== null && savedProjectFilter !== undefined) currentProjectFilter = savedProjectFilter;
+            else if (projectSelect && savedProject !== null) currentProjectFilter = savedProject;
+          }
+          try {
+            if (typeof LS_FILTER_PROJECT !== 'undefined' && typeof localStorage !== 'undefined') {
+              if (hadLsFilter) localStorage.setItem(LS_FILTER_PROJECT, savedLsFilter);
+              else localStorage.removeItem(LS_FILTER_PROJECT);
+            }
+          } catch (_) {}
+          savedDates.forEach(({ el, value }) => { if (el && typeof value !== 'undefined') el.value = value; });
+          try {
+            if (typeof LS_FROM !== 'undefined' && typeof localStorage !== 'undefined') {
+              if (hadLsFrom) localStorage.setItem(LS_FROM, savedLsFrom);
+              else localStorage.removeItem(LS_FROM);
+            }
+          } catch (_) {}
+          try {
+            if (typeof LS_TO !== 'undefined' && typeof localStorage !== 'undefined') {
+              if (hadLsTo) localStorage.setItem(LS_TO, savedLsTo);
+              else localStorage.removeItem(LS_TO);
+            }
+          } catch (_) {}
+          try { if (typeof renderResults === 'function') renderResults(); } catch (_) {}
+        });
+      } catch (err) {
+        console.warn('prepareReportsContext failed', err);
+      }
+
+      return () => {
+        while (cleanupActions.length) {
+          const fn = cleanupActions.shift();
+          try { fn(); } catch (e) { console.warn('restoreReportsContext failed', e); }
+        }
+      };
+    }
+
     async function exportExcelAllTabs(){
+      let restoreContext = () => {};
       try{
         if (typeof XLSX === 'undefined' || !XLSX || !XLSX.utils) { alert('Excel library not available'); return; }
+        restoreContext = prepareReportsContext();
         if (typeof window.rebuildReports === 'function') window.rebuildReports();
+
         const detailBundle = buildDetailedReportRows();
         if (!detailBundle){ alert('No report to export yet.'); return; }
         const { rows: detailedRows, from, to } = detailBundle;
@@ -6324,6 +6440,9 @@ rows += `<tr class="allowance">
         const fname = (from || to) ? `all_tabs_${safeFrom}_to_${safeTo}.xlsx` : 'all_tabs.xlsx';
         XLSX.writeFile(wb, fname);
       }catch(e){ console.warn('Excel export failed', e); alert('Excel export failed'); }
+      finally {
+        try { restoreContext(); } catch (e) { console.warn('restore context failed', e); }
+      }
     }
 
     try { window.exportExcelAllTabs = exportExcelAllTabs; } catch(e){}
