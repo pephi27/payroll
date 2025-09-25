@@ -5873,29 +5873,59 @@ rows += `<tr class="allowance">
       try{
         if (typeof XLSX === 'undefined' || !XLSX || !XLSX.utils) { alert('Excel library not available'); return; }
         if (typeof window.rebuildReports === 'function') window.rebuildReports();
-        if (!__report) { alert('No report to export yet.'); return; }
-        const { data, dates, from, to } = __report;
+        try { if (typeof window.renderMasterReport === 'function') window.renderMasterReport(); } catch(e){}
+
+        const reportRef = (typeof __report !== 'undefined' && __report) ? __report : null;
         const wb = XLSX.utils.book_new();
 
-        // 1) DTR sheet from #resultsTable (excluding actions)
-        try{
+        const norm = (s) => String(s || '').trim().toLowerCase();
+        const pushSheet = (name, aoa) => {
+          if (!aoa || !Array.isArray(aoa)) return;
+          const prepared = aoa
+            .filter(row => Array.isArray(row))
+            .map(row => {
+              if (!row.length) return [''];
+              return row.map(val => (val == null ? '' : String(val)));
+            });
+          if (!prepared.length) return;
+          const sheet = XLSX.utils.aoa_to_sheet(prepared);
+          XLSX.utils.book_append_sheet(wb, sheet, name.substring(0,31));
+        };
+
+        function buildDtrAoA(){
           const tbl = document.getElementById('resultsTable');
-          const head = Array.from(tbl.querySelectorAll('thead th')).map(th=> (th.textContent||'').trim()).filter(t=>t.toLowerCase()!=='actions' && t.toLowerCase()!=='split');
-          const rows = [head];
-          Array.from(tbl.querySelectorAll('tbody tr')).forEach(tr=>{
-            const tds = Array.from(tr.querySelectorAll('td')).filter(td=>!td.classList.contains('actions-cell'));
-            const row = tds.map(td=>{
+          if (!tbl) return null;
+          const headers = Array.from(tbl.querySelectorAll('thead th'));
+          if (!headers.length) return null;
+          const skipNames = new Set(['actions','split','editor']);
+          const include = headers.map(th => !skipNames.has(norm(th.textContent || th.innerText)));
+          const headRow = headers.reduce((arr, th, idx) => {
+            if (include[idx]) arr.push((th.textContent || th.innerText || '').trim());
+            return arr;
+          }, []);
+          if (!headRow.length) return null;
+          const rows = [headRow];
+          Array.from(tbl.querySelectorAll('tbody tr')).forEach(tr => {
+            const cells = Array.from(tr.cells || []);
+            const row = [];
+            cells.forEach((td, idx) => {
+              if (!include[idx]) return;
+              let text = '';
               const sel = td.querySelector && td.querySelector('select');
-              if (sel && sel.options && sel.selectedIndex>=0){ const opt=sel.options[sel.selectedIndex]; return (opt && (opt.textContent||opt.innerText||opt.value))||''; }
-              return (td.textContent||'').trim();
+              if (sel && sel.options && sel.selectedIndex >= 0) {
+                const opt = sel.options[sel.selectedIndex];
+                text = (opt && (opt.textContent || opt.innerText || opt.value)) || '';
+              } else {
+                text = (td.textContent || td.innerText || '').trim();
+              }
+              row.push(text);
             });
             rows.push(row);
           });
-          XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(rows), 'DTR');
-        }catch(e){}
+          return rows;
+        }
 
-        // 2) Employees sheet from store
-        try{
+        function buildEmployeesAoA(){
           const header = ['ID','Name','Hourly Rate','Bank Account','Schedule Name','Schedule ID','Project Name','Project ID','Deduct Pag-IBIG','Deduct PhilHealth','Deduct SSS'];
           const rows = [header];
           const flagsAll = (typeof contribFlags!=='undefined' && contribFlags) || {};
@@ -5912,71 +5942,203 @@ rows += `<tr class="allowance">
             const fSSS= (fl.sss !== false) ? 'Yes' : 'No';
             rows.push([id, emp.name||'', emp.hourlyRate||'', bank, schedName, schedId, projName, projId, fPI, fPH, fSSS]);
           });
-          XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(rows), 'Employees');
-        }catch(e){}
+          return rows;
+        }
 
-        // 3) Payroll sheet from #payrollTable (inputs → values, drop Payslip)
-        try{
+        function buildPayrollAoA(){
           const src = document.getElementById('payrollTable');
+          if (!src) return null;
           const clone = src.cloneNode(true);
-          // Remove Payslip last column
           const removeLastCell = row => { if (row && row.lastElementChild) row.removeChild(row.lastElementChild); };
           clone.querySelectorAll('thead tr').forEach(removeLastCell);
           clone.querySelectorAll('tbody tr').forEach(removeLastCell);
           clone.querySelectorAll('tfoot tr').forEach(removeLastCell);
-          // Convert inputs to text
-          clone.querySelectorAll('input').forEach(inp=>{ const td=inp.parentElement; td.textContent = (inp.value||inp.textContent||''); });
-          const head = [Array.from(clone.querySelectorAll('thead th')).map(th=> (th.textContent||'').trim())];
-          const body = Array.from(clone.querySelectorAll('tbody tr')).map(tr=> Array.from(tr.querySelectorAll('td')).map(td=> (td.textContent||'').trim()));
-          const foot = [];
-          const tfr = clone.querySelector('tfoot tr'); if (tfr){ foot.push(Array.from(tfr.querySelectorAll('td')).map(td=> (td.textContent||'').trim())); }
-          const aoa = head.concat(body).concat(foot);
-          XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(aoa), 'Payroll');
-        }catch(e){}
 
-        // 4) Reports: reuse per-project builder to append sheets + Summary
-        try{
-          // Build using existing function by temporarily overriding writeFile
-          // but here we inline the same logic as exportExcelAllSheets to append to wb
-          const addReportSheets = (wb2)=>{
-            const dayHeader = dates.map(d=>{ const lbl=d.toLocaleDateString(undefined,{day:'2-digit',month:'short'}); return [`RWH ${lbl}`, `OTH ${lbl}`]; }).flat();
-            const header = ['PERSONNEL','RATE'].concat(dayHeader, ['TOTAL REG HRS','TOTAL OT HRS','GRAND TOTAL HOURS','GROSS']);
-            const projects = Object.keys(data).sort();
-            let gReg=0,gOT=0,gGross=0;
-            const gDayTotals = dates.map(()=>({rwh:0, oth:0}));
-            const summaryRows = [['PROJECT'].concat(header)];
-            projects.forEach(proj=>{
-              const empMap = data[proj];
-              const rows = [header.slice()];
-              let pReg=0,pOT=0,pGross=0;
-              const dayTotals = dates.map(()=>({rwh:0, oth:0}));
-              Object.keys(empMap).sort((a,b)=>{ const A=(empMap[a].name||a).toUpperCase(); const B=(empMap[b].name||b).toUpperCase(); return A.localeCompare(B); }).forEach(empId=>{
-                const rec = empMap[empId]; const display = rec.name || empId; const rate = getRate(empId, display);
-                let rReg=0,rOT=0; const dayCells=[]; dates.forEach((d,i)=>{ const key=d.setHours(0,0,0,0); const v=rec.days[key]||{rwh:0,oth:0}; rReg+=v.rwh; rOT+=v.oth; dayTotals[i].rwh+=v.rwh; dayTotals[i].oth+=v.oth; dayCells.push(to2(v.rwh), to2(v.oth)); });
-                const otMult = toNum(document.querySelector('#otMultiplier')?.value || 1.5);
-                const gross = (rReg*rate) + (rOT*rate*otMult); pReg+=rReg; pOT+=rOT; pGross+=gross;
-                rows.push([display, to2(rate)].concat(dayCells, [to2(rReg), to2(rOT), to2(rReg+rOT), to2(gross)]));
-                summaryRows.push([proj, display, to2(rate)].concat(dayCells, [to2(rReg), to2(rOT), to2(rReg+rOT), to2(gross)]));
+          const key = (typeof LS_DIVISOR !== 'undefined' ? LS_DIVISOR : 'payroll_deduction_divisor');
+          const rawDiv = (typeof window !== 'undefined' && typeof window.divisor !== 'undefined' && Number(window.divisor))
+            || parseInt(((typeof localStorage !== 'undefined' && localStorage.getItem && localStorage.getItem(key)) || '1'), 10)
+            || 1;
+
+          clone.querySelectorAll('input').forEach(inp => {
+            const td = inp.parentElement;
+            if (!td) return;
+            const cls = inp.classList || { contains: () => false };
+            if (cls.contains('loanSSS') || cls.contains('loanPI')) {
+              const raw = parseFloat((inp.value || '').toString().replace(/,/g,'')) || 0;
+              td.textContent = (raw / rawDiv).toFixed(2);
+            } else {
+              td.textContent = (inp.value || inp.textContent || '').toString();
+            }
+          });
+
+          clone.querySelectorAll('select').forEach(sel => {
+            const td = sel.parentElement;
+            if (!td) return;
+            const opt = sel.options && sel.options[sel.selectedIndex];
+            td.textContent = opt ? (opt.textContent || opt.innerText || opt.value || '') : '';
+          });
+
+          clone.querySelectorAll('td').forEach(td => {
+            if (td.querySelector('input') || td.querySelector('select')) return;
+            const raw = (td.textContent || '').replace(/,/g,'').trim();
+            if (!raw) return;
+            const num = parseFloat(raw);
+            if (!isNaN(num) && num === 0) td.textContent = '-';
+          });
+
+          (function(){
+            function renameHeaders(){
+              function normHeader(s){ return String(s||'').replace(/\s+/g,' ').trim().toLowerCase(); }
+              const map = new Map([
+                ['regular hours','REG HRS'],
+                ['regular hrs','REG HRS'],
+                ['total regular hrs','REG HRS'],
+                ['ot hours','OT HRS'],
+                ['ot hrs','OT HRS'],
+                ['adjustment hrs','ADJ HRS'],
+                ['adjustments','ADJ'],
+                ['total deductions','TOTAL DEDUC.']
+              ]);
+              clone.querySelectorAll('thead th').forEach(th => {
+                const key = normHeader(th.textContent);
+                if (map.has(key)) th.textContent = map.get(key);
               });
-              // Allowance row
-              try{
-                const allow = Object.keys(bantay||{}).reduce((sum, empId)=>{ const assigned=(bantayProj||{})[empId]; if(!assigned) return sum; const matchesById=(assigned===proj); const matchesByName=((typeof storedProjects!=='undefined'&&storedProjects&&storedProjects[assigned]?.name)===proj); const amt=parseFloat((bantay&&bantay[empId])||0)||0; return (matchesById||matchesByName)?(sum+amt):sum; },0);
-                if(allow>0){ const zeros=new Array(dates.length*2).fill('0.00'); rows.push(['Allowance',''].concat(zeros,['0.00','0.00','0.00', to2(allow)])); summaryRows.push([proj,'Allowance',''].concat(zeros,['0.00','0.00','0.00', to2(allow)])); pGross+=allow; }
-              }catch(e){}
-              gReg+=pReg; gOT+=pOT; gGross+=pGross;
-              dayTotals.forEach((dt,i)=>{ gDayTotals[i].rwh += dt.rwh; gDayTotals[i].oth += dt.oth; });
-              const dayTotalsCells = dayTotals.flatMap(dt=>[to2(dt.rwh), to2(dt.oth)]);
-              rows.push(['Project Total',''].concat(dayTotalsCells, [to2(pReg), to2(pOT), to2(pReg+pOT), to2(pGross)]));
-              XLSX.utils.book_append_sheet(wb2, XLSX.utils.aoa_to_sheet(rows), (proj||'Project').toString().substring(0,31));
-            });
-            const gDayTotalsCells = gDayTotals.flatMap(dt=>[to2(dt.rwh), to2(dt.oth)]);
-            summaryRows.push(['','Grand Total',''].concat(gDayTotalsCells, [to2(gReg), to2(gOT), to2(gReg+gOT), to2(gGross)]));
-            XLSX.utils.book_append_sheet(wb2, XLSX.utils.aoa_to_sheet(summaryRows), 'Summary');
-          };
-          addReportSheets(wb);
-        }catch(e){}
+            }
+            renameHeaders();
+          })();
 
-        const fname = `all_tabs_${from}_to_${to}.xlsx`;
+          const ws = document.getElementById('weekStart');
+          const we = document.getElementById('weekEnd');
+          const startDate = ws && ws.value ? ws.value : '';
+          const endDate = we && we.value ? we.value : '';
+          const title = startDate && endDate ? `Payroll Report (${startDate} to ${endDate})` : 'Payroll Report';
+
+          const aoa = [[title], []];
+          Array.from(clone.querySelectorAll('thead tr')).forEach(tr => {
+            aoa.push(Array.from(tr.cells).map(td => (td.textContent || td.innerText || '').trim()));
+          });
+          aoa.push([]);
+          Array.from(clone.querySelectorAll('tbody tr')).forEach(tr => {
+            aoa.push(Array.from(tr.cells).map(td => (td.textContent || td.innerText || '').trim()));
+          });
+          const footRow = clone.querySelector('tfoot tr');
+          if (footRow){
+            aoa.push([]);
+            aoa.push(Array.from(footRow.cells).map(td => (td.textContent || td.innerText || '').trim()));
+          }
+          return aoa;
+        }
+
+        function buildReportsAllAoA(){
+          if (!reportRef || !reportRef.data || !Array.isArray(reportRef.dates)) return null;
+          const { data, dates, from, to } = reportRef;
+          const dayHeader = dates.map(d=>{
+            const lbl = d.toLocaleDateString(undefined,{day:'2-digit',month:'short'});
+            return [`RWH ${lbl}`, `OTH ${lbl}`];
+          }).flat();
+          const header = ['PROJECT','PERSONNEL','RATE']
+            .concat(dayHeader)
+            .concat(['TOTAL REG HRS','TOTAL OT HRS','GRAND TOTAL HOURS','GROSS']);
+          const rows = [[`Reports (All)${from && to ? ` - ${from} to ${to}` : ''}`], [], header];
+          const projects = Object.keys(data || {}).sort();
+          let gReg=0,gOT=0,gGross=0;
+          const gDayTotals = dates.map(()=>({ rwh:0, oth:0 }));
+
+          projects.forEach(proj=>{
+            const empMap = data[proj];
+            let pReg=0,pOT=0,pGross=0;
+            const dayTotals = dates.map(()=>({ rwh:0, oth:0 }));
+            Object.keys(empMap || {}).sort((a,b)=>{
+              const A = (empMap[a].name||a).toUpperCase();
+              const B = (empMap[b].name||b).toUpperCase();
+              return A.localeCompare(B);
+            }).forEach(empId=>{
+              const rec = empMap[empId];
+              const display = rec.name || empId;
+              const rate = getRate(empId, display);
+              let rReg=0,rOT=0;
+              const dayCells = [];
+              dates.forEach((d,i)=>{
+                const key = d.setHours(0,0,0,0);
+                const v = rec.days[key] || { rwh:0, oth:0 };
+                rReg += v.rwh; rOT += v.oth;
+                dayTotals[i].rwh += v.rwh; dayTotals[i].oth += v.oth;
+                dayCells.push(to2(v.rwh), to2(v.oth));
+              });
+              const otMult = toNum(document.querySelector('#otMultiplier')?.value || 1.5);
+              const gross = (rReg * rate) + (rOT * rate * otMult);
+              pReg += rReg; pOT += rOT; pGross += gross;
+              rows.push([proj, display, to2(rate)].concat(dayCells, [to2(rReg), to2(rOT), to2(rReg + rOT), to2(gross)]));
+            });
+
+            try {
+              const allow = Object.keys(bantay || {}).reduce((sum, empId) => {
+                const assigned = (bantayProj || {})[empId];
+                if (!assigned) return sum;
+                const matchesById   = (assigned === proj);
+                const matchesByName = ((typeof storedProjects !== 'undefined' && storedProjects && storedProjects[assigned]?.name) === proj);
+                const amt = parseFloat((bantay && bantay[empId]) || 0) || 0;
+                return (matchesById || matchesByName) ? (sum + amt) : sum;
+              }, 0);
+              if (allow && allow > 0){
+                const zeros = new Array(dates.length*2).fill('0.00');
+                rows.push([proj, 'Allowance', ''].concat(zeros, ['0.00','0.00','0.00', to2(allow)]));
+                pGross += allow;
+              }
+            } catch(e){}
+
+            gReg += pReg; gOT += pOT; gGross += pGross;
+            dayTotals.forEach((dt,i)=>{ gDayTotals[i].rwh += dt.rwh; gDayTotals[i].oth += dt.oth; });
+            const dayTotalsCells = dayTotals.flatMap(dt=>[to2(dt.rwh), to2(dt.oth)]);
+            rows.push([proj, 'Project Total', ''].concat(dayTotalsCells, [to2(pReg), to2(pOT), to2(pReg+pOT), to2(pGross)]));
+          });
+
+          const gDayTotalsCells = gDayTotals.flatMap(dt=>[to2(dt.rwh), to2(dt.oth)]);
+          rows.push(['', 'Grand Total', ''].concat(gDayTotalsCells, [to2(gReg), to2(gOT), to2(gReg+gOT), to2(gGross)]));
+          return rows;
+        }
+
+        function buildMasterReportAoA(){
+          const host = document.getElementById('masterReportContainer');
+          if (!host) return null;
+          const aoa = [];
+          const title = host.querySelector('h2');
+          if (title) aoa.push([title.textContent.trim()]);
+          const period = host.querySelector('.mr-period');
+          if (period) aoa.push([period.textContent.replace(/\s+/g,' ').trim()]);
+          Array.from(host.querySelectorAll('.mr-section')).forEach(section => {
+            const heading = section.querySelector('h4');
+            if (heading) aoa.push([], [heading.textContent.trim()]);
+            const table = section.querySelector('table');
+            if (table){
+              Array.from(table.rows).forEach(row => {
+                const vals = Array.from(row.cells).map(cell => (cell.textContent || cell.innerText || '').replace(/\s+/g,' ').trim());
+                aoa.push(vals);
+              });
+            }
+          });
+          return aoa;
+        }
+
+        try { pushSheet('DTR', buildDtrAoA()); } catch(e){}
+        try { pushSheet('Employees', buildEmployeesAoA()); } catch(e){}
+        try { pushSheet('Payroll', buildPayrollAoA()); } catch(e){}
+        try { pushSheet('Reports', buildReportsAllAoA()); } catch(e){}
+        try { pushSheet('Master Report', buildMasterReportAoA()); } catch(e){}
+
+        let fname = 'all_tabs.xlsx';
+        if (reportRef && reportRef.from && reportRef.to){
+          fname = `all_tabs_${reportRef.from}_to_${reportRef.to}.xlsx`;
+        } else {
+          const ws = document.getElementById('weekStart');
+          const we = document.getElementById('weekEnd');
+          const startDate = ws && ws.value ? ws.value : '';
+          const endDate = we && we.value ? we.value : '';
+          if (startDate || endDate){
+            fname = `all_tabs_${startDate || 'start'}_to_${endDate || 'end'}.xlsx`;
+          }
+        }
+
         XLSX.writeFile(wb, fname);
       }catch(e){ console.warn('Excel export failed', e); alert('Excel export failed'); }
     }
