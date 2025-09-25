@@ -5870,6 +5870,19 @@ rows += `<tr class="allowance">
       return { rows, from, to };
     }
 
+    // Some report rebuilds rely on async data fetches. Wait briefly for the
+    // detailed rows to populate so Excel exports capture the final dataset.
+    async function waitForDetailedReportBundle(maxTries = 8, delayMs = 200){
+      for (let attempt = 0; attempt < maxTries; attempt++){
+        const bundle = buildDetailedReportRows();
+        if (bundle && Array.isArray(bundle.rows) && bundle.rows.length > 2){
+          return bundle;
+        }
+        await new Promise(resolve => setTimeout(resolve, delayMs));
+      }
+      return buildDetailedReportRows();
+    }
+
     function exportCSVAll(){
       const bundle = buildDetailedReportRows();
       if (!bundle){ alert('No report to export yet.'); return; }
@@ -6282,7 +6295,7 @@ rows += `<tr class="allowance">
       try{
         if (typeof XLSX === 'undefined' || !XLSX || !XLSX.utils) { alert('Excel library not available'); return; }
         if (typeof window.rebuildReports === 'function') window.rebuildReports();
-        const detailBundle = buildDetailedReportRows();
+        const detailBundle = await waitForDetailedReportBundle();
         if (!detailBundle){ alert('No report to export yet.'); return; }
         const { rows: detailedRows, from, to } = detailBundle;
         const wb = XLSX.utils.book_new();
