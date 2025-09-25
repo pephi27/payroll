@@ -6326,38 +6326,24 @@ rows += `<tr class="allowance">
         const { from, to } = detailBundle;
         const wb = XLSX.utils.book_new();
 
-        const safeSheetName = (name) => {
-          const raw = (name == null) ? '' : String(name);
-          const cleaned = raw.replace(/[\/*?:\[\]]/g, ' ').trim();
-          return cleaned ? cleaned.slice(0, 31) : 'Sheet';
-        };
-
-        try {
-          const detailedRows = Array.isArray(detailBundle.rows) ? detailBundle.rows : null;
-          if (detailedRows && detailedRows.length){
-            const detailSheet = XLSX.utils.aoa_to_sheet(detailedRows);
-            XLSX.utils.book_append_sheet(wb, detailSheet, safeSheetName('Detailed Report'));
-          }
-        } catch(e){ console.warn('Failed to build Detailed Reports sheet', e); }
-
         try {
           const dtrAoA = buildDtrAoA();
           if (dtrAoA && dtrAoA.length){
-            XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(dtrAoA), safeSheetName('DTR'));
+            XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(dtrAoA), 'DTR');
           }
         } catch(e){ console.warn('Failed to build DTR sheet', e); }
 
         try {
           const payrollAoA = await buildPayrollAoA();
           if (payrollAoA && payrollAoA.length){
-            XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(payrollAoA), safeSheetName('Payroll'));
+            XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(payrollAoA), 'Payroll');
           }
         } catch(e){ console.warn('Failed to build Payroll sheet', e); }
 
         try {
           const masterAoA = buildMasterReportAoA();
           if (masterAoA && masterAoA.length){
-            XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(masterAoA), safeSheetName('Master Report'));
+            XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(masterAoA), 'Master Report');
           }
         } catch(e){ console.warn('Failed to build Master Report sheet', e); }
 
