@@ -5873,54 +5873,6 @@ rows += `<tr class="allowance">
     // Some report rebuilds rely on async data fetches. Wait briefly for the
     // detailed rows to populate so Excel exports capture the final dataset.
     async function waitForDetailedReportBundle(maxWaitMs = 8000, pollMs = 200){
-      const restoreTab = (() => {
-        try {
-          const reportsPanel = document.getElementById('panelProjectTotals');
-          const reportsActive = !!(reportsPanel && reportsPanel.classList && reportsPanel.classList.contains('active'));
-          if (reportsActive) {
-            return () => {};
-          }
-
-          const activeNav = document.querySelector('.tab-btn.active[data-page]');
-          const prevPage = activeNav && activeNav.dataset ? activeNav.dataset.page : null;
-          const prevBtn = activeNav || document.querySelector('.tab-btn.active');
-          const restore = () => {
-            if (prevPage && prevPage !== 'totals' && typeof window.showTab === 'function') {
-              try { window.showTab(prevPage); return; } catch(e){}
-            }
-            if (prevBtn && typeof prevBtn.click === 'function') {
-              try { prevBtn.click(); } catch(e){}
-            }
-          };
-
-          let switched = false;
-          if (typeof window.showTab === 'function') {
-            try { window.showTab('projectTotals'); switched = true; }
-            catch(e){}
-          }
-          if (!switched) {
-            const reportsBtn = document.getElementById('tabProjectTotals');
-            if (reportsBtn && reportsBtn !== prevBtn && !reportsBtn.classList.contains('active')) {
-              try { reportsBtn.click(); switched = true; }
-              catch(e){}
-            }
-          }
-          if (!switched && reportsPanel && reportsPanel.classList) {
-            reportsPanel.classList.add('active');
-          }
-
-          try {
-            const detailBtn = document.getElementById('btnReportsDetailed');
-            if (detailBtn && !detailBtn.classList.contains('active')) detailBtn.click();
-          } catch(e){}
-
-          try { if (typeof window.rebuildReports === 'function') window.rebuildReports(); }
-          catch(e){}
-
-          return restore;
-        } catch(e){ return () => {}; }
-      })();
-
       const started = Date.now();
       const hasDataRows = (bundle) => {
         if (!bundle || !Array.isArray(bundle.rows)) return false;
@@ -5930,35 +5882,31 @@ rows += `<tr class="allowance">
           return row.some(cell => String(cell ?? '').trim() !== '');
         });
       };
-      try {
-        while ((Date.now() - started) < maxWaitMs){
-          if (!__report && typeof window.rebuildReports === 'function'){
-            try { window.rebuildReports(); } catch(e){}
-          }
-          const bundle = buildDetailedReportRows();
-          if (hasDataRows(bundle)){
-            return bundle;
-          }
-          const renderedRows = (() => {
-            try {
-              return document.querySelectorAll('#r_table tbody tr').length;
-            } catch(_){ return 0; }
-          })();
-          if (renderedRows > 0){
-            const refreshed = buildDetailedReportRows();
-            if (hasDataRows(refreshed)){
-              return refreshed;
-            }
-          }
-          await new Promise(resolve => setTimeout(resolve, pollMs));
-        }
+      while ((Date.now() - started) < maxWaitMs){
         if (!__report && typeof window.rebuildReports === 'function'){
           try { window.rebuildReports(); } catch(e){}
         }
-        return buildDetailedReportRows();
-      } finally {
-        try { restoreTab(); } catch(e){}
+        const bundle = buildDetailedReportRows();
+        if (hasDataRows(bundle)){
+          return bundle;
+        }
+        const renderedRows = (() => {
+          try {
+            return document.querySelectorAll('#r_table tbody tr').length;
+          } catch(_){ return 0; }
+        })();
+        if (renderedRows > 0){
+          const refreshed = buildDetailedReportRows();
+          if (hasDataRows(refreshed)){
+            return refreshed;
+          }
+        }
+        await new Promise(resolve => setTimeout(resolve, pollMs));
       }
+      if (!__report && typeof window.rebuildReports === 'function'){
+        try { window.rebuildReports(); } catch(e){}
+      }
+      return buildDetailedReportRows();
     }
 
     function exportCSVAll(){
@@ -6378,38 +6326,24 @@ rows += `<tr class="allowance">
         const { from, to } = detailBundle;
         const wb = XLSX.utils.book_new();
 
-        const safeSheetName = (name) => {
-          const raw = (name == null) ? '' : String(name);
-          const cleaned = raw.replace(/[\/*?:\[\]]/g, ' ').trim();
-          return cleaned ? cleaned.slice(0, 31) : 'Sheet';
-        };
-
-        try {
-          const detailedRows = Array.isArray(detailBundle.rows) ? detailBundle.rows : null;
-          if (detailedRows && detailedRows.length){
-            const detailSheet = XLSX.utils.aoa_to_sheet(detailedRows);
-            XLSX.utils.book_append_sheet(wb, detailSheet, safeSheetName('Detailed Report'));
-          }
-        } catch(e){ console.warn('Failed to build Detailed Reports sheet', e); }
-
         try {
           const dtrAoA = buildDtrAoA();
           if (dtrAoA && dtrAoA.length){
-            XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(dtrAoA), safeSheetName('DTR'));
+            XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(dtrAoA), 'DTR');
           }
         } catch(e){ console.warn('Failed to build DTR sheet', e); }
 
         try {
           const payrollAoA = await buildPayrollAoA();
           if (payrollAoA && payrollAoA.length){
-            XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(payrollAoA), safeSheetName('Payroll'));
+            XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(payrollAoA), 'Payroll');
           }
         } catch(e){ console.warn('Failed to build Payroll sheet', e); }
 
         try {
           const masterAoA = buildMasterReportAoA();
           if (masterAoA && masterAoA.length){
-            XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(masterAoA), safeSheetName('Master Report'));
+            XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(masterAoA), 'Master Report');
           }
         } catch(e){ console.warn('Failed to build Master Report sheet', e); }
 
