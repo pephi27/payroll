@@ -4767,6 +4767,71 @@ document.addEventListener('DOMContentLoaded', () => {
     return lines.join('\n');
   }
 
+  function hasDetailedReportRows(bundle) {
+    try {
+      if (typeof window !== 'undefined' && typeof window.hasDetailedReportData === 'function') {
+        return window.hasDetailedReportData(bundle);
+      }
+    } catch (e) { /* no-op */ }
+    if (!bundle || !Array.isArray(bundle.rows) || bundle.rows.length <= 1) return false;
+    return bundle.rows.some((row, idx) => {
+      if (!Array.isArray(row) || idx === 0) return false;
+      return row.some(cell => String(cell ?? '').trim() !== '');
+    });
+  }
+
+  function cloneDetailedReportBundleSafe(bundle) {
+    try {
+      if (typeof window !== 'undefined' && typeof window.cloneDetailedReportBundle === 'function') {
+        return window.cloneDetailedReportBundle(bundle);
+      }
+    } catch (e) { /* no-op */ }
+    if (!bundle || !Array.isArray(bundle.rows)) return null;
+    return {
+      rows: bundle.rows.map(row => Array.isArray(row)
+        ? row.map(cell => String(cell ?? ''))
+        : []),
+      from: bundle && bundle.from != null ? String(bundle.from) : '',
+      to: bundle && bundle.to != null ? String(bundle.to) : ''
+    };
+  }
+
+  async function captureDetailedReportBundleForSnapshot() {
+    if (typeof window === 'undefined') return null;
+    try { if (typeof window.rebuildReports === 'function') window.rebuildReports(); } catch (e) { /* no-op */ }
+    const cloneIfReady = (candidate) => {
+      try {
+        return hasDetailedReportRows(candidate) ? cloneDetailedReportBundleSafe(candidate) : null;
+      } catch (_) {
+        return null;
+      }
+    };
+    try {
+      if (typeof window.getDetailedReportBundle === 'function') {
+        const immediate = cloneIfReady(window.getDetailedReportBundle());
+        if (immediate) return immediate;
+      }
+    } catch (e) { /* ignore */ }
+    const waitAttempts = [
+      [1500, 150],
+      [8000, 200]
+    ];
+    for (const [maxWait, poll] of waitAttempts) {
+      try {
+        if (typeof window.waitForDetailedReportBundle === 'function') {
+          const awaited = await window.waitForDetailedReportBundle(maxWait, poll);
+          const cloned = cloneIfReady(awaited);
+          if (cloned) return cloned;
+        }
+      } catch (e) { /* ignore */ }
+    }
+    try {
+      const rebuilt = cloneIfReady(buildDetailedReportRows());
+      if (rebuilt) return rebuilt;
+    } catch (e) { /* ignore */ }
+    return null;
+  }
+
   // Persist payrollHistory to localStorage
   function saveHistory() {
     localStorage.setItem(PAYROLL_HIST_KEY, JSON.stringify(payrollHistory));
@@ -4846,7 +4911,12 @@ document.addEventListener('DOMContentLoaded', () => {
     const hashArray = Array.from(new Uint8Array(hashBuffer));
     const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
     const now = new Date().toISOString();
-    payrollHistory.push({ startDate: start, endDate: end, rows: snap.rows, totals: snap.totals, hash: hashHex, lockedAt: now, locked: true });
+    const reportsCsvAll = await captureDetailedReportBundleForSnapshot();
+    const entry = { startDate: start, endDate: end, rows: snap.rows, totals: snap.totals, hash: hashHex, lockedAt: now, locked: true };
+    if (reportsCsvAll && hasDetailedReportRows(reportsCsvAll)) {
+      entry.reportsCsvAll = reportsCsvAll;
+    }
+    payrollHistory.push(entry);
     saveHistory();
     renderHistory();
     // Disable payroll and DTR editing via helper until date range changes
@@ -4893,7 +4963,7 @@ document.addEventListener('DOMContentLoaded', () => {
       // Export the All Tabs Excel for this snapshot's date range
       try {
         if (typeof window.exportExcelAllTabsForRange === 'function') {
-          window.exportExcelAllTabsForRange(snap.startDate, snap.endDate, { divisorOverride: snap.divisor });
+          window.exportExcelAllTabsForRange(snap.startDate, snap.endDate, { divisorOverride: snap.divisor, reportsCsvAll: snap.reportsCsvAll });
         } else if (typeof window.exportExcelAllTabs === 'function') {
           // Fallback: set range, rebuild, then export
           const ws = document.getElementById('weekStart');
@@ -4910,6 +4980,18 @@ document.addEventListener('DOMContentLoaded', () => {
               if (hasOverride && typeof window !== 'undefined') {
                 window.__snapshotDivisorOverride = overrideVal;
                 appliedOverride = true;
+              }
+              const hasDetail = hasDetailedReportRows(snap.reportsCsvAll);
+              if (typeof window !== 'undefined') {
+                try {
+                  window.__csvAllOverrideBundle = hasDetail
+                    ? (typeof window.cloneDetailedReportBundle === 'function'
+                      ? window.cloneDetailedReportBundle(snap.reportsCsvAll)
+                      : snap.reportsCsvAll)
+                    : undefined;
+                } catch (_) {
+                  window.__csvAllOverrideBundle = hasDetail ? (snap.reportsCsvAll || undefined) : undefined;
+                }
               }
               window.exportExcelAllTabs();
             }catch(e){}
@@ -5870,6 +5952,25 @@ rows += `<tr class="allowance">
       return { rows, from, to };
     }
 
+    const hasMeaningfulDetailedRows = (bundle) => {
+      if (!bundle || !Array.isArray(bundle.rows) || bundle.rows.length <= 1) return false;
+      return bundle.rows.some((row, idx) => {
+        if (!Array.isArray(row) || idx === 0) return false;
+        return row.some(cell => String(cell ?? '').trim() !== '');
+      });
+    };
+
+    const cloneDetailedBundle = (bundle) => {
+      if (!bundle || !Array.isArray(bundle.rows)) return null;
+      return {
+        rows: bundle.rows.map(row => Array.isArray(row)
+          ? row.map(cell => String(cell ?? ''))
+          : []),
+        from: bundle && bundle.from != null ? String(bundle.from) : '',
+        to: bundle && bundle.to != null ? String(bundle.to) : ''
+      };
+    };
+
     // Some report rebuilds rely on async data fetches. Wait briefly for the
     // detailed rows to populate so Excel exports capture the final dataset.
     async function waitForDetailedReportBundle(maxWaitMs = 8000, pollMs = 200){
@@ -5908,6 +6009,11 @@ rows += `<tr class="allowance">
       }
       return buildDetailedReportRows();
     }
+
+    try { window.hasDetailedReportData = hasMeaningfulDetailedRows; } catch(e){}
+    try { window.cloneDetailedReportBundle = cloneDetailedBundle; } catch(e){}
+    try { window.getDetailedReportBundle = () => buildDetailedReportRows(); } catch(e){}
+    try { window.waitForDetailedReportBundle = waitForDetailedReportBundle; } catch(e){}
 
     function exportCSVAll(){
       const bundle = buildDetailedReportRows();
@@ -6317,13 +6423,34 @@ rows += `<tr class="allowance">
     try { window.exportExcelAllSheets = exportExcelAllSheets; } catch(e){}
 
     // Export a single workbook that includes sheets for DTR, Payroll, detailed reports, and the Master Report
-    async function exportExcelAllTabs(){
+    async function exportExcelAllTabs(options = {}){
       try{
         if (typeof XLSX === 'undefined' || !XLSX || !XLSX.utils) { alert('Excel library not available'); return; }
         if (typeof window.rebuildReports === 'function') window.rebuildReports();
-        const detailBundle = await waitForDetailedReportBundle();
-        if (!detailBundle){ alert('No report to export yet.'); return; }
-        const { rows: detailedRows, from, to } = detailBundle;
+        const overrideCandidate = options && options.detailOverride
+          ? options.detailOverride
+          : (typeof window !== 'undefined' ? window.__csvAllOverrideBundle : null);
+        if (typeof window !== 'undefined') {
+          try { delete window.__csvAllOverrideBundle; } catch(e){ window.__csvAllOverrideBundle = undefined; }
+        }
+        let detailedRows = [];
+        let detailFrom = options && options.rangeFrom ? options.rangeFrom : '';
+        let detailTo = options && options.rangeTo ? options.rangeTo : '';
+        let detailBundle = null;
+        if (overrideCandidate && hasMeaningfulDetailedRows(overrideCandidate)){
+          detailBundle = cloneDetailedBundle(overrideCandidate);
+        } else {
+          const awaited = await waitForDetailedReportBundle();
+          if (!awaited){ alert('No report to export yet.'); return; }
+          if (hasMeaningfulDetailedRows(awaited)){
+            detailBundle = cloneDetailedBundle(awaited);
+          }
+        }
+        if (detailBundle){
+          detailedRows = Array.isArray(detailBundle.rows) ? detailBundle.rows : [];
+          if (detailBundle.from) detailFrom = detailBundle.from;
+          if (detailBundle.to) detailTo = detailBundle.to;
+        }
         const wb = XLSX.utils.book_new();
 
         try {
@@ -6358,9 +6485,13 @@ rows += `<tr class="allowance">
           return;
         }
 
-        const safeFrom = (from && String(from).trim()) || 'start';
-        const safeTo = (to && String(to).trim()) || 'end';
-        const fname = (from || to) ? `all_tabs_${safeFrom}_to_${safeTo}.xlsx` : 'all_tabs.xlsx';
+        const safeFrom = (detailFrom && String(detailFrom).trim()) || 'start';
+        const safeTo = (detailTo && String(detailTo).trim()) || 'end';
+        const fname = (detailFrom || detailTo)
+          ? `all_tabs_${safeFrom}_to_${safeTo}.xlsx`
+          : (options && (options.rangeFrom || options.rangeTo)
+            ? `all_tabs_${safeFrom}_to_${safeTo}.xlsx`
+            : 'all_tabs.xlsx');
         XLSX.writeFile(wb, fname);
       }catch(e){ console.warn('Excel export failed', e); alert('Excel export failed'); }
     }
@@ -6411,7 +6542,10 @@ rows += `<tr class="allowance">
               window.__snapshotDivisorOverride = overrideVal;
               appliedOverride = true;
             }
-            await exportExcelAllTabs();
+            const detailOverride = (opts && opts.reportsCsvAll && hasMeaningfulDetailedRows(opts.reportsCsvAll))
+              ? cloneDetailedBundle(opts.reportsCsvAll)
+              : null;
+            await exportExcelAllTabs({ detailOverride, rangeFrom: targetS, rangeTo: targetE });
           } catch(err){
             console.warn('Export (all tabs) for range failed', err);
           } finally {
