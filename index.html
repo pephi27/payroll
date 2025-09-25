@@ -5870,22 +5870,6 @@ rows += `<tr class="allowance">
       return { rows, from, to };
     }
 
-    function detailedRowsToExcelAoA(rows){
-      if (!Array.isArray(rows) || !rows.length) return null;
-      return rows.map(row => {
-        if (!Array.isArray(row)) {
-          const cell = row == null ? '' : String(row);
-          return [cell.startsWith('=') ? `'${cell}` : cell];
-        }
-        return row.map(cell => {
-          if (cell == null) return '';
-          if (typeof cell === 'number') return cell;
-          const text = String(cell);
-          return text.startsWith('=') ? `'${text}` : text;
-        });
-      });
-    }
-
     // Some report rebuilds rely on async data fetches. Wait briefly for the
     // detailed rows to populate so Excel exports capture the final dataset.
     async function waitForDetailedReportBundle(maxWaitMs = 8000, pollMs = 200){
@@ -6324,15 +6308,6 @@ rows += `<tr class="allowance">
         summaryRows.push(['','Grand Total',''].concat(gDayTotalsCells, [to2(gReg), to2(gOT), to2(gReg+gOT), to2(gGross)]));
         const wsSummary = XLSX.utils.aoa_to_sheet(summaryRows);
         XLSX.utils.book_append_sheet(wb, wsSummary, 'Summary');
-
-        try {
-          const detail = buildDetailedReportRows();
-          const detailAoA = detail ? detailedRowsToExcelAoA(detail.rows) : null;
-          if (detailAoA && detailAoA.length) {
-            XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(detailAoA), 'Detailed Report');
-          }
-        } catch(e){ console.warn('Failed to build Detailed Report sheet', e); }
-
         const fname = `reports_all_${from}_to_${to}.xlsx`;
         XLSX.writeFile(wb, fname);
       }catch(e){ console.warn('Excel export failed', e); alert('Excel export failed.'); }
@@ -6367,11 +6342,8 @@ rows += `<tr class="allowance">
 
         if (detailedRows && detailedRows.length){
           try {
-            const detailAoA = detailedRowsToExcelAoA(detailedRows);
-            if (detailAoA && detailAoA.length) {
-              XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(detailAoA), 'Detailed Report');
-            }
-          } catch(e){ console.warn('Failed to build Detailed Report sheet', e); }
+            XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(detailedRows), 'Reports Detailed');
+          } catch(e){ console.warn('Failed to build Reports sheet', e); }
         }
 
         try {
