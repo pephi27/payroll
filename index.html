@@ -6316,14 +6316,14 @@ rows += `<tr class="allowance">
     // Expose for external triggers (lock automation)
     try { window.exportExcelAllSheets = exportExcelAllSheets; } catch(e){}
 
-    // Export a single workbook that includes sheets for DTR, Payroll, detailed reports, and the Master Report
+    // Export a single workbook that includes sheets for DTR, Payroll, and the Master Report
     async function exportExcelAllTabs(){
       try{
         if (typeof XLSX === 'undefined' || !XLSX || !XLSX.utils) { alert('Excel library not available'); return; }
         if (typeof window.rebuildReports === 'function') window.rebuildReports();
         const detailBundle = await waitForDetailedReportBundle();
         if (!detailBundle){ alert('No report to export yet.'); return; }
-        const { rows: detailedRows, from, to } = detailBundle;
+        const { from, to } = detailBundle;
         const wb = XLSX.utils.book_new();
 
         try {
@@ -6339,12 +6339,6 @@ rows += `<tr class="allowance">
             XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(payrollAoA), 'Payroll');
           }
         } catch(e){ console.warn('Failed to build Payroll sheet', e); }
-
-        if (detailedRows && detailedRows.length){
-          try {
-            XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(detailedRows), 'Reports Detailed');
-          } catch(e){ console.warn('Failed to build Reports sheet', e); }
-        }
 
         try {
           const masterAoA = buildMasterReportAoA();
