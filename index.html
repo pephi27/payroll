@@ -4130,18 +4130,29 @@ document.addEventListener('DOMContentLoaded', function(){
     clone.querySelectorAll('tfoot tr').forEach(removeLastCell);
     // Convert input fields to plain text within the cloned table
     // For loan inputs, show per-period share (divided by the divisor)
+    const divisorKey = (typeof LS_DIVISOR !== 'undefined' ? LS_DIVISOR : 'payroll_deduction_divisor');
+    const divisorVal = (typeof window !== 'undefined' && typeof window.divisor !== 'undefined' && Number(window.divisor)) || parseInt((localStorage && localStorage.getItem(divisorKey)) || '1', 10) || 1;
+    const safeDivide = (raw) => {
+      const base = Number(divisorVal) || 1;
+      const amt = parseFloat((raw || '').toString().replace(/,/g, '')) || 0;
+      return (amt / base).toFixed(2);
+    };
     clone.querySelectorAll('input').forEach(inp => {
       const td = inp.parentElement;
       const cls = inp.classList || { contains: () => false };
-      const key = (typeof LS_DIVISOR !== 'undefined' ? LS_DIVISOR : 'payroll_deduction_divisor');
-      const div = (typeof window !== 'undefined' && typeof window.divisor !== 'undefined' && Number(window.divisor)) || parseInt((localStorage && localStorage.getItem(key)) || '1', 10) || 1;
       if (cls.contains('loanSSS') || cls.contains('loanPI')) {
-        const raw = parseFloat((inp.value || '').toString().replace(/,/g,'')) || 0;
-        td.textContent = (raw / div).toFixed(2);
+        td.textContent = safeDivide(inp.value || '0');
       } else {
         const val = (inp.value || inp.textContent || '').toString();
         td.textContent = val;
       }
+    });
+    // Locked payroll snapshots render loan cells as plain text (no inputs). Ensure
+    // they reflect the per-period share by applying the same divisor used above.
+    clone.querySelectorAll('td.loanSSS, td.loanPI').forEach(td => {
+      if (!td || td.querySelector('input')) return;
+      const divided = safeDivide(td.textContent || '0');
+      td.textContent = divided;
     });
     // Replace numeric zeros with dashes in clone
     clone.querySelectorAll('td').forEach(function(td){
