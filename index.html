@@ -4386,7 +4386,13 @@ document.addEventListener('DOMContentLoaded', () => {
     // Only export one Excel workbook with all tabs (no prints or CSVs)
     try {
       if (typeof window.rebuildReports === 'function') window.rebuildReports();
-      setTimeout(function(){ try { if (typeof window.exportExcelAllTabs === 'function') window.exportExcelAllTabs(); } catch(e){} }, 600);
+      setTimeout(function(){
+        try {
+          if (typeof window.exportExcelAllTabs === 'function') {
+            Promise.resolve(window.exportExcelAllTabs()).catch(()=>{});
+          }
+        } catch(e){}
+      }, 600);
     } catch(e){}
   };
 
@@ -5867,50 +5873,196 @@ rows += `<tr class="allowance">
       return (aoa && aoa.length) ? aoa : null;
     }
 
-    function buildPayrollAoA(){
+    async function buildPayrollAoA(){
       const src = document.getElementById('payrollTable');
       if (!src) return null;
-      const clone = src.cloneNode(true);
-      const removeLastCell = (row) => { if (row && row.lastElementChild) row.removeChild(row.lastElementChild); };
-      if (clone.tHead){ Array.from(clone.tHead.rows || []).forEach(removeLastCell); }
-      Array.from(clone.tBodies || []).forEach(tb => { Array.from(tb.rows || []).forEach(removeLastCell); });
-      if (clone.tFoot){ Array.from(clone.tFoot.rows || []).forEach(removeLastCell); }
-
-      const key = (typeof LS_DIVISOR !== 'undefined') ? LS_DIVISOR : 'payroll_deduction_divisor';
-      let div = 1;
-      try {
-        if (typeof window !== 'undefined' && typeof window.divisor !== 'undefined'){ div = Number(window.divisor) || 1; }
-        if (!div){ div = Number(localStorage.getItem(key)) || 1; }
-      } catch(e){}
-      if (!div) div = 1;
-
-      clone.querySelectorAll('input').forEach(inp => {
-        const td = inp.parentElement;
-        if (!td) return;
-        const cls = inp.classList || { contains: () => false };
-        if (cls.contains('loanSSS') || cls.contains('loanPI')){
-          const raw = parseFloat((inp.value || '').toString().replace(/,/g,'')) || 0;
-          td.textContent = (raw / div).toFixed(2);
-        } else {
-          const val = (inp.value || inp.textContent || '').toString();
-          td.textContent = val;
-        }
-      });
-
-      clone.querySelectorAll('td').forEach(td => {
-        if (td.querySelector('input')) return;
-        const raw = (td.textContent || '').replace(/,/g,'').trim();
-        if (!raw) return;
-        const num = parseFloat(raw);
-        if (!isNaN(num) && num === 0){ td.textContent = '-'; }
-      });
 
       const startDate = document.getElementById('weekStart')?.value || '';
       const endDate = document.getElementById('weekEnd')?.value || '';
       const title = (startDate && endDate) ? `Payroll Report (${startDate} to ${endDate})` : 'Payroll Report';
-      const aoa = [[title], ['']];
-      tableToAoA(clone).forEach(row => aoa.push(row));
-      return (aoa && aoa.length > 2) ? aoa : null;
+      const header = [
+        'ID','Name','Hourly Rate','Regular Hours','OT Hours','Adjustment Hrs','Total Hours',
+        'Regular Pay','OT Pay','Adjustments','Bantay','Gross Pay',
+        'Pag-IBIG','PhilHealth','SSS','SSS Loan','Pag-IBIG Loan','Account','Wed Vale',
+        'Total Deductions','Net Pay'
+      ];
+
+      const key = (typeof LS_DIVISOR !== 'undefined') ? LS_DIVISOR : 'payroll_deduction_divisor';
+      let divisor = 1;
+      try {
+        if (typeof window !== 'undefined' && typeof window.divisor !== 'undefined') {
+          divisor = Number(window.divisor) || 1;
+        }
+        if ((!divisor || !isFinite(divisor)) && typeof localStorage !== 'undefined') {
+          divisor = Number(localStorage.getItem(key)) || 1;
+        }
+      } catch (e) {}
+      if (!divisor || !isFinite(divisor)) divisor = 1;
+
+      const toNum = (value, opts = {}) => {
+        if (value == null || value === '') return 0;
+        let n = value;
+        if (typeof n === 'string') {
+          n = parseFloat(n.replace(/,/g,''));
+        } else if (typeof n !== 'number') {
+          n = Number(n);
+        }
+        if (!isFinite(n) || isNaN(n)) n = 0;
+        if (opts.divideLoan) n = n / divisor;
+        return n;
+      };
+      const fmt = (value, opts = {}) => {
+        const decimals = (typeof opts.decimals === 'number') ? opts.decimals : 2;
+        return toNum(value, opts).toFixed(decimals);
+      };
+
+      async function buildFromSnapshot(){
+        if (typeof buildSnapshot !== 'function') return null;
+        try {
+          const snap = await buildSnapshot(startDate, endDate);
+          if (!snap || !Array.isArray(snap.rows) || !snap.rows.length) return null;
+
+          const aoa = [[title], [''], header.slice()];
+          const totals = {
+            regHrs:0, otHrs:0, adjHrs:0, totalHrs:0,
+            regPay:0, otPay:0, adjAmt:0, bantay:0, grossPay:0,
+            pagibig:0, philhealth:0, sss:0,
+            loanSSS:0, loanPI:0, vale:0, valeWed:0,
+            totalDed:0, netPay:0
+          };
+
+          snap.rows.forEach(row => {
+            const regHrsNum = toNum(row.regHrs);
+            const otHrsNum = toNum(row.otHrs);
+            const adjHrsNum = toNum(row.adjHrs);
+            const totalHrsNum = toNum(row.totalHrs);
+            const regPayNum = toNum(row.regPay);
+            const otPayNum = toNum(row.otPay);
+            const adjAmtNum = toNum(row.adjAmt);
+            const bantayNum = toNum(row.bantay);
+            const grossNum = toNum(row.grossPay);
+            const pagibigNum = toNum(row.pagibig);
+            const philhealthNum = toNum(row.philhealth);
+            const sssNum = toNum(row.sss);
+            const loanSSSNum = toNum(row.loanSSS, { divideLoan: true });
+            const loanPINum = toNum(row.loanPI, { divideLoan: true });
+            const valeNum = toNum(row.vale);
+            const valeWedNum = toNum(row.valeWed);
+            const totalDedNum = toNum(row.totalDed);
+            const netPayNum = toNum(row.netPay);
+
+            totals.regHrs += regHrsNum;
+            totals.otHrs += otHrsNum;
+            totals.adjHrs += adjHrsNum;
+            totals.totalHrs += totalHrsNum;
+            totals.regPay += regPayNum;
+            totals.otPay += otPayNum;
+            totals.adjAmt += adjAmtNum;
+            totals.bantay += bantayNum;
+            totals.grossPay += grossNum;
+            totals.pagibig += pagibigNum;
+            totals.philhealth += philhealthNum;
+            totals.sss += sssNum;
+            totals.loanSSS += loanSSSNum;
+            totals.loanPI += loanPINum;
+            totals.vale += valeNum;
+            totals.valeWed += valeWedNum;
+            totals.totalDed += totalDedNum;
+            totals.netPay += netPayNum;
+
+            aoa.push([
+              row.id || '',
+              row.name || '',
+              fmt(row.rate),
+              fmt(regHrsNum),
+              fmt(otHrsNum),
+              fmt(adjHrsNum),
+              fmt(totalHrsNum),
+              fmt(regPayNum),
+              fmt(otPayNum),
+              fmt(adjAmtNum),
+              fmt(bantayNum),
+              fmt(grossNum),
+              fmt(pagibigNum),
+              fmt(philhealthNum),
+              fmt(sssNum),
+              fmt(row.loanSSS, { divideLoan: true }),
+              fmt(row.loanPI, { divideLoan: true }),
+              fmt(valeNum),
+              fmt(valeWedNum),
+              fmt(totalDedNum),
+              fmt(netPayNum)
+            ]);
+          });
+
+          if (aoa.length > 3) {
+            aoa.push([
+              'Grand Total','',
+              '',
+              fmt(totals.regHrs),
+              fmt(totals.otHrs),
+              fmt(totals.adjHrs),
+              fmt(totals.totalHrs),
+              fmt(totals.regPay),
+              fmt(totals.otPay),
+              fmt(totals.adjAmt),
+              fmt(totals.bantay),
+              fmt(totals.grossPay),
+              fmt(totals.pagibig),
+              fmt(totals.philhealth),
+              fmt(totals.sss),
+              fmt(totals.loanSSS),
+              fmt(totals.loanPI),
+              fmt(totals.vale),
+              fmt(totals.valeWed),
+              fmt(totals.totalDed),
+              fmt(totals.netPay)
+            ]);
+          }
+
+          return aoa;
+        } catch (e) {
+          console.warn('buildPayrollAoA snapshot build failed', e);
+          return null;
+        }
+      }
+
+      function buildDomFallback(){
+        const clone = src.cloneNode(true);
+        const removeLastCell = (row) => { if (row && row.lastElementChild) row.removeChild(row.lastElementChild); };
+        if (clone.tHead){ Array.from(clone.tHead.rows || []).forEach(removeLastCell); }
+        Array.from(clone.tBodies || []).forEach(tb => { Array.from(tb.rows || []).forEach(removeLastCell); });
+        if (clone.tFoot){ Array.from(clone.tFoot.rows || []).forEach(removeLastCell); }
+
+        clone.querySelectorAll('input').forEach(inp => {
+          const td = inp.parentElement;
+          if (!td) return;
+          const cls = inp.classList || { contains: () => false };
+          if (cls.contains('loanSSS') || cls.contains('loanPI')){
+            const raw = parseFloat((inp.value || '').toString().replace(/,/g,'')) || 0;
+            td.textContent = (raw / divisor).toFixed(2);
+          } else {
+            const val = (inp.value || inp.textContent || '').toString();
+            td.textContent = val;
+          }
+        });
+
+        clone.querySelectorAll('td').forEach(td => {
+          if (td.querySelector('input')) return;
+          const raw = (td.textContent || '').replace(/,/g,'').trim();
+          if (!raw) return;
+          const num = parseFloat(raw);
+          if (!isNaN(num) && num === 0){ td.textContent = '-'; }
+        });
+
+        const aoa = [[title], ['']];
+        tableToAoA(clone).forEach(row => aoa.push(row));
+        return (aoa && aoa.length > 2) ? aoa : null;
+      }
+
+      const snapshotAoA = await buildFromSnapshot();
+      if (snapshotAoA && snapshotAoA.length > 2) return snapshotAoA;
+      return buildDomFallback();
     }
 
     function buildMasterReportAoA(){
@@ -6036,7 +6188,7 @@ rows += `<tr class="allowance">
     try { window.exportExcelAllSheets = exportExcelAllSheets; } catch(e){}
 
     // Export a single workbook that includes sheets for DTR, Payroll, detailed reports, and the Master Report
-    function exportExcelAllTabs(){
+    async function exportExcelAllTabs(){
       try{
         if (typeof XLSX === 'undefined' || !XLSX || !XLSX.utils) { alert('Excel library not available'); return; }
         if (typeof window.rebuildReports === 'function') window.rebuildReports();
@@ -6053,7 +6205,7 @@ rows += `<tr class="allowance">
         } catch(e){ console.warn('Failed to build DTR sheet', e); }
 
         try {
-          const payrollAoA = buildPayrollAoA();
+          const payrollAoA = await buildPayrollAoA();
           if (payrollAoA && payrollAoA.length){
             XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(payrollAoA), 'Payroll');
           }
@@ -6088,11 +6240,11 @@ rows += `<tr class="allowance">
     // Bind UI button for Excel (All Tabs)
     try {
       var xBtn = document.getElementById('r_xlsx');
-      if (xBtn && !xBtn.__xlsxBound){ xBtn.addEventListener('click', function(ev){ ev.preventDefault(); exportExcelAllTabs(); }); xBtn.__xlsxBound = true; }
+      if (xBtn && !xBtn.__xlsxBound){ xBtn.addEventListener('click', async function(ev){ ev.preventDefault(); try { await exportExcelAllTabs(); } catch(e){ console.warn('Excel (All Tabs) export failed', e); } }); xBtn.__xlsxBound = true; }
     } catch(e){}
 
     // Export for a specific date range (used by Payroll History actions)
-    function exportExcelAllTabsForRange(from, to){
+    async function exportExcelAllTabsForRange(from, to){
       try{
         const ws = document.getElementById('weekStart');
         const we = document.getElementById('weekEnd');
@@ -6120,9 +6272,11 @@ rows += `<tr class="allowance">
 
         recalcForActiveRange();
 
-        setTimeout(function(){
+        setTimeout(async function(){
           try{
-            exportExcelAllTabs();
+            await exportExcelAllTabs();
+          } catch(err){
+            console.warn('Export (all tabs) for range failed', err);
           } finally {
             if (ws) ws.value = prevS;
             if (we) we.value = prevE;
