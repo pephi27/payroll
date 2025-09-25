@@ -4113,80 +4113,44 @@ window.formatDateRange = formatDateRange;
 // Print Payroll Report: generate a print-friendly view of the payroll table and open
 // a new window for printing. Inputs are converted to plain text and the final
 // payslip column is removed to preserve confidentiality.
-function clonePayrollTableForReport(opts = {}){
-  const srcTable = document.getElementById('payrollTable');
-  if (!srcTable) return null;
-  const clone = srcTable.cloneNode(true);
-  const removeLastCell = row => { if (row && row.lastElementChild) row.removeChild(row.lastElementChild); };
-  clone.querySelectorAll('thead tr').forEach(removeLastCell);
-  clone.querySelectorAll('tbody tr').forEach(removeLastCell);
-  clone.querySelectorAll('tfoot tr').forEach(removeLastCell);
-  const key = (typeof LS_DIVISOR !== 'undefined' ? LS_DIVISOR : 'payroll_deduction_divisor');
-  const div = (typeof window !== 'undefined' && typeof window.divisor !== 'undefined' && Number(window.divisor)) || parseInt((localStorage && localStorage.getItem(key)) || '1', 10) || 1;
-  clone.querySelectorAll('input').forEach(inp => {
-    const td = inp.parentElement;
-    const cls = inp.classList || { contains: () => false };
-    let text = (inp.value || inp.textContent || '').toString();
-    if (cls.contains('loanSSS') || cls.contains('loanPI')) {
-      const raw = parseFloat(text.replace(/,/g,'')) || 0;
-      text = (raw / div).toFixed(2);
-    }
-    td.textContent = text;
-  });
-  if (opts.replaceZeroWithDash) {
-    clone.querySelectorAll('td').forEach(td => {
-      if (td.querySelector('input')) return;
-      const raw = (td.textContent || '').replace(/,/g,'').trim();
-      if (!raw) return;
-      const num = parseFloat(raw);
-      if (!isNaN(num) && num === 0) td.textContent = '-';
-    });
-  }
-  return clone;
-}
-
-function buildPayrollReportAoA(){
-  const clone = clonePayrollTableForReport({ replaceZeroWithDash: false });
-  if (!clone) return [];
-  const headers = Array.from(clone.querySelectorAll('thead th')).map(th => (th.textContent || '').trim());
-  const colCount = headers.length || (clone.querySelector('tbody tr')?.children.length || 0);
-  if (!colCount) return [];
-  const padRow = (values = []) => {
-    const row = new Array(colCount).fill('');
-    values.forEach((val, idx) => { if (idx < colCount) row[idx] = val; });
-    return row;
-  };
-  const rows = [];
-  const ws = document.getElementById('weekStart');
-  const we = document.getElementById('weekEnd');
-  const startDate = ws && ws.value ? ws.value : '';
-  const endDate = we && we.value ? we.value : '';
-  rows.push(padRow(['Payroll Report']));
-  const periodLabel = startDate && endDate ? `${startDate} to ${endDate}` : (startDate || endDate || '');
-  if (periodLabel) rows.push(padRow(['Payroll Period', periodLabel]));
-  rows.push(new Array(colCount).fill(''));
-  rows.push(padRow(headers));
-  Array.from(clone.querySelectorAll('tbody tr')).forEach(tr => {
-    const cells = Array.from(tr.querySelectorAll('td')).map(td => (td.textContent || '').trim());
-    rows.push(padRow(cells));
-  });
-  const foot = clone.querySelector('tfoot tr');
-  if (foot) {
-    const cells = Array.from(foot.querySelectorAll('td')).map(td => (td.textContent || '').trim());
-    rows.push(padRow(cells));
-  }
-  return rows;
-}
-try { window.buildPayrollReportAoA = buildPayrollReportAoA; } catch(e){}
-
 document.addEventListener('DOMContentLoaded', function(){
   const btn = document.getElementById('printPayrollBtn');
   if (btn) btn.addEventListener('click', function(){
-    const clone = clonePayrollTableForReport({ replaceZeroWithDash: true });
-    if (!clone) {
+    const srcTable = document.getElementById('payrollTable');
+    if (!srcTable) {
       alert('Payroll table is missing or empty.');
       return;
     }
+    // Clone table so we can modify it without affecting the live DOM
+    const clone = srcTable.cloneNode(true);
+    // Remove the last column (Payslip) from thead, tbody and tfoot
+    const removeLastCell = row => { if (row && row.lastElementChild) row.removeChild(row.lastElementChild); };
+    clone.querySelectorAll('thead tr').forEach(removeLastCell);
+    clone.querySelectorAll('tbody tr').forEach(removeLastCell);
+    clone.querySelectorAll('tfoot tr').forEach(removeLastCell);
+    // Convert input fields to plain text within the cloned table
+    // For loan inputs, show per-period share (divided by the divisor)
+    clone.querySelectorAll('input').forEach(inp => {
+      const td = inp.parentElement;
+      const cls = inp.classList || { contains: () => false };
+      const key = (typeof LS_DIVISOR !== 'undefined' ? LS_DIVISOR : 'payroll_deduction_divisor');
+      const div = (typeof window !== 'undefined' && typeof window.divisor !== 'undefined' && Number(window.divisor)) || parseInt((localStorage && localStorage.getItem(key)) || '1', 10) || 1;
+      if (cls.contains('loanSSS') || cls.contains('loanPI')) {
+        const raw = parseFloat((inp.value || '').toString().replace(/,/g,'')) || 0;
+        td.textContent = (raw / div).toFixed(2);
+      } else {
+        const val = (inp.value || inp.textContent || '').toString();
+        td.textContent = val;
+      }
+    });
+    // Replace numeric zeros with dashes in clone
+    clone.querySelectorAll('td').forEach(function(td){
+      if (td.querySelector('input')) return;
+      var raw = (td.textContent || '').replace(/,/g,'').trim();
+      if (!raw) return;
+      var num = parseFloat(raw);
+      if (!isNaN(num) && num === 0) td.textContent = '-';
+    });
     // Rename selected header labels for print-only
     (function(){
       function norm(s){ return String(s||'').replace(/\s+/g,' ').trim().toLowerCase(); }
@@ -5913,12 +5877,21 @@ rows += `<tr class="allowance">
         const { data, dates, from, to } = __report;
         const wb = XLSX.utils.book_new();
 
-        // 1) DTR sheet from helper (excludes Split/Actions/Editor)
+        // 1) DTR sheet from #resultsTable (excluding actions)
         try{
-          const rows = (typeof window.collectDtrTableForExport === 'function') ? window.collectDtrTableForExport() : [];
-          if (Array.isArray(rows) && rows.length) {
-            XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(rows), 'DTR');
-          }
+          const tbl = document.getElementById('resultsTable');
+          const head = Array.from(tbl.querySelectorAll('thead th')).map(th=> (th.textContent||'').trim()).filter(t=>t.toLowerCase()!=='actions' && t.toLowerCase()!=='split');
+          const rows = [head];
+          Array.from(tbl.querySelectorAll('tbody tr')).forEach(tr=>{
+            const tds = Array.from(tr.querySelectorAll('td')).filter(td=>!td.classList.contains('actions-cell'));
+            const row = tds.map(td=>{
+              const sel = td.querySelector && td.querySelector('select');
+              if (sel && sel.options && sel.selectedIndex>=0){ const opt=sel.options[sel.selectedIndex]; return (opt && (opt.textContent||opt.innerText||opt.value))||''; }
+              return (td.textContent||'').trim();
+            });
+            rows.push(row);
+          });
+          XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(rows), 'DTR');
         }catch(e){}
 
         // 2) Employees sheet from store
@@ -5942,12 +5915,23 @@ rows += `<tr class="allowance">
           XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(rows), 'Employees');
         }catch(e){}
 
-        // 3) Payroll sheet using print-style helper
+        // 3) Payroll sheet from #payrollTable (inputs → values, drop Payslip)
         try{
-          const rows = (typeof window.buildPayrollReportAoA === 'function') ? window.buildPayrollReportAoA() : [];
-          if (Array.isArray(rows) && rows.length) {
-            XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(rows), 'Payroll');
-          }
+          const src = document.getElementById('payrollTable');
+          const clone = src.cloneNode(true);
+          // Remove Payslip last column
+          const removeLastCell = row => { if (row && row.lastElementChild) row.removeChild(row.lastElementChild); };
+          clone.querySelectorAll('thead tr').forEach(removeLastCell);
+          clone.querySelectorAll('tbody tr').forEach(removeLastCell);
+          clone.querySelectorAll('tfoot tr').forEach(removeLastCell);
+          // Convert inputs to text
+          clone.querySelectorAll('input').forEach(inp=>{ const td=inp.parentElement; td.textContent = (inp.value||inp.textContent||''); });
+          const head = [Array.from(clone.querySelectorAll('thead th')).map(th=> (th.textContent||'').trim())];
+          const body = Array.from(clone.querySelectorAll('tbody tr')).map(tr=> Array.from(tr.querySelectorAll('td')).map(td=> (td.textContent||'').trim()));
+          const foot = [];
+          const tfr = clone.querySelector('tfoot tr'); if (tfr){ foot.push(Array.from(tfr.querySelectorAll('td')).map(td=> (td.textContent||'').trim())); }
+          const aoa = head.concat(body).concat(foot);
+          XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(aoa), 'Payroll');
         }catch(e){}
 
         // 4) Reports: reuse per-project builder to append sheets + Summary
@@ -5990,17 +5974,6 @@ rows += `<tr class="allowance">
             XLSX.utils.book_append_sheet(wb2, XLSX.utils.aoa_to_sheet(summaryRows), 'Summary');
           };
           addReportSheets(wb);
-        }catch(e){}
-
-        // Ensure Master Report data is current before building the sheet
-        try { if (typeof window.renderMasterReport === 'function') window.renderMasterReport(); } catch(e){}
-
-        // 5) Master Report sheet (contributions + project summary)
-        try{
-          const masterRows = (typeof window.buildMasterReportAoA === 'function') ? window.buildMasterReportAoA() : [];
-          if (Array.isArray(masterRows) && masterRows.length){
-            XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(masterRows), 'Master Report');
-          }
         }catch(e){}
 
         const fname = `all_tabs_${from}_to_${to}.xlsx`;
@@ -6158,21 +6131,6 @@ rows += `<tr class="allowance">
 
   const CONTRIBUTION_FIELDS = ['piEE','piER','phEE','phER','sssEE','sssER','loanSSS','loanPI'];
   const makeContributionBucket = () => ({ piEE:0, piER:0, phEE:0, phER:0, sssEE:0, sssER:0, loanSSS:0, loanPI:0 });
-  const FALLBACK_COMPANIES = ['Edifice','Portafolio'];
-  const BASE_COMPANY_SEEDS = (() => {
-    if (typeof COMPANY_OPTIONS !== 'undefined' && Array.isArray(COMPANY_OPTIONS)) {
-      return COMPANY_OPTIONS.filter(name => typeof name === 'string' && name.trim().length);
-    }
-    return [];
-  })();
-  const getCompanySeedList = () => {
-    const seeds = BASE_COMPANY_SEEDS.length ? BASE_COMPANY_SEEDS : FALLBACK_COMPANIES;
-    return seeds.map(name => typeof name === 'string' ? name : '').filter(Boolean);
-  };
-  const normalizeCompanyLabel = (val) => {
-    const label = safe(val).trim();
-    return label.length ? label : 'Unassigned';
-  };
   const renderContributionTable = (bucket, opts = {}) => {
     const data = bucket || makeContributionBucket();
     const rowClassAttr = opts.rowClass ? ` class="${opts.rowClass}"` : '';
@@ -6225,14 +6183,19 @@ rows += `<tr class="allowance">
   // Compute contribution totals across employees for the active period
   function computeContributionTotals(){
     try{ if (typeof syncPeriodScopedData==='function') syncPeriodScopedData(); }catch(e){}
+    const hasCompanyOptions = (typeof COMPANY_OPTIONS !== 'undefined') && Array.isArray(COMPANY_OPTIONS);
+    const defaults = hasCompanyOptions
+      ? COMPANY_OPTIONS.filter(name => typeof name === 'string' && name.trim().length)
+      : ['Edifice','Portafolio'];
     const makeBucket = makeContributionBucket;
     const sums = {};
     const ensureBucket = (companyName) => {
-      const label = normalizeCompanyLabel(companyName);
+      const label = (typeof companyName === 'string' && companyName.trim().length) ? companyName.trim() : 'Unassigned';
       if (!sums[label]) sums[label] = makeBucket();
       return sums[label];
     };
-    getCompanySeedList().forEach(name => ensureBucket(name));
+    const seeds = defaults.length ? defaults : ['Edifice','Portafolio'];
+    seeds.forEach(name => ensureBucket(name));
     try{
       const list = (typeof employeeList!=='undefined' && employeeList) ? employeeList : [];
       const rates = (typeof payrollRates!=='undefined' && payrollRates) ? payrollRates : {};
@@ -6454,40 +6417,69 @@ rows += `<tr class="allowance">
     return computeProjectTotalsFromDTR();
   }
 
-  function collectMasterReportModel(){
-    const totalsByCompany = computeContributionTotals() || {};
-    const prows = computeProjectTotals() || [];
+  function renderMasterReport(){
+    const host = document.getElementById('masterReportContainer'); if(!host) return;
+    const totalsByCompany = computeContributionTotals();
+    const prows = computeProjectTotals();
     const g = prows.reduce((acc,r)=>{
       acc.h += Number((r && r.hrs != null) ? r.hrs : 0);
       acc.t += Number((r && r.total != null) ? r.total : 0);
       return acc;
     }, {h:0,t:0});
+    let html = '';
+    html += '<h2>PAYROLL REPORT</h2>';
     const [rangeStart, rangeEnd] = getPayrollRange();
     const periodLabel = formatPayrollPeriodLabel(rangeStart, rangeEnd);
-
-    const contributions = [];
+    if (periodLabel){
+      html += `<div class="mr-period">Payroll Period: <span>${safe(periodLabel)}</span></div>`;
+    } else {
+      html += '<div class="mr-period">Payroll Period: <span class="mr-period-missing">Not set</span></div>';
+    }
+    const makeBucket = makeContributionBucket;
+    const hasCompanyOptions = (typeof COMPANY_OPTIONS !== 'undefined') && Array.isArray(COMPANY_OPTIONS);
+    const defaults = hasCompanyOptions
+      ? COMPANY_OPTIONS.filter(name => typeof name === 'string' && name.trim().length)
+      : ['Edifice','Portafolio'];
+    const normalizeCompanyLabel = (val) => {
+      const label = safe(val).trim();
+      return label.length ? label : 'Unassigned';
+    };
     const seen = new Set();
     const orderedCompanies = [];
     const pushCompany = (name) => {
-      const label = normalizeCompanyLabel(name);
-      if (!label || seen.has(label)) return;
+      const label = (typeof name === 'string' && name.trim().length) ? name.trim() : 'Unassigned';
+      if (seen.has(label)) return;
       seen.add(label);
       orderedCompanies.push(label);
     };
-    getCompanySeedList().forEach(pushCompany);
+    (defaults.length ? defaults : ['Edifice','Portafolio']).forEach(pushCompany);
     Object.keys(totalsByCompany || {}).forEach(pushCompany);
     if (!orderedCompanies.length) pushCompany('Unassigned');
     orderedCompanies.forEach(companyName => {
-      const bucket = (totalsByCompany && totalsByCompany[companyName]) ? totalsByCompany[companyName] : makeContributionBucket();
-      contributions.push({ label: companyName, bucket });
+      const bucket = (totalsByCompany && totalsByCompany[companyName]) ? totalsByCompany[companyName] : makeBucket();
+      const label = companyName || 'Unassigned';
+      html += '<div class="mr-section">';
+      html += `<h4>SITE PAYROLL - ${safe(label)}</h4>`;
+      html += renderContributionTable(bucket);
+      html += '</div>';
     });
-    const overallContribution = contributions.reduce((acc, section) => {
-      const bucket = section.bucket || makeContributionBucket();
-      CONTRIBUTION_FIELDS.forEach(field => {
-        acc[field] += Number(bucket[field] || 0);
+
+    const allCompanyBuckets = (totalsByCompany && typeof totalsByCompany === 'object')
+      ? Object.values(totalsByCompany)
+      : [];
+    const overallBucket = allCompanyBuckets.reduce((acc, bucket) => {
+      CONTRIBUTION_FIELDS.forEach(key => {
+        const val = Number(bucket && bucket[key] != null ? bucket[key] : 0);
+        acc[key] += val;
       });
       return acc;
-    }, makeContributionBucket());
+    }, makeBucket());
+    if (orderedCompanies.length){
+      html += '<div class="mr-section mr-grand-contributions">';
+      html += '<h4>GRAND TOTAL - CONTRIBUTIONS</h4>';
+      html += renderContributionTable(overallBucket, { bold: true, combineEEER: true });
+      html += '</div>';
+    }
 
     const projectGroups = {};
     const ensureProjectGroup = (companyName) => {
@@ -6497,26 +6489,22 @@ rows += `<tr class="allowance">
     };
     prows.forEach(row => {
       const group = ensureProjectGroup(row && row.company);
-      const entry = {
-        name: safe(row && row.name),
-        hrs: Number((row && row.hrs != null) ? row.hrs : 0),
-        total: Number((row && row.total != null) ? row.total : 0)
-      };
-      group.rows.push(entry);
-      group.hrs += entry.hrs;
-      group.total += entry.total;
+      group.rows.push(row);
+      group.hrs += Number((row && row.hrs != null) ? row.hrs : 0);
+      group.total += Number((row && row.total != null) ? row.total : 0);
     });
-
     const projectSeen = new Set();
     const projectOrder = [];
     const pushProjectCompany = (name) => {
       const label = normalizeCompanyLabel(name);
+      if (projectSeen.has(label)) return;
       const grp = projectGroups[label];
-      if (!grp || !grp.rows.length || projectSeen.has(label)) return;
+      if (!grp || !grp.rows.length) return;
       projectSeen.add(label);
       projectOrder.push(label);
     };
-    getCompanySeedList().map(normalizeCompanyLabel).forEach(pushProjectCompany);
+    const defaultOrder = (defaults.length ? defaults : ['Edifice','Portafolio']).map(normalizeCompanyLabel);
+    defaultOrder.forEach(pushProjectCompany);
     Object.keys(projectGroups).sort((a,b)=>{
       const aUn = (a === 'Unassigned');
       const bUn = (b === 'Unassigned');
@@ -6525,153 +6513,35 @@ rows += `<tr class="allowance">
       return a.localeCompare(b);
     }).forEach(pushProjectCompany);
 
-    const projectSections = projectOrder.map(companyName => {
-      const group = projectGroups[companyName];
-      const sortedRows = group.rows.slice().sort((a,b)=> safe(a && a.name).localeCompare(safe(b && b.name)));
-      return { label: companyName, rows: sortedRows, subtotal: { hrs: group.hrs, total: group.total } };
-    });
-
-    return {
-      periodLabel,
-      contributions,
-      overallContribution,
-      showOverallContribution: orderedCompanies.length > 0,
-      projectSections,
-      fallbackProjects: prows,
-      projectTotals: g
-    };
-  }
-
-  function renderMasterReport(){
-    const host = document.getElementById('masterReportContainer'); if(!host) return;
-    const model = collectMasterReportModel();
-    const { periodLabel, contributions, overallContribution, showOverallContribution, projectSections, fallbackProjects, projectTotals } = model;
-    let html = '';
-    html += '<h2>PAYROLL REPORT</h2>';
-    if (periodLabel){
-      html += `<div class="mr-period">Payroll Period: <span>${safe(periodLabel)}</span></div>`;
-    } else {
-      html += '<div class="mr-period">Payroll Period: <span class="mr-period-missing">Not set</span></div>';
-    }
-    contributions.forEach(section => {
-      html += '<div class="mr-section">';
-      html += `<h4>SITE PAYROLL - ${safe(section.label)}</h4>`;
-      html += renderContributionTable(section.bucket);
-      html += '</div>';
-    });
-
-    if (showOverallContribution){
-      html += '<div class="mr-section mr-grand-contributions">';
-      html += '<h4>GRAND TOTAL - CONTRIBUTIONS</h4>';
-      html += renderContributionTable(overallContribution, { bold: true, combineEEER: true });
-      html += '</div>';
-    }
-
     html += '<div class="mr-section" style="margin-top:16px;">';
     html += '<h4 class="mr-project-title">PROJECT</h4>';
     html += '<table class="mr-table"><thead><tr><th class="left">NAME</th><th class="mr-num">HRS</th><th class="mr-num">GRAND TOTAL</th></tr></thead><tbody>';
-    if (!projectSections.length){
-      if (!fallbackProjects.length){
+    if (!projectOrder.length){
+      if (!prows.length){
         html += '<tr><td class="left" colspan="3">No project totals available.</td></tr>';
       } else {
-        fallbackProjects.forEach(r=>{ html += `<tr><td class="left">${safe(r && r.name)}</td><td class="mr-num">${f2(r && r.hrs)}</td><td class="mr-num">${f2(r && r.total)}</td></tr>`; });
+        prows.forEach(r=>{ html += `<tr><td class="left">${safe(r.name)}</td><td class="mr-num">${f2(r.hrs)}</td><td class="mr-num">${f2(r.total)}</td></tr>`; });
       }
     } else {
-      projectSections.forEach(section => {
-        const companyLabel = normalizeCompanyLabel(section.label);
+      projectOrder.forEach(companyName => {
+        const group = projectGroups[companyName];
+        if (!group || !group.rows.length) return;
+        const companyLabel = normalizeCompanyLabel(companyName);
         html += `<tr class="mr-company"><th colspan="3">${safe(companyLabel)}</th></tr>`;
-        section.rows.forEach(r=>{
+        const sortedRows = group.rows.slice().sort((a,b)=> safe(a && a.name).localeCompare(safe(b && b.name)));
+        sortedRows.forEach(r=>{
           html += `<tr><td class="left">${safe(r && r.name)}</td><td class="mr-num">${f2(r && r.hrs)}</td><td class="mr-num">${f2(r && r.total)}</td></tr>`;
         });
-        html += `<tr class="mr-subtotal"><td class="left" style="font-weight:600;">Subtotal - ${safe(companyLabel)}</td><td class="mr-num" style="font-weight:600;">${f2(section.subtotal.hrs)}</td><td class="mr-num" style="font-weight:600;">${f2(section.subtotal.total)}</td></tr>`;
+        html += `<tr class="mr-subtotal"><td class="left" style="font-weight:600;">Subtotal - ${safe(companyLabel)}</td><td class="mr-num" style="font-weight:600;">${f2(group.hrs)}</td><td class="mr-num" style="font-weight:600;">${f2(group.total)}</td></tr>`;
       });
     }
-    html += `</tbody><tfoot><tr><td class="left">Grand Total</td><td class="mr-num">${f2(projectTotals.h)}</td><td class="mr-num">${f2(projectTotals.t)}</td></tr></tfoot></table>`;
+    html += `</tbody><tfoot><tr><td class="left">Grand Total</td><td class="mr-num">${f2(g.h)}</td><td class="mr-num">${f2(g.t)}</td></tr></tfoot></table>`;
     html += '</div>';
 
     host.innerHTML = html;
   }
 
-  function buildMasterReportAoA(){
-    const model = collectMasterReportModel();
-    const { periodLabel, contributions, overallContribution, showOverallContribution, projectSections, fallbackProjects, projectTotals } = model;
-    const rows = [];
-    rows.push(['PAYROLL REPORT']);
-    rows.push(['Payroll Period', periodLabel || 'Not set']);
-    rows.push([]);
-    contributions.forEach(section => {
-      const bucket = section.bucket || makeContributionBucket();
-      rows.push([`SITE PAYROLL - ${section.label}`]);
-      rows.push(['PAG-IBIG EE','PAG-IBIG ER','PHILHEALTH EE','PHILHEALTH ER','SSS EE','SSS ER','SSS LOAN','PAG-IBIG LOAN']);
-      rows.push([
-        f2(bucket.piEE),
-        f2(bucket.piER),
-        f2(bucket.phEE),
-        f2(bucket.phER),
-        f2(bucket.sssEE),
-        f2(bucket.sssER),
-        f2(bucket.loanSSS),
-        f2(bucket.loanPI)
-      ]);
-      rows.push([]);
-    });
-    if (showOverallContribution){
-      rows.push(['GRAND TOTAL - CONTRIBUTIONS']);
-      rows.push(['PAG-IBIG','PHILHEALTH','SSS','SSS LOAN','PAG-IBIG LOAN']);
-      rows.push([
-        f2(Number(overallContribution.piEE || 0) + Number(overallContribution.piER || 0)),
-        f2(Number(overallContribution.phEE || 0) + Number(overallContribution.phER || 0)),
-        f2(Number(overallContribution.sssEE || 0) + Number(overallContribution.sssER || 0)),
-        f2(overallContribution.loanSSS || 0),
-        f2(overallContribution.loanPI || 0)
-      ]);
-      rows.push([]);
-    }
-    rows.push(['PROJECT']);
-    rows.push(['NAME','HRS','GRAND TOTAL']);
-    if (!projectSections.length){
-      if (!fallbackProjects.length){
-        rows.push(['No project totals available.','','']);
-      } else {
-        fallbackProjects.forEach(r=>{
-          rows.push([
-            safe(r && r.name),
-            f2(r && r.hrs),
-            f2(r && r.total)
-          ]);
-        });
-      }
-    } else {
-      projectSections.forEach(section => {
-        const companyLabel = normalizeCompanyLabel(section.label);
-        rows.push([companyLabel]);
-        rows.push(['NAME','HRS','GRAND TOTAL']);
-        section.rows.forEach(r=>{
-          rows.push([
-            safe(r && r.name),
-            f2(r && r.hrs),
-            f2(r && r.total)
-          ]);
-        });
-        rows.push([
-          `Subtotal - ${companyLabel}`,
-          f2(section.subtotal.hrs),
-          f2(section.subtotal.total)
-        ]);
-        rows.push([]);
-      });
-    }
-    rows.push(['Grand Total', f2(projectTotals.h), f2(projectTotals.t)]);
-    const maxCols = rows.reduce((max,row)=>Math.max(max, row.length), 0);
-    return rows.map(row => {
-      const copy = row.slice();
-      while(copy.length < maxCols) copy.push('');
-      return copy;
-    });
-  }
-
   try { window.renderMasterReport = renderMasterReport; } catch (e) {}
-  try { window.buildMasterReportAoA = buildMasterReportAoA; } catch(e){}
 
   function attachMasterPrint(){
     const btn = document.getElementById('mr_print');
@@ -7749,59 +7619,22 @@ function __inRange(d){
 });
 
 
-function collectDtrTableForExport(){
-  try {
-    const table = document.getElementById('resultsTable');
-    if (!table) return [];
-    const dropIdx = [];
-    const headers = Array.from(table.querySelectorAll('thead th'));
-    headers.forEach((th, idx) => {
-      const text = (th.textContent || '').trim().toLowerCase();
-      if (text === 'split' || text === 'actions' || text === 'editor') {
-        dropIdx.push(idx);
-      }
-    });
-    const keepHeader = headers
-      .filter((_, idx) => !dropIdx.includes(idx))
-      .map(th => (th.textContent || '').trim());
-    const rows = [keepHeader];
-    Array.from(table.querySelectorAll('tbody tr')).forEach(tr => {
-      const cells = Array.from(tr.querySelectorAll('td'));
-      const row = [];
-      cells.forEach((td, idx) => {
-        if (dropIdx.includes(idx)) return;
-        let text = '';
-        const sel = td.querySelector && td.querySelector('select');
-        if (sel && sel.options && sel.selectedIndex >= 0) {
-          const opt = sel.options[sel.selectedIndex];
-          text = (opt && (opt.textContent || opt.innerText || opt.value)) || '';
-        } else {
-          text = (td.textContent || '').trim();
-        }
-        row.push(text);
-      });
-      rows.push(row);
-    });
-    return rows;
-  } catch (e) {
-    console.warn('collectDtrTableForExport failed', e);
-    return [];
-  }
-}
-try { window.collectDtrTableForExport = collectDtrTableForExport; } catch(e){}
-
 document.getElementById('downloadCSV').addEventListener('click', ()=>{
-  const rows = collectDtrTableForExport();
-  if (!rows || rows.length <= 1) {
-    alert('No DTR records to export.');
-    return;
-  }
-  const csv = rows.map(r=>r.map(c=>{
-    const cell = String(c ?? '');
-    return (cell.includes('"')||cell.includes(',')||cell.includes('\n')) ? '"' + cell.replace(/"/g,'""') + '"' : cell;
-  }).join(',')).join('\n');
-  const blob = new Blob([csv], { type:'text/csv' });
-  const url = URL.createObjectURL(blob);
+  const rows = [['ID','Name','Project','Schedule','Date','AM In','AM Out','PM In','PM Out','OT In','OT Out','Total Regular Hrs','OT Hrs']];
+  document.querySelectorAll('#resultsTable tbody tr').forEach(tr=>{
+  const cells = Array.from(tr.querySelectorAll('td')).filter(td=>!td.classList.contains('actions-cell'));
+  const rowVals = cells.map(td => {
+    const sel = td.querySelector && td.querySelector('select');
+    if (sel && sel.options && sel.selectedIndex >= 0) {
+      const opt = sel.options[sel.selectedIndex];
+      return (opt && opt.textContent) ? opt.textContent.trim() : '';
+    }
+    return td.textContent.trim();
+  });
+  rows.push(rowVals);
+});
+const csv = rows.map(r=>r.map(c=> (c.includes('"')||c.includes(',')||c.includes('\n')) ? '"' + c.replace(/"/g,'""') + '"' : c ).join(',')).join('\n');
+  const blob = new Blob([csv], { type:'text/csv' }); const url = URL.createObjectURL(blob);
   const a = document.createElement('a'); a.href = url; a.download = 'attendance_with_ot.csv'; document.body.appendChild(a); a.click(); a.remove();
 });
 function padHM(hm){ if(!hm) return ''; const [h,m]=hm.split(':').map(x=>String(Number(x)).padStart(2,'0')); return h.padStart(2,'0')+':'+m.padStart(2,'0'); }
