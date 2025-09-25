@@ -5929,7 +5929,18 @@ rows += `<tr class="allowance">
           const head = [Array.from(clone.querySelectorAll('thead th')).map(th=> (th.textContent||'').trim())];
           const body = Array.from(clone.querySelectorAll('tbody tr')).map(tr=> Array.from(tr.querySelectorAll('td')).map(td=> (td.textContent||'').trim()));
           const foot = [];
-          const tfr = clone.querySelector('tfoot tr'); if (tfr){ foot.push(Array.from(tfr.querySelectorAll('td')).map(td=> (td.textContent||'').trim())); }
+          const tfr = clone.querySelector('tfoot tr');
+          if (tfr) {
+            const cells = Array.from(tfr.querySelectorAll('td'));
+            const row = [];
+            cells.forEach(td => {
+              const text = (td.textContent || '').trim();
+              const span = Number(td.getAttribute('colspan') || td.colSpan || 1);
+              row.push(text);
+              for (let i = 1; i < span; i++) row.push('');
+            });
+            foot.push(row);
+          }
           const aoa = head.concat(body).concat(foot);
           XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(aoa), 'Payroll');
         }catch(e){}
