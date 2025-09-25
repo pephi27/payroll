@@ -5870,119 +5870,43 @@ rows += `<tr class="allowance">
       return { rows, from, to };
     }
 
-    function hasMeaningfulRows(rows){
-      if (!Array.isArray(rows) || !rows.length) return false;
-      if (rows.length === 1){
-        const first = rows[0];
-        if (!Array.isArray(first)) return false;
-        return first.some(cell => String(cell ?? '').trim() !== '');
-      }
-      for (let i = 1; i < rows.length; i++){
-        const row = rows[i];
-        if (!Array.isArray(row)) continue;
-        if (row.some(cell => String(cell ?? '').trim() !== '')){
-          return true;
-        }
-      }
-      return false;
-    }
-
     // Some report rebuilds rely on async data fetches. Wait briefly for the
     // detailed rows to populate so Excel exports capture the final dataset.
     async function waitForDetailedReportBundle(maxWaitMs = 8000, pollMs = 200){
-      const restoreTab = (() => {
-        try {
-          const reportsPanel = document.getElementById('panelProjectTotals');
-          const reportsActive = !!(reportsPanel && reportsPanel.classList && reportsPanel.classList.contains('active'));
-          if (reportsActive) {
-            return () => {};
-          }
-
-          const activeNav = document.querySelector('.tab-btn.active[data-page]');
-          const prevPage = activeNav && activeNav.dataset ? activeNav.dataset.page : null;
-          const prevBtn = activeNav || document.querySelector('.tab-btn.active');
-          const restore = () => {
-            if (prevPage && prevPage !== 'totals' && typeof window.showTab === 'function') {
-              try { window.showTab(prevPage); return; } catch(e){}
-            }
-            if (prevBtn && typeof prevBtn.click === 'function') {
-              try { prevBtn.click(); } catch(e){}
-            }
-          };
-
-          let switched = false;
-          if (typeof window.showTab === 'function') {
-            try { window.showTab('projectTotals'); switched = true; }
-            catch(e){}
-          }
-          if (!switched) {
-            const reportsBtn = document.getElementById('tabProjectTotals');
-            if (reportsBtn && reportsBtn !== prevBtn && !reportsBtn.classList.contains('active')) {
-              try { reportsBtn.click(); switched = true; }
-              catch(e){}
-            }
-          }
-          if (!switched && reportsPanel && reportsPanel.classList) {
-            reportsPanel.classList.add('active');
-          }
-
-          try {
-            const detailBtn = document.getElementById('btnReportsDetailed');
-            if (detailBtn && !detailBtn.classList.contains('active')) detailBtn.click();
-          } catch(e){}
-
-          try { if (typeof window.rebuildReports === 'function') window.rebuildReports(); }
-          catch(e){}
-
-          return restore;
-        } catch(e){ return () => {}; }
-      })();
-
       const started = Date.now();
-      try {
-        if (typeof buildDetailedReportRows !== 'function'){
-          try { if (typeof window.rebuildReports === 'function') window.rebuildReports(); }
-          catch(e){}
-          return null;
-        }
-        while ((Date.now() - started) < maxWaitMs){
-          if (!__report && typeof window.rebuildReports === 'function'){
-            try { window.rebuildReports(); } catch(e){}
-          }
-          let bundle = null;
-          try { bundle = buildDetailedReportRows(); }
-          catch(e){ bundle = null; }
-          if (bundle && hasMeaningfulRows(bundle.rows)){
-            return bundle;
-          }
-          const renderedRows = (() => {
-            try {
-              return document.querySelectorAll('#r_table tbody tr').length;
-            } catch(_){ return 0; }
-          })();
-          if (renderedRows > 0){
-            let refreshed = null;
-            try { refreshed = buildDetailedReportRows(); }
-            catch(e){ refreshed = null; }
-            if (refreshed && hasMeaningfulRows(refreshed.rows)){
-              return refreshed;
-            }
-          }
-          await new Promise(resolve => setTimeout(resolve, pollMs));
-        }
+      const hasDataRows = (bundle) => {
+        if (!bundle || !Array.isArray(bundle.rows)) return false;
+        if (bundle.rows.length > 2) return true;
+        return bundle.rows.some((row, idx) => {
+          if (!row || idx === 0) return false;
+          return row.some(cell => String(cell ?? '').trim() !== '');
+        });
+      };
+      while ((Date.now() - started) < maxWaitMs){
         if (!__report && typeof window.rebuildReports === 'function'){
           try { window.rebuildReports(); } catch(e){}
         }
-        try {
-          const finalBundle = buildDetailedReportRows();
-          if (finalBundle && hasMeaningfulRows(finalBundle.rows)){
-            return finalBundle;
+        const bundle = buildDetailedReportRows();
+        if (hasDataRows(bundle)){
+          return bundle;
+        }
+        const renderedRows = (() => {
+          try {
+            return document.querySelectorAll('#r_table tbody tr').length;
+          } catch(_){ return 0; }
+        })();
+        if (renderedRows > 0){
+          const refreshed = buildDetailedReportRows();
+          if (hasDataRows(refreshed)){
+            return refreshed;
           }
-        } catch(e){}
-        return null;
-      } finally {
-        try { restoreTab(); } catch(e){}
+        }
+        await new Promise(resolve => setTimeout(resolve, pollMs));
       }
+      if (!__report && typeof window.rebuildReports === 'function'){
+        try { window.rebuildReports(); } catch(e){}
+      }
+      return buildDetailedReportRows();
     }
 
     function exportCSVAll(){
@@ -6397,85 +6321,29 @@ rows += `<tr class="allowance">
       try{
         if (typeof XLSX === 'undefined' || !XLSX || !XLSX.utils) { alert('Excel library not available'); return; }
         if (typeof window.rebuildReports === 'function') window.rebuildReports();
-        let detailBundle = null;
-        try {
-          detailBundle = await waitForDetailedReportBundle();
-        } catch(e){
-          console.warn('Waiting for detailed bundle failed', e);
-          detailBundle = null;
-        }
-        if (!detailBundle || !hasMeaningfulRows(detailBundle.rows)){
-          try {
-            if (typeof buildDetailedReportRows === 'function'){
-              const rebuilt = buildDetailedReportRows();
-              if (rebuilt && hasMeaningfulRows(rebuilt.rows)){
-                detailBundle = detailBundle || {};
-                detailBundle.rows = rebuilt.rows;
-                detailBundle.from = detailBundle.from || rebuilt.from;
-                detailBundle.to = detailBundle.to || rebuilt.to;
-              }
-            }
-          } catch(e){ console.warn('Detailed report rebuild failed', e); }
-        }
-        if (!detailBundle || !hasMeaningfulRows(detailBundle.rows)){
-          try {
-            const table = document.getElementById('r_table');
-            if (table){
-              const aoa = tableToAoA(table);
-              if (hasMeaningfulRows(aoa)){
-                detailBundle = detailBundle || {};
-                detailBundle.rows = aoa;
-              }
-            }
-          } catch(e){ console.warn('Detailed report DOM fallback failed', e); }
-        }
-
-        if (!detailBundle || !hasMeaningfulRows(detailBundle.rows)){
-          alert('No report to export yet.');
-          return;
-        }
-
-        const periodFrom = (detailBundle && detailBundle.from) || ((__report || {}).from) || '';
-        const periodTo = (detailBundle && detailBundle.to) || ((__report || {}).to) || '';
-        const { rows: detailRows } = detailBundle;
+        const detailBundle = await waitForDetailedReportBundle();
+        if (!detailBundle){ alert('No report to export yet.'); return; }
+        const { from, to } = detailBundle;
         const wb = XLSX.utils.book_new();
-
-        const safeSheetName = (name) => {
-          const raw = (name == null) ? '' : String(name);
-          const cleaned = raw.replace(/[\/*?:\[\]]/g, ' ').trim();
-          return cleaned ? cleaned.slice(0, 31) : 'Sheet';
-        };
-
-        try {
-          const detailedRows = Array.isArray(detailRows) ? detailRows : null;
-          if (detailedRows && detailedRows.length){
-            const normalized = detailedRows.map(row => Array.isArray(row)
-              ? row.map(cell => (cell == null ? '' : cell))
-              : [String(row ?? '')]
-            );
-            const detailSheet = XLSX.utils.aoa_to_sheet(normalized);
-            XLSX.utils.book_append_sheet(wb, detailSheet, safeSheetName('Detailed Report'));
-          }
-        } catch(e){ console.warn('Failed to build Detailed Reports sheet', e); }
 
         try {
           const dtrAoA = buildDtrAoA();
           if (dtrAoA && dtrAoA.length){
-            XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(dtrAoA), safeSheetName('DTR'));
+            XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(dtrAoA), 'DTR');
           }
         } catch(e){ console.warn('Failed to build DTR sheet', e); }
 
         try {
           const payrollAoA = await buildPayrollAoA();
           if (payrollAoA && payrollAoA.length){
-            XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(payrollAoA), safeSheetName('Payroll'));
+            XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(payrollAoA), 'Payroll');
           }
         } catch(e){ console.warn('Failed to build Payroll sheet', e); }
 
         try {
           const masterAoA = buildMasterReportAoA();
           if (masterAoA && masterAoA.length){
-            XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(masterAoA), safeSheetName('Master Report'));
+            XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(masterAoA), 'Master Report');
           }
         } catch(e){ console.warn('Failed to build Master Report sheet', e); }
 
@@ -6484,9 +6352,9 @@ rows += `<tr class="allowance">
           return;
         }
 
-        const safeFrom = (periodFrom && String(periodFrom).trim()) || 'start';
-        const safeTo = (periodTo && String(periodTo).trim()) || 'end';
-        const fname = (periodFrom || periodTo) ? `all_tabs_${safeFrom}_to_${safeTo}.xlsx` : 'all_tabs.xlsx';
+        const safeFrom = (from && String(from).trim()) || 'start';
+        const safeTo = (to && String(to).trim()) || 'end';
+        const fname = (from || to) ? `all_tabs_${safeFrom}_to_${safeTo}.xlsx` : 'all_tabs.xlsx';
         XLSX.writeFile(wb, fname);
       }catch(e){ console.warn('Excel export failed', e); alert('Excel export failed'); }
     }
