@@ -5870,6 +5870,45 @@ rows += `<tr class="allowance">
       return { rows, from, to };
     }
 
+    // Some report rebuilds rely on async data fetches. Wait briefly for the
+    // detailed rows to populate so Excel exports capture the final dataset.
+    async function waitForDetailedReportBundle(maxWaitMs = 8000, pollMs = 200){
+      const started = Date.now();
+      const hasDataRows = (bundle) => {
+        if (!bundle || !Array.isArray(bundle.rows)) return false;
+        if (bundle.rows.length > 2) return true;
+        return bundle.rows.some((row, idx) => {
+          if (!row || idx === 0) return false;
+          return row.some(cell => String(cell ?? '').trim() !== '');
+        });
+      };
+      while ((Date.now() - started) < maxWaitMs){
+        if (!__report && typeof window.rebuildReports === 'function'){
+          try { window.rebuildReports(); } catch(e){}
+        }
+        const bundle = buildDetailedReportRows();
+        if (hasDataRows(bundle)){
+          return bundle;
+        }
+        const renderedRows = (() => {
+          try {
+            return document.querySelectorAll('#r_table tbody tr').length;
+          } catch(_){ return 0; }
+        })();
+        if (renderedRows > 0){
+          const refreshed = buildDetailedReportRows();
+          if (hasDataRows(refreshed)){
+            return refreshed;
+          }
+        }
+        await new Promise(resolve => setTimeout(resolve, pollMs));
+      }
+      if (!__report && typeof window.rebuildReports === 'function'){
+        try { window.rebuildReports(); } catch(e){}
+      }
+      return buildDetailedReportRows();
+    }
+
     function exportCSVAll(){
       const bundle = buildDetailedReportRows();
       if (!bundle){ alert('No report to export yet.'); return; }
@@ -6282,7 +6321,7 @@ rows += `<tr class="allowance">
       try{
         if (typeof XLSX === 'undefined' || !XLSX || !XLSX.utils) { alert('Excel library not available'); return; }
         if (typeof window.rebuildReports === 'function') window.rebuildReports();
-        const detailBundle = buildDetailedReportRows();
+        const detailBundle = await waitForDetailedReportBundle();
         if (!detailBundle){ alert('No report to export yet.'); return; }
         const { rows: detailedRows, from, to } = detailBundle;
         const wb = XLSX.utils.book_new();
