@@ -4486,7 +4486,31 @@ document.addEventListener('DOMContentLoaded', () => {
         totals[key] = parseFloat(td.textContent.trim()) || 0;
       });
     }
-    return { startDate, endDate, rows, totals };
+
+    let divisorValue = 1;
+    try {
+      const input = document.getElementById('deductionDivisor');
+      const maybeInput = input ? parseInt(input.value, 10) : NaN;
+      if (!isNaN(maybeInput) && isFinite(maybeInput) && maybeInput > 0) {
+        divisorValue = maybeInput;
+      } else if (typeof window !== 'undefined' && typeof window.divisor !== 'undefined') {
+        const winDiv = Number(window.divisor);
+        if (!isNaN(winDiv) && isFinite(winDiv) && winDiv > 0) {
+          divisorValue = winDiv;
+        } else if (typeof localStorage !== 'undefined') {
+          const key = (typeof LS_DIVISOR !== 'undefined' ? LS_DIVISOR : 'payroll_deduction_divisor');
+          const stored = parseInt((localStorage && localStorage.getItem(key)) || '1', 10);
+          if (!isNaN(stored) && isFinite(stored) && stored > 0) divisorValue = stored;
+        }
+      } else if (typeof localStorage !== 'undefined') {
+        const key = (typeof LS_DIVISOR !== 'undefined' ? LS_DIVISOR : 'payroll_deduction_divisor');
+        const stored = parseInt((localStorage && localStorage.getItem(key)) || '1', 10);
+        if (!isNaN(stored) && isFinite(stored) && stored > 0) divisorValue = stored;
+      }
+    } catch (e) {}
+    if (!divisorValue || !isFinite(divisorValue) || divisorValue <= 0) divisorValue = 1;
+
+    return { startDate, endDate, rows, totals, divisor: divisorValue };
   }
   // Expose buildSnapshot globally so it can be called from other scripts
   window.buildSnapshot = buildSnapshot;
@@ -4705,13 +4729,34 @@ document.addEventListener('DOMContentLoaded', () => {
       'Total Deductions','Net Pay'
     ];
     const lines = [header.join(',')];
+    const key = (typeof LS_DIVISOR !== 'undefined' ? LS_DIVISOR : 'payroll_deduction_divisor');
+    let divisor = 1;
+    const snapDiv = Number(snap && snap.divisor);
+    if (!isNaN(snapDiv) && isFinite(snapDiv) && snapDiv > 0) {
+      divisor = snapDiv;
+    } else if (typeof window !== 'undefined' && typeof window.divisor !== 'undefined') {
+      const winDiv = Number(window.divisor);
+      if (!isNaN(winDiv) && isFinite(winDiv) && winDiv > 0) divisor = winDiv;
+      else if (typeof localStorage !== 'undefined') {
+        const stored = parseInt((localStorage && localStorage.getItem(key)) || '1', 10);
+        if (!isNaN(stored) && isFinite(stored) && stored > 0) divisor = stored;
+      }
+    } else if (typeof localStorage !== 'undefined') {
+      const stored = parseInt((localStorage && localStorage.getItem(key)) || '1', 10);
+      if (!isNaN(stored) && isFinite(stored) && stored > 0) divisor = stored;
+    }
+    if (!divisor || !isFinite(divisor) || divisor <= 0) divisor = 1;
+    const formatLoan = (val) => {
+      const num = parseFloat(String(val ?? '').replace(/,/g,'')) || 0;
+      return (num / divisor).toFixed(2);
+    };
     snap.rows.forEach(row => {
       const values = [
         row.id, row.name,
         row.rate, row.regHrs, row.otHrs, row.adjHrs, row.totalHrs,
         row.regPay, row.otPay, row.adjAmt, row.bantay, row.grossPay,
         row.pagibig, row.philhealth, row.sss,
-        row.loanSSS, row.loanPI, row.vale, row.valeWed,
+        formatLoan(row.loanSSS), formatLoan(row.loanPI), row.vale, row.valeWed,
         row.totalDed, row.netPay
       ];
       lines.push(values.map(v => {
@@ -4848,7 +4893,7 @@ document.addEventListener('DOMContentLoaded', () => {
       // Export the All Tabs Excel for this snapshot's date range
       try {
         if (typeof window.exportExcelAllTabsForRange === 'function') {
-          window.exportExcelAllTabsForRange(snap.startDate, snap.endDate);
+          window.exportExcelAllTabsForRange(snap.startDate, snap.endDate, { divisorOverride: snap.divisor });
         } else if (typeof window.exportExcelAllTabs === 'function') {
           // Fallback: set range, rebuild, then export
           const ws = document.getElementById('weekStart');
@@ -4857,11 +4902,24 @@ document.addEventListener('DOMContentLoaded', () => {
           if (ws) ws.value = snap.startDate || prevS; if (we) we.value = snap.endDate || prevE;
           try{ if (typeof calculatePayrollFromResultsTable==='function') calculatePayrollFromResultsTable(); else if (typeof calculatePayrollFromRecords==='function') calculatePayrollFromRecords(); }catch(e){}
           try{ if (typeof window.rebuildReports === 'function') window.rebuildReports(); }catch(e){}
+          const overrideVal = Number(snap.divisor);
+          const hasOverride = !isNaN(overrideVal) && isFinite(overrideVal) && overrideVal > 0;
           setTimeout(function(){
-            try{ window.exportExcelAllTabs(); }catch(e){}
+            let appliedOverride = false;
+            try{
+              if (hasOverride && typeof window !== 'undefined') {
+                window.__snapshotDivisorOverride = overrideVal;
+                appliedOverride = true;
+              }
+              window.exportExcelAllTabs();
+            }catch(e){}
             // Restore previous range and rebuild
             setTimeout(function(){
               try{ if (ws) ws.value = prevS; if (we) we.value = prevE; if (typeof window.rebuildReports==='function') window.rebuildReports(); }catch(e){}
+              if (appliedOverride && typeof window !== 'undefined') {
+                try { delete window.__snapshotDivisorOverride; }
+                catch(err){ window.__snapshotDivisorOverride = undefined; }
+              }
             }, 0);
           }, 300);
         }
@@ -5056,7 +5114,24 @@ document.addEventListener('DOMContentLoaded', () => {
       const num = (x)=>{ const n = parseFloat(String(x??'').replace(/,/g,'')); return isNaN(n)?0:n; };
       // Current divisor and OT multiplier
       const keyDiv = (typeof LS_DIVISOR !== 'undefined' ? LS_DIVISOR : 'payroll_deduction_divisor');
-      const curDiv = (typeof window !== 'undefined' && typeof window.divisor !== 'undefined' && Number(window.divisor)) || parseInt((localStorage && localStorage.getItem(keyDiv)) || '1', 10) || 1;
+      let curDiv = Number(snap && snap.divisor);
+      if (!curDiv || !isFinite(curDiv) || curDiv <= 0) {
+        let winDiv = NaN;
+        try {
+          if (typeof window !== 'undefined' && typeof window.__snapshotDivisorOverride !== 'undefined') {
+            winDiv = Number(window.__snapshotDivisorOverride);
+          }
+          if ((!winDiv || !isFinite(winDiv) || winDiv <= 0) && typeof window !== 'undefined' && typeof window.divisor !== 'undefined') {
+            winDiv = Number(window.divisor);
+          }
+        } catch (e) { winDiv = NaN; }
+        if (!isNaN(winDiv) && isFinite(winDiv) && winDiv > 0) {
+          curDiv = winDiv;
+        } else {
+          const stored = parseInt((localStorage && localStorage.getItem(keyDiv)) || '1', 10);
+          curDiv = (!isNaN(stored) && isFinite(stored) && stored > 0) ? stored : 1;
+        }
+      }
       const otMultLS = parseFloat((typeof LS_OTMULT !== 'undefined' && localStorage && localStorage.getItem(LS_OTMULT)) || '1.5') || 1.5;
       const otMult = num(document.getElementById('otMultiplier')?.value || otMultLS) || 1.5;
       // Raw fields from snapshot
@@ -5888,16 +5963,27 @@ rows += `<tr class="allowance">
       ];
 
       const key = (typeof LS_DIVISOR !== 'undefined') ? LS_DIVISOR : 'payroll_deduction_divisor';
-      let divisor = 1;
+      let divisorOverride = null;
       try {
-        if (typeof window !== 'undefined' && typeof window.divisor !== 'undefined') {
-          divisor = Number(window.divisor) || 1;
-        }
-        if ((!divisor || !isFinite(divisor)) && typeof localStorage !== 'undefined') {
-          divisor = Number(localStorage.getItem(key)) || 1;
+        if (typeof window !== 'undefined' && typeof window.__snapshotDivisorOverride !== 'undefined') {
+          const maybe = Number(window.__snapshotDivisorOverride);
+          if (!isNaN(maybe) && isFinite(maybe) && maybe > 0) divisorOverride = maybe;
         }
       } catch (e) {}
-      if (!divisor || !isFinite(divisor)) divisor = 1;
+      let divisor = divisorOverride || 1;
+      if (!divisorOverride) {
+        try {
+          if (typeof window !== 'undefined' && typeof window.divisor !== 'undefined') {
+            const winDiv = Number(window.divisor);
+            if (!isNaN(winDiv) && isFinite(winDiv) && winDiv > 0) divisor = winDiv;
+          }
+          if ((!divisor || !isFinite(divisor) || divisor <= 0) && typeof localStorage !== 'undefined') {
+            const stored = Number(localStorage.getItem(key));
+            if (!isNaN(stored) && isFinite(stored) && stored > 0) divisor = stored;
+          }
+        } catch (e) {}
+      }
+      if (!divisor || !isFinite(divisor) || divisor <= 0) divisor = 1;
 
       const toNum = (value, opts = {}) => {
         if (value == null || value === '') return 0;
@@ -5921,6 +6007,10 @@ rows += `<tr class="allowance">
         try {
           const snap = await buildSnapshot(startDate, endDate);
           if (!snap || !Array.isArray(snap.rows) || !snap.rows.length) return null;
+          if (!divisorOverride) {
+            const snapDiv = Number(snap.divisor);
+            if (!isNaN(snapDiv) && isFinite(snapDiv) && snapDiv > 0) divisor = snapDiv;
+          }
 
           const aoa = [[title], [''], header.slice()];
           const totals = {
@@ -6244,7 +6334,7 @@ rows += `<tr class="allowance">
     } catch(e){}
 
     // Export for a specific date range (used by Payroll History actions)
-    async function exportExcelAllTabsForRange(from, to){
+    async function exportExcelAllTabsForRange(from, to, opts = {}){
       try{
         const ws = document.getElementById('weekStart');
         const we = document.getElementById('weekEnd');
@@ -6253,6 +6343,9 @@ rows += `<tr class="allowance">
         const targetS = from || prevS;
         const targetE = to || prevE;
         const changed = (targetS !== prevS) || (targetE !== prevE);
+        const options = (opts && typeof opts === 'object') ? opts : {};
+        const overrideVal = Number(options.divisorOverride);
+        const hasOverride = !isNaN(overrideVal) && isFinite(overrideVal) && overrideVal > 0;
 
         function recalcForActiveRange(){
           try{ if (typeof syncPeriodScopedData === 'function') syncPeriodScopedData(); }catch(e){}
@@ -6273,11 +6366,20 @@ rows += `<tr class="allowance">
         recalcForActiveRange();
 
         setTimeout(async function(){
+          let appliedOverride = false;
           try{
+            if (hasOverride && typeof window !== 'undefined') {
+              window.__snapshotDivisorOverride = overrideVal;
+              appliedOverride = true;
+            }
             await exportExcelAllTabs();
           } catch(err){
             console.warn('Export (all tabs) for range failed', err);
           } finally {
+            if (appliedOverride && typeof window !== 'undefined') {
+              try { delete window.__snapshotDivisorOverride; }
+              catch(e){ window.__snapshotDivisorOverride = undefined; }
+            }
             if (ws) ws.value = prevS;
             if (we) we.value = prevE;
             if (changed) {
