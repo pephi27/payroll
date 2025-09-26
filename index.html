@@ -1680,9 +1680,6 @@ window.addEventListener('load', dashReports);
      <select id="filterProject" title="Filter by project">
      </select>
     </label>
-<button id="downloadCSV" style="display:none">
-     Download CSV
-    </button>
     <label> Search Name: <input id="dtrSearchName" type="text" placeholder="Type a name" style="width:220px" /></label>
    </div>
    <div class="note">
@@ -4357,8 +4354,6 @@ document.addEventListener('DOMContentLoaded', () => {
         // For unlocked snapshots, allow deletion
         actions.push(`<button type="button" class="deleteSnapshot" data-index="${index}">Delete</button>`);
       }
-      // Always provide a download button
-      actions.push(`<button type="button" class="downloadSnapshot" data-index="${index}">Download CSV</button>`);
       tr.innerHTML = `
         <td><input type="checkbox" class="diff-select" data-index="${index}"></td>
         <td>${startText}</td>
@@ -4526,7 +4521,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // #panelMain) may escape. Explicitly disabling them ensures search fields, date filters,
     // project dropdowns and import/export buttons cannot be used once locked. These IDs
     // correspond to the manual DTR workflow and DTR filtering controls.
-    ['dtrSearchName','dtrDateFrom','dtrDateTo','dtrDateClear','filterProject','downloadCSV','fileInput','manualDtrBtn','printDtrBtn','dtrDateRangeFrom','dtrDateRangeTo'].forEach(id => {
+    ['dtrSearchName','dtrDateFrom','dtrDateTo','dtrDateClear','filterProject','fileInput','manualDtrBtn','printDtrBtn','dtrDateRangeFrom','dtrDateRangeTo'].forEach(id => {
       const el = document.getElementById(id);
       if (el) el.disabled = true;
     });
@@ -4582,7 +4577,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // disablePayrollInputs(). This ensures search, date filters, project filter,
     // and import/export controls become usable again when the payroll is unlocked
     // or the date range is changed.
-    ['dtrSearchName','dtrDateFrom','dtrDateTo','dtrDateClear','filterProject','downloadCSV','fileInput','manualDtrBtn','printDtrBtn','dtrDateRangeFrom','dtrDateRangeTo'].forEach(id => {
+    ['dtrSearchName','dtrDateFrom','dtrDateTo','dtrDateClear','filterProject','fileInput','manualDtrBtn','printDtrBtn','dtrDateRangeFrom','dtrDateRangeTo'].forEach(id => {
       const el = document.getElementById(id);
       if (el) el.disabled = false;
     });
@@ -4706,56 +4701,6 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
   window.checkAndToggleEditState = checkAndToggleEditState;
-
-  /**
-   * Convert a snapshot into a CSV string. Header names correspond to payroll columns.
-   */
-  function snapshotToCSV(snap) {
-    // Mirror the payroll grid ordering, including adjustment/total hours and Bantay
-    const header = [
-      'ID','Name','Hourly Rate','Regular Hours','OT Hours','Adjustment Hours','Total Hours',
-      'Regular Pay','OT Pay','Adjustments','Bantay','Gross Pay',
-      'Pag-IBIG','PhilHealth','SSS','SSS Loan','Pag-IBIG Loan','Vale','Wed Vale',
-      'Total Deductions','Net Pay'
-    ];
-    const lines = [header.join(',')];
-    const key = (typeof LS_DIVISOR !== 'undefined' ? LS_DIVISOR : 'payroll_deduction_divisor');
-    let divisor = 1;
-    const snapDiv = Number(snap && snap.divisor);
-    if (!isNaN(snapDiv) && isFinite(snapDiv) && snapDiv > 0) {
-      divisor = snapDiv;
-    } else if (typeof window !== 'undefined' && typeof window.divisor !== 'undefined') {
-      const winDiv = Number(window.divisor);
-      if (!isNaN(winDiv) && isFinite(winDiv) && winDiv > 0) divisor = winDiv;
-      else if (typeof localStorage !== 'undefined') {
-        const stored = parseInt((localStorage && localStorage.getItem(key)) || '1', 10);
-        if (!isNaN(stored) && isFinite(stored) && stored > 0) divisor = stored;
-      }
-    } else if (typeof localStorage !== 'undefined') {
-      const stored = parseInt((localStorage && localStorage.getItem(key)) || '1', 10);
-      if (!isNaN(stored) && isFinite(stored) && stored > 0) divisor = stored;
-    }
-    if (!divisor || !isFinite(divisor) || divisor <= 0) divisor = 1;
-    const formatLoan = (val) => {
-      const num = parseFloat(String(val ?? '').replace(/,/g,'')) || 0;
-      return (num / divisor).toFixed(2);
-    };
-    snap.rows.forEach(row => {
-      const values = [
-        row.id, row.name,
-        row.rate, row.regHrs, row.otHrs, row.adjHrs, row.totalHrs,
-        row.regPay, row.otPay, row.adjAmt, row.bantay, row.grossPay,
-        row.pagibig, row.philhealth, row.sss,
-        formatLoan(row.loanSSS), formatLoan(row.loanPI), row.vale, row.valeWed,
-        row.totalDed, row.netPay
-      ];
-      lines.push(values.map(v => {
-        const s = String(v ?? '');
-        return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
-      }).join(','));
-    });
-    return lines.join('\n');
-  }
 
   // Persist payrollHistory to localStorage
   function saveHistory() {
@@ -4935,17 +4880,6 @@ document.addEventListener('DOMContentLoaded', () => {
       saveHistory();
       renderHistory();
       renderActivePayrolls();
-    }
-    if (target.classList.contains('downloadSnapshot')) {
-      const csv = snapshotToCSV(snap);
-      const blob = new Blob([csv], { type: 'text/csv' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `payroll_${snap.startDate}_${snap.endDate}.csv`;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
     }
   });
 
@@ -7999,26 +7933,6 @@ function __inRange(d){
     r.readAsText(file);
   });
 });
-
-
-document.getElementById('downloadCSV').addEventListener('click', ()=>{
-  const rows = [['ID','Name','Project','Schedule','Date','AM In','AM Out','PM In','PM Out','OT In','OT Out','Total Regular Hrs','OT Hrs']];
-  document.querySelectorAll('#resultsTable tbody tr').forEach(tr=>{
-  const cells = Array.from(tr.querySelectorAll('td')).filter(td=>!td.classList.contains('actions-cell'));
-  const rowVals = cells.map(td => {
-    const sel = td.querySelector && td.querySelector('select');
-    if (sel && sel.options && sel.selectedIndex >= 0) {
-      const opt = sel.options[sel.selectedIndex];
-      return (opt && opt.textContent) ? opt.textContent.trim() : '';
-    }
-    return td.textContent.trim();
-  });
-  rows.push(rowVals);
-});
-const csv = rows.map(r=>r.map(c=> (c.includes('"')||c.includes(',')||c.includes('\n')) ? '"' + c.replace(/"/g,'""') + '"' : c ).join(',')).join('\n');
-  const blob = new Blob([csv], { type:'text/csv' }); const url = URL.createObjectURL(blob);
-  const a = document.createElement('a'); a.href = url; a.download = 'attendance_with_ot.csv'; document.body.appendChild(a); a.click(); a.remove();
-});
 function padHM(hm){ if(!hm) return ''; const [h,m]=hm.split(':').map(x=>String(Number(x)).padStart(2,'0')); return h.padStart(2,'0')+':'+m.padStart(2,'0'); }
 function toMins(hm){ if(!hm) return null; const [h,m]=hm.split(':').map(Number); return h*60+m; }
 function minsToDecimal(mins){ return (mins/60).toFixed(2); }
@@ -8584,8 +8498,6 @@ let otMins = 0;
     _dtrEmpIds.add(empId);
   }
 
-  // Show/hide download button
-  document.getElementById('downloadCSV').style.display = _rowCount ? 'inline-block' : 'none';
   // --- DTR Summary ---
   // After building the table, update the summary using accumulated totals
   (function(){
