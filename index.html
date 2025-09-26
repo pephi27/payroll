@@ -3766,10 +3766,11 @@ function calculateRow(tr){  const readNum = sel => { const el = tr.querySelector
   // Check per-employee contribution deduction flags; default to true if not set
   const flags = contribFlags[id] || {};
   const div = Number(divisor) || 1;
-  const pagibig = (flags.pagibig !== false ? +((regPay * piRate)).toFixed(2) : 0);
-  const philhealth = (flags.philhealth !== false ? +((regPay * phRate)).toFixed(2) : 0);
-  const sssFull = sssShareByMonthly(monthly);
-  const sss = (flags.sss !== false ? +(sssFull / div).toFixed(2) : 0);
+  const hasCompensation = (reg > 0) || (otTotal > 0) || (adj !== 0);
+  const pagibig = (hasCompensation && flags.pagibig !== false ? +((regPay * piRate)).toFixed(2) : 0);
+  const philhealth = (hasCompensation && flags.philhealth !== false ? +((regPay * phRate)).toFixed(2) : 0);
+  const sssFull = hasCompensation ? sssShareByMonthly(monthly) : 0;
+  const sss = (hasCompensation && flags.sss !== false ? +(sssFull / div).toFixed(2) : 0);
   const sssLoan = +(lSSS / div).toFixed(2);
   const piLoan = +(lPI / div).toFixed(2);
   const valeAmt = v;
