@@ -4828,10 +4828,7 @@ document.addEventListener('DOMContentLoaded', () => {
       // Export the All Tabs Excel for this snapshot's date range
       try {
         if (typeof window.exportExcelAllTabsForRange === 'function') {
-          window.exportExcelAllTabsForRange(snap.startDate, snap.endDate, {
-            divisorOverride: snap.divisor,
-            snapshot: { rows: snap.rows, totals: snap.totals, divisor: snap.divisor }
-          });
+          window.exportExcelAllTabsForRange(snap.startDate, snap.endDate, { divisorOverride: snap.divisor });
         } else if (typeof window.exportExcelAllTabs === 'function') {
           // Fallback: set range, rebuild, then export
           const ws = document.getElementById('weekStart');
@@ -5928,13 +5925,6 @@ rows += `<tr class="allowance">
         'Total Deductions','Net Pay'
       ];
 
-      let snapshotOverride = null;
-      try {
-        if (typeof window !== 'undefined' && window.__snapshotPayrollOverride && typeof window.__snapshotPayrollOverride === 'object') {
-          snapshotOverride = window.__snapshotPayrollOverride;
-        }
-      } catch (e) {}
-
       const key = (typeof LS_DIVISOR !== 'undefined') ? LS_DIVISOR : 'payroll_deduction_divisor';
       let divisorOverride = null;
       try {
@@ -5976,14 +5966,9 @@ rows += `<tr class="allowance">
       };
 
       async function buildFromSnapshot(){
-        let snap = null;
+        if (typeof buildSnapshot !== 'function') return null;
         try {
-          if (snapshotOverride) {
-            snap = snapshotOverride;
-          } else {
-            if (typeof buildSnapshot !== 'function') return null;
-            snap = await buildSnapshot(startDate, endDate);
-          }
+          const snap = await buildSnapshot(startDate, endDate);
           if (!snap || !Array.isArray(snap.rows) || !snap.rows.length) return null;
           if (!divisorOverride) {
             const snapDiv = Number(snap.divisor);
@@ -5999,8 +5984,7 @@ rows += `<tr class="allowance">
             totalDed:0, netPay:0
           };
 
-          const rows = Array.isArray(snap.rows) ? snap.rows : [];
-          rows.forEach(row => {
+          snap.rows.forEach(row => {
             const regHrsNum = toNum(row.regHrs);
             const otHrsNum = toNum(row.otHrs);
             const adjHrsNum = toNum(row.adjHrs);
@@ -6063,39 +6047,6 @@ rows += `<tr class="allowance">
               fmt(netPayNum)
             ]);
           });
-
-          const storedTotals = (snap && snap.totals && typeof snap.totals === 'object') ? snap.totals : null;
-          if (storedTotals) {
-            const keyMap = {
-              regHrs: 'regHrs',
-              otHrs: 'otHrs',
-              adjHrs: 'adjHrs',
-              totalHrs: 'totalHrs',
-              regPay: 'regPay',
-              otPay: 'otPay',
-              adjAmt: 'adjAmt',
-              bantay: 'bantay',
-              grossPay: 'grossPay',
-              pagibig: 'pagibig',
-              philhealth: 'philhealth',
-              sss: 'sss',
-              loanSSS: 'loanSSS',
-              loanPI: 'loanPI',
-              vale: 'vale',
-              valeWed: 'valeWed',
-              totalDed: 'totalDed',
-              netPay: 'netPay'
-            };
-            Object.keys(keyMap).forEach(destKey => {
-              const sourceKey = keyMap[destKey];
-              if (Object.prototype.hasOwnProperty.call(storedTotals, sourceKey)) {
-                const maybeNum = Number(storedTotals[sourceKey]);
-                if (!isNaN(maybeNum) && isFinite(maybeNum)) {
-                  totals[destKey] = maybeNum;
-                }
-              }
-            });
-          }
 
           if (aoa.length > 3) {
             aoa.push([
@@ -6350,16 +6301,8 @@ rows += `<tr class="allowance">
         const targetE = to || prevE;
         const changed = (targetS !== prevS) || (targetE !== prevE);
         const options = (opts && typeof opts === 'object') ? opts : {};
-        const snapshotOverride = (options.snapshot && typeof options.snapshot === 'object') ? options.snapshot : null;
-        let overrideVal = Number(options.divisorOverride);
-        let hasOverride = !isNaN(overrideVal) && isFinite(overrideVal) && overrideVal > 0;
-        if (!hasOverride && snapshotOverride && typeof snapshotOverride.divisor !== 'undefined') {
-          const snapDivisor = Number(snapshotOverride.divisor);
-          if (!isNaN(snapDivisor) && isFinite(snapDivisor) && snapDivisor > 0) {
-            overrideVal = snapDivisor;
-            hasOverride = true;
-          }
-        }
+        const overrideVal = Number(options.divisorOverride);
+        const hasOverride = !isNaN(overrideVal) && isFinite(overrideVal) && overrideVal > 0;
 
         function recalcForActiveRange(){
           try{ if (typeof syncPeriodScopedData === 'function') syncPeriodScopedData(); }catch(e){}
@@ -6381,12 +6324,7 @@ rows += `<tr class="allowance">
 
         setTimeout(async function(){
           let appliedOverride = false;
-          let appliedSnapshot = false;
           try{
-            if (snapshotOverride && typeof window !== 'undefined') {
-              window.__snapshotPayrollOverride = snapshotOverride;
-              appliedSnapshot = true;
-            }
             if (hasOverride && typeof window !== 'undefined') {
               window.__snapshotDivisorOverride = overrideVal;
               appliedOverride = true;
@@ -6395,10 +6333,6 @@ rows += `<tr class="allowance">
           } catch(err){
             console.warn('Export (all tabs) for range failed', err);
           } finally {
-            if (appliedSnapshot && typeof window !== 'undefined') {
-              try { delete window.__snapshotPayrollOverride; }
-              catch(e){ window.__snapshotPayrollOverride = undefined; }
-            }
             if (appliedOverride && typeof window !== 'undefined') {
               try { delete window.__snapshotDivisorOverride; }
               catch(e){ window.__snapshotDivisorOverride = undefined; }
