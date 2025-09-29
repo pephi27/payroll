@@ -160,6 +160,70 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_KEY)
 // provides a simple, predictable global reference.
 window.supabase = supabase;
 window.SUPABASE_TABLE = TABLE;
+
+function queueHydrateRerender() {
+  try { window.__kv_hydrated = true; } catch {}
+  try { window.dispatchEvent(new Event('kv-hydrated')); } catch {}
+  const rerender = () => {
+    try { if (typeof window.calculateAll === 'function') window.calculateAll(); } catch {}
+    try { if (typeof window.renderResults === 'function') window.renderResults(); } catch {}
+  };
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', () => { setTimeout(rerender, 0); }, { once: true });
+  } else {
+    setTimeout(rerender, 0);
+  }
+}
+
+if (!window.__kvSubscribed) {
+  try {
+    const channel = supabase.channel('kv_store_sync');
+    window.__kvSubscribed = true;
+    window.__kvChannel = channel;
+    channel
+      .on('postgres_changes', { event: '*', schema: 'public', table: TABLE }, (payload) => {
+        try {
+          const eventType = payload && payload.eventType;
+          const key = (payload && payload.new && payload.new.key) || (payload && payload.old && payload.old.key);
+          if (!key || !KNOWN_KEYS.includes(key)) return;
+          if (eventType === 'INSERT' || eventType === 'UPDATE') {
+            const serialized = safeStringify(payload && payload.new ? payload.new.value : undefined);
+            const nextValue = serialized == null ? 'null' : String(serialized);
+            const current = localStorage.getItem(key);
+            if (nextValue !== current) {
+              try { __origSetItem.call(localStorage, key, nextValue); } catch {}
+              queueHydrateRerender();
+            }
+          } else if (eventType === 'DELETE') {
+            if (localStorage.getItem(key) !== null) {
+              try { __origRemoveItem.call(localStorage, key); } catch {}
+              queueHydrateRerender();
+            }
+          }
+        } catch (err) {
+          console.warn('Supabase realtime sync failed', err);
+        }
+      })
+      .subscribe()
+      .catch((err) => console.warn('Supabase channel subscribe failed', err));
+    if (!window.__kvUnloadCleanup) {
+      window.addEventListener('beforeunload', () => {
+        try {
+          if (window.__kvChannel) {
+            if (typeof window.__kvChannel.unsubscribe === 'function') {
+              window.__kvChannel.unsubscribe();
+            } else if (window.supabase && typeof window.supabase.removeChannel === 'function') {
+              window.supabase.removeChannel(window.__kvChannel);
+            }
+          }
+        } catch {}
+      }, { once: true });
+      window.__kvUnloadCleanup = true;
+    }
+  } catch (err) {
+    console.warn('Supabase realtime channel setup failed', err);
+  }
+}
 // === Supabase KV helpers (no localStorage) ===
 async function readKV(key){
   try{
@@ -251,17 +315,7 @@ Storage.prototype.removeItem = function(k) {
     if (changed) {
       // Avoid reload: signal hydration complete and re-render once safely.
       try { sessionStorage.removeItem("__kv_reloaded"); } catch {}
-      try { window.__kv_hydrated = true; } catch {}
-      try { window.dispatchEvent(new Event('kv-hydrated')); } catch {}
-      const rerender = () => {
-        try { if (typeof window.calculateAll === 'function') window.calculateAll(); } catch {}
-        try { if (typeof window.renderResults === 'function') window.renderResults(); } catch {}
-      };
-      if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', () => { setTimeout(rerender, 0); }, { once: true });
-      } else {
-        setTimeout(rerender, 0);
-      }
+      queueHydrateRerender();
     }
   } catch (e) { console.warn("Initial hydrate failed", e) }
 })()
