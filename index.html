@@ -204,8 +204,11 @@ if (!window.__kvSubscribed) {
           console.warn('Supabase realtime sync failed', err);
         }
       })
-      .subscribe()
-      .catch((err) => console.warn('Supabase channel subscribe failed', err));
+      .subscribe((status) => {
+        if (status === 'CHANNEL_ERROR') {
+          console.warn('Supabase channel subscribe failed');
+        }
+      });
     if (!window.__kvUnloadCleanup) {
       window.addEventListener('beforeunload', () => {
         try {
