@@ -1212,9 +1212,6 @@ window.addEventListener('load', dashReports);
   /* Page title icon */
   .page-title > span:first-child { font-size: 0; } .page-title > span:first-child::before { content: "📊"; font-size: 32px; } .page-title > span.icon-emoji { font-size: 32px !important; } .page-title > span.icon-emoji::before { content: none !important; }
 
-  /* Warning note text */
-  .warning-note { font-size: 0; }
-  .warning-note::before { content: "⚠️ Data persisted in browser (localStorage). Use Clear to remove."; font-size: 14px; }
 </style>
 
 <!-- Boot guard to ensure global stored data is available early -->
@@ -1448,9 +1445,6 @@ window.addEventListener('load', dashReports);
               <button id="saveNewPeriod" type="button" class="primary">Create</button>
             </div>
           </div>
-        </div>
-        <div class="warning-note">
-          ðŸ’¾ Data persisted in browser (localStorage). Use Clear to remove.
         </div>
       </div>
 
