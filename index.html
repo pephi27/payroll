@@ -4771,7 +4771,53 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   // Delegate open/download actions on history table
-  historyTableBody && historyTableBody.addEventListener('click', (e) => {
+  function normalizeSnapshotKeyPart(value) {
+    if (!value) return '';
+    if (value instanceof Date && !isNaN(value.getTime())) {
+      return String(value.getFullYear()) + String(value.getMonth() + 1).padStart(2, '0') + String(value.getDate()).padStart(2, '0');
+    }
+    const str = String(value);
+    const iso = str.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (iso) return iso[1] + iso[2] + iso[3];
+    const parsed = new Date(str);
+    if (!isNaN(parsed)) {
+      return String(parsed.getFullYear()) + String(parsed.getMonth() + 1).padStart(2, '0') + String(parsed.getDate()).padStart(2, '0');
+    }
+    return str.replace(/[^0-9]/g, '');
+  }
+
+  function buildSnapshotStorageKeys(startDate, endDate) {
+    const pid = `p:${normalizeSnapshotKeyPart(startDate)}:${normalizeSnapshotKeyPart(endDate)}`;
+    return [
+      `snap:dtr:${pid}`,
+      `snap:payroll:${pid}`,
+      `snap:reports:${pid}`,
+      `snap:deductions:${pid}`
+    ];
+  }
+
+  async function purgeStoredSnapshot(startDate, endDate) {
+    const keys = buildSnapshotStorageKeys(startDate, endDate);
+    if (typeof localStorage !== 'undefined') {
+      keys.forEach((key) => {
+        try { localStorage.removeItem(key); }
+        catch (err) { console.warn('localStorage remove failed', err); }
+      });
+    }
+    try {
+      if (window.supabase && window.SUPABASE_TABLE && typeof window.supabase.from === 'function') {
+        const { error } = await window.supabase
+          .from(window.SUPABASE_TABLE)
+          .delete()
+          .in('key', keys);
+        if (error) console.warn('Supabase delete error', error);
+      }
+    } catch (err) {
+      console.warn('Supabase purge failed', err);
+    }
+  }
+
+  historyTableBody && historyTableBody.addEventListener('click', async (e) => {
     const target = e.target;
     if (!target) return;
     const idxStr = target.dataset.index;
@@ -4839,13 +4885,23 @@ document.addEventListener('DOMContentLoaded', () => {
       return;
     }
     if (target.classList.contains('unlockSnapshot')) {
-      // Unlock this locked snapshot: mark as unlocked and remove timestamp
+      // Unlock this locked snapshot: remove stored snapshot payload and mark unlocked
       if (!snap.locked) return;
+      try {
+        await purgeStoredSnapshot(snap.startDate, snap.endDate);
+      } catch (err) {
+        console.warn('Failed to purge stored snapshot', err);
+      }
       snap.locked = false;
       snap.lockedAt = '';
+      snap.hash = '';
+      snap.rows = [];
+      snap.totals = {};
+      if ('divisor' in snap) delete snap.divisor;
       saveHistory();
       renderHistory();
       renderActivePayrolls();
+      return;
     }
   });
 
