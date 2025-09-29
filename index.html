@@ -2359,17 +2359,6 @@ window.addEventListener('load', dashReports);
     </div>
     </div>
     <div class="tab" id="deductionsTab">
-     <!-- Sub-tab navigation for Deductions.  Users can switch between the main
-          deductions table and the cash advance tracker.  We reuse the
-          existing tab button styles by including the `tab-btn` class. -->
-     <div class="subtab-nav">
-      <button class="tab-btn subtab-btn active" data-subtab="dedMainSection">Deductions Table</button>
-      <button class="tab-btn subtab-btn" data-subtab="cashAdvanceSection">Cash Advance Tracker</button>
-     </div>
-     <!-- Main deductions content wrapper.  All of the existing controls,
-          informational notes and the deductions table reside inside this
-          wrapper so that it can be toggled independently from the cash
-          advance tracker. -->
      <div id="dedMainSection" class="subtab-panel active">
      <div class="controls">
       <label>
@@ -2433,22 +2422,6 @@ window.addEventListener('load', dashReports);
 
      </table>
      </div><!-- close dedMainSection -->
-     <!-- Cash Advance Tracker section.  Initially hidden; toggled via the subtab buttons. -->
-     <div id="cashAdvanceSection" class="subtab-panel" style="display:none;">
-      <table id="cashAdvanceTable">
-        <thead>
-         <tr>
-          <th>ID</th>
-          <th>Name</th>
-          <th>Original Amount</th>
-          <th>Deduction</th>
-          <th>Balance</th>
-          <th>Action</th>
-         </tr>
-        </thead>
-        <tbody></tbody>
-      </table>
-     </div>
     </div>
 
     <!-- Manual Adjustments Tab -->
@@ -2645,19 +2618,6 @@ let otHours = JSON.parse(localStorage.getItem(LS_OT_HRS) || '{}');
 
 // Per-employee contribution deduction flags. Each entry keyed by employee ID holds booleans {pagibig, philhealth, sss}
 let contribFlags = JSON.parse(localStorage.getItem(LS_CONTRIB_FLAGS) || '{}');
-
-// Cash advance localStorage keys and in-memory objects.  These store per-employee
-// original cash advance amounts, per-payroll deductions and the current
-// outstanding balance.  Each key is persisted to localStorage (and
-// mirrored to Supabase via the auto-sync adapter) under its own
-// namespace.  The objects are keyed by employee ID.  See the cash
-// advance tracker script at the bottom of the document for usage.
-const LS_CASH_ORIG = 'payroll_cashAdvanceOrig',
-      LS_CASH_DED  = 'payroll_cashAdvanceDed',
-      LS_CASH_BAL  = 'payroll_cashAdvanceBal';
-let cashOrig = JSON.parse(localStorage.getItem(LS_CASH_ORIG) || '{}');
-let cashDed  = JSON.parse(localStorage.getItem(LS_CASH_DED)  || '{}');
-let cashBal  = JSON.parse(localStorage.getItem(LS_CASH_BAL)  || '{}');
 
 let otMultiplier = parseFloat(localStorage.getItem(LS_OTMULT)) || 1.50;
 let weekStartSaved = localStorage.getItem(LS_WEEKSTART) || '';
@@ -11211,172 +11171,7 @@ function updateWeekInputs(snap) {
 </script>
 
 <script>
-/* Cash Advance Tracker implementation.  Handles sub-tab navigation within the
- * Deductions tab and provides a per-employee cash advance table that stores
- * original amounts, deductions and current balances.  The tracker updates
- * the main Deductions table's Vale column via the `vale` object and calls
- * `calculateAll()` whenever a deduction or payment changes. */
-
 (function(){
-  // Ensure new cash-advance keys are mirrored to Supabase by adding them to KNOWN_KEYS.
-  // Use window.KNOWN_KEYS exclusively because the constant KNOWN_KEYS is scoped to the
-  // module that defines the Supabase adapter. Without referencing window.KNOWN_KEYS
-  // here, attempts to push new keys could throw a ReferenceError if KNOWN_KEYS is
-  // not defined in the global scope. Wrapping in a try/catch protects against any
-  // unexpected errors while still allowing the page to function normally.
-  try {
-    const extra = ['payroll_cashAdvanceOrig', 'payroll_cashAdvanceDed', 'payroll_cashAdvanceBal'];
-    if (window.KNOWN_KEYS) {
-      extra.forEach(k => {
-        const keys = window.KNOWN_KEYS;
-        if (!Array.isArray(keys)) return;
-        if (!keys.includes(k)) keys.push(k);
-      });
-    }
-  } catch (err) {
-    // Swallow errors silently; failure to add keys will simply leave them local-only.
-  }
-
-  // Render the cash advance tracker table
-  function renderCashAdvanceTable() {
-    syncPeriodScopedData();
-    const tb = document.querySelector('#cashAdvanceTable tbody');
-    if (!tb) return;
-    tb.innerHTML = '';
-    (employeeList || []).forEach(emp => {
-      const id = emp.id;
-      const name = emp.name || '';
-      const origVal = Number(cashOrig[id] ?? 0);
-      const dedVal  = Number(cashDed[id] ?? 0);
-      // Determine the current balance.  If no explicit balance is stored for
-      // this employee yet, default to the original amount (not yet updated).
-      const hasBal = cashBal.hasOwnProperty(id);
-      const balVal = hasBal ? Number(cashBal[id] || 0) : origVal;
-      // Decide if update button should be disabled and what label it should have.
-      // The update button remains active after each click to allow multiple deductions until the balance is zero.
-      let btnLabel = 'Update';
-      let disabled = false;
-      if (!origVal || !dedVal) {
-        // Need both original amount and deduction to enable update
-        disabled = true;
-      } else if (balVal <= 0) {
-        // Fully paid off
-        btnLabel = 'Paid';
-        disabled = true;
-      }
-      const tr = document.createElement('tr');
-      tr.innerHTML = `
-        <td>${id}</td>
-        <td class="wrap">${name}</td>
-        <td><input type="number" step="0.01" class="cashOrig" data-id="${id}" value="${origVal || ''}"></td>
-        <td><input type="number" step="0.01" class="cashDed" data-id="${id}" value="${dedVal || ''}"></td>
-        <td class="cashBal">${balVal ? balVal.toFixed(2) : '0.00'}</td>
-        <td><button class="cashUpdateBtn" data-id="${id}" ${disabled ? 'disabled' : ''}>${btnLabel}</button></td>
-      `;
-      tb.appendChild(tr);
-    });
-    attachCashAdvanceHandlers();
-  }
-
-  function attachCashAdvanceHandlers() {
-    // Handle original amount changes
-    document.querySelectorAll('.cashOrig').forEach(inp => {
-      // Update the inâ€‘memory values on every keystroke but defer reâ€‘rendering
-      inp.addEventListener('input', () => {
-        const id = inp.getAttribute('data-id');
-        const val = parseFloat(inp.value);
-        if (!isNaN(val) && val > 0) {
-          cashOrig[id] = +(val.toFixed(2));
-          // Reset balance to original whenever original amount changes
-          cashBal[id] = +(val.toFixed(2));
-        } else {
-          delete cashOrig[id];
-          delete cashBal[id];
-        }
-        localStorage.setItem(LS_CASH_ORIG, JSON.stringify(cashOrig));
-        localStorage.setItem(LS_CASH_BAL, JSON.stringify(cashBal));
-        // Do not call renderCashAdvanceTable() here; this would rebuild the table
-        // on every keystroke and cause the input to lose focus.  Reâ€‘render on blur instead.
-      });
-      // When the user finishes editing (on blur/change), rebuild the table so buttons/labels refresh
-      inp.addEventListener('change', () => {
-        renderCashAdvanceTable();
-      });
-    });
-    // Handle deduction changes
-    document.querySelectorAll('.cashDed').forEach(inp => {
-      // Update the deduction and recalculate totals on each keystroke but do not reâ€‘render
-      inp.addEventListener('input', () => {
-        const id = inp.getAttribute('data-id');
-        const val = parseFloat(inp.value);
-        if (!isNaN(val) && val > 0) {
-          cashDed[id] = +(val.toFixed(2));
-          // Persist the deduction for this employee
-          vale[id] = +(val.toFixed(2));
-        } else {
-          delete cashDed[id];
-          delete vale[id];
-        }
-        localStorage.setItem(LS_CASH_DED, JSON.stringify(cashDed));
-        saveCurrentPeriodDeductions();
-        calculateAll();
-        // Avoid calling renderCashAdvanceTable() here; it would reset focus on every key press.
-      });
-      // Rebuild the table when the user commits their change (on blur/change)
-      inp.addEventListener('change', () => {
-        renderCashAdvanceTable();
-      });
-    });
-    // Handle update (apply a single deduction)
-    document.querySelectorAll('.cashUpdateBtn').forEach(btn => {
-      btn.addEventListener('click', () => {
-        const id = btn.getAttribute('data-id');
-        const orig = Number(cashOrig[id] ?? 0);
-        const ded  = Number(cashDed[id] ?? 0);
-        // Only proceed if we have valid original and deduction amounts
-        if (!orig || !ded) return;
-        // Determine the current balance; fall back to original amount if no stored balance exists.
-        const currentBal = cashBal.hasOwnProperty(id) ? Number(cashBal[id] || 0) : orig;
-        // Compute new balance by subtracting the deduction from the current balance.
-        let newBal = +(currentBal - ded);
-        if (newBal <= 0) {
-          // Fully paid off: set balance to zero and clear deduction and vale
-          newBal = 0;
-          delete cashDed[id];
-          delete vale[id];
-          localStorage.setItem(LS_CASH_DED, JSON.stringify(cashDed));
-        }
-        // Persist the new balance
-        cashBal[id] = +(newBal.toFixed(2));
-        localStorage.setItem(LS_CASH_BAL, JSON.stringify(cashBal));
-        saveCurrentPeriodDeductions();
-        calculateAll();
-        // Re-render the table to reflect the updated balance; the update button remains active.
-        renderCashAdvanceTable();
-      });
-    });
-  }
-
-  // Wire up the sub-tab navigation within the Deductions tab
-  document.addEventListener('DOMContentLoaded', () => {
-    const navBtns = document.querySelectorAll('#deductionsTab .subtab-nav .subtab-btn');
-    navBtns.forEach(btn => {
-      btn.addEventListener('click', () => {
-        navBtns.forEach(b => b.classList.remove('active'));
-        btn.classList.add('active');
-        const target = btn.getAttribute('data-subtab');
-        // Show the selected panel and hide others
-        document.querySelectorAll('#deductionsTab .subtab-panel').forEach(panel => {
-          panel.style.display = (panel.id === target) ? '' : 'none';
-        });
-      });
-    });
-    // Initialize panel visibility on page load
-    document.querySelectorAll('#deductionsTab .subtab-panel').forEach(panel => {
-      panel.style.display = (panel.id === 'dedMainSection') ? '' : 'none';
-    });
-    renderCashAdvanceTable();
-  });
   // On page load, immediately check whether the currently selected payroll period
   // is locked and toggle the UI accordingly. Without this, the DTR panel may
   // remain interactive on initial load even if the chosen period has been
