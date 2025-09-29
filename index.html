@@ -2906,6 +2906,12 @@ function setSssTable(rows){
   localStorage.setItem(LS_SSS_TABLE, JSON.stringify(clean));
 }
 
+function formatDeductionDisplay(value){
+  const num = Number(value);
+  if (!Number.isFinite(num)) return '-';
+  return Math.abs(num) < 0.005 ? '-' : num.toFixed(2);
+}
+
 function renderDeductionsTable(){
   syncPeriodScopedData();
   const dtbody = document.querySelector('#deductionsTable tbody');
@@ -2938,14 +2944,14 @@ function renderDeductionsTable(){
     tr.innerHTML = [
       `<td>${emp.id}</td>`,
       `<td class="wrap">${emp.name}</td>`,
-      `<td class="num">${pagibig.toFixed(2)}</td>`,
-      `<td class="num">${philhealth.toFixed(2)}</td>`,
-      `<td class="num">${sss.toFixed(2)}</td>`,
-      `<td class="num">${sssLoan.toFixed(2)}</td>`,
-      `<td class="num">${piLoan.toFixed(2)}</td>`,
-      `<td class="num">${v.toFixed(2)}</td>`,
-      `<td class="num">${vW.toFixed(2)}</td>`,
-      `<td class="num">${total.toFixed(2)}</td>`
+      `<td class="num">${formatDeductionDisplay(pagibig)}</td>`,
+      `<td class="num">${formatDeductionDisplay(philhealth)}</td>`,
+      `<td class="num">${formatDeductionDisplay(sss)}</td>`,
+      `<td class="num">${formatDeductionDisplay(sssLoan)}</td>`,
+      `<td class="num">${formatDeductionDisplay(piLoan)}</td>`,
+      `<td class="num">${formatDeductionDisplay(v)}</td>`,
+      `<td class="num">${formatDeductionDisplay(vW)}</td>`,
+      `<td class="num">${formatDeductionDisplay(total)}</td>`
     ].join('');
     dtbody.appendChild(tr);
   });
@@ -10090,7 +10096,10 @@ document.addEventListener('DOMContentLoaded', function(){
     });
     Object.keys(t).forEach(function(k){
       var cell = foot.querySelector('[data-col="'+k+'"]');
-      if (cell) cell.textContent = _fmt(t[k]);
+      if (cell) {
+        var display = formatDeductionDisplay(t[k]);
+        cell.textContent = display === '-' ? '-' : _fmt(t[k]);
+      }
     });
   }
   window.updateDeductionsGrandTotals = updateDeductionsGrandTotals;
@@ -12638,14 +12647,14 @@ document.addEventListener('DOMContentLoaded', async function () {
             const total = +(pagibig + philhealth + sss + sssLoan + piLoan + v + vW).toFixed(2);
             const tr = document.createElement('tr');
             tr.innerHTML = '<td>'+id+'</td><td class="wrap">'+(emp.name||'')+'</td>'+
-              '<td class="num">'+pagibig.toFixed(2)+'</td>'+
-              '<td class="num">'+philhealth.toFixed(2)+'</td>'+
-              '<td class="num">'+sss.toFixed(2)+'</td>'+
-              '<td class="num">'+sssLoan.toFixed(2)+'</td>'+
-              '<td class="num">'+piLoan.toFixed(2)+'</td>'+
-              '<td class="num">'+v.toFixed(2)+'</td>'+
-              '<td class="num">'+vW.toFixed(2)+'</td>'+
-              '<td class="num">'+total.toFixed(2)+'</td>';
+              '<td class="num">'+formatDeductionDisplay(pagibig)+'</td>'+
+              '<td class="num">'+formatDeductionDisplay(philhealth)+'</td>'+
+              '<td class="num">'+formatDeductionDisplay(sss)+'</td>'+
+              '<td class="num">'+formatDeductionDisplay(sssLoan)+'</td>'+
+              '<td class="num">'+formatDeductionDisplay(piLoan)+'</td>'+
+              '<td class="num">'+formatDeductionDisplay(v)+'</td>'+
+              '<td class="num">'+formatDeductionDisplay(vW)+'</td>'+
+              '<td class="num">'+formatDeductionDisplay(total)+'</td>';
             frag.appendChild(tr);
           });
           dtbody.appendChild(frag);
