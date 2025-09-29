@@ -10883,6 +10883,20 @@ function loadSaved(){
 (function(){
   const PAYROLL_HIST_KEY = 'payroll_hist';
   const LS_ACTIVE_INDEX = 'payroll_active_index';
+  let reloadTimer = null;
+
+  function scheduleFullReload(){
+    if (reloadTimer !== null) return;
+    try {
+      reloadTimer = window.setTimeout(() => {
+        try {
+          window.location.reload();
+        } catch (_) {}
+      }, 120);
+    } catch (_) {
+      try { window.location.reload(); } catch (_) {}
+    }
+  }
 
   function loadHistory() {
     try {
@@ -11010,6 +11024,7 @@ function updateWeekInputs(snap) {
     updateWeekInputs(history[idx]);
     // Keep all selects in sync
     populateDropdowns();
+    scheduleFullReload();
   }
 
   async function createNewPeriodSnapshot(start, end){
