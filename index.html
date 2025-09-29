@@ -12738,13 +12738,20 @@ document.addEventListener('DOMContentLoaded', async function () {
   async function renderFromSnapshots(){
     const p = getPeriod();
     const pid = pidFromDates(p.start, p.end);
-    const [dtr, payroll, reports] = await Promise.all([
+    const [dtr, payroll, reports, deductions] = await Promise.all([
       readKVWithLocal(`snap:dtr:${pid}`),
       readKVWithLocal(`snap:payroll:${pid}`),
-      readKVWithLocal(`snap:reports:${pid}`)
+      readKVWithLocal(`snap:reports:${pid}`),
+      readKVWithLocal(`snap:deductions:${pid}`)
     ]);
     if (dtr) renderSimpleTableSnapshot('resultsTable', dtr);
     if (reports){ if (!renderSimpleTableSnapshot('projectTotalsTable', reports)) renderSimpleTableSnapshot('r_table', reports); }
+    if (deductions){
+      const ok = renderSimpleTableSnapshot('deductionsTable', deductions);
+      if (ok){
+        try { window.__deductionsDirty = false; } catch {}
+      }
+    }
     if (payroll){
       try {
         const tb = document.querySelector('#payrollTable tbody');
@@ -12788,9 +12795,11 @@ document.addEventListener('DOMContentLoaded', async function () {
     const dtr = serializeTableById('resultsTable') || { headers:[], rows:[] };
     const reports = serializeTableById('projectTotalsTable') || serializeTableById('r_table') || { headers:[], rows:[] };
     const payroll = (typeof window.buildSnapshot==='function') ? await window.buildSnapshot(p.start, p.end) : null;
+    const deductions = serializeTableById('deductionsTable') || { headers:[], rows:[] };
     await writeKVMirror(`snap:dtr:${pid}`, dtr);
     await writeKVMirror(`snap:payroll:${pid}`, payroll);
     await writeKVMirror(`snap:reports:${pid}`, reports);
+    await writeKVMirror(`snap:deductions:${pid}`, deductions);
     await renderFromSnapshots();
     try { setPayrollLockedUI(true); } catch{}
   }
@@ -12803,7 +12812,7 @@ document.addEventListener('DOMContentLoaded', async function () {
       wrapped.__guarded = true; window[name] = wrapped;
     } catch{}
   }
-  ['renderResults','calculatePayrollFromResultsTable','calculatePayrollFromRecords','rebuildReports','renderProjectTotals','calculateAll','renderTable'].forEach(guard);
+  ['renderResults','calculatePayrollFromResultsTable','calculatePayrollFromRecords','rebuildReports','renderProjectTotals','calculateAll','renderTable','renderDeductionsTable'].forEach(guard);
 
   document.addEventListener('DOMContentLoaded', function(){
     // Delegate to existing dashboard lock/unlock buttons if present
