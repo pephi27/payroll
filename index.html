@@ -180,8 +180,8 @@ if (!window.__kvSubscribed) {
     const channel = supabase.channel('kv_store_sync');
     window.__kvSubscribed = true;
     window.__kvChannel = channel;
-    channel
-      .on('postgres_changes', { event: '*', schema: 'public', table: TABLE }, (payload) => {
+
+    channel.on('postgres_changes', { event: '*', schema: 'public', table: TABLE }, (payload) => {
         try {
           const eventType = payload && payload.eventType;
           const key = (payload && payload.new && payload.new.key) || (payload && payload.old && payload.old.key);
@@ -203,12 +203,19 @@ if (!window.__kvSubscribed) {
         } catch (err) {
           console.warn('Supabase realtime sync failed', err);
         }
-      })
-      .subscribe((status) => {
+      });
+
+    const subscribeResult = channel.subscribe((status) => {
         if (status === 'CHANNEL_ERROR') {
           console.warn('Supabase channel subscribe failed');
         }
       });
+
+    if (subscribeResult && typeof subscribeResult.catch === 'function') {
+      subscribeResult.catch((err) => {
+        console.warn('Supabase channel subscribe promise rejected', err);
+      });
+    }
     if (!window.__kvUnloadCleanup) {
       window.addEventListener('beforeunload', () => {
         try {
