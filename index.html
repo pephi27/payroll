@@ -2925,11 +2925,12 @@ function renderDeductionsTable(){
     const monthly = rate * 8 * 24;
     const piRate = pagibigRateByMonthly(monthly);
     const phRate = philhealthRateByMonthly(monthly);
+    const flags = (typeof contribFlags !== 'undefined' && contribFlags[emp.id]) || {};
     const div = Number(divisor) || 1;
-    const pagibig = +((regPay * piRate)).toFixed(2);
-    const philhealth = +((regPay * phRate)).toFixed(2);
-    const sssFull = sssShareByMonthly(monthly);
-    const sss = +(sssFull / div).toFixed(2);
+    const pagibig = (flags.pagibig === false) ? 0 : +((regPay * piRate).toFixed(2));
+    const philhealth = (flags.philhealth === false) ? 0 : +((regPay * phRate).toFixed(2));
+    const sssFull = (flags.sss === false) ? 0 : sssShareByMonthly(monthly);
+    const sss = (flags.sss === false) ? 0 : +((sssFull / div).toFixed(2));
     const sssLoan = +(lSSS / div).toFixed(2);
     const piLoan = +(lPI / div).toFixed(2);
     const total = +(pagibig + philhealth + sss + sssLoan + piLoan + v + vW).toFixed(2);
@@ -2970,9 +2971,11 @@ document.addEventListener('click', (e)=>{
         const phRate   = (typeof philhealthRateByMonthly === 'function') ? philhealthRateByMonthly(monthly) : 0;
         const sssFull  = (typeof sssShareByMonthly === 'function') ? sssShareByMonthly(monthly) : 0;
 
-        const pagibig    = +(regPay * piRate).toFixed(2);
-        const philhealth = +(regPay * phRate).toFixed(2);
-        const sssPer     = +(sssFull / div).toFixed(2);
+        const flags = (typeof contribFlags !== 'undefined' && contribFlags?.[id]) || {};
+
+        const pagibig    = (flags.pagibig === false) ? 0 : +((regPay * piRate).toFixed(2));
+        const philhealth = (flags.philhealth === false) ? 0 : +((regPay * phRate).toFixed(2));
+        const sssPer     = (flags.sss === false) ? 0 : +((sssFull / div).toFixed(2));
 
         // RAW totals from storage (NOT divided) for editable columns
         const sssLoanRaw = +(Number((typeof loanSSS !== 'undefined' ? loanSSS?.[id] : 0)) || 0).toFixed(2);
