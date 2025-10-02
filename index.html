@@ -4300,9 +4300,14 @@ document.addEventListener('DOMContentLoaded', function(){
 
     ['thead','tbody','tfoot'].forEach(section => {
       clone.querySelectorAll(section + ' tr').forEach(tr => {
-        const cells = Array.from(tr.children).map(cell => {
+        const cells = [];
+        Array.from(tr.children).forEach(cell => {
           const text = (cell.textContent || '').trim();
-          return text;
+          const span = parseInt(cell.getAttribute('colspan'), 10) || 1;
+          cells.push(text);
+          for (let i = 1; i < span; i += 1) {
+            cells.push('');
+          }
         });
         rows.push(cells);
       });
