@@ -13060,14 +13060,25 @@ document.addEventListener('DOMContentLoaded', async function () {
     try { if (window.writeKV) await window.writeKV(key, value); } catch{}
     try { localStorage.setItem(key, JSON.stringify(value)); } catch{}
   }
+  function serializeMasterReport(){
+    try {
+      const node = document.getElementById('masterReportContainer');
+      if (!node) return null;
+      return { html: node.innerHTML || '' };
+    } catch (e) {
+      return null;
+    }
+  }
+
   async function renderFromSnapshots(){
     const p = getPeriod();
     const pid = pidFromDates(p.start, p.end);
-    const [dtr, payroll, reports, deductions] = await Promise.all([
+    const [dtr, payroll, reports, deductions, master] = await Promise.all([
       readKVWithLocal(`snap:dtr:${pid}`),
       readKVWithLocal(`snap:payroll:${pid}`),
       readKVWithLocal(`snap:reports:${pid}`),
-      readKVWithLocal(`snap:deductions:${pid}`)
+      readKVWithLocal(`snap:deductions:${pid}`),
+      readKVWithLocal(`snap:master:${pid}`)
     ]);
     if (dtr) renderSimpleTableSnapshot('resultsTable', dtr);
     if (reports){ if (!renderSimpleTableSnapshot('projectTotalsTable', reports)) renderSimpleTableSnapshot('r_table', reports); }
@@ -13076,6 +13087,12 @@ document.addEventListener('DOMContentLoaded', async function () {
       if (ok){
         try { window.__deductionsDirty = false; } catch {}
       }
+    }
+    if (master && typeof master.html === 'string'){
+      try {
+        const host = document.getElementById('masterReportContainer');
+        if (host) host.innerHTML = master.html;
+      } catch {}
     }
     if (payroll){
       try {
@@ -13116,15 +13133,18 @@ document.addEventListener('DOMContentLoaded', async function () {
     const p = getPeriod(); if (!p.start || !p.end) { alert('Select a period first.'); return; }
     try { if (typeof window.renderResults==='function') window.renderResults(); } catch{}
     try { if (typeof window.rebuildReports==='function') window.rebuildReports(); else if (typeof window.renderProjectTotals==='function') window.renderProjectTotals(); } catch{}
+    try { if (typeof window.renderMasterReport==='function') window.renderMasterReport(); } catch{}
     const pid = pidFromDates(p.start, p.end);
     const dtr = serializeTableById('resultsTable') || { headers:[], rows:[] };
     const reports = serializeTableById('projectTotalsTable') || serializeTableById('r_table') || { headers:[], rows:[] };
+    const master = serializeMasterReport() || { html: '' };
     const payroll = (typeof window.buildSnapshot==='function') ? await window.buildSnapshot(p.start, p.end) : null;
     const deductions = serializeTableById('deductionsTable') || { headers:[], rows:[] };
     await writeKVMirror(`snap:dtr:${pid}`, dtr);
     await writeKVMirror(`snap:payroll:${pid}`, payroll);
     await writeKVMirror(`snap:reports:${pid}`, reports);
     await writeKVMirror(`snap:deductions:${pid}`, deductions);
+    await writeKVMirror(`snap:master:${pid}`, master);
     await renderFromSnapshots();
     try { setPayrollLockedUI(true); } catch{}
   }
@@ -13137,7 +13157,7 @@ document.addEventListener('DOMContentLoaded', async function () {
       wrapped.__guarded = true; window[name] = wrapped;
     } catch{}
   }
-  ['renderResults','calculatePayrollFromResultsTable','calculatePayrollFromRecords','rebuildReports','renderProjectTotals','calculateAll','renderTable','renderDeductionsTable'].forEach(guard);
+  ['renderResults','calculatePayrollFromResultsTable','calculatePayrollFromRecords','rebuildReports','renderProjectTotals','renderMasterReport','calculateAll','renderTable','renderDeductionsTable'].forEach(guard);
 
   document.addEventListener('DOMContentLoaded', function(){
     // Delegate to existing dashboard lock/unlock buttons if present
