@@ -4298,13 +4298,24 @@ document.addEventListener('DOMContentLoaded', function(){
     rows.push([title]);
     rows.push([]);
 
+    const asSheetValue = (text) => {
+      const trimmed = (text || '').trim();
+      if (!trimmed || trimmed === '-') return trimmed;
+      const normalized = trimmed.replace(/,/g, '');
+      if (/^-?\d+(\.\d+)?$/.test(normalized)) {
+        const num = Number(normalized);
+        if (!Number.isNaN(num)) return num;
+      }
+      return trimmed;
+    };
+
     ['thead','tbody','tfoot'].forEach(section => {
       clone.querySelectorAll(section + ' tr').forEach(tr => {
         const cells = [];
         Array.from(tr.children).forEach(cell => {
           const text = (cell.textContent || '').trim();
           const span = parseInt(cell.getAttribute('colspan'), 10) || 1;
-          cells.push(text);
+          cells.push(asSheetValue(text));
           for (let i = 1; i < span; i += 1) {
             cells.push('');
           }
