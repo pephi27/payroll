@@ -5565,6 +5565,10 @@ document.addEventListener('DOMContentLoaded', () => {
     #panelProjectTotals .mr-table th, #panelProjectTotals .mr-table td{ border:1px solid #dbe3ef; padding:6px 8px; text-align:left }
     #panelProjectTotals .mr-table .mr-num{ text-align:right; font-variant-numeric:tabular-nums; white-space:nowrap }
     #panelProjectTotals .mr-contrib-table th, #panelProjectTotals .mr-contrib-table td{ text-align:center }
+    #panelProjectTotals .mr-table.mr-site-payroll .mr-site-label{ text-align:left }
+    #panelProjectTotals .mr-table.mr-site-payroll thead th.mr-site-label{ text-align:left }
+    #panelProjectTotals .mr-table.mr-site-payroll tfoot th,
+    #panelProjectTotals .mr-table.mr-site-payroll tfoot td{ font-weight:600; background:#f8fafc }
     #panelProjectTotals .mr-table th.left, #panelProjectTotals .mr-table td.left{ text-align:left }
     #panelProjectTotals .mr-table tfoot td{ font-weight:700; background:#fff7ed }
     #panelProjectTotals .mr-table tr.mr-company th{ text-align:center; background:#eef4fb; font-size:13px }
@@ -6729,6 +6733,92 @@ rows += `<tr class="allowance">
       `</thead><tbody><tr${rowClassAttr}>${cell(data.piEE)}${cell(data.piER)}${cell(data.phEE)}${cell(data.phER)}${cell(data.sssEE)}${cell(data.sssER)}${cell(data.loanSSS)}${cell(data.loanPI)}</tr></tbody></table>`;
   };
 
+  const renderSitePayrollTable = (orderedCompanies, totalsByCompany, opts = {}) => {
+    const bucketFactory = (typeof opts.makeBucket === 'function') ? opts.makeBucket : makeContributionBucket;
+    const safeFn = (typeof opts.safe === 'function') ? opts.safe : safe;
+    const companies = Array.isArray(orderedCompanies) ? orderedCompanies : [];
+    const groups = [
+      { label: 'PAG-IBIG', keys: ['piEE', 'piER'] },
+      { label: 'PHILHEALTH', keys: ['phEE', 'phER'] },
+      { label: 'SSS', keys: ['sssEE', 'sssER'] }
+    ];
+    const singles = [
+      { label: 'SSS LOAN', key: 'loanSSS' },
+      { label: 'PAG-IBIG LOAN', key: 'loanPI' }
+    ];
+
+    const ensureBucket = (name) => {
+      const label = (typeof name === 'string' && name.trim().length) ? name.trim() : 'Unassigned';
+      if (totalsByCompany && totalsByCompany[label]) return totalsByCompany[label];
+      return bucketFactory();
+    };
+
+    const totals = bucketFactory();
+    const rows = [];
+
+    companies.forEach(companyName => {
+      const bucket = ensureBucket(companyName);
+      const rowCells = [`<th scope="row" class="mr-site-label">${safeFn(companyName)}</th>`];
+      groups.forEach(group => {
+        group.keys.forEach((key, idx) => {
+          const value = Number(bucket && bucket[key] != null ? bucket[key] : 0);
+          totals[key] += value;
+          rowCells.push(`<td>${f2(value)}</td>`);
+        });
+      });
+      singles.forEach(single => {
+        const value = Number(bucket && bucket[single.key] != null ? bucket[single.key] : 0);
+        totals[single.key] += value;
+        rowCells.push(`<td>${f2(value)}</td>`);
+      });
+      rows.push(`<tr>${rowCells.join('')}</tr>`);
+    });
+
+    const totalRow = () => {
+      if (!companies.length) return '';
+      const cells = [`<th scope="row" class="mr-site-label">TOTAL</th>`];
+      groups.forEach(group => {
+        group.keys.forEach(key => {
+          const value = Number(totals && totals[key] != null ? totals[key] : 0);
+          cells.push(`<td>${f2(value)}</td>`);
+        });
+      });
+      singles.forEach(single => {
+        const value = Number(totals && totals[single.key] != null ? totals[single.key] : 0);
+        cells.push(`<td>${f2(value)}</td>`);
+      });
+      return `<tr class="mr-site-total">${cells.join('')}</tr>`;
+    };
+
+    const headerTop = [
+      '<tr>',
+      '<th rowspan="2" class="mr-site-label">SITE PAYROLL</th>',
+      ...groups.map(group => `<th colspan="${group.keys.length}">${group.label}</th>`),
+      singles.map(single => `<th rowspan="2">${single.label}</th>`).join(''),
+      '</tr>'
+    ].join('');
+
+    const headerBottom = [
+      '<tr>',
+      groups.map(group => group.keys.map((_, idx) => `<th>${idx === 0 ? 'EE' : 'ER'}</th>`).join('')).join(''),
+      '</tr>'
+    ].join('');
+
+    const body = rows.length
+      ? rows.join('')
+      : `<tr><td class="mr-site-label" colspan="${1 + groups.reduce((sum, group) => sum + group.keys.length, 0) + singles.length}">No site payroll data available.</td></tr>`;
+
+    const foot = totalRow();
+
+    return [
+      '<table class="mr-table mr-contrib-table mr-site-payroll">',
+      `<thead>${headerTop}${headerBottom}</thead>`,
+      `<tbody>${body}</tbody>`,
+      foot ? `<tfoot>${foot}</tfoot>` : '',
+      '</table>'
+    ].join('');
+  };
+
   function getPayrollRange(){
     try{
       const ws = document.getElementById('weekStart')?.value || '';
@@ -7033,14 +7123,10 @@ rows += `<tr class="allowance">
     (defaults.length ? defaults : ['Edifice','Portafolio']).forEach(pushCompany);
     Object.keys(totalsByCompany || {}).forEach(pushCompany);
     if (!orderedCompanies.length) pushCompany('Unassigned');
-    orderedCompanies.forEach(companyName => {
-      const bucket = (totalsByCompany && totalsByCompany[companyName]) ? totalsByCompany[companyName] : makeBucket();
-      const label = companyName || 'Unassigned';
-      html += '<div class="mr-section">';
-      html += `<h4>SITE PAYROLL - ${safe(label)}</h4>`;
-      html += renderContributionTable(bucket);
-      html += '</div>';
-    });
+    const sitePayrollTable = renderSitePayrollTable(orderedCompanies, totalsByCompany, { makeBucket, safe });
+    html += '<div class="mr-section">';
+    html += sitePayrollTable;
+    html += '</div>';
 
     const allCompanyBuckets = (totalsByCompany && typeof totalsByCompany === 'object')
       ? Object.values(totalsByCompany)
