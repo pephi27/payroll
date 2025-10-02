@@ -7140,6 +7140,13 @@ rows += `<tr class="allowance">
       });
       return acc;
     }, makeBucket());
+    if (orderedCompanies.length){
+      html += '<div class="mr-section mr-grand-contributions">';
+      html += '<h4>GRAND TOTAL - CONTRIBUTIONS</h4>';
+      html += renderContributionTable(overallBucket, { bold: true, combineEEER: true });
+      html += '</div>';
+    }
+
     const projectGroups = {};
     const ensureProjectGroup = (companyName) => {
       const label = normalizeCompanyLabel(companyName);
