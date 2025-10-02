@@ -2539,6 +2539,53 @@ let bantayProj = {};
 })();
 // LocalStorage key for per-employee contribution flags (Pag-IBIG, PhilHealth, SSS)
 const LS_CONTRIB_FLAGS='payroll_contrib_flags';
+// Valid contribution keys used throughout the app.
+const CONTRIBUTION_KEYS = ['pagibig','philhealth','sss'];
+// Interpret persisted contribution flags that might be stored as strings/other truthy values.
+function interpretContributionFlag(value){
+  if (typeof value === 'undefined') return true;
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'string'){
+    const norm = value.trim().toLowerCase();
+    if (!norm) return false;
+    if (['false','0','no','off','disabled'].includes(norm)) return false;
+    if (['true','1','yes','on','enabled'].includes(norm)) return true;
+  }
+  if (typeof value === 'number') return value !== 0;
+  if (value == null) return false;
+  return Boolean(value);
+}
+function isContributionEnabled(flags, key){
+  if (!flags || typeof flags !== 'object') return true;
+  if (!CONTRIBUTION_KEYS.includes(key)) return true;
+  return interpretContributionFlag(flags[key]);
+}
+function normalizeContribFlags(){
+  if (!contribFlags || typeof contribFlags !== 'object'){
+    contribFlags = {};
+    return;
+  }
+  let mutated = false;
+  Object.keys(contribFlags).forEach(id=>{
+    const entry = contribFlags[id];
+    if (!entry || typeof entry !== 'object'){
+      contribFlags[id] = { pagibig: true, philhealth: true, sss: true };
+      mutated = true;
+      return;
+    }
+    CONTRIBUTION_KEYS.forEach(key=>{
+      const hasKey = Object.prototype.hasOwnProperty.call(entry, key);
+      const normalized = interpretContributionFlag(hasKey ? entry[key] : undefined);
+      if (!hasKey || entry[key] !== normalized){
+        entry[key] = normalized;
+        mutated = true;
+      }
+    });
+  });
+  if (mutated){
+    try { localStorage.setItem(LS_CONTRIB_FLAGS, JSON.stringify(contribFlags)); } catch(e){}
+  }
+}
 
 // Current employee contribution rates (decimal form).  Defaults: 0.02 (2%) for Pagâ€‘IBIG and 0.025 (2.5%) for PhilHealth.
 let pagibigRate = parseFloat(localStorage.getItem(LS_PAGIBIG_RATE) ?? '0.02');
@@ -2674,6 +2721,7 @@ let otHours = JSON.parse(localStorage.getItem(LS_OT_HRS) || '{}');
 
 // Per-employee contribution deduction flags. Each entry keyed by employee ID holds booleans {pagibig, philhealth, sss}
 let contribFlags = JSON.parse(localStorage.getItem(LS_CONTRIB_FLAGS) || '{}');
+normalizeContribFlags();
 
 let otMultiplier = parseFloat(localStorage.getItem(LS_OTMULT)) || 1.50;
 let weekStartSaved = localStorage.getItem(LS_WEEKSTART) || '';
@@ -2989,10 +3037,13 @@ function renderDeductionsTable(){
     const phRate = philhealthRateByMonthly(monthly);
     const flags = (typeof contribFlags !== 'undefined' && contribFlags[emp.id]) || {};
     const div = Number(divisor) || 1;
-    const pagibig = (flags.pagibig === false) ? 0 : +((regPay * piRate).toFixed(2));
-    const philhealth = (flags.philhealth === false) ? 0 : +((regPay * phRate).toFixed(2));
-    const sssFull = (flags.sss === false) ? 0 : sssShareByMonthly(monthly);
-    const sss = (flags.sss === false) ? 0 : +((sssFull / div).toFixed(2));
+    const pagibigEnabled = isContributionEnabled(flags, 'pagibig');
+    const philhealthEnabled = isContributionEnabled(flags, 'philhealth');
+    const sssEnabled = isContributionEnabled(flags, 'sss');
+    const pagibig = pagibigEnabled ? +((regPay * piRate).toFixed(2)) : 0;
+    const philhealth = philhealthEnabled ? +((regPay * phRate).toFixed(2)) : 0;
+    const sssFull = sssEnabled ? sssShareByMonthly(monthly) : 0;
+    const sss = sssEnabled ? +((sssFull / div).toFixed(2)) : 0;
     const sssLoan = +(lSSS / div).toFixed(2);
     const piLoan = +(lPI / div).toFixed(2);
     const total = +(pagibig + philhealth + sss + sssLoan + piLoan + v + vW).toFixed(2);
@@ -3034,10 +3085,13 @@ document.addEventListener('click', (e)=>{
         const sssFull  = (typeof sssShareByMonthly === 'function') ? sssShareByMonthly(monthly) : 0;
 
         const flags = (typeof contribFlags !== 'undefined' && contribFlags?.[id]) || {};
+        const pagibigEnabled = isContributionEnabled(flags, 'pagibig');
+        const philhealthEnabled = isContributionEnabled(flags, 'philhealth');
+        const sssEnabled = isContributionEnabled(flags, 'sss');
 
-        const pagibig    = (flags.pagibig === false) ? 0 : +((regPay * piRate).toFixed(2));
-        const philhealth = (flags.philhealth === false) ? 0 : +((regPay * phRate).toFixed(2));
-        const sssPer     = (flags.sss === false) ? 0 : +((sssFull / div).toFixed(2));
+        const pagibig    = pagibigEnabled ? +((regPay * piRate).toFixed(2)) : 0;
+        const philhealth = philhealthEnabled ? +((regPay * phRate).toFixed(2)) : 0;
+        const sssPer     = sssEnabled ? +((sssFull / div).toFixed(2)) : 0;
 
         // RAW totals from storage (NOT divided) for editable columns
         const sssLoanRaw = +(Number((typeof loanSSS !== 'undefined' ? loanSSS?.[id] : 0)) || 0).toFixed(2);
@@ -3787,12 +3841,15 @@ function calculateRow(tr){  const readNum = sel => { const el = tr.querySelector
   const phRate = philhealthRateByMonthly(monthly);
   // Check per-employee contribution deduction flags; default to true if not set
   const flags = contribFlags[id] || {};
+  const pagibigEnabled = isContributionEnabled(flags, 'pagibig');
+  const philhealthEnabled = isContributionEnabled(flags, 'philhealth');
+  const sssEnabled = isContributionEnabled(flags, 'sss');
   const div = Number(divisor) || 1;
   const hasCompensation = (reg > 0) || (otTotal > 0) || (adj !== 0);
-  const pagibig = (hasCompensation && flags.pagibig !== false ? +((regPay * piRate)).toFixed(2) : 0);
-  const philhealth = (hasCompensation && flags.philhealth !== false ? +((regPay * phRate)).toFixed(2) : 0);
-  const sssFull = hasCompensation ? sssShareByMonthly(monthly) : 0;
-  const sss = (hasCompensation && flags.sss !== false ? +(sssFull / div).toFixed(2) : 0);
+  const pagibig = (hasCompensation && pagibigEnabled ? +((regPay * piRate)).toFixed(2) : 0);
+  const philhealth = (hasCompensation && philhealthEnabled ? +((regPay * phRate)).toFixed(2) : 0);
+  const sssFull = (hasCompensation && sssEnabled) ? sssShareByMonthly(monthly) : 0;
+  const sss = (hasCompensation && sssEnabled ? +(sssFull / div).toFixed(2) : 0);
   const sssLoan = +(lSSS / div).toFixed(2);
   const piLoan = +(lPI / div).toFixed(2);
   const valeAmt = v;
@@ -5288,10 +5345,13 @@ document.addEventListener('DOMContentLoaded', () => {
         const flags = (typeof contribFlags !== 'undefined' && contribFlags[id]) || {};
         const piRate = (typeof pagibigRateByMonthly==='function') ? pagibigRateByMonthly(monthly) : 0;
         const phRate = (typeof philhealthRateByMonthly==='function') ? philhealthRateByMonthly(monthly) : 0;
-        pagibig    = (flags.pagibig !== false   ? +((regPay * piRate)).toFixed(2) : 0);
-        philhealth = (flags.philhealth !== false? +((regPay * phRate)).toFixed(2) : 0);
-        const sssFull = (typeof sssShareByMonthly==='function') ? sssShareByMonthly(monthly) : 0;
-        sss = (flags.sss !== false ? +(sssFull / curDiv).toFixed(2) : 0);
+        const pagibigEnabled = isContributionEnabled(flags, 'pagibig');
+        const philhealthEnabled = isContributionEnabled(flags, 'philhealth');
+        const sssEnabled = isContributionEnabled(flags, 'sss');
+        pagibig    = (pagibigEnabled ? +((regPay * piRate)).toFixed(2) : 0);
+        philhealth = (philhealthEnabled ? +((regPay * phRate)).toFixed(2) : 0);
+        const sssFull = (typeof sssShareByMonthly==='function' && sssEnabled) ? sssShareByMonthly(monthly) : 0;
+        sss = (sssEnabled ? +(sssFull / curDiv).toFixed(2) : 0);
       }catch(e){}
 
       // Loans in snapshot view should reflect per-period share per user request
@@ -6795,10 +6855,13 @@ rows += `<tr class="allowance">
         const sssFull = (typeof sssShareByMonthly==='function') ? sssShareByMonthly(monthly) : 0;
         const sssEmployerFull = (typeof sssEmployerShareByMonthly==='function') ? sssEmployerShareByMonthly(monthly) : sssFull;
         const flags = flagsAll[id] || {};
-        const pi = (flags.pagibig===false) ? 0 : +(regPay * piRate).toFixed(2);
-        const ph = (flags.philhealth===false) ? 0 : +(regPay * phRate).toFixed(2);
-        const sssEE = (flags.sss===false) ? 0 : +(sssFull/div).toFixed(2);
-        const sssER = (flags.sss===false) ? 0 : +(sssEmployerFull/div).toFixed(2);
+        const pagibigEnabled = isContributionEnabled(flags, 'pagibig');
+        const philhealthEnabled = isContributionEnabled(flags, 'philhealth');
+        const sssEnabled = isContributionEnabled(flags, 'sss');
+        const pi = pagibigEnabled ? +(regPay * piRate).toFixed(2) : 0;
+        const ph = philhealthEnabled ? +(regPay * phRate).toFixed(2) : 0;
+        const sssEE = sssEnabled ? +(sssFull/div).toFixed(2) : 0;
+        const sssER = sssEnabled ? +(sssEmployerFull/div).toFixed(2) : 0;
         bucket.piEE += pi; bucket.piER += pi;
         bucket.phEE += ph; bucket.phER += ph;
         bucket.sssEE += sssEE; bucket.sssER += sssER;
@@ -7434,9 +7497,9 @@ document.getElementById('downloadEmployeesCSV').addEventListener('click', () => 
     const bank = emp.bankAccount || '';
     const company = emp.company || COMPANY_OPTIONS[0] || '';
     const flags = (typeof contribFlags !== 'undefined' && contribFlags[id]) || {};
-    const fPI = (flags.pagibig !== false) ? 'Yes' : 'No';
-    const fPH = (flags.philhealth !== false) ? 'Yes' : 'No';
-    const fSSS = (flags.sss !== false) ? 'Yes' : 'No';
+    const fPI = isContributionEnabled(flags, 'pagibig') ? 'Yes' : 'No';
+    const fPH = isContributionEnabled(flags, 'philhealth') ? 'Yes' : 'No';
+    const fSSS = isContributionEnabled(flags, 'sss') ? 'Yes' : 'No';
     rows.push([id, emp.name || '', emp.hourlyRate || '', company, bank, schedName, schedId, projName, projId, fPI, fPH, fSSS]);
   });
 
@@ -8882,9 +8945,9 @@ document.addEventListener('DOMContentLoaded', function () {
         const bank = emp.bankAccount || '';
         const company = emp.company || COMPANY_OPTIONS[0] || '';
         const flags = (typeof contribFlags !== 'undefined' && contribFlags[id]) || {};
-        const fPI = (flags.pagibig !== false) ? 'Yes' : 'No';
-        const fPH = (flags.philhealth !== false) ? 'Yes' : 'No';
-        const fSSS = (flags.sss !== false) ? 'Yes' : 'No';
+        const fPI = isContributionEnabled(flags, 'pagibig') ? 'Yes' : 'No';
+        const fPH = isContributionEnabled(flags, 'philhealth') ? 'Yes' : 'No';
+        const fSSS = isContributionEnabled(flags, 'sss') ? 'Yes' : 'No';
         rows.push([id, emp.name || '', emp.hourlyRate || '', company, bank, schedName, schedId, projName, projId, fPI, fPH, fSSS]);
       });
       const csv = rows.map(r => r.map(v => {
