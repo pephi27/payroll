@@ -2188,6 +2188,9 @@ window.addEventListener('load', dashReports);
       <button id="printPayrollBtn" type="button">
        Print Report
       </button>
+      <button id="printPayrollExcelBtn" type="button">
+       Print Report Excel
+      </button>
       <button id="printAllPayslipsBtn" type="button">
        Print Payslips
       </button>
@@ -4214,6 +4217,105 @@ document.addEventListener('DOMContentLoaded', function(){
     } catch(e) { try { safePrint(w); } catch(_){} }
     // Optionally close after printing (comment out if you don't want auto-close)
     // w.close();
+  });
+});
+
+// Export Payroll Report Excel: mirrors the Print Report table structure but writes to XLSX.
+document.addEventListener('DOMContentLoaded', function(){
+  const btn = document.getElementById('printPayrollExcelBtn');
+  if (!btn) return;
+  btn.addEventListener('click', function(){
+    if (typeof XLSX === 'undefined' || !XLSX || !XLSX.utils) {
+      alert('Excel library not available');
+      return;
+    }
+    const srcTable = document.getElementById('payrollTable');
+    if (!srcTable) {
+      alert('Payroll table is missing or empty.');
+      return;
+    }
+    const clone = srcTable.cloneNode(true);
+    const removeLastCell = row => { if (row && row.lastElementChild) row.removeChild(row.lastElementChild); };
+    clone.querySelectorAll('thead tr').forEach(removeLastCell);
+    clone.querySelectorAll('tbody tr').forEach(removeLastCell);
+    clone.querySelectorAll('tfoot tr').forEach(removeLastCell);
+
+    const divisorKey = (typeof LS_DIVISOR !== 'undefined' ? LS_DIVISOR : 'payroll_deduction_divisor');
+    const divisorVal = (typeof window !== 'undefined' && typeof window.divisor !== 'undefined' && Number(window.divisor)) || parseInt((localStorage && localStorage.getItem(divisorKey)) || '1', 10) || 1;
+    const safeDivide = (raw) => {
+      const base = Number(divisorVal) || 1;
+      const amt = parseFloat((raw || '').toString().replace(/,/g, '')) || 0;
+      return (amt / base).toFixed(2);
+    };
+
+    clone.querySelectorAll('input').forEach(inp => {
+      const td = inp.parentElement;
+      const cls = inp.classList || { contains: () => false };
+      if (cls.contains('loanSSS') || cls.contains('loanPI')) {
+        td.textContent = safeDivide(inp.value || '0');
+      } else {
+        const val = (inp.value || inp.textContent || '').toString();
+        td.textContent = val;
+      }
+    });
+
+    clone.querySelectorAll('td.loanSSS, td.loanPI').forEach(td => {
+      if (!td || td.querySelector('input')) return;
+      const divided = safeDivide(td.textContent || '0');
+      td.textContent = divided;
+    });
+
+    clone.querySelectorAll('td').forEach(function(td){
+      if (td.querySelector('input')) return;
+      var raw = (td.textContent || '').replace(/,/g,'').trim();
+      if (!raw) return;
+      var num = parseFloat(raw);
+      if (!isNaN(num) && num === 0) td.textContent = '-';
+    });
+
+    (function(){
+      function norm(s){ return String(s||'').replace(/\s+/g,' ').trim().toLowerCase(); }
+      var map = new Map([
+        ['regular hours','REG HRS'],
+        ['ot hours','OT HRS'],
+        ['adjustment hrs','ADJ HRS'],
+        ['adjustments','ADJ'],
+        ['total deductions','TOTAL DEDUC.']
+      ]);
+      clone.querySelectorAll('thead th').forEach(function(th){
+        var key = norm(th.textContent);
+        if (map.has(key)) th.textContent = map.get(key);
+      });
+    })();
+
+    const ws = document.getElementById('weekStart');
+    const we = document.getElementById('weekEnd');
+    const startDate = ws && ws.value ? ws.value : '';
+    const endDate = we && we.value ? we.value : '';
+    const title = (startDate && endDate) ? `Payroll Report (${startDate} to ${endDate})` : 'Payroll Report';
+
+    const rows = [];
+    rows.push([title]);
+    rows.push([]);
+
+    ['thead','tbody','tfoot'].forEach(section => {
+      clone.querySelectorAll(section + ' tr').forEach(tr => {
+        const cells = Array.from(tr.children).map(cell => {
+          const text = (cell.textContent || '').trim();
+          return text;
+        });
+        rows.push(cells);
+      });
+    });
+
+    const wb = XLSX.utils.book_new();
+    const sheet = XLSX.utils.aoa_to_sheet(rows);
+    XLSX.utils.book_append_sheet(wb, sheet, 'Payroll Report');
+
+    const rangeLabel = (startDate && endDate) ? `${startDate}_to_${endDate}` : '';
+    const safeLabel = rangeLabel.replace(/[^0-9A-Za-z_-]/g, '');
+    const filename = safeLabel ? `Payroll_Report_${safeLabel}.xlsx` : 'Payroll_Report.xlsx';
+    XLSX.writeFile(wb, filename);
   });
 });
 document.addEventListener('DOMContentLoaded', () => {
