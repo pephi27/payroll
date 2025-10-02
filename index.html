@@ -6716,12 +6716,9 @@ rows += `<tr class="allowance">
     const cell = (value) => `<td${cellStyleAttr}>${f2(value)}</td>`;
     const toNum = (v) => Number(v || 0);
     if (opts.combineEEER) {
-      // Per request: the combined "Grand Total - Contributions" row should only
-      // reflect the employee share of each contribution. Employer shares remain
-      // visible in the per-company tables where both columns are shown.
-      const piTotal = toNum(data.piEE);
-      const phTotal = toNum(data.phEE);
-      const sssTotal = toNum(data.sssEE);
+      const piTotal = toNum(data.piEE) + toNum(data.piER);
+      const phTotal = toNum(data.phEE) + toNum(data.phER);
+      const sssTotal = toNum(data.sssEE) + toNum(data.sssER);
       return '<table class="mr-table mr-contrib-table"><thead>'+
         '<tr><th>PAG-IBIG</th><th>PHILHEALTH</th><th>SSS</th><th>SSS LOAN</th><th>PAG-IBIG LOAN</th></tr>'+
         `</thead><tbody><tr${rowClassAttr}>${cell(piTotal)}${cell(phTotal)}${cell(sssTotal)}${cell(data.loanSSS)}${cell(data.loanPI)}</tr></tbody></table>`;
