@@ -5566,6 +5566,13 @@ document.addEventListener('DOMContentLoaded', () => {
     #panelProjectTotals .mr-table .mr-num{ text-align:right; font-variant-numeric:tabular-nums; white-space:nowrap }
     #panelProjectTotals .mr-contrib-table th, #panelProjectTotals .mr-contrib-table td{ text-align:center }
     #panelProjectTotals .mr-table th.left, #panelProjectTotals .mr-table td.left{ text-align:left }
+    #panelProjectTotals .mr-site-payroll-table th{ text-align:center }
+    #panelProjectTotals .mr-site-payroll-table th.left{ text-align:left }
+    #panelProjectTotals .mr-site-payroll-table td{ text-align:right; font-variant-numeric:tabular-nums; white-space:nowrap }
+    #panelProjectTotals .mr-site-payroll-table tr.mr-site-payroll-total th{ text-align:left }
+    #panelProjectTotals .mr-site-payroll-table tr.mr-site-payroll-total td{ text-align:left; font-weight:600; background:#fff7ed }
+    #panelProjectTotals .mr-site-payroll-table tr.mr-site-payroll-total span{ font-variant-numeric:tabular-nums }
+    #panelProjectTotals .mr-empty{ padding:12px; text-align:center; color:#64748b; font-style:italic; border:1px solid #dbe3ef; border-radius:8px }
     #panelProjectTotals .mr-table tfoot td{ font-weight:700; background:#fff7ed }
     #panelProjectTotals .mr-table tr.mr-company th{ text-align:center; background:#eef4fb; font-size:13px }
     /* Print: one sheet per project, repeat header; hide grand total (redundant) */
@@ -6729,6 +6736,85 @@ rows += `<tr class="allowance">
       `</thead><tbody><tr${rowClassAttr}>${cell(data.piEE)}${cell(data.piER)}${cell(data.phEE)}${cell(data.phER)}${cell(data.sssEE)}${cell(data.sssER)}${cell(data.loanSSS)}${cell(data.loanPI)}</tr></tbody></table>`;
   };
 
+  const renderSitePayrollTable = (entries = []) => {
+    if (!Array.isArray(entries) || !entries.length) {
+      return '<div class="mr-empty">No site payroll data available.</div>';
+    }
+
+    const normalized = entries.map(entry => ({
+      label: safe(entry && entry.label),
+      bucket: entry && entry.bucket ? entry.bucket : makeContributionBucket()
+    }));
+
+    const hasAny = normalized.some(entry => {
+      return Object.keys(makeContributionBucket()).some(key => Number(entry.bucket[key] || 0) !== 0);
+    });
+
+    if (!hasAny) {
+      return '<div class="mr-empty">No site payroll data available.</div>';
+    }
+
+    const rows = normalized.filter(entry => {
+      return Object.keys(makeContributionBucket()).some(key => Number(entry.bucket[key] || 0) !== 0);
+    });
+
+    const effectiveRows = rows.length ? rows : normalized;
+
+    const totals = effectiveRows.reduce((acc, entry) => {
+      const bucket = entry.bucket || makeContributionBucket();
+      acc.piEE += Number(bucket.piEE || 0);
+      acc.piER += Number(bucket.piER || 0);
+      acc.phEE += Number(bucket.phEE || 0);
+      acc.phER += Number(bucket.phER || 0);
+      acc.sssEE += Number(bucket.sssEE || 0);
+      acc.sssER += Number(bucket.sssER || 0);
+      acc.loanSSS += Number(bucket.loanSSS || 0);
+      acc.loanPI += Number(bucket.loanPI || 0);
+      return acc;
+    }, makeContributionBucket());
+
+    let html = '<table class="mr-table mr-site-payroll-table"><thead>';
+    html += '<tr><th class="left">SITE PAYROLL</th>'+
+      '<th colspan="2">PAG-IBIG</th>'+
+      '<th colspan="2">PHILHEALTH</th>'+
+      '<th colspan="2">SSS</th>'+
+      '<th rowspan="2">SSS LOAN</th>'+
+      '<th rowspan="2">PAG-IBIG LOAN</th></tr>';
+    html += '<tr><th></th><th>EE</th><th>ER</th><th>EE</th><th>ER</th><th>EE</th><th>ER</th></tr>';
+    html += '</thead><tbody>';
+
+    effectiveRows.forEach(entry => {
+      const bucket = entry && entry.bucket ? entry.bucket : makeContributionBucket();
+      html += '<tr>'+
+        `<th class="left">${entry.label}</th>`+
+        `<td class="mr-num">${f2(bucket.piEE)}</td>`+
+        `<td class="mr-num">${f2(bucket.piER)}</td>`+
+        `<td class="mr-num">${f2(bucket.phEE)}</td>`+
+        `<td class="mr-num">${f2(bucket.phER)}</td>`+
+        `<td class="mr-num">${f2(bucket.sssEE)}</td>`+
+        `<td class="mr-num">${f2(bucket.sssER)}</td>`+
+        `<td class="mr-num">${f2(bucket.loanSSS)}</td>`+
+        `<td class="mr-num">${f2(bucket.loanPI)}</td>`+
+      '</tr>';
+    });
+
+    const piTotal = totals.piEE + totals.piER;
+    const phTotal = totals.phEE + totals.phER;
+    const sssTotal = totals.sssEE + totals.sssER;
+
+    html += '<tr class="mr-site-payroll-total">'+
+      '<th>Total</th>'+
+      `<td colspan="2">PAG-IBIG TOTAL: <span>${f2(piTotal)}</span></td>`+
+      `<td colspan="2">PHILHEALTH TOTAL: <span>${f2(phTotal)}</span></td>`+
+      `<td colspan="2">SSS TOTAL: <span>${f2(sssTotal)}</span></td>`+
+      `<td>SSS LOAN: <span>${f2(totals.loanSSS)}</span></td>`+
+      `<td>PAG-IBIG LOAN: <span>${f2(totals.loanPI)}</span></td>`+
+    '</tr>';
+
+    html += '</tbody></table>';
+    return html;
+  };
+
   function getPayrollRange(){
     try{
       const ws = document.getElementById('weekStart')?.value || '';
@@ -7033,14 +7119,16 @@ rows += `<tr class="allowance">
     (defaults.length ? defaults : ['Edifice','Portafolio']).forEach(pushCompany);
     Object.keys(totalsByCompany || {}).forEach(pushCompany);
     if (!orderedCompanies.length) pushCompany('Unassigned');
-    orderedCompanies.forEach(companyName => {
-      const bucket = (totalsByCompany && totalsByCompany[companyName]) ? totalsByCompany[companyName] : makeBucket();
-      const label = companyName || 'Unassigned';
-      html += '<div class="mr-section">';
-      html += `<h4>SITE PAYROLL - ${safe(label)}</h4>`;
-      html += renderContributionTable(bucket);
+    const sitePayrollEntries = orderedCompanies.map(companyName => ({
+      label: companyName || 'Unassigned',
+      bucket: (totalsByCompany && totalsByCompany[companyName]) ? totalsByCompany[companyName] : makeBucket()
+    }));
+
+    if (sitePayrollEntries.length) {
+      html += '<div class="mr-section mr-site-payroll">';
+      html += renderSitePayrollTable(sitePayrollEntries);
       html += '</div>';
-    });
+    }
 
     const allCompanyBuckets = (totalsByCompany && typeof totalsByCompany === 'object')
       ? Object.values(totalsByCompany)
