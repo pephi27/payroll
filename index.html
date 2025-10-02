@@ -979,9 +979,6 @@ window.addEventListener('load', dashReports);
 #deductionsTab #deductionsTable tfoot td.label-cell{ text-align:left; }
 #payrollTab #payrollTable tfoot td.num,
 #deductionsTab #deductionsTable tfoot td.num{ text-align:right; }
-#deductionsTab #deductionsTable .ded-contrib-wrapper{ display:flex; align-items:center; justify-content:flex-end; gap:6px; }
-#deductionsTab #deductionsTable .ded-contrib-wrapper input{ margin:0; }
-#deductionsTab #deductionsTable .ded-contrib-wrapper span{ min-width:60px; text-align:right; font-variant-numeric:tabular-nums; display:inline-block; }
 </style>
     <!-- Added payroll dashboard theme -->
     <style>
@@ -2976,76 +2973,43 @@ function renderDeductionsTable(){
   const dtbody = document.querySelector('#deductionsTable tbody');
   if (!dtbody) return;
   dtbody.innerHTML = '';
-  const frag = document.createDocumentFragment();
-  const allFlags = (typeof contribFlags !== 'undefined' && contribFlags) ? contribFlags : {};
-  const div = Number(divisor) || 1;
-  const makeContribCell = (empId, type, isChecked, displayValue) => {
-    const checkedAttr = isChecked ? ' checked' : '';
-    return `<td class="num"><label class="ded-contrib-wrapper"><input type="checkbox" class="ded-contrib-toggle" data-id="${empId}" data-type="${type}"${checkedAttr}><span>${displayValue}</span></label></td>`;
-  };
   employeeList.forEach(emp => {
     const rH = Number(regHours[emp.id] ?? 0);
-    const rateRaw = (storedEmployees[emp.id]?.hourlyRate) ?? (payrollRates[emp.id] ?? 0);
-    const rate = Number(rateRaw);
-    const appliedRate = Number.isFinite(rate) ? rate : 0;
-    payrollRates[emp.id] = appliedRate;
+    const rate = Number((storedEmployees[emp.id]?.hourlyRate) ?? (payrollRates[emp.id] ?? 0));
+    payrollRates[emp.id] = isNaN(rate) ? 0 : rate;
     const lSSS = Number(loanSSS[emp.id] ?? 0);
     const lPI = Number(loanPI[emp.id] ?? 0);
     const v = Number(vale[emp.id] ?? 0);
     const vW = Number(valeWed[emp.id] ?? 0);
-    const regPay = +(rH * appliedRate).toFixed(2);
+    const regPay = +(rH * rate).toFixed(2);
     // Use dynamic contribution tables for Pag-IBIG and PhilHealth.  Determine the
     // applicable rate based on monthly income and multiply by regular pay.
-    const monthly = appliedRate * 8 * 24;
+    const monthly = rate * 8 * 24;
     const piRate = pagibigRateByMonthly(monthly);
     const phRate = philhealthRateByMonthly(monthly);
-    const flags = allFlags[emp.id] || {};
-    const pagibigEnabled = flags.pagibig !== false;
-    const philhealthEnabled = flags.philhealth !== false;
-    const sssEnabled = flags.sss !== false;
-    const pagibig = pagibigEnabled ? +((regPay * piRate).toFixed(2)) : 0;
-    const philhealth = philhealthEnabled ? +((regPay * phRate).toFixed(2)) : 0;
-    const sssFull = sssEnabled ? sssShareByMonthly(monthly) : 0;
-    const sss = sssEnabled ? +((sssFull / div).toFixed(2)) : 0;
+    const flags = (typeof contribFlags !== 'undefined' && contribFlags[emp.id]) || {};
+    const div = Number(divisor) || 1;
+    const pagibig = (flags.pagibig === false) ? 0 : +((regPay * piRate).toFixed(2));
+    const philhealth = (flags.philhealth === false) ? 0 : +((regPay * phRate).toFixed(2));
+    const sssFull = (flags.sss === false) ? 0 : sssShareByMonthly(monthly);
+    const sss = (flags.sss === false) ? 0 : +((sssFull / div).toFixed(2));
     const sssLoan = +(lSSS / div).toFixed(2);
     const piLoan = +(lPI / div).toFixed(2);
     const total = +(pagibig + philhealth + sss + sssLoan + piLoan + v + vW).toFixed(2);
     const tr = document.createElement('tr');
-    const pagibigDisplay = formatDeductionDisplay(pagibig);
-    const philhealthDisplay = formatDeductionDisplay(philhealth);
-    const sssDisplay = formatDeductionDisplay(sss);
-    const sssLoanDisplay = formatDeductionDisplay(sssLoan);
-    const piLoanDisplay = formatDeductionDisplay(piLoan);
-    const valeDisplay = formatDeductionDisplay(v);
-    const wedValeDisplay = formatDeductionDisplay(vW);
-    const totalDisplay = formatDeductionDisplay(total);
     tr.innerHTML = [
       `<td>${emp.id}</td>`,
       `<td class="wrap">${emp.name}</td>`,
-      makeContribCell(emp.id, 'pagibig', pagibigEnabled, pagibigDisplay),
-      makeContribCell(emp.id, 'philhealth', philhealthEnabled, philhealthDisplay),
-      makeContribCell(emp.id, 'sss', sssEnabled, sssDisplay),
-      `<td class="num">${sssLoanDisplay}</td>`,
-      `<td class="num">${piLoanDisplay}</td>`,
-      `<td class="num">${valeDisplay}</td>`,
-      `<td class="num">${wedValeDisplay}</td>`,
-      `<td class="num">${totalDisplay}</td>`
+      `<td class="num">${formatDeductionDisplay(pagibig)}</td>`,
+      `<td class="num">${formatDeductionDisplay(philhealth)}</td>`,
+      `<td class="num">${formatDeductionDisplay(sss)}</td>`,
+      `<td class="num">${formatDeductionDisplay(sssLoan)}</td>`,
+      `<td class="num">${formatDeductionDisplay(piLoan)}</td>`,
+      `<td class="num">${formatDeductionDisplay(v)}</td>`,
+      `<td class="num">${formatDeductionDisplay(vW)}</td>`,
+      `<td class="num">${formatDeductionDisplay(total)}</td>`
     ].join('');
-    frag.appendChild(tr);
-  });
-  dtbody.appendChild(frag);
-  dtbody.querySelectorAll('input.ded-contrib-toggle').forEach(inp => {
-    inp.addEventListener('change', () => {
-      const id = inp.dataset.id;
-      const type = inp.dataset.type;
-      if (!id || !type) return;
-      if (!contribFlags[id]) contribFlags[id] = {};
-      contribFlags[id][type] = inp.checked;
-      try { localStorage.setItem(LS_CONTRIB_FLAGS, JSON.stringify(contribFlags)); } catch (err) { /* no-op */ }
-      const peerSelector = `.emp-${type}[data-id="${id}"]`;
-      document.querySelectorAll(peerSelector).forEach(cb => { cb.checked = inp.checked; });
-      if (typeof calculateAll === 'function') calculateAll();
-    });
+    dtbody.appendChild(tr);
   });
 }
 document.addEventListener('click', (e)=>{
@@ -12815,7 +12779,61 @@ document.addEventListener('DOMContentLoaded', async function () {
       const optimized = function(){
         if (!isDeductionsVisible()) { window.__deductionsDirty = true; return; }
         window.__deductionsDirty = false;
-        return orig.apply(this, arguments);
+        try {
+          const dtbody = document.querySelector('#deductionsTable tbody');
+          if (!dtbody) return;
+          const frag = document.createDocumentFragment();
+          const div = Number(typeof divisor !== 'undefined' ? divisor : (window.divisor || 1)) || 1;
+          dtbody.innerHTML = '';
+          const _employees = (typeof employeeList !== 'undefined' ? employeeList : (window.employeeList || []));
+          const _regHours = (typeof regHours !== 'undefined' ? regHours : (window.regHours || {}));
+          const _storedEmployees = (typeof storedEmployees !== 'undefined' ? storedEmployees : (window.storedEmployees || {}));
+          const _rates = (typeof payrollRates !== 'undefined' ? payrollRates : (window.payrollRates || {}));
+          const _loanSSS = (typeof loanSSS !== 'undefined' ? loanSSS : (window.loanSSS || {}));
+          const _loanPI = (typeof loanPI !== 'undefined' ? loanPI : (window.loanPI || {}));
+          const _vale = (typeof vale !== 'undefined' ? vale : (window.vale || {}));
+          const _valeWed = (typeof valeWed !== 'undefined' ? valeWed : (window.valeWed || {}));
+          const _piRateFn = (typeof pagibigRateByMonthly === 'function' ? pagibigRateByMonthly : (window.pagibigRateByMonthly || null));
+          const _phRateFn = (typeof philhealthRateByMonthly === 'function' ? philhealthRateByMonthly : (window.philhealthRateByMonthly || null));
+          const _sssFn = (typeof sssShareByMonthly === 'function' ? sssShareByMonthly : (window.sssShareByMonthly || null));
+          const _piFlat = (typeof pagibigRate !== 'undefined' ? pagibigRate : (window.pagibigRate || 0));
+          const _phFlat = (typeof philhealthRate !== 'undefined' ? philhealthRate : (window.philhealthRate || 0));
+          _employees.forEach(emp => {
+            const id = emp.id;
+            const rH = Number(_regHours[id] || 0);
+            const stored = _storedEmployees[id];
+            const rate = Number((stored && stored.hourlyRate) ?? (_rates[id] ?? 0)) || 0;
+            if (_rates) _rates[id] = rate;
+            const lSSS = Number(_loanSSS[id] || 0);
+            const lPI = Number(_loanPI[id] || 0);
+            const v = Number(_vale[id] || 0);
+            const vW = Number(_valeWed[id] || 0);
+            const regPay = +(rH * rate).toFixed(2);
+            const monthly = rate * 8 * 24;
+            const piRate = (_piRateFn ? _piRateFn(monthly) : _piFlat);
+            const phRate = (_phRateFn ? _phRateFn(monthly) : _phFlat);
+            const pagibig = +((regPay * piRate)).toFixed(2);
+            const philhealth = +((regPay * phRate)).toFixed(2);
+            const sssFull = (_sssFn ? _sssFn(monthly) : 0);
+            const sss = +(sssFull / div).toFixed(2);
+            const sssLoan = +(lSSS / div).toFixed(2);
+            const piLoan = +(lPI / div).toFixed(2);
+            const total = +(pagibig + philhealth + sss + sssLoan + piLoan + v + vW).toFixed(2);
+            const tr = document.createElement('tr');
+            tr.innerHTML = '<td>'+id+'</td><td class="wrap">'+(emp.name||'')+'</td>'+
+              '<td class="num">'+formatDeductionDisplay(pagibig)+'</td>'+
+              '<td class="num">'+formatDeductionDisplay(philhealth)+'</td>'+
+              '<td class="num">'+formatDeductionDisplay(sss)+'</td>'+
+              '<td class="num">'+formatDeductionDisplay(sssLoan)+'</td>'+
+              '<td class="num">'+formatDeductionDisplay(piLoan)+'</td>'+
+              '<td class="num">'+formatDeductionDisplay(v)+'</td>'+
+              '<td class="num">'+formatDeductionDisplay(vW)+'</td>'+
+              '<td class="num">'+formatDeductionDisplay(total)+'</td>';
+            frag.appendChild(tr);
+          });
+          dtbody.appendChild(frag);
+        } catch(e) { try { return orig(); } catch(_){} }
+        try { (window.scheduleTotals||window.updateDeductionsGrandTotals||function(){})(); } catch(e){}
       };
       optimized.__perfWrapped = true;
       window.renderDeductionsTable = optimized;
