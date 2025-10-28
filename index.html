@@ -6878,8 +6878,12 @@ rows += `<tr class="allowance">
       const lPI  = (typeof loanPI!=='undefined'  && loanPI ) ? loanPI  : {};
       list.forEach(emp=>{
         const id = emp.id;
-        const bucket = ensureBucket(se?.[id]?.company);
         const rH = num(rHours[id]);
+        const oH = (typeof otHours !== 'undefined' && otHours) ? num(otHours[id]) : 0;
+        const adjH = (typeof adjHrs !== 'undefined' && adjHrs) ? num(adjHrs[id]) : 0;
+        const totalHours = rH + oH + Math.abs(adjH);
+        if (totalHours <= 0) return;
+        const bucket = ensureBucket(se?.[id]?.company);
         const rate = num(se?.[id]?.hourlyRate ?? rates?.[id]);
         const regPay = +(rH * rate).toFixed(2);
         const monthly = rate * 8 * 24;
