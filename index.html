@@ -1508,7 +1508,6 @@ window.addEventListener('load', dashReports);
           @keyframes npSpin{to{transform:rotate(360deg)}}
           #newPeriodModal .error{color:#b91c1c;font-size:12px;display:none;margin-top:8px}
           #historyTable tbody tr{cursor:pointer;}
-          #historyTable tbody tr.selected{background:#e0f2fe;}
           @media (max-width: 520px){
             #newPeriodModal .card{width:94vw}
             #newPeriodModal .row > div{flex-basis:100%}
@@ -1577,10 +1576,6 @@ window.addEventListener('load', dashReports);
      </thead>
      <tbody></tbody>
    </table>
-   <div class="controls" style="margin-top:8px;">
-     <button id="diffBtn">Diff Selected</button>
-   </div>
-
    <!-- Full Backup & Restore (Dashboard) -->
    <h4 style="margin-top:18px">Full Backup & Restore</h4>
    <div class="controls" id="dashBackupControls" style="gap:8px; align-items:center; flex-wrap:wrap;">
@@ -4167,7 +4162,7 @@ document.addEventListener('DOMContentLoaded', function() {
   This script defines utilities for managing payroll history snapshots. It is intentionally
   separated from the existing payroll logic to avoid altering core calculations.
   The dashboard allows users to select a date range, generate a snapshot of the current payroll table,
-  lock it to prevent further edits, view past snapshots, download CSV versions, and compare (diff) two snapshots.
+  lock it to prevent further edits, view past snapshots, and download CSV versions.
 -->
 <script>
 // Shared helpers for formatting dashboard dates in MM-DD-YYYY layout.
@@ -4490,8 +4485,6 @@ document.addEventListener('DOMContentLoaded', () => {
   const dashLockBtn = document.getElementById('dashLock');
   const historyTableBody = document.querySelector('#historyTable tbody');
   const snapshotView = document.getElementById('snapshotView');
-  const diffBtn = document.getElementById('diffBtn');
-
   // Reference to the Active Payrolls table body
   const activeTableBody = document.querySelector('#activePayrollTable tbody');
 
@@ -4613,7 +4606,6 @@ document.addEventListener('DOMContentLoaded', () => {
       const tr = document.createElement('tr');
       tr.dataset.index = index;
       tr.tabIndex = 0;
-      tr.setAttribute('aria-selected', 'false');
       const startText = formatDisplayDate(snap.startDate);
       const endText = formatDisplayDate(snap.endDate);
       // Build row HTML; note small hash display for brevity
@@ -5154,8 +5146,6 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!actionBtn) {
       const row = target.closest('tr');
       if (!row || !historyTableBody.contains(row)) return;
-      row.classList.toggle('selected');
-      row.setAttribute('aria-selected', row.classList.contains('selected') ? 'true' : 'false');
       try { if (typeof row.focus === 'function') row.focus({ preventScroll: true }); } catch {}
       return;
     }
@@ -5236,84 +5226,6 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
 
-  historyTableBody && historyTableBody.addEventListener('keydown', (e) => {
-    if (e.key !== ' ' && e.key !== 'Enter') return;
-    if (e.target.closest('button')) return;
-    const row = e.target.closest('tr');
-    if (!row || !historyTableBody.contains(row)) return;
-    e.preventDefault();
-    row.classList.toggle('selected');
-    row.setAttribute('aria-selected', row.classList.contains('selected') ? 'true' : 'false');
-  });
-
-  // Compare two snapshots and display net pay differences
-  diffBtn && diffBtn.addEventListener('click', () => {
-    const selectedRows = Array.from(document.querySelectorAll('#historyTable tbody tr.selected'));
-    if (selectedRows.length !== 2) {
-      alert('Please select exactly two snapshots to compare.');
-      return;
-    }
-    const idx1 = parseInt(selectedRows[0].dataset.index, 10);
-    const idx2 = parseInt(selectedRows[1].dataset.index, 10);
-    const s1 = payrollHistory[idx1];
-    const s2 = payrollHistory[idx2];
-    if (!s1 || !s2) return;
-    const map1 = {};
-    s1.rows.forEach(r => { map1[r.id] = r; });
-    const map2 = {};
-    s2.rows.forEach(r => { map2[r.id] = r; });
-    const allIds = new Set([...Object.keys(map1), ...Object.keys(map2)]);
-    if (snapshotView) snapshotView.innerHTML = '';
-    const table = document.createElement('table');
-    table.style.borderCollapse = 'collapse';
-    table.style.width = '100%';
-    const thead = document.createElement('thead');
-    const hr = document.createElement('tr');
-    const range1 = formatDateRange(s1.startDate, s1.endDate);
-    const range2 = formatDateRange(s2.startDate, s2.endDate);
-    [
-      'ID',
-      'Name',
-      range1 ? `Net (${range1})` : 'Net',
-      range2 ? `Net (${range2})` : 'Net',
-      'Difference'
-    ].forEach(h => {
-      const th = document.createElement('th');
-      th.textContent = h;
-      th.style.border = '1px solid #e2e8f0';
-      th.style.background = '#f1f5f9';
-      th.style.padding = '4px';
-      hr.appendChild(th);
-    });
-    thead.appendChild(hr);
-    table.appendChild(thead);
-    const tbody = document.createElement('tbody');
-    allIds.forEach(id => {
-      const r1 = map1[id] || {};
-      const r2 = map2[id] || {};
-      const name = r2.name || r1.name || '';
-      const net1 = parseFloat(r1.netPay) || 0;
-      const net2 = parseFloat(r2.netPay) || 0;
-      const diff = (net2 - net1).toFixed(2);
-      const tr = document.createElement('tr');
-      [id, name, net1.toFixed(2), net2.toFixed(2), diff].forEach((val, i) => {
-        const td = document.createElement('td');
-        td.textContent = val;
-        td.style.border = '1px solid #e2e8f0';
-        td.style.padding = '4px';
-        if (i >= 2) td.style.textAlign = 'right';
-        tr.appendChild(td);
-      });
-      // Highlight difference cell
-      const diffVal = parseFloat(diff);
-      const diffCell = tr.children[4];
-      if (diffVal > 0) diffCell.style.background = '#dcfce7';
-      else if (diffVal < 0) diffCell.style.background = '#fee2e2';
-      tbody.appendChild(tr);
-    });
-    table.appendChild(tbody);
-    if (snapshotView) snapshotView.appendChild(table);
-  });
 
   // Initial render on page load
   renderHistory();
