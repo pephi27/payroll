@@ -476,6 +476,27 @@ function safePrint(win){
     data.piLoanRaw = piLoanRaw;
     data.sssLoan = loanSharePerPeriod(sssLoanRaw);
     data.piLoan = loanSharePerPeriod(piLoanRaw);
+    var adjRawDataset = row && row.dataset ? toNum(row.dataset.adjustmentRaw) : 0;
+    var adjPosDataset = row && row.dataset ? toNum(row.dataset.adjustmentPositive) : 0;
+    var adjDedDataset = row && row.dataset ? toNum(row.dataset.adjustmentDeduction) : 0;
+    if (!(adjPosDataset > 0) && !(adjDedDataset > 0)){
+      var mapVal = 0;
+      try {
+        if (typeof adjustments !== 'undefined' && adjustments && data.id){
+          mapVal = Number(adjustments[data.id] ?? 0) || 0;
+        }
+      } catch(e){ mapVal = 0; }
+      var split = splitAdjustmentValue(mapVal);
+      adjRawDataset = split.raw;
+      adjPosDataset = split.positive;
+      adjDedDataset = split.deduction;
+    }
+    data.adjustmentRaw = adjRawDataset;
+    data.adjustmentPositive = adjPosDataset;
+    data.adjustmentDeductions = adjDedDataset;
+    if (!data.adjustments || toNum(data.adjustments) === 0){
+      data.adjustments = adjPosDataset > 0 ? adjPosDataset.toFixed(2) : data.adjustments;
+    }
     if (!data.totalHours){
       var r = toNum(data.regHours);
       var o = toNum(data.otHours);
@@ -506,8 +527,9 @@ function safePrint(win){
     addDed('Pag-IBIG Loan', data.piLoan);
     addDed('Account', data.vale);
     addDed('Wed Vale', data.valeWed);
+    addDed('Adjustments', data.adjustmentDeductions);
     var bantayRow = toNum(data.bantay) !== 0 ? `<tr><td>Bantay</td><td>${fmt(data.bantay)}</td></tr>` : '';
-    var adjRow = toNum(data.adjustments) !== 0 ? `<tr><td>Adjustments</td><td>${fmt(data.adjustments)}</td></tr>` : '';
+    var adjRow = toNum(data.adjustmentPositive) !== 0 ? `<tr><td>Adjustments</td><td>${fmt(data.adjustmentPositive)}</td></tr>` : '';
     var totalRow = toNum(data.totalDeductions) > 0 ? `<tr><td>Total Deductions</td><td>${fmt(data.totalDeductions)}</td></tr>` : '';
     var rateRaw = (data.rate != null ? String(data.rate).trim() : '');
     var rateDisplay = rateRaw ? fmt(data.rate) : '-';
@@ -2445,7 +2467,7 @@ window.addEventListener('load', dashReports);
       <br/>â€¢ <strong>Column 6:</strong> SSS Loan (edit this value)
       <br/>â€¢ <strong>Column 7:</strong> Pag-IBIG Loan (edit this value)
       <br/>â€¢ <strong>Column 8:</strong> Account (edit this value)
-      <br/>â€¢ <strong>Column 9:</strong> Adjustments (edit this value as needed)
+      <br/>â€¢ <strong>Column 9:</strong> Adjustments (auto-filled from negative manual adjustments, edit if needed)
       <br/>â€¢ <strong>Column 10:</strong> Wed Vale (edit this value)
       <br/><strong>Important:</strong> Don't change columns 1-5 or 11 (they're calculated automatically)
       <br/><strong>Note:</strong> If employee names are split into 2 columns, the system automatically adjusts
@@ -2489,7 +2511,7 @@ window.addEventListener('load', dashReports);
     <!-- Manual Adjustments Tab -->
     <div class="tab" id="adjustmentsTab">
      <div class="section note">
-      Enter positive or negative adjustments for each employee. These values will be added (or subtracted if negative) to the net pay. Adjustments are saved automatically.
+      Enter positive adjustments to add to payroll. Enter negative amounts to create deductions&mdash;they will appear automatically in the Deductions tab and will not reduce the gross pay calculation. Adjustments are saved automatically.
      </div>
      <table id="adjustmentsTable">
       <thead>
@@ -2976,6 +2998,19 @@ function formatDeductionDisplay(value){
   return Math.abs(num) < 0.005 ? '-' : num.toFixed(2);
 }
 
+function roundToCents(value){
+  const num = Number(value);
+  if (!Number.isFinite(num)) return 0;
+  return Math.round(num * 100) / 100;
+}
+
+function splitAdjustmentValue(value){
+  const rounded = roundToCents(value);
+  const positive = rounded > 0 ? +rounded.toFixed(2) : 0;
+  const deduction = rounded < 0 ? +(-rounded).toFixed(2) : 0;
+  return { raw: rounded, positive, deduction };
+}
+
 function renderDeductionsTable(){
   syncPeriodScopedData();
   const dtbody = document.querySelector('#deductionsTable tbody');
@@ -2989,7 +3024,8 @@ function renderDeductionsTable(){
     const lPI = Number(loanPI[emp.id] ?? 0);
     const v = Number(vale[emp.id] ?? 0);
     const vW = Number(valeWed[emp.id] ?? 0);
-    const adj = Number(adjustments[emp.id] ?? 0);
+    const adjParts = splitAdjustmentValue(adjustments[emp.id]);
+    const adjDeduction = adjParts.deduction;
     const regPay = +(rH * rate).toFixed(2);
     // Use dynamic contribution tables for Pag-IBIG and PhilHealth.  Determine the
     // applicable rate based on monthly income and multiply by regular pay.
@@ -3004,7 +3040,7 @@ function renderDeductionsTable(){
     const sss = (flags.sss === false) ? 0 : +((sssFull / div).toFixed(2));
     const sssLoan = +(lSSS / div).toFixed(2);
     const piLoan = +(lPI / div).toFixed(2);
-    const total = +(pagibig + philhealth + sss + sssLoan + piLoan + v + vW).toFixed(2);
+    const total = +(pagibig + philhealth + sss + sssLoan + piLoan + v + vW + adjDeduction).toFixed(2);
     const tr = document.createElement('tr');
     tr.innerHTML = [
       `<td>${emp.id}</td>`,
@@ -3015,7 +3051,7 @@ function renderDeductionsTable(){
       `<td class="num">${formatDeductionDisplay(sssLoan)}</td>`,
       `<td class="num">${formatDeductionDisplay(piLoan)}</td>`,
       `<td class="num">${formatDeductionDisplay(v)}</td>`,
-      `<td class="num">${formatDeductionDisplay(adj)}</td>`,
+      `<td class="num">${formatDeductionDisplay(adjDeduction)}</td>`,
       `<td class="num">${formatDeductionDisplay(vW)}</td>`,
       `<td class="num">${formatDeductionDisplay(total)}</td>`
     ].join('');
@@ -3053,11 +3089,13 @@ document.addEventListener('click', (e)=>{
         const sssLoanRaw = +(Number((typeof loanSSS !== 'undefined' ? loanSSS?.[id] : 0)) || 0).toFixed(2);
         const piLoanRaw  = +(Number((typeof loanPI  !== 'undefined' ? loanPI?.[id]  : 0)) || 0).toFixed(2);
         const valeRaw    = +(Number((typeof vale   !== 'undefined' ? vale?.[id]   : 0)) || 0).toFixed(2);
-        const adjRaw     = +(Number((typeof adjustments !== 'undefined' ? adjustments?.[id] : 0)) || 0).toFixed(2);
+        const adjRawVal  = Number((typeof adjustments !== 'undefined' ? adjustments?.[id] : 0)) || 0;
+        const adjSplit   = splitAdjustmentValue(adjRawVal);
+        const adjDeduct  = adjSplit.deduction;
         const wedValeRaw = +(Number((typeof valeWed!== 'undefined' ? valeWed?.[id]: 0)) || 0).toFixed(2);
 
         // Total per-period (loans contribute their per-period share here)
-        const totalPer  = +(pagibig + philhealth + sssPer + (sssLoanRaw/div) + (piLoanRaw/div) + valeRaw + wedValeRaw).toFixed(2);
+        const totalPer  = +(pagibig + philhealth + sssPer + (sssLoanRaw/div) + (piLoanRaw/div) + valeRaw + wedValeRaw + adjDeduct).toFixed(2);
 
         rows.push([
           id, name,
@@ -3067,7 +3105,7 @@ document.addEventListener('click', (e)=>{
           sssLoanRaw.toFixed(2),
           piLoanRaw.toFixed(2),
           valeRaw.toFixed(2),
-          adjRaw.toFixed(2),
+          adjDeduct.toFixed(2),
           wedValeRaw.toFixed(2),
           totalPer.toFixed(2)
         ]);
@@ -3807,14 +3845,17 @@ function calculateRow(tr){  const readNum = sel => { const el = tr.querySelector
   const vW = Number((vWEl && typeof vWEl.value !== 'undefined') ? vWEl.value : readNum('.valeWed'))||0;
 
   // Adjustment amount for this employee (may be positive or negative)
-  const adj = Number(adjustments[id] || 0);
+  const adjParts = splitAdjustmentValue(adjustments[id]);
+  const adjRaw = adjParts.raw;
+  const adjPositive = adjParts.positive;
+  const adjDeduction = adjParts.deduction;
   // Bantay allowance (treated as positive allowance).  Parse numeric value from bantay input.
   const bVal = parseFloat((tr.querySelector('.bantay')?.value || '').trim()) || 0;
 
   const regPay = +(reg * rate).toFixed(2);
   tr.querySelector('.totalHrs').textContent = totalHrs.toFixed(2);
   const otPay = +(otTotal * rate * (Number(otMultiplier)||0)).toFixed(2);
-  const gross = +(regPay + otPay + adj + bVal).toFixed(2);
+  const gross = +(regPay + otPay + adjPositive + bVal).toFixed(2);
   // Compute contributions using dynamic tables (employee share).  Determine the
   // appropriate rate based on the monthly income and multiply by regular pay.
   const monthly = rate * 8 * 24;
@@ -3823,7 +3864,7 @@ function calculateRow(tr){  const readNum = sel => { const el = tr.querySelector
   // Check per-employee contribution deduction flags; default to true if not set
   const flags = contribFlags[id] || {};
   const div = Number(divisor) || 1;
-  const hasCompensation = (reg > 0) || (otTotal > 0) || (adj !== 0);
+  const hasCompensation = (reg > 0) || (otTotal > 0) || (adjPositive > 0) || (bVal > 0);
   const pagibig = (hasCompensation && flags.pagibig !== false ? +((regPay * piRate)).toFixed(2) : 0);
   const philhealth = (hasCompensation && flags.philhealth !== false ? +((regPay * phRate)).toFixed(2) : 0);
   const sssFull = hasCompensation ? sssShareByMonthly(monthly) : 0;
@@ -3833,7 +3874,7 @@ function calculateRow(tr){  const readNum = sel => { const el = tr.querySelector
   const valeAmt = v;
   const wedValeAmt = vW;
 
-  const total = pagibig + philhealth + sss + sssLoan + piLoan + valeAmt + wedValeAmt;
+  const total = pagibig + philhealth + sss + sssLoan + piLoan + valeAmt + wedValeAmt + adjDeduction;
   const net = gross - total;
 
   w('.regPay', regPay);
@@ -3845,8 +3886,13 @@ function calculateRow(tr){  const readNum = sel => { const el = tr.querySelector
   w('.totalDed', total);
   // Populate adjustment cell (if exists) and net pay
   if (tr.querySelector('.adjAmt')) {
-    w('.adjAmt', adj);
+    w('.adjAmt', adjPositive);
   }
+  try {
+    tr.dataset.adjustmentRaw = adjRaw ? adjRaw.toFixed(2) : '0.00';
+    tr.dataset.adjustmentPositive = adjPositive ? adjPositive.toFixed(2) : '0.00';
+    tr.dataset.adjustmentDeduction = adjDeduction ? adjDeduction.toFixed(2) : '0.00';
+  } catch (_) {}
   // Update the displayed adjustment hours cell if present
   const adjHrsCell = tr.querySelector('.adjHrs'); if (adjHrsCell) { adjHrsCell.textContent = (adjHours===0 ? '-' : adjHours.toFixed(2)); }
   w('.netPay', net);
@@ -4606,6 +4652,22 @@ document.addEventListener('DOMContentLoaded', () => {
       data.valeWed = readNum('.valeWed', 18);
       data.totalDed = readNum('.totalDed', 19);
       data.netPay = readNum('.netPay', 20);
+      try {
+        const rawDed = row && row.dataset ? row.dataset.adjustmentDeduction : null;
+        if (rawDed != null && rawDed !== '') {
+          const parsed = parseFloat(String(rawDed).replace(/,/g,''));
+          if (!isNaN(parsed)) {
+            data.adjustmentDeduction = parsed;
+          }
+        }
+        if (typeof data.adjustmentDeduction === 'undefined') {
+          const val = adjustments && data.id ? Number(adjustments[data.id] ?? 0) : 0;
+          data.adjustmentDeduction = splitAdjustmentValue(val).deduction;
+        }
+      } catch (e) {
+        const val = adjustments && data.id ? Number(adjustments[data.id] ?? 0) : 0;
+        data.adjustmentDeduction = splitAdjustmentValue(val).deduction;
+      }
       // Capture DTR records for this employee within the selected date range. Stores an array of {date, times}
       try {
         /*
@@ -5304,7 +5366,7 @@ document.addEventListener('DOMContentLoaded', () => {
       let regPay = +(regHrs * rate).toFixed(2);
       const otTotal = otHrs + adjHrs;
       let otPay  = +(otTotal * rate * otMult).toFixed(2);
-      let gross  = +(regPay + otPay).toFixed(2);
+      let gross  = +(regPay + otPay + adjAmt + bantay).toFixed(2);
       let pagibig = num(r.pagibig);
       let philhealth = num(r.philhealth);
       let sss = num(r.sss);
@@ -5312,7 +5374,20 @@ document.addEventListener('DOMContentLoaded', () => {
       const loanPIRaw  = num(r.loanPI);
       const vale = num(r.vale);
       const wedVale = num(r.valeWed);
-      const adjAmt = num(r.adjAmt);
+      let adjAmt = num(r.adjAmt);
+      let adjDeduction = num(r.adjustmentDeduction);
+      if (!(adjAmt > 0) || !(adjDeduction >= 0)){
+        try {
+          const adjMap = (typeof adjustments !== 'undefined' ? adjustments : (typeof window !== 'undefined' ? window.adjustments : {})) || {};
+          const rawAdj = Number(adjMap[id] ?? 0) || 0;
+          const split = splitAdjustmentValue(rawAdj);
+          if (!(adjAmt > 0)) adjAmt = split.positive;
+          if (!(adjDeduction > 0)) adjDeduction = split.deduction;
+        } catch (err) {
+          if (!(adjDeduction >= 0)) adjDeduction = 0;
+        }
+      }
+      adjDeduction = adjDeduction || 0;
       const bantay = num(r.bantay);
 
       // Heuristic: if snapshot has truncated values (e.g., 2.00 due to commas), recompute using current rules
@@ -5335,8 +5410,9 @@ document.addEventListener('DOMContentLoaded', () => {
       const loanPIPer  = +(loanPIRaw  / curDiv).toFixed(2);
 
       // Compute net pay consistent with Payroll tab
-      const totalDeds = pagibig + philhealth + sss + loanSSSPer + loanPIPer + vale + wedVale;
-      const netPay = +(gross - totalDeds + adjAmt + bantay).toFixed(2);
+      const totalDeds = pagibig + philhealth + sss + loanSSSPer + loanPIPer + vale + wedVale + adjDeduction;
+      const netPay = +(gross - totalDeds).toFixed(2);
+      try { r.adjustmentDeduction = adjDeduction; } catch (err) {}
 
         const vals = [
           id, r.name, rate, regHrs, otHrs, adjHrs, totalHrs,
@@ -10704,6 +10780,19 @@ document.addEventListener('click', function(e) {
     return per.toFixed(2);
   }
 
+  function datasetNumber(key){
+    if (!row || !row.dataset) return 0;
+    var raw = row.dataset[key];
+    if (raw == null || raw === '') return 0;
+    var num = parseFloat(raw.toString().replace(/,/g,''));
+    return isNaN(num) ? 0 : num;
+  }
+
+  function parseAmount(val){
+    var num = parseFloat((val == null ? '' : val).toString().replace(/,/g,''));
+    return isNaN(num) ? 0 : num;
+  }
+
   var rowData = (typeof window.collectPayslipRowData === 'function') ? window.collectPayslipRowData(row) : null;
 
   var id = (rowData && rowData.id) || ((row.cells[0] && row.cells[0].textContent) ? row.cells[0].textContent.trim() : '');
@@ -10722,9 +10811,31 @@ document.addEventListener('click', function(e) {
   var piLoan    = rowData ? rowData.piLoan : perLoanShare(inputVal('.loanPI'));
   var valeAmt   = rowData ? rowData.vale : inputVal('.vale');
   var wedValeAmt= rowData ? rowData.valeWed : inputVal('.valeWed');
-  var adjAmt    = rowData ? rowData.adjustments : cellText('.adjAmt');
+  var bantayVal = rowData ? rowData.bantay : inputVal('.bantay');
+  var adjPositiveNum = rowData ? Number(rowData.adjustmentPositive || 0) : datasetNumber('adjustmentPositive');
+  var adjDeductNum = rowData ? Number(rowData.adjustmentDeductions || 0) : datasetNumber('adjustmentDeduction');
+  if (!(adjPositiveNum > 0)){
+    adjPositiveNum = parseAmount(cellText('.adjAmt'));
+  }
+  if (!(adjDeductNum > 0)){
+    try {
+      var rawAdjMap = 0;
+      if (typeof adjustments !== 'undefined' && adjustments && id){
+        rawAdjMap = Number(adjustments[id] ?? 0) || 0;
+      } else if (typeof window !== 'undefined' && window.adjustments && id){
+        rawAdjMap = Number(window.adjustments[id] ?? 0) || 0;
+      }
+      var splitAdj = splitAdjustmentValue(rawAdjMap);
+      if (!(adjPositiveNum > 0)) adjPositiveNum = splitAdj.positive;
+      adjDeductNum = splitAdj.deduction;
+    } catch (err) { adjDeductNum = adjDeductNum || 0; }
+  }
+  var adjAmt    = adjPositiveNum > 0 ? adjPositiveNum.toFixed(2) : '0.00';
+  var adjDeductionStr = adjDeductNum > 0 ? adjDeductNum.toFixed(2) : '0.00';
   var totalDed  = rowData ? rowData.totalDeductions : cellText('.totalDed');
   var net       = rowData ? rowData.net : cellText('.netPay');
+  var bantayRowLegacy = parseAmount(bantayVal) !== 0 ? `<tr><td>Bantay</td><td class="right">${bantayVal}</td></tr>` : '';
+  var adjPositiveRowLegacy = adjPositiveNum > 0 ? `<tr><td>Adjustments</td><td class="right">${adjAmt}</td></tr>` : '';
 
   var ws = (document.getElementById('weekStart') || {}).value || '';
   var we = (document.getElementById('weekEnd')   || {}).value || '';
@@ -10782,6 +10893,8 @@ h3{margin:0 0 3px 0;font-size:10px;}
       <tr><th colspan="2">Earnings</th></tr>
       <tr><td>Regular Pay</td><td class="right">${regPay}</td></tr>
       <tr><td>OT Pay</td><td class="right">${otPay}</td></tr>
+      ${bantayRowLegacy}
+      ${adjPositiveRowLegacy}
     </table>
   </div>
 
@@ -10795,7 +10908,7 @@ h3{margin:0 0 3px 0;font-size:10px;}
       <tr><td>Pag-IBIG Loan</td><td class="right">${piLoan}</td></tr>
       <tr><td>Account</td><td class="right">${valeAmt}</td></tr>
       <tr><td>Wednesday Vale</td><td class="right">${wedValeAmt}</td></tr>
-      <tr><td>Adjustments</td><td class="right">${adjAmt}</td></tr>
+      <tr><td>Adjustments</td><td class="right">${adjDeductionStr}</td></tr>
       <tr><th>Total Deductions</th><th class="right">${totalDed}</th></tr>
     </table>
   </div>
