@@ -4849,6 +4849,8 @@ document.addEventListener('DOMContentLoaded', () => {
     if (we) we.disabled = true;
     if (genBtn) genBtn.disabled = true;
     if (lockBtn) lockBtn.disabled = true;
+    // Ensure the payroll tab reflects the locked state as well
+    try { setPayrollLockedUI(true); } catch (err) { /* no-op if helper is unavailable */ }
   }
   // Expose helper globally so other scripts can disable editing
   window.disablePayrollInputs = disablePayrollInputs;
@@ -4904,6 +4906,8 @@ document.addEventListener('DOMContentLoaded', () => {
     if (we) we.disabled = false;
     if (genBtn) genBtn.disabled = false;
     if (lockBtn) lockBtn.disabled = false;
+    // Restore interactivity for the payroll tab when unlocked
+    try { setPayrollLockedUI(false); } catch (err) { /* no-op if helper is unavailable */ }
   }
   // Expose helper globally so other scripts can enable editing
   window.enablePayrollInputs = enablePayrollInputs;
