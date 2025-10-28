@@ -2443,10 +2443,11 @@ window.addEventListener('load', dashReports);
      <div class="section note">
       <strong>File Format:</strong> Use the exported CSV from this table, then edit only these columns:
       <br/>â€¢ <strong>Column 6:</strong> SSS Loan (edit this value)
-      <br/>â€¢ <strong>Column 7:</strong> Pag-IBIG Loan (edit this value)  
-      <br/>â€¢ <strong>Column 8:</strong> Vale (edit this value)
-      <br/>â€¢ <strong>Column 9:</strong> Wed Vale (edit this value)
-      <br/><strong>Important:</strong> Don't change columns 1-5 or 10 (they're calculated automatically)
+      <br/>â€¢ <strong>Column 7:</strong> Pag-IBIG Loan (edit this value)
+      <br/>â€¢ <strong>Column 8:</strong> Account (edit this value)
+      <br/>â€¢ <strong>Column 9:</strong> Adjustments (edit this value as needed)
+      <br/>â€¢ <strong>Column 10:</strong> Wed Vale (edit this value)
+      <br/><strong>Important:</strong> Don't change columns 1-5 or 11 (they're calculated automatically)
       <br/><strong>Note:</strong> If employee names are split into 2 columns, the system automatically adjusts
      </div>
      <table id="deductionsTable">
@@ -2460,6 +2461,7 @@ window.addEventListener('load', dashReports);
         <th>SSS Loan</th>
         <th>Pag-IBIG Loan</th>
         <th>Account</th>
+        <th>Adjustments</th>
         <th>Wed Vale</th>
         <th>Total Deductions</th>
        </tr>
@@ -2474,6 +2476,7 @@ window.addEventListener('load', dashReports);
           <td class="num" data-col="loanSSS">0.00</td>
           <td class="num" data-col="loanPI">0.00</td>
           <td class="num" data-col="vale">0.00</td>
+          <td class="num" data-col="adjustments">0.00</td>
           <td class="num" data-col="valeWed">0.00</td>
           <td class="num" data-col="total">0.00</td>
         </tr>
@@ -2866,6 +2869,7 @@ async function saveCurrentPeriodDeductions(){
 saveCurrentPeriodDeductions();
 let allAdjustments = JSON.parse(localStorage.getItem(LS_ADJ) || '{}');
 let adjustments = allAdjustments[currentPeriodKey] || {};
+try { window.adjustments = adjustments; } catch(_){ }
 let allAdjHrs = JSON.parse(localStorage.getItem(LS_ADJ_HRS) || '{}');
 let adjHrs = allAdjHrs[currentPeriodKey] || {};
 let allBantay = JSON.parse(localStorage.getItem(LS_BANTAY) || '{}');
@@ -2886,6 +2890,7 @@ function syncPeriodScopedData(){
   vale = ensurePeriodData(allVale, pk, tplVale, { allowDefault: carryForward });
   valeWed = ensurePeriodData(allValeWed, pk, tplValeWed, { allowDefault: carryForward });
   adjustments = allAdjustments[pk] || {};
+  try { window.adjustments = adjustments; } catch(_){ }
   adjHrs = allAdjHrs[pk] || {};
   bantay = allBantay[pk] || {};
   currentPeriodKey = pk;
@@ -2984,6 +2989,7 @@ function renderDeductionsTable(){
     const lPI = Number(loanPI[emp.id] ?? 0);
     const v = Number(vale[emp.id] ?? 0);
     const vW = Number(valeWed[emp.id] ?? 0);
+    const adj = Number(adjustments[emp.id] ?? 0);
     const regPay = +(rH * rate).toFixed(2);
     // Use dynamic contribution tables for Pag-IBIG and PhilHealth.  Determine the
     // applicable rate based on monthly income and multiply by regular pay.
@@ -3009,6 +3015,7 @@ function renderDeductionsTable(){
       `<td class="num">${formatDeductionDisplay(sssLoan)}</td>`,
       `<td class="num">${formatDeductionDisplay(piLoan)}</td>`,
       `<td class="num">${formatDeductionDisplay(v)}</td>`,
+      `<td class="num">${formatDeductionDisplay(adj)}</td>`,
       `<td class="num">${formatDeductionDisplay(vW)}</td>`,
       `<td class="num">${formatDeductionDisplay(total)}</td>`
     ].join('');
@@ -3018,7 +3025,7 @@ function renderDeductionsTable(){
 document.addEventListener('click', (e)=>{
   if(e.target && e.target.id === 'exportDeductionsCSV'){
     try {
-      const header = ['ID','Name','Pag-IBIG','PhilHealth','SSS','SSS Loan','Pag-IBIG Loan','Account','Wed Vale','Total Deductions'];
+      const header = ['ID','Name','Pag-IBIG','PhilHealth','SSS','SSS Loan','Pag-IBIG Loan','Account','Adjustments','Wed Vale','Total Deductions'];
       const rows = [header];
 
       const div = Number(typeof divisor !== 'undefined' ? divisor : 1) || 1;
@@ -3046,6 +3053,7 @@ document.addEventListener('click', (e)=>{
         const sssLoanRaw = +(Number((typeof loanSSS !== 'undefined' ? loanSSS?.[id] : 0)) || 0).toFixed(2);
         const piLoanRaw  = +(Number((typeof loanPI  !== 'undefined' ? loanPI?.[id]  : 0)) || 0).toFixed(2);
         const valeRaw    = +(Number((typeof vale   !== 'undefined' ? vale?.[id]   : 0)) || 0).toFixed(2);
+        const adjRaw     = +(Number((typeof adjustments !== 'undefined' ? adjustments?.[id] : 0)) || 0).toFixed(2);
         const wedValeRaw = +(Number((typeof valeWed!== 'undefined' ? valeWed?.[id]: 0)) || 0).toFixed(2);
 
         // Total per-period (loans contribute their per-period share here)
@@ -3059,6 +3067,7 @@ document.addEventListener('click', (e)=>{
           sssLoanRaw.toFixed(2),
           piLoanRaw.toFixed(2),
           valeRaw.toFixed(2),
+          adjRaw.toFixed(2),
           wedValeRaw.toFixed(2),
           totalPer.toFixed(2)
         ]);
@@ -3148,6 +3157,8 @@ document.addEventListener('click', (e)=>{
         const idxPagibigLoan = header.indexOf('pag-ibig loan');
         const idxVale = header.indexOf('vale');
         const idxAccount = header.indexOf('account');
+        const idxAdjustments = header.indexOf('adjustments');
+        const idxAdjust = header.indexOf('adjustment');
         const idxWedVale = header.indexOf('wed vale');
         const IDX = {
           id: idxId,
@@ -3155,6 +3166,7 @@ document.addEventListener('click', (e)=>{
           sssloan: idxSSSLoan,
           pagibigloan: idxPagibigLoan,
           vale: (idxAccount >= 0 ? idxAccount : idxVale),
+          adjustments: (idxAdjustments >= 0 ? idxAdjustments : idxAdjust),
           wedvale: idxWedVale
         };
         if (IDX.id < 0) { alert('Upload missing column: id'); return; }
@@ -3162,7 +3174,11 @@ document.addEventListener('click', (e)=>{
         if (IDX.pagibigloan < 0) { alert('Upload missing column: pag-ibig loan'); return; }
         if (IDX.vale < 0) { alert('Upload missing column: account (or vale)'); return; }
         if (IDX.wedvale < 0) { alert('Upload missing column: wed vale'); return; }
-for (let i = 1; i < rows.length; i++) {
+        const hasAdjustmentsCol = IDX.adjustments >= 0;
+        if (!hasAdjustmentsCol) {
+          console.warn('Upload missing column: adjustments – existing adjustments will remain unchanged.');
+        }
+        for (let i = 1; i < rows.length; i++) {
           const row = rows[i];
           if (row.length < 10) {
             console.log(`Row ${i} too short (${row.length} columns):`, row);
@@ -3174,9 +3190,9 @@ for (let i = 1; i < rows.length; i++) {
           // Only read the specific columns we need for loans and vales
           // Skip the calculated fields (Pag-IBIG, PhilHealth, SSS, Total Deductions)
           // Note: If name is split into 2 columns, adjust accordingly
-          const sssLoan = parseFloat(row[IDX.sssloan]) || 0; const pagibigLoan = parseFloat(row[IDX.pagibigloan]) || 0; const valeVal = parseFloat(row[IDX.vale]) || 0; const wedValeVal = parseFloat(row[IDX.wedvale]) || 0;       // Column 9: Wed Vale (was 8)
-          
-          console.log(`Row ${i}: ID=${empId}, SSS Loan=${sssLoan}, Pag-IBIG Loan=${pagibigLoan}, Vale=${valeVal}, Wed Vale=${wedValeVal}`);
+          const sssLoan = parseFloat(row[IDX.sssloan]) || 0; const pagibigLoan = parseFloat(row[IDX.pagibigloan]) || 0; const valeVal = parseFloat(row[IDX.vale]) || 0; const adjVal = hasAdjustmentsCol ? (parseFloat(row[IDX.adjustments]) || 0) : (adjustments[empId] || 0); const wedValeVal = parseFloat(row[IDX.wedvale]) || 0;       // Column 10: Wed Vale (was 9)
+
+          console.log(`Row ${i}: ID=${empId}, SSS Loan=${sssLoan}, Pag-IBIG Loan=${pagibigLoan}, Vale=${valeVal}, Adjustments=${hasAdjustmentsCol ? adjVal : '(unchanged)'}, Wed Vale=${wedValeVal}`);
           
           if (!empId) continue;
           
@@ -3187,21 +3203,37 @@ for (let i = 1; i < rows.length; i++) {
             loanPI[empId] = pagibigLoan;
             loanSSS[empId] = sssLoan;
             vale[empId] = valeVal;
+            if (hasAdjustmentsCol) {
+              if (!isNaN(adjVal) && adjVal !== 0) {
+                adjustments[empId] = +(adjVal.toFixed(2));
+              } else {
+                delete adjustments[empId];
+              }
+            }
             valeWed[empId] = wedValeVal;
             updated++;
-            console.log(`Updated employee ${empId}:`, { pagibigLoan, sssLoan, vale: valeVal, wedVale: wedValeVal });
+            const updateLog = { pagibigLoan, sssLoan, vale: valeVal, wedVale: wedValeVal };
+            if (hasAdjustmentsCol) updateLog.adjustments = adjVal;
+            console.log(`Updated employee ${empId}:`, updateLog);
           } else {
             errors.push(`Employee ID ${empId} not found`);
             console.log(`Employee ${empId} not found in:`, employeeList.map(e => e.id));
           }
         }
-        
+
         // Save to localStorage + Supabase (wait for persistence before alerting success)
         await saveCurrentPeriodDeductions();
-        
+        if (hasAdjustmentsCol) {
+          allAdjustments[currentPeriodKey] = adjustments;
+          try { window.adjustments = adjustments; } catch(_){ }
+          localStorage.setItem(LS_ADJ, JSON.stringify(allAdjustments));
+        }
+
         // Refresh displays
         if (typeof renderDeductionsTable === 'function') renderDeductionsTable();
         if (typeof renderTable === 'function') renderTable();
+        if (hasAdjustmentsCol && typeof renderAdjustmentsTable === 'function') renderAdjustmentsTable();
+        else if (typeof renderAdjustmentsFoot === 'function') renderAdjustmentsFoot();
         
         // Show results
         let message = `Updated ${updated} employees.`;
@@ -3863,6 +3895,7 @@ function renderAdjustmentsTable() {
         delete adjustments[empId];
       }
       allAdjustments[currentPeriodKey] = adjustments;
+      try { window.adjustments = adjustments; } catch(_){ }
       localStorage.setItem(LS_ADJ, JSON.stringify(allAdjustments));
       calculateAll();
       renderAdjustmentsFoot();
@@ -10335,6 +10368,7 @@ document.addEventListener('DOMContentLoaded', function(){
       loanSSS: findIdx(['sss loan','loan sss']),
       loanPI: findIdx(['pag-ibig loan','pag ibig loan','loan pi','pi loan']),
       vale: findIdx(['vale','account','acct']),
+      adjustments: findIdx(['adjustments','adjustment','adj']),
       valeWed: findIdx(['vale wed','wed vale']),
       total: findIdx(['total','total deductions','total ded'])
     };
@@ -10345,7 +10379,7 @@ document.addEventListener('DOMContentLoaded', function(){
     var foot = document.querySelector('#deductionsTable_foot');
     if (!tb || !foot) return;
     var map = _dedHeadMap();
-    var t = {pagibig:0, philhealth:0, sss:0, loanSSS:0, loanPI:0, vale:0, valeWed:0, total:0};
+    var t = {pagibig:0, philhealth:0, sss:0, loanSSS:0, loanPI:0, vale:0, adjustments:0, valeWed:0, total:0};
     tb.querySelectorAll('tr').forEach(function(tr){
       var c = tr.cells||[];
       function cell(idx){ return (idx>=0 && idx<c.length) ? c[idx].textContent : ''; }
@@ -10355,6 +10389,7 @@ document.addEventListener('DOMContentLoaded', function(){
       t.loanSSS   += _parse(cell(map.loanSSS));
       t.loanPI    += _parse(cell(map.loanPI));
       t.vale      += _parse(cell(map.vale));
+      t.adjustments += _parse(cell(map.adjustments));
       t.valeWed   += _parse(cell(map.valeWed));
       t.total     += _parse(cell(map.total));
     });
@@ -12882,6 +12917,7 @@ document.addEventListener('DOMContentLoaded', async function () {
           const _loanSSS = (typeof loanSSS !== 'undefined' ? loanSSS : (window.loanSSS || {}));
           const _loanPI = (typeof loanPI !== 'undefined' ? loanPI : (window.loanPI || {}));
           const _vale = (typeof vale !== 'undefined' ? vale : (window.vale || {}));
+          const _adjustments = (typeof adjustments !== 'undefined' ? adjustments : (window.adjustments || {}));
           const _valeWed = (typeof valeWed !== 'undefined' ? valeWed : (window.valeWed || {}));
           const _piRateFn = (typeof pagibigRateByMonthly === 'function' ? pagibigRateByMonthly : (window.pagibigRateByMonthly || null));
           const _phRateFn = (typeof philhealthRateByMonthly === 'function' ? philhealthRateByMonthly : (window.philhealthRateByMonthly || null));
@@ -12897,6 +12933,7 @@ document.addEventListener('DOMContentLoaded', async function () {
             const lSSS = Number(_loanSSS[id] || 0);
             const lPI = Number(_loanPI[id] || 0);
             const v = Number(_vale[id] || 0);
+            const adj = Number(_adjustments[id] || 0);
             const vW = Number(_valeWed[id] || 0);
             const regPay = +(rH * rate).toFixed(2);
             const monthly = rate * 8 * 24;
@@ -12917,6 +12954,7 @@ document.addEventListener('DOMContentLoaded', async function () {
               '<td class="num">'+formatDeductionDisplay(sssLoan)+'</td>'+
               '<td class="num">'+formatDeductionDisplay(piLoan)+'</td>'+
               '<td class="num">'+formatDeductionDisplay(v)+'</td>'+
+              '<td class="num">'+formatDeductionDisplay(adj)+'</td>'+
               '<td class="num">'+formatDeductionDisplay(vW)+'</td>'+
               '<td class="num">'+formatDeductionDisplay(total)+'</td>';
             frag.appendChild(tr);
