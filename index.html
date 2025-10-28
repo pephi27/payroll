@@ -48,7 +48,7 @@
               .from(window.SUPABASE_TABLE)
               .select('value')
               .eq('key', key)
-              .single();
+              .maybeSingle();
             if (error || !data) return defaultValue;
             return (data.value ?? defaultValue);
           } else {
@@ -241,7 +241,7 @@ async function readKV(key){
       .from(window.SUPABASE_TABLE)
       .select('value')
       .eq('key', key)
-      .single();
+      .maybeSingle();
     if (error || !data) return null;
     return data.value;
   }catch(e){ console.warn('readKV failed', e); return null; }
@@ -1329,7 +1329,7 @@ window.addEventListener('load', dashReports);
           .from(table)
           .select('value')
           .eq('key', key)
-          .single()
+          .maybeSingle()
           .then(({ data, error }) => {
             if (error || !data) return resolve(undefined);
             const v = data.value;
