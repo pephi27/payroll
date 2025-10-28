@@ -2964,7 +2964,12 @@ function loadEmployees() {
   list.sort((a,b)=> (a.name||'').localeCompare(b.name||''));
   return list;
 }
-const employeeList = loadEmployees();
+function refreshEmployeeList(){
+  employeeList = loadEmployees();
+  try { window.employeeList = employeeList; } catch (_) {}
+}
+let employeeList = loadEmployees();
+try { window.employeeList = employeeList; } catch (_) {}
 function getSssTable(){
   let arr = [];
   try { arr = JSON.parse(localStorage.getItem(LS_SSS_TABLE) || '[]'); }
@@ -7899,7 +7904,10 @@ function resetRanges(){
 document.getElementById('saveRangesBtn').addEventListener('click', saveRangesFromUI);
 document.getElementById('resetRangesBtn').addEventListener('click', resetRanges);
 
-function saveEmployeesToLS(){ localStorage.setItem(LS_EMPLOYEES, JSON.stringify(storedEmployees)); }
+function saveEmployeesToLS(){
+  localStorage.setItem(LS_EMPLOYEES, JSON.stringify(storedEmployees));
+  refreshEmployeeList();
+}
 function renderEmpScheduleDropdowns(){
   const sel = document.getElementById('empScheduleSelect'); if(!sel) return;
   sel.innerHTML = '';
