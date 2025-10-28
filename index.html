@@ -3034,10 +3034,13 @@ function renderDeductionsTable(){
     const phRate = philhealthRateByMonthly(monthly);
     const flags = (typeof contribFlags !== 'undefined' && contribFlags[emp.id]) || {};
     const div = Number(divisor) || 1;
-    const pagibig = (flags.pagibig === false) ? 0 : +((regPay * piRate).toFixed(2));
-    const philhealth = (flags.philhealth === false) ? 0 : +((regPay * phRate).toFixed(2));
-    const sssFull = (flags.sss === false) ? 0 : sssShareByMonthly(monthly);
-    const sss = (flags.sss === false) ? 0 : +((sssFull / div).toFixed(2));
+    const pagibigEnabled = flags.pagibig !== false;
+    const philhealthEnabled = flags.philhealth !== false;
+    const sssEnabled = flags.sss !== false;
+    const pagibig = pagibigEnabled ? +((regPay * piRate).toFixed(2)) : 0;
+    const philhealth = philhealthEnabled ? +((regPay * phRate).toFixed(2)) : 0;
+    const sssFull = sssEnabled ? sssShareByMonthly(monthly) : 0;
+    const sss = sssEnabled ? +((sssFull / div).toFixed(2)) : 0;
     const sssLoan = +(lSSS / div).toFixed(2);
     const piLoan = +(lPI / div).toFixed(2);
     const total = +(pagibig + philhealth + sss + sssLoan + piLoan + v + vW + adjDeduction).toFixed(2);
@@ -3045,9 +3048,9 @@ function renderDeductionsTable(){
     tr.innerHTML = [
       `<td>${emp.id}</td>`,
       `<td class="wrap">${emp.name}</td>`,
-      `<td class="num">${formatDeductionDisplay(pagibig)}</td>`,
-      `<td class="num">${formatDeductionDisplay(philhealth)}</td>`,
-      `<td class="num">${formatDeductionDisplay(sss)}</td>`,
+      `<td class="num">${pagibigEnabled ? formatDeductionDisplay(pagibig) : ''}</td>`,
+      `<td class="num">${philhealthEnabled ? formatDeductionDisplay(philhealth) : ''}</td>`,
+      `<td class="num">${sssEnabled ? formatDeductionDisplay(sss) : ''}</td>`,
       `<td class="num">${formatDeductionDisplay(sssLoan)}</td>`,
       `<td class="num">${formatDeductionDisplay(piLoan)}</td>`,
       `<td class="num">${formatDeductionDisplay(v)}</td>`,
