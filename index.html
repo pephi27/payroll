@@ -4251,22 +4251,30 @@ document.addEventListener('DOMContentLoaded', function(){
     // Insert a column showing adjustment deductions (negative adjustments)
     (function(){
       const norm = (s) => String(s || '').replace(/\s+/g, ' ').trim().toLowerCase();
-      const headerRow = clone.querySelector('thead tr');
-      if (!headerRow) return;
-      const accountIndex = Array.from(headerRow.cells || []).findIndex(cell => norm(cell.textContent) === 'account');
-      if (accountIndex < 0) return;
-      const insertIndex = accountIndex + 1;
+      const findWedCell = (tr) => {
+        if (!tr) return null;
+        return Array.from(tr.cells || []).find(cell => {
+          if (!cell) return false;
+          if (cell.dataset && cell.dataset.col && norm(cell.dataset.col) === 'valewed') return true;
+          if (cell.classList && cell.classList.contains('valeWed')) return true;
+          if (typeof cell.querySelector === 'function' && cell.querySelector('.valeWed')) return true;
+          return norm(cell.textContent) === 'wed vale';
+        }) || null;
+      };
       let totalAdjDeduction = 0;
 
       clone.querySelectorAll('thead tr').forEach(tr => {
+        const ref = findWedCell(tr);
+        if (!ref) return;
         const th = document.createElement('th');
         th.textContent = 'Adj Deduction';
         th.style.textAlign = 'right';
-        const ref = tr.cells && tr.cells[insertIndex] ? tr.cells[insertIndex] : null;
         tr.insertBefore(th, ref);
       });
 
       clone.querySelectorAll('tbody tr').forEach(tr => {
+        const ref = findWedCell(tr);
+        if (!ref) return;
         const td = document.createElement('td');
         td.classList.add('num');
         let raw = 0;
@@ -4277,17 +4285,17 @@ document.addEventListener('DOMContentLoaded', function(){
         if (raw < 0) raw = Math.abs(raw);
         totalAdjDeduction += raw;
         td.textContent = raw > 0 ? raw.toFixed(2) : '0.00';
-        const ref = tr.cells && tr.cells[insertIndex] ? tr.cells[insertIndex] : null;
         tr.insertBefore(td, ref);
       });
 
       const totalText = totalAdjDeduction > 0 ? totalAdjDeduction.toFixed(2) : '0.00';
       clone.querySelectorAll('tfoot tr').forEach(tr => {
+        const ref = findWedCell(tr);
         const td = document.createElement('td');
         td.classList.add('num');
         td.textContent = totalText;
-        const ref = tr.cells && tr.cells[insertIndex] ? tr.cells[insertIndex] : null;
-        tr.insertBefore(td, ref);
+        if (ref) tr.insertBefore(td, ref);
+        else tr.appendChild(td);
       });
     })();
 
@@ -4320,7 +4328,7 @@ document.addEventListener('DOMContentLoaded', function(){
     if (!w) return;
     w.document.write('<html><head><meta charset="utf-8"><title>Payroll Report</title>');
     // Basic styles: borders and alignment
-    w.document.write('<style>@page{size:letter landscape;margin:10mm} html,body{-webkit-print-color-adjust:exact;print-color-adjust:exact;width:11in;height:8.5in;margin:0} body{font-family:Arial,Helvetica,sans-serif;margin:0;} h2{margin:0 0 6px;font-size:16px} table{border-collapse:collapse;width:100%;table-layout:fixed} thead{display:table-header-group} tfoot{display:table-footer-group} th,td{border:1pt solid #000!important;border-style:solid!important;padding:4px;font-size:11px} table,th,td{border-color:#000!important;border-style:solid!important} th{background:#f1f5f9} td.num{text-align:right} th:nth-child(1),td:nth-child(1),th:nth-child(2),td:nth-child(2){text-align:left} tfoot td{font-weight:700;background:#fff7ed;border-top:2pt solid #000!important} #payrollTable{page-break-inside:auto} #payrollTable tr{page-break-inside:avoid;break-inside:avoid-page} #payrollTable th, #payrollTable td { white-space: nowrap !important; page-break-inside: avoid; } #payrollTable th:nth-child(1), #payrollTable td:nth-child(1) { width:30px; min-width:30px; } #payrollTable th:nth-child(2), #payrollTable td:nth-child(2) { width:150px; min-width:150px; } #payrollTable th:nth-child(3), #payrollTable td:nth-child(3) { width:60px; min-width:60px; } #payrollTable th:nth-child(4), #payrollTable td:nth-child(4) { width:60px; min-width:60px; } #payrollTable th:nth-child(5), #payrollTable td:nth-child(5) { width:60px; min-width:60px; } #payrollTable th:nth-child(6), #payrollTable td:nth-child(6) { width:60px; min-width:60px; } #payrollTable th:nth-child(7), #payrollTable td:nth-child(7) { width:60px; min-width:60px; } #payrollTable th:nth-child(8), #payrollTable td:nth-child(8) { width:60px; min-width:60px; } #payrollTable th:nth-child(9), #payrollTable td:nth-child(9) { width:60px; min-width:60px; } #payrollTable th:nth-child(10), #payrollTable td:nth-child(10) { width:60px; min-width:60px; } #payrollTable th:nth-child(11), #payrollTable td:nth-child(11) { width:60px; min-width:60px; } #payrollTable th:nth-child(12), #payrollTable td:nth-child(12) { width:60px; min-width:60px; } #payrollTable th:nth-child(13), #payrollTable td:nth-child(13) { width:60px; min-width:60px; } #payrollTable th:nth-child(14), #payrollTable td:nth-child(14) { width:60px; min-width:60px; } #payrollTable th:nth-child(15), #payrollTable td:nth-child(15) { width:60px; min-width:60px; } #payrollTable th:nth-child(16), #payrollTable td:nth-child(16) { width:60px; min-width:60px; } #payrollTable th:nth-child(17), #payrollTable td:nth-child(17) { width:60px; min-width:60px; } #payrollTable th:nth-child(18), #payrollTable td:nth-child(18) { width:60px; min-width:60px; } #payrollTable th:nth-child(19), #payrollTable td:nth-child(19) { width:60px; min-width:60px; } #payrollTable th:nth-child(20), #payrollTable td:nth-child(20) { width:60px; min-width:60px; } #payrollTable th:nth-child(21), #payrollTable td:nth-child(21) { width:50px; min-width:50px; } #payrollTable th:nth-child(22), #payrollTable td:nth-child(22) { width:75px; min-width:75px; }</style>');
+    w.document.write('<style>@page{size:letter landscape;margin:10mm} html,body{-webkit-print-color-adjust:exact;print-color-adjust:exact;width:11in;height:8.5in;margin:0} body{font-family:Arial,Helvetica,sans-serif;margin:0;} h2{margin:0 0 6px;font-size:16px} table{border-collapse:collapse;width:100%;table-layout:fixed} thead{display:table-header-group} tfoot{display:table-footer-group} th,td{border:1pt solid #000!important;border-style:solid!important;padding:4px;font-size:11px} table,th,td{border-color:#000!important;border-style:solid!important} th{background:#f1f5f9} td.num{text-align:right} th:nth-child(1),td:nth-child(1),th:nth-child(2),td:nth-child(2){text-align:left} tfoot td{font-weight:700;background:#fff7ed;border-top:2pt solid #000!important} #payrollTable{page-break-inside:auto} #payrollTable tr{page-break-inside:avoid;break-inside:avoid-page} #payrollTable th, #payrollTable td { white-space: nowrap !important; page-break-inside: avoid; } #payrollTable th:nth-child(1), #payrollTable td:nth-child(1) { width:30px; min-width:30px; } #payrollTable th:nth-child(2), #payrollTable td:nth-child(2) { width:150px; min-width:150px; } #payrollTable th:nth-child(3), #payrollTable td:nth-child(3) { width:60px; min-width:60px; } #payrollTable th:nth-child(4), #payrollTable td:nth-child(4) { width:60px; min-width:60px; } #payrollTable th:nth-child(5), #payrollTable td:nth-child(5) { width:60px; min-width:60px; } #payrollTable th:nth-child(6), #payrollTable td:nth-child(6) { width:60px; min-width:60px; } #payrollTable th:nth-child(7), #payrollTable td:nth-child(7) { width:60px; min-width:60px; } #payrollTable th:nth-child(8), #payrollTable td:nth-child(8) { width:60px; min-width:60px; } #payrollTable th:nth-child(9), #payrollTable td:nth-child(9) { width:60px; min-width:60px; } #payrollTable th:nth-child(10), #payrollTable td:nth-child(10) { width:60px; min-width:60px; } #payrollTable th:nth-child(11), #payrollTable td:nth-child(11) { width:60px; min-width:60px; } #payrollTable th:nth-child(12), #payrollTable td:nth-child(12) { width:60px; min-width:60px; } #payrollTable th:nth-child(13), #payrollTable td:nth-child(13) { width:60px; min-width:60px; } #payrollTable th:nth-child(14), #payrollTable td:nth-child(14) { width:60px; min-width:60px; } #payrollTable th:nth-child(15), #payrollTable td:nth-child(15) { width:60px; min-width:60px; } #payrollTable th:nth-child(16), #payrollTable td:nth-child(16) { width:60px; min-width:60px; } #payrollTable th:nth-child(17), #payrollTable td:nth-child(17) { width:60px; min-width:60px; } #payrollTable th:nth-child(18), #payrollTable td:nth-child(18) { width:60px; min-width:60px; } #payrollTable th:nth-child(19), #payrollTable td:nth-child(19) { width:60px; min-width:60px; } #payrollTable th:nth-child(20), #payrollTable td:nth-child(20) { width:50px; min-width:50px; } #payrollTable th:nth-child(21), #payrollTable td:nth-child(21) { width:75px; min-width:75px; } #payrollTable th:nth-child(22), #payrollTable td:nth-child(22) { width:75px; min-width:75px; }</style>');
     w.document.write('</head><body>');
     // Header with date range if available
     const ws = document.getElementById('weekStart');
