@@ -509,6 +509,8 @@ function safePrint(win){
     var bantayRow = toNum(data.bantay) !== 0 ? `<tr><td>Bantay</td><td>${fmt(data.bantay)}</td></tr>` : '';
     var adjRow = toNum(data.adjustments) !== 0 ? `<tr><td>Adjustments</td><td>${fmt(data.adjustments)}</td></tr>` : '';
     var totalRow = toNum(data.totalDeductions) > 0 ? `<tr><td>Total Deductions</td><td>${fmt(data.totalDeductions)}</td></tr>` : '';
+    var rateRaw = (data.rate != null ? String(data.rate).trim() : '');
+    var rateDisplay = rateRaw ? fmt(data.rate) : '-';
     return `<div class="payslip">
       <h3>Payslip</h3>
       <p class="meta"><strong>Employee ID:</strong> ${data.id || ''}</p>
@@ -517,6 +519,7 @@ function safePrint(win){
       <table>
         <tr><th>Description</th><th>Amount</th></tr>
         <tr><td>Total Hours</td><td>${dash(data.totalHours)}</td></tr>
+        <tr><td>Hourly Rate</td><td>${rateDisplay}</td></tr>
         ${bantayRow}
         ${adjRow}
         <tr><td>Gross Amount</td><td>${dash(data.gross)}</td></tr>
