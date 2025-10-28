@@ -4258,12 +4258,26 @@ document.addEventListener('DOMContentLoaded', function(){
       const insertIndex = accountIndex + 1;
       let totalAdjDeduction = 0;
 
+      const insertCellAt = (tr, cell, columnIndex) => {
+        if (!tr || !cell) return;
+        let col = 0;
+        const cells = Array.from(tr.children);
+        for (const existing of cells) {
+          const span = parseInt(existing.getAttribute('colspan'), 10) || 1;
+          if (col >= columnIndex || (col + span) > columnIndex) {
+            tr.insertBefore(cell, existing);
+            return;
+          }
+          col += span;
+        }
+        tr.appendChild(cell);
+      };
+
       clone.querySelectorAll('thead tr').forEach(tr => {
         const th = document.createElement('th');
         th.textContent = 'Adj Deduction';
         th.style.textAlign = 'right';
-        const ref = tr.cells && tr.cells[insertIndex] ? tr.cells[insertIndex] : null;
-        tr.insertBefore(th, ref);
+        insertCellAt(tr, th, insertIndex);
       });
 
       clone.querySelectorAll('tbody tr').forEach(tr => {
@@ -4277,8 +4291,7 @@ document.addEventListener('DOMContentLoaded', function(){
         if (raw < 0) raw = Math.abs(raw);
         totalAdjDeduction += raw;
         td.textContent = raw > 0 ? raw.toFixed(2) : '0.00';
-        const ref = tr.cells && tr.cells[insertIndex] ? tr.cells[insertIndex] : null;
-        tr.insertBefore(td, ref);
+        insertCellAt(tr, td, insertIndex);
       });
 
       const totalText = totalAdjDeduction > 0 ? totalAdjDeduction.toFixed(2) : '0.00';
@@ -4286,8 +4299,7 @@ document.addEventListener('DOMContentLoaded', function(){
         const td = document.createElement('td');
         td.classList.add('num');
         td.textContent = totalText;
-        const ref = tr.cells && tr.cells[insertIndex] ? tr.cells[insertIndex] : null;
-        tr.insertBefore(td, ref);
+        insertCellAt(tr, td, insertIndex);
       });
     })();
 
