@@ -4204,128 +4204,6 @@ function formatDateRange(start, end) {
 window.formatDisplayDate = formatDisplayDate;
 window.formatDateRange = formatDateRange;
 
-function buildPrintableDeductionsTable(){
-  try { if (typeof syncPeriodScopedData === 'function') syncPeriodScopedData(); } catch (_) {}
-  const global = (typeof window !== 'undefined') ? window : {};
-  const sourceEmployees = (typeof employeeList !== 'undefined') ? employeeList : global.employeeList;
-  const employees = Array.isArray(sourceEmployees) ? sourceEmployees : [];
-  if (!employees.length) return '';
-  const ratesMap = (typeof payrollRates !== 'undefined' && payrollRates) ? payrollRates : (global.payrollRates || {});
-  const regHoursMap = (typeof regHours !== 'undefined' && regHours) ? regHours : (global.regHours || {});
-  const loanSSSMap = (typeof loanSSS !== 'undefined' && loanSSS) ? loanSSS : (global.loanSSS || {});
-  const loanPIMap = (typeof loanPI !== 'undefined' && loanPI) ? loanPI : (global.loanPI || {});
-  const valeMap = (typeof vale !== 'undefined' && vale) ? vale : (global.vale || {});
-  const valeWedMap = (typeof valeWed !== 'undefined' && valeWed) ? valeWed : (global.valeWed || {});
-  const storedMap = (typeof storedEmployees !== 'undefined' && storedEmployees) ? storedEmployees : (global.storedEmployees || {});
-  const contribMap = (typeof contribFlags !== 'undefined' && contribFlags) ? contribFlags : (global.contribFlags || {});
-  const adjustmentsMap = (typeof adjustments !== 'undefined' && adjustments) ? adjustments : (global.adjustments || {});
-  const divisorVal = (typeof currentDivisor === 'function') ? currentDivisor() : 1;
-  const escapeHTML = (str) => String(str == null ? '' : str).replace(/[&<>]/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[ch] || ch));
-  const formatCell = (value) => {
-    const num = Number(value);
-    if (!Number.isFinite(num) || Math.abs(num) < 0.005) return '-';
-    return num.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-  };
-  const totals = { pagibig:0, philhealth:0, sss:0, loanSSS:0, loanPI:0, vale:0, adjustments:0, valeWed:0, total:0 };
-  const rows = [];
-  employees.forEach(emp => {
-    if (!emp) return;
-    const id = emp.id;
-    const stored = storedMap && storedMap[id];
-    const name = (emp.name != null && emp.name !== '') ? emp.name : (stored && stored.name ? stored.name : '');
-    const rawRate = Number((stored && stored.hourlyRate != null) ? stored.hourlyRate : (ratesMap && ratesMap[id] != null ? ratesMap[id] : 0));
-    const rate = Number.isFinite(rawRate) ? rawRate : 0;
-    if (ratesMap && typeof ratesMap === 'object') ratesMap[id] = rate;
-    const regValRaw = Number(regHoursMap && regHoursMap[id] != null ? regHoursMap[id] : 0);
-    const regVal = Number.isFinite(regValRaw) ? regValRaw : 0;
-    const loanSSSRaw = Number(loanSSSMap && loanSSSMap[id] != null ? loanSSSMap[id] : 0);
-    const loanPIRaw = Number(loanPIMap && loanPIMap[id] != null ? loanPIMap[id] : 0);
-    const valeRaw = Number(valeMap && valeMap[id] != null ? valeMap[id] : 0);
-    const valeWedRaw = Number(valeWedMap && valeWedMap[id] != null ? valeWedMap[id] : 0);
-    const regPay = +(regVal * rate).toFixed(2);
-    const monthly = rate * 8 * 24;
-    const flags = (contribMap && contribMap[id]) || {};
-    const piRate = (typeof pagibigRateByMonthly === 'function') ? pagibigRateByMonthly(monthly) : 0;
-    const phRate = (typeof philhealthRateByMonthly === 'function') ? philhealthRateByMonthly(monthly) : 0;
-    const sssFull = (typeof sssShareByMonthly === 'function') ? sssShareByMonthly(monthly) : 0;
-    const pagibig = (flags.pagibig === false) ? 0 : +((regPay * piRate).toFixed(2));
-    const philhealth = (flags.philhealth === false) ? 0 : +((regPay * phRate).toFixed(2));
-    const sss = (flags.sss === false) ? 0 : +((sssFull / divisorVal).toFixed(2));
-    const sssLoan = +((Number.isFinite(loanSSSRaw) ? loanSSSRaw : 0) / divisorVal).toFixed(2);
-    const piLoan = +((Number.isFinite(loanPIRaw) ? loanPIRaw : 0) / divisorVal).toFixed(2);
-    const account = +(Number.isFinite(valeRaw) ? valeRaw : 0).toFixed(2);
-    const wedVale = +(Number.isFinite(valeWedRaw) ? valeWedRaw : 0).toFixed(2);
-    let adjDeduction = 0;
-    try {
-      if (typeof splitAdjustmentValue === 'function') {
-        const split = splitAdjustmentValue(adjustmentsMap ? adjustmentsMap[id] : 0);
-        adjDeduction = Number(split && split.deduction) || 0;
-      }
-    } catch (_) {
-      adjDeduction = 0;
-    }
-    adjDeduction = Math.round(adjDeduction * 100) / 100;
-    const total = +(pagibig + philhealth + sss + sssLoan + piLoan + account + wedVale + adjDeduction).toFixed(2);
-    totals.pagibig += pagibig;
-    totals.philhealth += philhealth;
-    totals.sss += sss;
-    totals.loanSSS += sssLoan;
-    totals.loanPI += piLoan;
-    totals.vale += account;
-    totals.adjustments += adjDeduction;
-    totals.valeWed += wedVale;
-    totals.total += total;
-    rows.push(`
-      <tr>
-        <td>${escapeHTML(id)}</td>
-        <td class="wrap">${escapeHTML(name)}</td>
-        <td class="num">${formatCell(pagibig)}</td>
-        <td class="num">${formatCell(philhealth)}</td>
-        <td class="num">${formatCell(sss)}</td>
-        <td class="num">${formatCell(sssLoan)}</td>
-        <td class="num">${formatCell(piLoan)}</td>
-        <td class="num">${formatCell(account)}</td>
-        <td class="num">${formatCell(adjDeduction)}</td>
-        <td class="num">${formatCell(wedVale)}</td>
-        <td class="num">${formatCell(total)}</td>
-      </tr>
-    `);
-  });
-  if (!rows.length) return '';
-  const head = `
-    <thead>
-      <tr>
-        <th>ID</th>
-        <th>Name</th>
-        <th>Pag-IBIG</th>
-        <th>PhilHealth</th>
-        <th>SSS</th>
-        <th>SSS Loan</th>
-        <th>Pag-IBIG Loan</th>
-        <th>Account</th>
-        <th>Adjustments</th>
-        <th>Wed Vale</th>
-        <th>Total Deductions</th>
-      </tr>
-    </thead>`;
-  const foot = `
-    <tfoot>
-      <tr>
-        <td class="label-cell" colspan="2">Grand Total</td>
-        <td class="num">${formatCell(totals.pagibig)}</td>
-        <td class="num">${formatCell(totals.philhealth)}</td>
-        <td class="num">${formatCell(totals.sss)}</td>
-        <td class="num">${formatCell(totals.loanSSS)}</td>
-        <td class="num">${formatCell(totals.loanPI)}</td>
-        <td class="num">${formatCell(totals.vale)}</td>
-        <td class="num">${formatCell(totals.adjustments)}</td>
-        <td class="num">${formatCell(totals.valeWed)}</td>
-        <td class="num">${formatCell(totals.total)}</td>
-      </tr>
-    </tfoot>`;
-  return `<div class="print-deductions-wrap"><h3>Deductions Summary</h3><table class="print-deductions">${head}<tbody>${rows.join('')}</tbody>${foot}</table></div>`;
-}
-
 // Print Payroll Report: generate a print-friendly view of the payroll table and open
 // a new window for printing. Inputs are converted to plain text and the final
 // payslip column is removed to preserve confidentiality.
@@ -4398,7 +4276,7 @@ document.addEventListener('DOMContentLoaded', function(){
     if (!w) return;
     w.document.write('<html><head><meta charset="utf-8"><title>Payroll Report</title>');
     // Basic styles: borders and alignment
-    w.document.write('<style>@page{size:letter landscape;margin:10mm} html,body{-webkit-print-color-adjust:exact;print-color-adjust:exact;width:11in;height:8.5in;margin:0} body{font-family:Arial,Helvetica,sans-serif;margin:0;} h2{margin:0 0 6px;font-size:16px} table{border-collapse:collapse;width:100%;table-layout:fixed} thead{display:table-header-group} tfoot{display:table-footer-group} th,td{border:1pt solid #000!important;border-style:solid!important;padding:4px;font-size:11px} table,th,td{border-color:#000!important;border-style:solid!important} th{background:#f1f5f9} td.num{text-align:right} th:nth-child(1),td:nth-child(1),th:nth-child(2),td:nth-child(2){text-align:left} tfoot td{font-weight:700;background:#fff7ed;border-top:2pt solid #000!important} #payrollTable{page-break-inside:auto} #payrollTable tr{page-break-inside:avoid;break-inside:avoid-page} #payrollTable th, #payrollTable td { white-space: nowrap !important; page-break-inside: avoid; } #payrollTable th:nth-child(1), #payrollTable td:nth-child(1) { width:30px; min-width:30px; } #payrollTable th:nth-child(2), #payrollTable td:nth-child(2) { width:150px; min-width:150px; } #payrollTable th:nth-child(3), #payrollTable td:nth-child(3) { width:60px; min-width:60px; } #payrollTable th:nth-child(4), #payrollTable td:nth-child(4) { width:60px; min-width:60px; } #payrollTable th:nth-child(5), #payrollTable td:nth-child(5) { width:60px; min-width:60px; } #payrollTable th:nth-child(6), #payrollTable td:nth-child(6) { width:60px; min-width:60px; } #payrollTable th:nth-child(7), #payrollTable td:nth-child(7) { width:60px; min-width:60px; } #payrollTable th:nth-child(8), #payrollTable td:nth-child(8) { width:60px; min-width:60px; } #payrollTable th:nth-child(9), #payrollTable td:nth-child(9) { width:60px; min-width:60px; } #payrollTable th:nth-child(10), #payrollTable td:nth-child(10) { width:60px; min-width:60px; } #payrollTable th:nth-child(11), #payrollTable td:nth-child(11) { width:60px; min-width:60px; } #payrollTable th:nth-child(12), #payrollTable td:nth-child(12) { width:60px; min-width:60px; } #payrollTable th:nth-child(13), #payrollTable td:nth-child(13) { width:60px; min-width:60px; } #payrollTable th:nth-child(14), #payrollTable td:nth-child(14) { width:60px; min-width:60px; } #payrollTable th:nth-child(15), #payrollTable td:nth-child(15) { width:60px; min-width:60px; } #payrollTable th:nth-child(16), #payrollTable td:nth-child(16) { width:60px; min-width:60px; } #payrollTable th:nth-child(17), #payrollTable td:nth-child(17) { width:60px; min-width:60px; } #payrollTable th:nth-child(18), #payrollTable td:nth-child(18) { width:60px; min-width:60px; } #payrollTable th:nth-child(19), #payrollTable td:nth-child(19) { width:60px; min-width:60px; } #payrollTable th:nth-child(20), #payrollTable td:nth-child(20) { width:50px; min-width:50px; } #payrollTable th:nth-child(21), #payrollTable td:nth-child(21) { width:75px; min-width:75px; } .print-deductions-wrap{margin-top:12px;} .print-deductions{margin-top:6px;border-collapse:collapse;width:100%;table-layout:fixed;} .print-deductions th,.print-deductions td{border:1pt solid #000!important;border-style:solid!important;padding:4px;font-size:11px} .print-deductions th{background:#f1f5f9;text-align:left} .print-deductions td.num{text-align:right} .print-deductions tfoot td{font-weight:700;background:#fff7ed;border-top:2pt solid #000!important} .print-deductions tfoot td.label-cell{text-align:left}</style>');
+    w.document.write('<style>@page{size:letter landscape;margin:10mm} html,body{-webkit-print-color-adjust:exact;print-color-adjust:exact;width:11in;height:8.5in;margin:0} body{font-family:Arial,Helvetica,sans-serif;margin:0;} h2{margin:0 0 6px;font-size:16px} table{border-collapse:collapse;width:100%;table-layout:fixed} thead{display:table-header-group} tfoot{display:table-footer-group} th,td{border:1pt solid #000!important;border-style:solid!important;padding:4px;font-size:11px} table,th,td{border-color:#000!important;border-style:solid!important} th{background:#f1f5f9} td.num{text-align:right} th:nth-child(1),td:nth-child(1),th:nth-child(2),td:nth-child(2){text-align:left} tfoot td{font-weight:700;background:#fff7ed;border-top:2pt solid #000!important} #payrollTable{page-break-inside:auto} #payrollTable tr{page-break-inside:avoid;break-inside:avoid-page} #payrollTable th, #payrollTable td { white-space: nowrap !important; page-break-inside: avoid; } #payrollTable th:nth-child(1), #payrollTable td:nth-child(1) { width:30px; min-width:30px; } #payrollTable th:nth-child(2), #payrollTable td:nth-child(2) { width:150px; min-width:150px; } #payrollTable th:nth-child(3), #payrollTable td:nth-child(3) { width:60px; min-width:60px; } #payrollTable th:nth-child(4), #payrollTable td:nth-child(4) { width:60px; min-width:60px; } #payrollTable th:nth-child(5), #payrollTable td:nth-child(5) { width:60px; min-width:60px; } #payrollTable th:nth-child(6), #payrollTable td:nth-child(6) { width:60px; min-width:60px; } #payrollTable th:nth-child(7), #payrollTable td:nth-child(7) { width:60px; min-width:60px; } #payrollTable th:nth-child(8), #payrollTable td:nth-child(8) { width:60px; min-width:60px; } #payrollTable th:nth-child(9), #payrollTable td:nth-child(9) { width:60px; min-width:60px; } #payrollTable th:nth-child(10), #payrollTable td:nth-child(10) { width:60px; min-width:60px; } #payrollTable th:nth-child(11), #payrollTable td:nth-child(11) { width:60px; min-width:60px; } #payrollTable th:nth-child(12), #payrollTable td:nth-child(12) { width:60px; min-width:60px; } #payrollTable th:nth-child(13), #payrollTable td:nth-child(13) { width:60px; min-width:60px; } #payrollTable th:nth-child(14), #payrollTable td:nth-child(14) { width:60px; min-width:60px; } #payrollTable th:nth-child(15), #payrollTable td:nth-child(15) { width:60px; min-width:60px; } #payrollTable th:nth-child(16), #payrollTable td:nth-child(16) { width:60px; min-width:60px; } #payrollTable th:nth-child(17), #payrollTable td:nth-child(17) { width:60px; min-width:60px; } #payrollTable th:nth-child(18), #payrollTable td:nth-child(18) { width:60px; min-width:60px; } #payrollTable th:nth-child(19), #payrollTable td:nth-child(19) { width:60px; min-width:60px; } #payrollTable th:nth-child(20), #payrollTable td:nth-child(20) { width:50px; min-width:50px; } #payrollTable th:nth-child(21), #payrollTable td:nth-child(21) { width:75px; min-width:75px; }</style>');
     w.document.write('</head><body>');
     // Header with date range if available
     const ws = document.getElementById('weekStart');
@@ -4410,11 +4288,7 @@ document.addEventListener('DOMContentLoaded', function(){
     } else {
       w.document.write('<div id="printWrap"><h2>Payroll Report</h2>');
     }
-    const deductionsHtml = buildPrintableDeductionsTable();
     w.document.write(clone.outerHTML);
-    if (deductionsHtml) {
-      w.document.write(deductionsHtml);
-    }
     w.document.write('</div></body></html>');
     w.document.close();
     // Print without auto-scaling
