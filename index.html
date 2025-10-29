@@ -346,67 +346,6 @@ function safeStringify(v){
     opacity: 0.6;
   }
 
-  #activePayrollPicker {
-    gap: 15px;
-    flex-wrap: wrap;
-  }
-  #activePayrollPicker .lock-controls {
-    display: flex;
-    gap: 8px;
-    align-items: center;
-  }
-  #activePayrollPicker .lock-btn {
-    border: 1px solid #d1d5db;
-    background: #f9fafb;
-    color: #1f2937;
-    border-radius: 8px;
-    padding: 6px 14px;
-    font-size: 13px;
-    font-weight: 600;
-    cursor: pointer;
-    transition: background 0.2s ease, color 0.2s ease, box-shadow 0.2s ease;
-  }
-  #activePayrollPicker .lock-btn:hover {
-    background: #eef2ff;
-    box-shadow: 0 2px 6px rgba(59, 130, 246, 0.15);
-  }
-  #activePayrollPicker .lock-btn.secondary {
-    background: #fff;
-  }
-  #activePayrollPicker .lock-btn[disabled] {
-    opacity: 0.6;
-    cursor: not-allowed;
-    box-shadow: none;
-  }
-
-  #snapshotView {
-    margin-top: 12px;
-  }
-  #snapshotView .snapshot-card {
-    background: #fff;
-    border: 1px solid #e5e7eb;
-    border-radius: 14px;
-    padding: 16px;
-    box-shadow: 0 14px 40px rgba(15, 23, 42, 0.08);
-    max-width: 100%;
-    overflow-x: auto;
-  }
-  #snapshotView .snapshot-card section {
-    margin-bottom: 24px;
-  }
-  #snapshotView .snapshot-card section:last-of-type {
-    margin-bottom: 0;
-  }
-  #snapshotView .snapshot-card h2 {
-    margin-top: 0;
-    color: #1f2937;
-  }
-  #snapshotView .snapshot-note {
-    font-size: 12px;
-    color: #64748b;
-    margin-bottom: 10px;
-  }
-
 /* === PATCH: Adjustments & Bantay column widths === */
 #payrollTable th:nth-child(10), #payrollTable td:nth-child(10) { width: 100px; min-width: 100px; } /* Adjustments */
 #payrollTable th:nth-child(11), #payrollTable td:nth-child(11) { width: 100px; min-width: 100px; } /* Bantay */
@@ -1552,10 +1491,6 @@ window.addEventListener('load', dashReports);
           <span style="font-weight:600;color:#374151;">Payroll period:</span>
           <select id="activePayrollSelect" class="date-input activeWeekSelect" style="min-width:260px;"></select>
           <button id="newPayrollPeriod" type="button" class="date-input">New period</button>
-          <div class="lock-controls">
-            <button id="lockPeriodBtn" type="button" class="date-input lock-btn">Lock period</button>
-            <button id="unlockPeriodBtn" type="button" class="date-input lock-btn secondary" style="display:none;">Unlock period</button>
-          </div>
           <span id="dashLockStatus" style="display:none;font-size:12px;color:#111827;font-weight:600;"></span>
         </div>
         <!-- New Period Modal (pre-rendered for instant open) -->
@@ -4553,10 +4488,6 @@ document.addEventListener('DOMContentLoaded', () => {
   const snapshotView = document.getElementById('snapshotView');
   // Reference to the Active Payrolls table body
   const activeTableBody = document.querySelector('#activePayrollTable tbody');
-  const lockPeriodBtn = document.getElementById('lockPeriodBtn');
-  const unlockPeriodBtn = document.getElementById('unlockPeriodBtn');
-  updateLockControls(false, false);
-  renderSnapshotViewForPeriod('', '', false);
 
   const PAYROLL_LOCKS_KEY = 'payroll_lock_state';
 
@@ -4614,223 +4545,6 @@ document.addEventListener('DOMContentLoaded', () => {
       totals[col] = (td.textContent || '').trim();
     });
     return totals;
-  }
-
-  function updateLockControls(locked, hasRange) {
-    const canLock = !!hasRange && !locked;
-    if (lockPeriodBtn) {
-      lockPeriodBtn.style.display = locked ? 'none' : 'inline-flex';
-      lockPeriodBtn.disabled = !canLock;
-    }
-    if (unlockPeriodBtn) {
-      unlockPeriodBtn.style.display = locked ? 'inline-flex' : 'none';
-      unlockPeriodBtn.disabled = !locked;
-    }
-  }
-
-  function collectRowCells(tr) {
-    if (!tr || !tr.cells) return [];
-    return Array.from(tr.cells).map(cell => {
-      const text = (cell.textContent || '').replace(/\s+/g, ' ').trim();
-      return text;
-    });
-  }
-
-  function extractHeaderRows(table) {
-    if (!table || !table.tHead) return [];
-    return Array.from(table.tHead.rows || []).map(collectRowCells);
-  }
-
-  function extractBodyRows(table) {
-    if (!table) return [];
-    const rows = [];
-    Array.from(table.tBodies || []).forEach(tb => {
-      Array.from(tb.rows || []).forEach(tr => {
-        rows.push(collectRowCells(tr));
-      });
-    });
-    return rows;
-  }
-
-  function extractFooterRow(table) {
-    if (!table || !table.tFoot || !table.tFoot.rows || !table.tFoot.rows.length) return null;
-    return collectRowCells(table.tFoot.rows[table.tFoot.rows.length - 1]);
-  }
-
-  function cleanInteractiveElements(root) {
-    if (!root) return;
-    root.querySelectorAll('select').forEach(sel => {
-      const opt = sel.options && sel.selectedIndex >= 0 ? sel.options[sel.selectedIndex] : null;
-      const text = (opt && (opt.textContent || opt.label)) || sel.value || '';
-      const span = document.createElement('span');
-      span.textContent = String(text || '').trim();
-      sel.replaceWith(span);
-    });
-    root.querySelectorAll('input, textarea').forEach(inp => {
-      const value = typeof inp.value !== 'undefined' ? inp.value : inp.textContent;
-      const span = document.createElement('span');
-      span.textContent = String(value || '').trim();
-      inp.replaceWith(span);
-    });
-    root.querySelectorAll('button').forEach(btn => btn.remove());
-  }
-
-  function removeColumnsByHeader(table, matchSet) {
-    if (!table || !table.tHead || !matchSet || !matchSet.size) return;
-    const headerRow = table.tHead.rows && table.tHead.rows[table.tHead.rows.length - 1];
-    if (!headerRow) return;
-    const dropIdx = [];
-    Array.from(headerRow.cells || []).forEach((cell, idx) => {
-      const txt = (cell.textContent || '').trim().toLowerCase();
-      if (matchSet.has(txt)) dropIdx.push(idx);
-    });
-    if (!dropIdx.length) return;
-    const unique = Array.from(new Set(dropIdx)).sort((a, b) => b - a);
-    const removeCells = (tr) => {
-      if (!tr || !tr.cells) return;
-      unique.forEach(index => {
-        if (index >= 0 && index < tr.cells.length) {
-          try { tr.deleteCell(index); }
-          catch (err) { /* ignore */ }
-        }
-      });
-    };
-    Array.from(table.tHead.rows || []).forEach(removeCells);
-    Array.from(table.tBodies || []).forEach(tb => Array.from(tb.rows || []).forEach(removeCells));
-    Array.from(table.tFoot ? table.tFoot.rows || [] : []).forEach(removeCells);
-  }
-
-  function captureDtrSnapshot() {
-    const table = document.getElementById('resultsTable');
-    if (!table) return null;
-    const clone = table.cloneNode(true);
-    cleanInteractiveElements(clone);
-    removeColumnsByHeader(clone, new Set(['actions', 'split', 'editor']));
-    const headerRows = extractHeaderRows(clone);
-    const rows = extractBodyRows(clone);
-    if (!headerRows.length && !rows.length) return null;
-    return {
-      headers: headerRows[headerRows.length - 1] || [],
-      headerRows,
-      rows
-    };
-  }
-
-  function captureDetailedReportSnapshot() {
-    try { if (typeof window.rebuildReports === 'function') window.rebuildReports(); }
-    catch (err) {}
-    const table = document.getElementById('r_table');
-    if (!table) return null;
-    const clone = table.cloneNode(true);
-    cleanInteractiveElements(clone);
-    const headerRows = extractHeaderRows(clone);
-    const rows = extractBodyRows(clone);
-    const footer = extractFooterRow(clone);
-    if (!headerRows.length && !rows.length) return null;
-    return {
-      headers: headerRows[headerRows.length - 1] || [],
-      headerRows,
-      rows,
-      footer
-    };
-  }
-
-  function captureMasterReportSnapshot() {
-    try { if (typeof window.renderMasterReport === 'function') window.renderMasterReport(); }
-    catch (err) {}
-    const container = document.getElementById('masterReportContainer');
-    if (!container) return null;
-    const html = container.innerHTML || '';
-    if (!html.trim()) return null;
-    return { html };
-  }
-
-  function cloneNumericMap(source) {
-    const result = {};
-    if (!source || typeof source !== 'object') return result;
-    Object.keys(source).forEach(key => {
-      const num = Number(source[key]);
-      if (!Number.isFinite(num)) return;
-      result[key] = num;
-    });
-    return result;
-  }
-
-  function captureDeductionsSnapshot() {
-    const globalObj = (typeof window !== 'undefined') ? window : {};
-    const divisorKey = (typeof globalObj.divisor !== 'undefined')
-      ? Number(globalObj.divisor)
-      : Number(localStorage.getItem(typeof LS_DIVISOR !== 'undefined' ? LS_DIVISOR : 'payroll_deduction_divisor'));
-    return {
-      loanSSS: cloneNumericMap(globalObj.loanSSS || {}),
-      loanPI: cloneNumericMap(globalObj.loanPI || {}),
-      vale: cloneNumericMap(globalObj.vale || {}),
-      valeWed: cloneNumericMap(globalObj.valeWed || {}),
-      adjustments: cloneNumericMap(globalObj.adjustments || {}),
-      adjustmentHours: cloneNumericMap(globalObj.adjHrs || {}),
-      bantay: cloneNumericMap(globalObj.bantay || {}),
-      divisor: Number.isFinite(divisorKey) && divisorKey > 0 ? divisorKey : 1
-    };
-  }
-
-  async function writeSnapshotSegment(segment, startDate, endDate, value) {
-    const key = composeSnapshotStorageKey(segment, startDate, endDate);
-    if (!key) return;
-    try {
-      if (value == null) {
-        localStorage.removeItem(key);
-      } else {
-        localStorage.setItem(key, JSON.stringify(value));
-      }
-    } catch (err) {
-      console.warn('Snapshot local persist failed', err);
-    }
-    if (typeof window.writeKV === 'function') {
-      try {
-        await window.writeKV(key, value == null ? null : value);
-      } catch (err) {
-        console.warn('Snapshot cloud persist failed', err);
-      }
-    }
-  }
-
-  async function persistSnapshotSegments(start, end, segments) {
-    const tasks = [];
-    if (segments && segments.payroll) tasks.push(writeSnapshotSegment('payroll', start, end, segments.payroll));
-    if (segments && segments.dtr) tasks.push(writeSnapshotSegment('dtr', start, end, segments.dtr));
-    if (segments && segments.reports) tasks.push(writeSnapshotSegment('reports', start, end, segments.reports));
-    if (segments && segments.master) tasks.push(writeSnapshotSegment('master', start, end, segments.master));
-    if (segments && segments.deductions) tasks.push(writeSnapshotSegment('deductions', start, end, segments.deductions));
-    if (!tasks.length) return;
-    try { await Promise.allSettled(tasks); }
-    catch (err) { console.warn('Snapshot persist tasks failed', err); }
-  }
-
-  async function ensureHistorySnapshot(start, end, snap, lockedAt) {
-    if (!Array.isArray(payrollHistory) || !snap) return;
-    let entry = payrollHistory.find(item => item && item.startDate === start && item.endDate === end);
-    if (!entry) {
-      entry = { startDate: start, endDate: end };
-      payrollHistory.push(entry);
-    }
-    entry.startDate = start;
-    entry.endDate = end;
-    entry.rows = Array.isArray(snap.rows) ? snap.rows : [];
-    entry.totals = snap.totals || {};
-    entry.divisor = snap.divisor;
-    entry.locked = true;
-    entry.lockedAt = lockedAt;
-    try {
-      const json = JSON.stringify({ rows: entry.rows, totals: entry.totals, divisor: entry.divisor });
-      const hashBuffer = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(json));
-      const hashArray = Array.from(new Uint8Array(hashBuffer));
-      entry.hash = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
-    } catch (err) {
-      // Ignore hashing errors
-    }
-    if (typeof saveHistory === 'function') saveHistory();
-    if (typeof renderHistory === 'function') renderHistory();
-    if (typeof renderActivePayrolls === 'function') renderActivePayrolls();
   }
 
   function syncHistoryLockState(start, end, locked, meta) {
@@ -4898,8 +4612,6 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!hasRange) {
       enablePayrollInputs();
       updateLockStatusDisplay(null);
-      updateLockControls(false, false);
-      renderSnapshotViewForPeriod('', '', false);
       return false;
     }
     const entry = getLockEntry(start, end);
@@ -4911,8 +4623,6 @@ document.addEventListener('DOMContentLoaded', () => {
       enablePayrollInputs();
       updateLockStatusDisplay(null);
     }
-    updateLockControls(locked, hasRange);
-    renderSnapshotViewForPeriod(start, end, locked);
     return locked;
   }
 
@@ -4927,11 +4637,6 @@ document.addEventListener('DOMContentLoaded', () => {
       return;
     }
     try {
-      if (typeof renderResults === 'function') {
-        renderResults();
-      }
-    } catch (err) {}
-    try {
       if (typeof calculateAll === 'function') {
         await Promise.resolve(calculateAll());
       }
@@ -4941,43 +4646,11 @@ document.addEventListener('DOMContentLoaded', () => {
         updatePayrollGrandTotals();
       }
     } catch (err) {}
-    try { if (typeof window.rebuildReports === 'function') window.rebuildReports(); }
-    catch (err) {}
-    try { if (typeof window.renderMasterReport === 'function') window.renderMasterReport(); }
-    catch (err) {}
-
-    let snap = null;
-    try {
-      if (typeof buildSnapshot === 'function') {
-        snap = await buildSnapshot(start, end);
-      }
-    } catch (err) {}
-    if (!snap) {
-      alert('Payroll table is missing or empty.');
-      applyLockUI();
-      return;
-    }
-
+    const totals = captureGrandTotals();
     const lockedAt = new Date().toISOString();
-    const totals = (snap.totals && Object.keys(snap.totals || {}).length) ? snap.totals : (captureGrandTotals() || snap.totals || {});
-    const dtrSnap = captureDtrSnapshot();
-    const detailedSnap = captureDetailedReportSnapshot();
-    const masterSnap = captureMasterReportSnapshot();
-    const deductionSnap = captureDeductionsSnapshot();
-
     disablePayrollInputs();
-    await ensureHistorySnapshot(start, end, snap, lockedAt);
-    await persistSnapshotSegments(start, end, {
-      payroll: snap,
-      dtr: dtrSnap,
-      reports: detailedSnap,
-      master: masterSnap,
-      deductions: deductionSnap
-    });
     setPeriodLocked(start, end, true, { lockedAt, totals });
     applyLockUI();
-    try { if (typeof window.runPostLockOutputs === 'function') window.runPostLockOutputs(); }
-    catch (err) {}
   }
 
   async function unlockCurrentPeriod() {
@@ -4990,8 +4663,6 @@ document.addEventListener('DOMContentLoaded', () => {
       applyLockUI();
       return;
     }
-    try { await purgeStoredSnapshot(start, end); }
-    catch (err) { console.warn('Unable to purge stored snapshot', err); }
     setPeriodLocked(start, end, false);
     enablePayrollInputs();
     applyLockUI();
@@ -5012,22 +4683,6 @@ document.addEventListener('DOMContentLoaded', () => {
   }
   if (dashEnd) {
     dashEnd.addEventListener('change', () => { checkAndToggleEditState(); });
-  }
-  if (lockPeriodBtn) {
-    lockPeriodBtn.addEventListener('click', async () => {
-      if (lockPeriodBtn.disabled) return;
-      lockPeriodBtn.disabled = true;
-      try { await lockCurrentPeriod(); }
-      finally { applyLockUI(); }
-    });
-  }
-  if (unlockPeriodBtn) {
-    unlockPeriodBtn.addEventListener('click', async () => {
-      if (unlockPeriodBtn.disabled) return;
-      unlockPeriodBtn.disabled = true;
-      try { await unlockCurrentPeriod(); }
-      finally { applyLockUI(); }
-    });
   }
   checkAndToggleEditState();
   try {
@@ -5534,21 +5189,14 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   function buildTableHtml(headers, rows, options = {}) {
-    const headerRows = Array.isArray(options.headerRows) && options.headerRows.length
-      ? options.headerRows.map(row => Array.isArray(row) ? row.slice() : [])
-      : (Array.isArray(headers) ? [headers.slice()] : []);
-    const lastHeader = headerRows.length ? headerRows[headerRows.length - 1] : (Array.isArray(headers) ? headers.slice() : []);
-    const cols = Array.isArray(lastHeader) ? lastHeader.slice() : [];
+    const cols = Array.isArray(headers) ? headers.slice() : [];
     const bodyRows = Array.isArray(rows) ? rows : [];
     const numericCols = new Set(options.numericCols || []);
     const classes = options.columnClasses || {};
-    const thead = headerRows.length ? headerRows.map((row) => {
-      const cells = normalizeRowLength(row, cols.length).map((text, idx) => {
-        const cls = classes[idx] ? ` class="${classes[idx]}"` : '';
-        return `<th${cls}>${escapeHtml(text)}</th>`;
-      }).join('');
-      return `<tr>${cells}</tr>`;
-    }).join('') : '';
+    const thead = cols.map((text, idx) => {
+      const cls = classes[idx] ? ` class="${classes[idx]}"` : '';
+      return `<th${cls}>${escapeHtml(text)}</th>`;
+    }).join('');
     const tbody = bodyRows.length ? bodyRows.map((row) => {
       const cells = normalizeRowLength(row, cols.length).map((cell, idx) => {
         const raw = cell == null ? '' : cell;
@@ -5568,8 +5216,7 @@ document.addEventListener('DOMContentLoaded', () => {
       }).join('');
       foot = `<tfoot><tr>${footerCells}</tr></tfoot>`;
     }
-    const theadHtml = thead ? `<thead>${thead}</thead>` : '';
-    return `<table class="report-table">${theadHtml}<tbody>${tbody}</tbody>${foot}</table>`;
+    return `<table class="report-table"><thead><tr>${thead}</tr></thead><tbody>${tbody}</tbody>${foot}</table>`;
   }
 
   function dropColumns(headers, rows, predicate) {
@@ -5647,27 +5294,21 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function buildDtrSectionFromSnapshot(data, startDate, endDate) {
     if (!data) return '';
-    const headerRows = Array.isArray(data.headerRows) && data.headerRows.length
-      ? data.headerRows
-      : (Array.isArray(data.headers) ? [data.headers] : []);
+    const filtered = dropColumns(data.headers || [], data.rows || [], (header) => {
+      const norm = String(header || '').trim().toLowerCase();
+      return norm === 'actions' || norm === 'split' || norm === 'editor';
+    });
     const range = formatDateRangeInline(startDate, endDate);
     const subtitle = range ? `<div class="report-subtitle">${escapeHtml(range)}</div>` : '';
-    const table = buildTableHtml(headerRows[headerRows.length - 1] || [], data.rows || [], {
-      headerRows
-    });
+    const table = buildTableHtml(filtered.headers, filtered.rows, { numericCols: [] });
     return `<section class="report-block"><h2>Daily Time Records</h2>${subtitle}${table}</section>`;
   }
 
   function buildDetailedSectionFromSnapshot(data) {
     if (!data) return '';
-    const headerRows = Array.isArray(data.headerRows) && data.headerRows.length
-      ? data.headerRows
-      : (Array.isArray(data.headers) ? [data.headers] : []);
+    const headers = Array.isArray(data.headers) ? data.headers : [];
     const rows = Array.isArray(data.rows) ? data.rows : [];
-    const table = buildTableHtml(headerRows[headerRows.length - 1] || [], rows, {
-      headerRows,
-      footerRow: Array.isArray(data.footer) ? data.footer : null
-    });
+    const table = buildTableHtml(headers, rows, {});
     return `<section class="report-block"><h2>Detailed Report</h2>${table}</section>`;
   }
 
@@ -5676,64 +5317,6 @@ document.addEventListener('DOMContentLoaded', () => {
     const subtitle = range ? `<div class="report-subtitle">${escapeHtml(range)}</div>` : '';
     const inner = master && typeof master.html === 'string' && master.html.trim() ? master.html : '<p class="muted">No master report data available.</p>';
     return `<section class="report-block"><h2>Master Report</h2>${subtitle}<div class="master-wrapper">${inner}</div></section>`;
-  }
-
-  function sumMapValues(map) {
-    if (!map || typeof map !== 'object') return 0;
-    return Object.values(map).reduce((total, value) => total + (Number(value) || 0), 0);
-  }
-
-  function buildDeductionsSectionFromSnapshot(data) {
-    if (!data) return '';
-    const rows = [
-      ['SSS Loan', formatNumber(sumMapValues(data.loanSSS))],
-      ['Pag-IBIG Loan', formatNumber(sumMapValues(data.loanPI))],
-      ['Vale', formatNumber(sumMapValues(data.vale))],
-      ['Wed Vale', formatNumber(sumMapValues(data.valeWed))],
-      ['Adjustments', formatNumber(sumMapValues(data.adjustments))],
-      ['Adjustment Hours', formatNumber(sumMapValues(data.adjustmentHours))],
-      ['Bantay Allowance', formatNumber(sumMapValues(data.bantay))]
-    ];
-    const table = buildTableHtml(['Category', 'Total'], rows, { numericCols: [1] });
-    const note = data.divisor ? `<p class="snapshot-note">Deduction divisor at lock: ${escapeHtml(String(data.divisor))}</p>` : '';
-    return `<section class="report-block"><h2>Deductions & Adjustments</h2>${note}${table}</section>`;
-  }
-
-  async function renderSnapshotViewForPeriod(start, end, locked) {
-    if (!snapshotView) return;
-    if (!locked) {
-      snapshotView.innerHTML = '';
-      snapshotView.style.display = 'none';
-      return;
-    }
-    snapshotView.style.display = 'block';
-    snapshotView.innerHTML = '<div class="snapshot-card"><p>Loading locked snapshot…</p></div>';
-    try {
-      const [payroll, dtr, reports, master, deductions] = await Promise.all([
-        readSnapshotSegment('payroll', start, end),
-        readSnapshotSegment('dtr', start, end),
-        readSnapshotSegment('reports', start, end),
-        readSnapshotSegment('master', start, end),
-        readSnapshotSegment('deductions', start, end)
-      ]);
-      const sections = [];
-      if (payroll) {
-        const payload = Object.assign({}, payroll, {
-          startDate: payroll.startDate || start,
-          endDate: payroll.endDate || end
-        });
-        sections.push(buildPayrollSectionFromSnapshot(payload));
-      }
-      if (dtr) sections.push(buildDtrSectionFromSnapshot(dtr, start, end));
-      if (reports) sections.push(buildDetailedSectionFromSnapshot(reports));
-      if (master) sections.push(buildMasterSectionFromSnapshot(master, start, end));
-      if (deductions) sections.push(buildDeductionsSectionFromSnapshot(deductions));
-      const content = sections.length ? sections.join('') : '<p>No snapshot data is stored for this locked period.</p>';
-      snapshotView.innerHTML = `<div class="snapshot-card">${content}</div>`;
-    } catch (err) {
-      console.warn('Unable to render locked snapshot view', err);
-      snapshotView.innerHTML = '<div class="snapshot-card"><p>Unable to load snapshot data for this period.</p></div>';
-    }
   }
 
   async function exportCombinedPdfForSnapshot(snap) {
@@ -5833,7 +5416,6 @@ document.addEventListener('DOMContentLoaded', () => {
       `snap:dtr:${pid}`,
       `snap:payroll:${pid}`,
       `snap:reports:${pid}`,
-      `snap:master:${pid}`,
       `snap:deductions:${pid}`
     ];
   }
