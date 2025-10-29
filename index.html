@@ -1491,6 +1491,8 @@ window.addEventListener('load', dashReports);
           <span style="font-weight:600;color:#374151;">Payroll period:</span>
           <select id="activePayrollSelect" class="date-input activeWeekSelect" style="min-width:260px;"></select>
           <button id="newPayrollPeriod" type="button" class="date-input">New period</button>
+          <button id="lockSnapshotBtn" type="button" class="date-input">Lock &amp; Snapshot</button>
+          <button id="unlockPeriodBtn" type="button" class="date-input">Unlock</button>
           <span id="dashLockStatus" style="display:none;font-size:12px;color:#111827;font-weight:600;"></span>
         </div>
         <!-- New Period Modal (pre-rendered for instant open) -->
@@ -4483,6 +4485,8 @@ document.addEventListener('DOMContentLoaded', () => {
   const dashStart = document.getElementById('weekStart');
   const dashEnd = document.getElementById('weekEnd');
   const dashGenerateBtn = document.getElementById('dashGenerate');
+  const dashLockButton = document.getElementById('lockSnapshotBtn');
+  const dashUnlockButton = document.getElementById('unlockPeriodBtn');
   const dashLockStatus = document.getElementById('dashLockStatus');
   const historyTableBody = document.querySelector('#historyTable tbody');
   const snapshotView = document.getElementById('snapshotView');
@@ -4547,6 +4551,164 @@ document.addEventListener('DOMContentLoaded', () => {
     return totals;
   }
 
+  function findHistorySnapshot(start, end) {
+    if (!start || !end || !Array.isArray(payrollHistory)) return null;
+    return payrollHistory.find(entry => entry && entry.startDate === start && entry.endDate === end) || null;
+  }
+
+  function setSnapshotOverride(snapshot) {
+    if (!snapshot) return;
+    const payload = {
+      rows: Array.isArray(snapshot.rows) ? snapshot.rows : [],
+      totals: snapshot.totals || {},
+      divisor: snapshot.divisor
+    };
+    try { window.__snapshotPayrollOverride = payload; }
+    catch (err) { window.__snapshotPayrollOverride = payload; }
+  }
+
+  function clearSnapshotOverride() {
+    try { delete window.__snapshotPayrollOverride; }
+    catch (err) { window.__snapshotPayrollOverride = undefined; }
+  }
+
+  function formatSnapshotNumber(value, options = {}) {
+    const num = Number(value);
+    if (!Number.isFinite(num)) {
+      if (value === '' || value == null) return options.emptyAsDash ? '-' : '0.00';
+      return String(value);
+    }
+    if (options.keepZero) {
+      return num.toFixed(options.decimals ?? 2);
+    }
+    if (Math.abs(num) < 0.0005) return '-';
+    return num.toFixed(options.decimals ?? 2);
+  }
+
+  function formatFootTotal(value) {
+    const num = Number(value);
+    if (!Number.isFinite(num)) {
+      if (value == null) return '0.00';
+      return String(value);
+    }
+    try {
+      return num.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    } catch (err) {
+      return num.toFixed(2);
+    }
+  }
+
+  function applySnapshotToPayrollTable(snapshot) {
+    if (!snapshot || !Array.isArray(snapshot.rows)) return false;
+    const table = document.getElementById('payrollTable');
+    if (!table) return false;
+    const bodyRows = table.querySelectorAll('tbody tr');
+    if (!bodyRows || !bodyRows.length) return false;
+    const byId = new Map();
+    snapshot.rows.forEach(row => {
+      if (!row) return;
+      const key = row.id != null ? String(row.id).trim() : '';
+      if (key) byId.set(key, row);
+    });
+
+    bodyRows.forEach(tr => {
+      const idCell = tr.cells && tr.cells[0];
+      if (!idCell) return;
+      const empId = (idCell.textContent || '').trim();
+      if (!empId) return;
+      const data = byId.get(empId);
+      if (!data) return;
+
+      const applyInput = (selector, value, decimals = 2) => {
+        const el = tr.querySelector(selector);
+        if (!el) return;
+        if (typeof el.value !== 'undefined') {
+          const num = Number(value);
+          if (!Number.isFinite(num)) {
+            el.value = value == null ? '' : String(value);
+          } else if (decimals == null) {
+            el.value = String(num);
+          } else {
+            el.value = num.toFixed(decimals);
+          }
+        } else {
+          el.textContent = formatSnapshotNumber(value, { decimals });
+        }
+      };
+
+      const applyText = (selector, value, options) => {
+        const el = tr.querySelector(selector);
+        if (!el) return;
+        el.textContent = formatSnapshotNumber(value, options || {});
+      };
+
+      applyInput('.rate', data.rate);
+      applyInput('.regHrs', data.regHrs);
+      applyInput('.otHrs', data.otHrs);
+
+      const adjHrsCell = tr.querySelector('.adjHrs');
+      if (adjHrsCell) {
+        const adjHoursNum = Number(data.adjHrs);
+        if (!Number.isFinite(adjHoursNum)) {
+          adjHrsCell.textContent = '-';
+        } else if (Math.abs(adjHoursNum) < 0.0005) {
+          adjHrsCell.textContent = '-';
+        } else {
+          adjHrsCell.textContent = adjHoursNum.toFixed(2);
+        }
+      }
+
+      applyText('.totalHrs', data.totalHrs, { decimals: 2, keepZero: true });
+      applyText('.regPay', data.regPay);
+      applyText('.otPay', data.otPay);
+      applyText('.adjAmt', data.adjAmt);
+      applyInput('.bantay', data.bantay);
+      applyText('.grossPay', data.grossPay);
+      applyText('.pagibig', data.pagibig);
+      applyText('.philhealth', data.philhealth);
+      applyText('.sss', data.sss);
+      applyInput('.loanSSS', data.loanSSS);
+      applyInput('.loanPI', data.loanPI);
+      applyInput('.vale', data.vale);
+      applyInput('.valeWed', data.valeWed);
+      applyText('.totalDed', data.totalDed);
+      applyText('.netPay', data.netPay);
+
+      const adjPositive = Number(data.adjAmt) || 0;
+      const adjDeduction = Number(data.adjustmentDeduction) || 0;
+      const adjRaw = adjPositive - adjDeduction;
+      try {
+        tr.dataset.adjustmentRaw = adjRaw.toFixed(2);
+        tr.dataset.adjustmentPositive = adjPositive.toFixed(2);
+        tr.dataset.adjustmentDeduction = adjDeduction.toFixed(2);
+      } catch (err) {}
+
+      if (typeof payrollRates === 'object' && payrollRates) payrollRates[empId] = Number(data.rate) || 0;
+      if (typeof regHours === 'object' && regHours) regHours[empId] = Number(data.regHrs) || 0;
+      if (typeof otHours === 'object' && otHours) otHours[empId] = Number(data.otHrs) || 0;
+      if (typeof adjHrs === 'object' && adjHrs) adjHrs[empId] = Number(data.adjHrs) || 0;
+      if (typeof bantay === 'object' && bantay) bantay[empId] = Number(data.bantay) || 0;
+      if (typeof loanSSS === 'object' && loanSSS) loanSSS[empId] = Number(data.loanSSS) || 0;
+      if (typeof loanPI === 'object' && loanPI) loanPI[empId] = Number(data.loanPI) || 0;
+      if (typeof vale === 'object' && vale) vale[empId] = Number(data.vale) || 0;
+      if (typeof valeWed === 'object' && valeWed) valeWed[empId] = Number(data.valeWed) || 0;
+      if (typeof adjustments === 'object' && adjustments) adjustments[empId] = adjRaw;
+    });
+
+    const foot = document.getElementById('payrollTotalsFoot');
+    if (foot && snapshot.totals && typeof snapshot.totals === 'object') {
+      foot.querySelectorAll('[data-col]').forEach(td => {
+        const key = td.dataset.col;
+        if (!key) return;
+        td.textContent = formatFootTotal(snapshot.totals[key]);
+      });
+    }
+
+    try { if (typeof renderDeductionsTable === 'function') renderDeductionsTable(); } catch (err) {}
+    try { if (typeof updatePayrollGrandTotals === 'function') updatePayrollGrandTotals(); } catch (err) {}
+    return true;
+  }
+
   function syncHistoryLockState(start, end, locked, meta) {
     if (!Array.isArray(payrollHistory) || !start || !end) return;
     let snap = payrollHistory.find(entry => entry && entry.startDate === start && entry.endDate === end);
@@ -4557,9 +4719,18 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!snap) return;
     snap.locked = locked;
     snap.lockedAt = locked ? (meta && meta.lockedAt ? meta.lockedAt : new Date().toISOString()) : '';
-    if (locked && meta && meta.totals) {
-      snap.totals = meta.totals;
-    } else if (!locked) {
+    if (locked) {
+      const snapMeta = meta && meta.snapshot && typeof meta.snapshot === 'object' ? meta.snapshot : null;
+      if (snapMeta) {
+        if (Array.isArray(snapMeta.rows)) snap.rows = snapMeta.rows;
+        if (snapMeta.totals && typeof snapMeta.totals === 'object') snap.totals = snapMeta.totals;
+        if (typeof snapMeta.divisor !== 'undefined') snap.divisor = snapMeta.divisor;
+        if (snapMeta.hash) snap.hash = snapMeta.hash;
+      } else if (meta && meta.totals) {
+        snap.totals = meta.totals;
+      }
+      if (meta && meta.hash) snap.hash = meta.hash;
+    } else {
       snap.totals = {};
       if (typeof snap.hash !== 'undefined') snap.hash = '';
     }
@@ -4612,6 +4783,9 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!hasRange) {
       enablePayrollInputs();
       updateLockStatusDisplay(null);
+      clearSnapshotOverride();
+      if (dashLockButton) dashLockButton.disabled = true;
+      if (dashUnlockButton) dashUnlockButton.disabled = true;
       return false;
     }
     const entry = getLockEntry(start, end);
@@ -4619,9 +4793,21 @@ document.addEventListener('DOMContentLoaded', () => {
     if (locked) {
       disablePayrollInputs();
       updateLockStatusDisplay(entry);
+      const snap = findHistorySnapshot(start, end);
+      if (snap) {
+        setSnapshotOverride(snap);
+        applySnapshotToPayrollTable(snap);
+      } else {
+        clearSnapshotOverride();
+      }
+      if (dashLockButton) dashLockButton.disabled = true;
+      if (dashUnlockButton) dashUnlockButton.disabled = false;
     } else {
       enablePayrollInputs();
       updateLockStatusDisplay(null);
+      clearSnapshotOverride();
+      if (dashLockButton) dashLockButton.disabled = false;
+      if (dashUnlockButton) dashUnlockButton.disabled = true;
     }
     return locked;
   }
@@ -4646,10 +4832,57 @@ document.addEventListener('DOMContentLoaded', () => {
         updatePayrollGrandTotals();
       }
     } catch (err) {}
-    const totals = captureGrandTotals();
+    const snapshot = await buildSnapshot(start, end);
+    if (!snapshot || !Array.isArray(snapshot.rows) || !snapshot.rows.length) {
+      alert('Payroll table is missing or empty.');
+      return;
+    }
+    let hashHex = '';
+    try {
+      const payload = JSON.stringify({
+        startDate: start,
+        endDate: end,
+        rows: snapshot.rows,
+        totals: snapshot.totals,
+        divisor: snapshot.divisor
+      });
+      const hashBuffer = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(payload));
+      const hashArray = Array.from(new Uint8Array(hashBuffer));
+      hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+    } catch (err) {
+      hashHex = '';
+    }
     const lockedAt = new Date().toISOString();
+    let existing = findHistorySnapshot(start, end);
+    if (!existing) {
+      existing = { startDate: start, endDate: end };
+      payrollHistory.push(existing);
+    }
+    existing.startDate = start;
+    existing.endDate = end;
+    existing.rows = snapshot.rows;
+    existing.totals = snapshot.totals;
+    existing.divisor = snapshot.divisor;
+    existing.hash = hashHex;
+    existing.locked = true;
+    existing.lockedAt = lockedAt;
+    saveHistory();
+    if (typeof renderHistory === 'function') renderHistory();
+    if (typeof renderActivePayrolls === 'function') renderActivePayrolls();
     disablePayrollInputs();
-    setPeriodLocked(start, end, true, { lockedAt, totals });
+    setSnapshotOverride(existing);
+    setPeriodLocked(start, end, true, {
+      lockedAt,
+      totals: snapshot.totals,
+      hash: hashHex,
+      snapshot: {
+        rows: snapshot.rows,
+        totals: snapshot.totals,
+        divisor: snapshot.divisor,
+        hash: hashHex
+      }
+    });
+    applySnapshotToPayrollTable(existing);
     applyLockUI();
   }
 
@@ -4915,7 +5148,10 @@ document.addEventListener('DOMContentLoaded', () => {
     if (footRow) {
       footRow.querySelectorAll('[data-col]').forEach(td => {
         const key = td.dataset.col;
-        totals[key] = parseFloat(td.textContent.trim()) || 0;
+        const raw = (td.textContent || '').trim();
+        const normalized = raw.replace(/,/g, '');
+        const num = Number(normalized);
+        totals[key] = Number.isFinite(num) ? num : 0;
       });
     }
 
@@ -5143,6 +5379,22 @@ document.addEventListener('DOMContentLoaded', () => {
     // Update both history and active payroll tables after creating a new snapshot
     renderHistory();
     if (typeof renderActivePayrolls === 'function') renderActivePayrolls();
+  });
+
+  dashLockButton && dashLockButton.addEventListener('click', async () => {
+    try {
+      await Promise.resolve(lockCurrentPeriod());
+    } catch (err) {
+      console.warn('Lock & Snapshot failed', err);
+    }
+  });
+
+  dashUnlockButton && dashUnlockButton.addEventListener('click', async () => {
+    try {
+      await Promise.resolve(unlockCurrentPeriod());
+    } catch (err) {
+      console.warn('Unlock period failed', err);
+    }
   });
 
   // Helper: build snapshot storage key matching lockPeriod persistence
@@ -11295,6 +11547,7 @@ function loadSaved(){
   return '';
 }
 function updateWeekInputs(snap) {
+  const isLockedSnapshot = !!(snap && snap.locked);
   const startISO = toIsoDate(snap && snap.startDate);
   const endISO   = toIsoDate(snap && snap.endDate);
 
@@ -11321,7 +11574,15 @@ function updateWeekInputs(snap) {
   try { if (typeof renderResults === 'function') { renderResults(); } } catch (e) {}
 
   // Recalculate payroll if available, deriving hours from the DTR results table
-  try { if (typeof calculatePayrollFromResultsTable === 'function') { calculatePayrollFromResultsTable(); } else if (typeof calculatePayrollFromRecords === 'function') { calculatePayrollFromRecords(); } } catch (e) {}
+  if (!isLockedSnapshot) {
+    try {
+      if (typeof calculatePayrollFromResultsTable === 'function') { calculatePayrollFromResultsTable(); }
+      else if (typeof calculatePayrollFromRecords === 'function') { calculatePayrollFromRecords(); }
+    } catch (e) {}
+  } else {
+    try { setSnapshotOverride(snap); } catch (e) {}
+    try { applySnapshotToPayrollTable(snap); } catch (e) {}
+  }
 
   // After updating the week range, toggle editing state based on whether the
   // selected period is locked. Without this, switching between periods would
