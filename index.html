@@ -1014,6 +1014,13 @@ window.addEventListener('load', dashReports);
 #deductionsTab #deductionsTable tfoot td.label-cell{ text-align:left; }
 #payrollTab #payrollTable tfoot td.num,
 #deductionsTab #deductionsTable tfoot td.num{ text-align:right; }
+#deductionsTab .column-toggle-controls{ display:flex; flex-wrap:wrap; gap:0.35rem 1rem; align-items:center; margin:0.5rem 0 0; font-size:0.95rem; }
+#deductionsTab .column-toggle-controls span{ font-weight:600; margin-right:0.5rem; }
+#deductionsTab .column-toggle-controls label{ display:flex; align-items:center; gap:0.35rem; }
+#deductionsTab [data-col].deduction-excluded{ opacity:0.45; position:relative; }
+#deductionsTab [data-col].deduction-excluded::after{ content:'Excluded'; font-size:0.65rem; font-weight:600; letter-spacing:0.03em; text-transform:uppercase; color:#c2410c; position:absolute; inset:auto 0.25rem 0.15rem auto; background:rgba(255,247,237,0.9); padding:0.1rem 0.3rem; border-radius:0.35rem; }
+#payrollTable .deduction-excluded{ opacity:0.55; position:relative; }
+#payrollTable .deduction-excluded::after{ content:'Excluded'; font-size:0.6rem; font-weight:600; letter-spacing:0.02em; text-transform:uppercase; color:#9a3412; position:absolute; inset:auto 0.2rem 0.1rem auto; background:rgba(254,242,242,0.9); padding:0.1rem 0.25rem; border-radius:0.3rem; }
 </style>
     <!-- Added payroll dashboard theme -->
     <style>
@@ -2463,6 +2470,18 @@ window.addEventListener('load', dashReports);
         <option value="5">5</option>
        </select>
       </label>
+      <div class="column-toggle-controls" id="deductionColumnToggles">
+       <span>Include in deductions:</span>
+       <label><input type="checkbox" data-col="pagibig" checked/> Pag-IBIG</label>
+       <label><input type="checkbox" data-col="philhealth" checked/> PhilHealth</label>
+       <label><input type="checkbox" data-col="sss" checked/> SSS</label>
+       <label><input type="checkbox" data-col="loanSSS" checked/> SSS Loan</label>
+       <label><input type="checkbox" data-col="loanPI" checked/> Pag-IBIG Loan</label>
+       <label><input type="checkbox" data-col="vale" checked/> Account</label>
+       <label><input type="checkbox" data-col="adjustments" checked/> Adjustments</label>
+       <label><input type="checkbox" data-col="valeWed" checked/> Wed Vale</label>
+       <label><input type="checkbox" data-col="total" checked/> Total Deductions</label>
+      </div>
      </div>
      <div class="section note">
       <strong>File Format:</strong> Use the exported CSV from this table, then edit only these columns:
@@ -2477,17 +2496,17 @@ window.addEventListener('load', dashReports);
      <table id="deductionsTable">
       <thead>
        <tr>
-        <th>ID</th>
-        <th>Name</th>
-        <th>Pag-IBIG</th>
-        <th>PhilHealth</th>
-        <th>SSS</th>
-        <th>SSS Loan</th>
-        <th>Pag-IBIG Loan</th>
-        <th>Account</th>
-        <th>Adjustments</th>
-        <th>Wed Vale</th>
-        <th>Total Deductions</th>
+        <th data-col="id">ID</th>
+        <th data-col="name">Name</th>
+        <th data-col="pagibig">Pag-IBIG</th>
+        <th data-col="philhealth">PhilHealth</th>
+        <th data-col="sss">SSS</th>
+        <th data-col="loanSSS">SSS Loan</th>
+        <th data-col="loanPI">Pag-IBIG Loan</th>
+        <th data-col="vale">Account</th>
+        <th data-col="adjustments">Adjustments</th>
+        <th data-col="valeWed">Wed Vale</th>
+        <th data-col="total">Total Deductions</th>
        </tr>
       </thead>
       <tbody></tbody>
@@ -3054,6 +3073,114 @@ function splitAdjustmentValue(value){
   return { raw: rounded, positive, deduction };
 }
 
+const DEDUCTION_COLUMN_KEYS = ['pagibig','philhealth','sss','loanSSS','loanPI','vale','adjustments','valeWed','total'];
+let deductionColumnInclusions = {};
+try {
+  const stored = localStorage.getItem('deductionColumnVisibility');
+  if (stored) {
+    const parsed = JSON.parse(stored);
+    if (parsed && typeof parsed === 'object') {
+      deductionColumnInclusions = {};
+      Object.keys(parsed).forEach(function(key){
+        if (parsed[key] === false) {
+          deductionColumnInclusions[key] = false;
+        }
+      });
+    }
+  }
+} catch (err) { deductionColumnInclusions = {}; }
+
+function isDeductionColumnIncluded(key){
+  if (!key) return true;
+  return !deductionColumnInclusions || deductionColumnInclusions[key] !== false;
+}
+
+function persistDeductionColumnInclusions(){
+  try {
+    if (!deductionColumnInclusions || Object.keys(deductionColumnInclusions).length === 0){
+      localStorage.removeItem('deductionColumnVisibility');
+    } else {
+      localStorage.setItem('deductionColumnVisibility', JSON.stringify(deductionColumnInclusions));
+    }
+  } catch (err) {}
+}
+
+function computeEffectiveDeductionValues(rawValues){
+  const effective = {};
+  let runningTotal = 0;
+  DEDUCTION_COLUMN_KEYS.forEach(function(key){
+    if (key === 'total') return;
+    const rawSource = rawValues && Object.prototype.hasOwnProperty.call(rawValues, key) ? Number(rawValues[key]) : 0;
+    const raw = Number.isFinite(rawSource) ? roundToCents(rawSource) : 0;
+    const include = isDeductionColumnIncluded(key);
+    const value = include ? raw : 0;
+    effective[key] = value;
+    runningTotal += value;
+  });
+  const includeTotal = isDeductionColumnIncluded('total');
+  effective.total = includeTotal ? roundToCents(runningTotal) : 0;
+  return effective;
+}
+
+function updateDeductionCellDisplay(cell, raw, effective, included){
+  if (!cell) return;
+  const cleanRaw = Number.isFinite(raw) ? roundToCents(raw) : 0;
+  const cleanEffective = Number.isFinite(effective) ? roundToCents(effective) : 0;
+  cell.setAttribute('data-raw', cleanRaw);
+  cell.setAttribute('data-effective', cleanEffective);
+  if (cell.tagName === 'TD' || cell.tagName === 'TH') {
+    cell.textContent = formatDeductionDisplay(cleanEffective);
+  }
+  if (!included && Math.abs(cleanRaw) > 0.004) {
+    cell.classList.add('deduction-excluded');
+    cell.setAttribute('title', `Excluded (was ${cleanRaw.toFixed(2)})`);
+  } else {
+    cell.classList.remove('deduction-excluded');
+    cell.removeAttribute('title');
+  }
+}
+
+function applyDeductionColumnState(){
+  const toggles = document.querySelectorAll('#deductionColumnToggles input[data-col]');
+  toggles.forEach(function(input){
+    const col = input.getAttribute('data-col');
+    if (!col) return;
+    input.checked = isDeductionColumnIncluded(col);
+  });
+
+  const table = document.getElementById('deductionsTable');
+  if (!table) return;
+
+  const rows = table.querySelectorAll('tbody tr, tfoot tr');
+  rows.forEach(function(tr){
+    const rawValues = {};
+    DEDUCTION_COLUMN_KEYS.forEach(function(key){
+      if (key === 'total') return;
+      const cell = tr.querySelector(`[data-col="${key}"]`);
+      if (!cell) { rawValues[key] = 0; return; }
+      let raw = Number(cell.getAttribute('data-raw'));
+      if (!Number.isFinite(raw)) {
+        raw = Number(cell.dataset.rawValue);
+      }
+      if (!Number.isFinite(raw)) {
+        const parsed = parseFloat((cell.textContent || '').replace(/,/g,''));
+        raw = Number.isFinite(parsed) ? parsed : 0;
+      }
+      rawValues[key] = roundToCents(raw);
+    });
+    const rawTotal = Object.keys(rawValues).reduce(function(sum, key){ return sum + (key === 'total' ? 0 : Number(rawValues[key]) || 0); }, 0);
+    rawValues.total = roundToCents(rawTotal);
+    const effectiveValues = computeEffectiveDeductionValues(rawValues);
+    DEDUCTION_COLUMN_KEYS.forEach(function(key){
+      const cell = tr.querySelector(`[data-col="${key}"]`);
+      if (!cell) return;
+      const raw = roundToCents(Number(rawValues[key]) || 0);
+      const effective = roundToCents(Number(effectiveValues[key]) || 0);
+      updateDeductionCellDisplay(cell, raw, effective, isDeductionColumnIncluded(key));
+    });
+  });
+}
+
 function renderDeductionsTable(){
   syncPeriodScopedData();
   const dtbody = document.querySelector('#deductionsTable tbody');
@@ -3083,24 +3210,76 @@ function renderDeductionsTable(){
     const sss = (flags.sss === false) ? 0 : +((sssFull / div).toFixed(2));
     const sssLoan = +(lSSS / div).toFixed(2);
     const piLoan = +(lPI / div).toFixed(2);
-    const total = +(pagibig + philhealth + sss + sssLoan + piLoan + v + vW + adjDeduction).toFixed(2);
+    const rowRaw = {
+      pagibig,
+      philhealth,
+      sss,
+      loanSSS: sssLoan,
+      loanPI: piLoan,
+      vale: v,
+      adjustments: adjDeduction,
+      valeWed: vW
+    };
+    rowRaw.total = roundToCents(pagibig + philhealth + sss + sssLoan + piLoan + v + vW + adjDeduction);
+    const rowEffective = computeEffectiveDeductionValues(rowRaw);
     const tr = document.createElement('tr');
-    tr.innerHTML = [
-      `<td>${emp.id}</td>`,
-      `<td class="wrap">${emp.name}</td>`,
-      `<td class="num">${formatDeductionDisplay(pagibig)}</td>`,
-      `<td class="num">${formatDeductionDisplay(philhealth)}</td>`,
-      `<td class="num">${formatDeductionDisplay(sss)}</td>`,
-      `<td class="num">${formatDeductionDisplay(sssLoan)}</td>`,
-      `<td class="num">${formatDeductionDisplay(piLoan)}</td>`,
-      `<td class="num">${formatDeductionDisplay(v)}</td>`,
-      `<td class="num">${formatDeductionDisplay(adjDeduction)}</td>`,
-      `<td class="num">${formatDeductionDisplay(vW)}</td>`,
-      `<td class="num">${formatDeductionDisplay(total)}</td>`
-    ].join('');
+    const idCell = document.createElement('td');
+    idCell.setAttribute('data-col', 'id');
+    idCell.textContent = emp.id;
+    tr.appendChild(idCell);
+    const nameCell = document.createElement('td');
+    nameCell.classList.add('wrap');
+    nameCell.setAttribute('data-col', 'name');
+    nameCell.textContent = emp.name;
+    tr.appendChild(nameCell);
+    DEDUCTION_COLUMN_KEYS.forEach(function(key){
+      const td = document.createElement('td');
+      td.classList.add('num');
+      td.setAttribute('data-col', key);
+      const raw = Object.prototype.hasOwnProperty.call(rowRaw, key) ? rowRaw[key] : 0;
+      const effective = Object.prototype.hasOwnProperty.call(rowEffective, key) ? rowEffective[key] : 0;
+      updateDeductionCellDisplay(td, raw, effective, isDeductionColumnIncluded(key));
+      tr.appendChild(td);
+    });
     dtbody.appendChild(tr);
   });
+  applyDeductionColumnState();
 }
+document.addEventListener('DOMContentLoaded', function(){
+  try {
+    applyDeductionColumnState();
+  } catch (err) {}
+  try {
+    const toggles = document.getElementById('deductionColumnToggles');
+    if (toggles && !toggles.__boundColumnToggle){
+      toggles.addEventListener('change', function(ev){
+        const input = ev.target;
+        if (!input || !input.matches('input[data-col]')) return;
+        const col = input.getAttribute('data-col');
+        if (!col || DEDUCTION_COLUMN_KEYS.indexOf(col) === -1) return;
+        if (input.checked) {
+          delete deductionColumnInclusions[col];
+        } else {
+          deductionColumnInclusions[col] = false;
+        }
+        persistDeductionColumnInclusions();
+        applyDeductionColumnState();
+        try {
+          document.querySelectorAll('#payrollTable tbody tr').forEach(function(tr){
+            try { calculateRow(tr); } catch (calcErr) {}
+          });
+        } catch (calcWrapErr) {}
+        try {
+          (window.scheduleTotals || function(){ try { updatePayrollGrandTotals(); updateDeductionsGrandTotals(); } catch (_) {} })();
+        } catch (totErr) {
+          try { updatePayrollGrandTotals(); } catch (innerErr) {}
+          try { updateDeductionsGrandTotals(); } catch (innerErr2) {}
+        }
+      });
+      toggles.__boundColumnToggle = true;
+    }
+  } catch (err) {}
+});
 document.addEventListener('click', (e)=>{
   if(e.target && e.target.id === 'exportDeductionsCSV'){
     try {
@@ -3138,13 +3317,29 @@ document.addEventListener('click', (e)=>{
         const wedValeRaw = +(Number((typeof valeWed!== 'undefined' ? valeWed?.[id]: 0)) || 0).toFixed(2);
 
         // Total per-period (loans contribute their per-period share here)
-        const totalPer  = +(pagibig + philhealth + sssPer + (sssLoanRaw/div) + (piLoanRaw/div) + valeRaw + wedValeRaw + adjDeduct).toFixed(2);
+        const loanSssPer = +((sssLoanRaw / div)).toFixed(2);
+        const loanPiPer  = +((piLoanRaw / div)).toFixed(2);
+        const rowRawForTotals = {
+          pagibig,
+          philhealth,
+          sss: sssPer,
+          loanSSS: loanSssPer,
+          loanPI: loanPiPer,
+          vale: valeRaw,
+          adjustments: adjDeduct,
+          valeWed: wedValeRaw
+        };
+        const rowEffective = computeEffectiveDeductionValues(rowRawForTotals);
+        const pagibigApplied = roundToCents(rowEffective.pagibig || 0);
+        const philhealthApplied = roundToCents(rowEffective.philhealth || 0);
+        const sssApplied = roundToCents(rowEffective.sss || 0);
+        const totalPer  = roundToCents(rowEffective.total || 0);
 
         rows.push([
           id, name,
-          pagibig.toFixed(2),
-          philhealth.toFixed(2),
-          sssPer.toFixed(2),
+          pagibigApplied.toFixed(2),
+          philhealthApplied.toFixed(2),
+          sssApplied.toFixed(2),
           sssLoanRaw.toFixed(2),
           piLoanRaw.toFixed(2),
           valeRaw.toFixed(2),
@@ -3917,16 +4112,47 @@ function calculateRow(tr){  const readNum = sel => { const el = tr.querySelector
   const valeAmt = v;
   const wedValeAmt = vW;
 
-  const total = pagibig + philhealth + sss + sssLoan + piLoan + valeAmt + wedValeAmt + adjDeduction;
+  const deductionRaw = {
+    pagibig,
+    philhealth,
+    sss,
+    loanSSS: sssLoan,
+    loanPI: piLoan,
+    vale: valeAmt,
+    adjustments: adjDeduction,
+    valeWed: wedValeAmt
+  };
+  deductionRaw.total = roundToCents(pagibig + philhealth + sss + sssLoan + piLoan + valeAmt + wedValeAmt + adjDeduction);
+  const deductionEffective = computeEffectiveDeductionValues(deductionRaw);
+  const total = deductionEffective.total;
   const net = gross - total;
 
   w('.regPay', regPay);
   w('.otPay', otPay);
   w('.grossPay', gross);
-  w('.pagibig', pagibig);
-  w('.philhealth', philhealth);
-  w('.sss', sss);
-  w('.totalDed', total);
+  const applyDeductionCell = (selector, key) => {
+    const applied = roundToCents(deductionEffective[key] || 0);
+    w(selector, applied);
+    const cell = tr.querySelector(selector);
+    if (!cell) return;
+    const rawVal = roundToCents(deductionRaw[key] || 0);
+    try {
+      cell.dataset.rawValue = rawVal.toFixed(2);
+      cell.dataset.effectiveValue = applied.toFixed(2);
+    } catch (_) {}
+    const included = isDeductionColumnIncluded(key);
+    if (!included && Math.abs(rawVal) > 0.004) {
+      cell.classList.add('deduction-excluded');
+      cell.setAttribute('title', `Excluded (was ${rawVal.toFixed(2)})`);
+    } else {
+      cell.classList.remove('deduction-excluded');
+      cell.removeAttribute('title');
+    }
+  };
+  applyDeductionCell('.pagibig', 'pagibig');
+  applyDeductionCell('.philhealth', 'philhealth');
+  applyDeductionCell('.sss', 'sss');
+  applyDeductionCell('.totalDed', 'total');
   // Populate adjustment cell (if exists) and net pay
   if (tr.querySelector('.adjAmt')) {
     w('.adjAmt', adjPositive);
@@ -10607,60 +10833,33 @@ document.addEventListener('DOMContentLoaded', function(){
   window.updatePayrollGrandTotals = updatePayrollGrandTotals;
 
   // === Deductions ===
-  function _dedHeadMap(){
-    var ths = Array.from(document.querySelectorAll('#deductionsTable thead th')).map(function(th){return (th.textContent||'').trim().toLowerCase();});
-    function findIdx(keys){
-      for (var i=0;i<ths.length;i++){
-        for (var j=0;j<keys.length;j++){
-          if (ths[i] === keys[j]) return i;
-        }
-        // loose contains for variants like "vale wed" vs "wed vale"
-        for (var j=0;j<keys.length;j++){
-          if (ths[i].indexOf(keys[j]) !== -1) return i;
-        }
-      }
-      return -1;
-    }
-    return {
-      id: findIdx(['id','emp id','employee id']),
-      name: findIdx(['name','employee name']),
-      pagibig: findIdx(['pag-ibig','pag ibig','pagibig']),
-      philhealth: findIdx(['philhealth','phil health']),
-      sss: findIdx(['sss']),
-      loanSSS: findIdx(['sss loan','loan sss']),
-      loanPI: findIdx(['pag-ibig loan','pag ibig loan','loan pi','pi loan']),
-      vale: findIdx(['vale','account','acct']),
-      adjustments: findIdx(['adjustments','adjustment','adj']),
-      valeWed: findIdx(['vale wed','wed vale']),
-      total: findIdx(['total','total deductions','total ded'])
-    };
-  }
-
   function updateDeductionsGrandTotals(){
     var tb = document.querySelector('#deductionsTable tbody');
     var foot = document.querySelector('#deductionsTable_foot');
     if (!tb || !foot) return;
-    var map = _dedHeadMap();
-    var t = {pagibig:0, philhealth:0, sss:0, loanSSS:0, loanPI:0, vale:0, adjustments:0, valeWed:0, total:0};
+    var totalsRaw = {pagibig:0, philhealth:0, sss:0, loanSSS:0, loanPI:0, vale:0, adjustments:0, valeWed:0};
     tb.querySelectorAll('tr').forEach(function(tr){
-      var c = tr.cells||[];
-      function cell(idx){ return (idx>=0 && idx<c.length) ? c[idx].textContent : ''; }
-      t.pagibig   += _parse(cell(map.pagibig));
-      t.philhealth+= _parse(cell(map.philhealth));
-      t.sss       += _parse(cell(map.sss));
-      t.loanSSS   += _parse(cell(map.loanSSS));
-      t.loanPI    += _parse(cell(map.loanPI));
-      t.vale      += _parse(cell(map.vale));
-      t.adjustments += _parse(cell(map.adjustments));
-      t.valeWed   += _parse(cell(map.valeWed));
-      t.total     += _parse(cell(map.total));
+      DEDUCTION_COLUMN_KEYS.forEach(function(key){
+        if (key === 'total') return;
+        var cell = tr.querySelector('[data-col="'+key+'"]');
+        if (!cell) return;
+        var rawAttr = cell.getAttribute('data-raw');
+        var rawVal = rawAttr != null ? parseFloat(rawAttr) : NaN;
+        if (!Number.isFinite(rawVal)) {
+          rawVal = _parse(cell.textContent || '');
+        }
+        if (!Number.isFinite(rawVal)) rawVal = 0;
+        totalsRaw[key] += rawVal;
+      });
     });
-    Object.keys(t).forEach(function(k){
-      var cell = foot.querySelector('[data-col="'+k+'"]');
-      if (cell) {
-        var display = formatDeductionDisplay(t[k]);
-        cell.textContent = display === '-' ? '-' : _fmt(t[k]);
-      }
+    totalsRaw.total = roundToCents(Object.keys(totalsRaw).reduce(function(sum, key){ return sum + (key === 'total' ? 0 : totalsRaw[key]); }, 0));
+    var effectiveTotals = computeEffectiveDeductionValues(totalsRaw);
+    Object.keys(effectiveTotals).forEach(function(key){
+      var cell = foot.querySelector('[data-col="'+key+'"]');
+      if (!cell) return;
+      var raw = roundToCents(totalsRaw[key] || 0);
+      var effective = roundToCents(effectiveTotals[key] || 0);
+      updateDeductionCellDisplay(cell, raw, effective, isDeductionColumnIncluded(key));
     });
   }
   window.updateDeductionsGrandTotals = updateDeductionsGrandTotals;
@@ -13241,7 +13440,9 @@ document.addEventListener('DOMContentLoaded', async function () {
             const lSSS = Number(_loanSSS[id] || 0);
             const lPI = Number(_loanPI[id] || 0);
             const v = Number(_vale[id] || 0);
-            const adj = Number(_adjustments[id] || 0);
+            const adjVal = Number(_adjustments[id] || 0);
+            const adjSplit = splitAdjustmentValue(adjVal);
+            const adjDeduction = adjSplit.deduction;
             const vW = Number(_valeWed[id] || 0);
             const regPay = +(rH * rate).toFixed(2);
             const monthly = rate * 8 * 24;
@@ -13253,21 +13454,41 @@ document.addEventListener('DOMContentLoaded', async function () {
             const sss = +(sssFull / div).toFixed(2);
             const sssLoan = +(lSSS / div).toFixed(2);
             const piLoan = +(lPI / div).toFixed(2);
-            const total = +(pagibig + philhealth + sss + sssLoan + piLoan + v + vW).toFixed(2);
+            const rowRaw = {
+              pagibig,
+              philhealth,
+              sss,
+              loanSSS: sssLoan,
+              loanPI: piLoan,
+              vale: v,
+              adjustments: adjDeduction,
+              valeWed: vW
+            };
+            rowRaw.total = roundToCents(pagibig + philhealth + sss + sssLoan + piLoan + v + vW + adjDeduction);
+            const rowEffective = computeEffectiveDeductionValues(rowRaw);
             const tr = document.createElement('tr');
-            tr.innerHTML = '<td>'+id+'</td><td class="wrap">'+(emp.name||'')+'</td>'+
-              '<td class="num">'+formatDeductionDisplay(pagibig)+'</td>'+
-              '<td class="num">'+formatDeductionDisplay(philhealth)+'</td>'+
-              '<td class="num">'+formatDeductionDisplay(sss)+'</td>'+
-              '<td class="num">'+formatDeductionDisplay(sssLoan)+'</td>'+
-              '<td class="num">'+formatDeductionDisplay(piLoan)+'</td>'+
-              '<td class="num">'+formatDeductionDisplay(v)+'</td>'+
-              '<td class="num">'+formatDeductionDisplay(adj)+'</td>'+
-              '<td class="num">'+formatDeductionDisplay(vW)+'</td>'+
-              '<td class="num">'+formatDeductionDisplay(total)+'</td>';
+            const idCell = document.createElement('td');
+            idCell.textContent = id;
+            idCell.setAttribute('data-col','id');
+            tr.appendChild(idCell);
+            const nameCell = document.createElement('td');
+            nameCell.classList.add('wrap');
+            nameCell.setAttribute('data-col','name');
+            nameCell.textContent = emp.name || '';
+            tr.appendChild(nameCell);
+            DEDUCTION_COLUMN_KEYS.forEach(function(key){
+              const td = document.createElement('td');
+              td.classList.add('num');
+              td.setAttribute('data-col', key);
+              const raw = Object.prototype.hasOwnProperty.call(rowRaw, key) ? rowRaw[key] : 0;
+              const effective = Object.prototype.hasOwnProperty.call(rowEffective, key) ? rowEffective[key] : 0;
+              updateDeductionCellDisplay(td, raw, effective, isDeductionColumnIncluded(key));
+              tr.appendChild(td);
+            });
             frag.appendChild(tr);
           });
           dtbody.appendChild(frag);
+          try { applyDeductionColumnState(); } catch (_) {}
         } catch(e) { try { return orig(); } catch(_){} }
         try { (window.scheduleTotals||window.updateDeductionsGrandTotals||function(){})(); } catch(e){}
       };
