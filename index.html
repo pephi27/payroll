@@ -4564,8 +4564,22 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!snap) return;
     snap.locked = locked;
     snap.lockedAt = locked ? (meta && meta.lockedAt ? meta.lockedAt : new Date().toISOString()) : '';
-    if (locked && meta && meta.totals) {
-      snap.totals = meta.totals;
+    if (locked && meta) {
+      if (meta.totals) {
+        snap.totals = meta.totals;
+      }
+      if (meta.snapshot && Array.isArray(meta.snapshot.rows)) {
+        snap.rows = meta.snapshot.rows;
+      }
+      if (meta.snapshot && typeof meta.snapshot.divisor !== 'undefined') {
+        snap.divisor = meta.snapshot.divisor;
+      }
+      if (meta.snapshot && meta.snapshot.totals) {
+        snap.totals = meta.snapshot.totals;
+      }
+      if (meta.hash) {
+        snap.hash = meta.hash;
+      }
     } else if (!locked) {
       snap.totals = {};
       if (typeof snap.hash !== 'undefined') snap.hash = '';
@@ -4676,11 +4690,55 @@ document.addEventListener('DOMContentLoaded', () => {
         updatePayrollGrandTotals();
       }
     } catch (err) {}
+    try {
+      if (typeof window.renderDeductionsTable === 'function') {
+        window.renderDeductionsTable();
+      }
+    } catch (err) {}
+    try {
+      if (typeof window.rebuildReports === 'function') {
+        window.rebuildReports();
+      }
+    } catch (err) {}
+    try {
+      if (typeof window.renderMasterReport === 'function') {
+        window.renderMasterReport();
+      }
+    } catch (err) {}
+
+    let snapshotData = null;
+    try {
+      if (typeof buildSnapshot === 'function') {
+        snapshotData = await buildSnapshot(start, end);
+        if (snapshotData) {
+          snapshotData.capturedAt = new Date().toISOString();
+        }
+      }
+    } catch (err) {
+      console.warn('buildSnapshot during lock failed', err);
+    }
+
+    let hashHex = '';
+    if (snapshotData) {
+      try {
+        const json = JSON.stringify(snapshotData);
+        const hashBuffer = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(json));
+        const hashArray = Array.from(new Uint8Array(hashBuffer));
+        hashHex = hashArray.map((b) => b.toString(16).padStart(2, '0')).join('');
+      } catch (err) {
+        console.warn('Unable to compute snapshot hash', err);
+      }
+    }
     const totals = captureGrandTotals();
     const lockedAt = new Date().toISOString();
     disablePayrollInputs();
-    setPeriodLocked(start, end, true, { lockedAt, totals });
+    setPeriodLocked(start, end, true, { lockedAt, totals, snapshot: snapshotData, hash: hashHex });
     applyLockUI();
+    try {
+      await captureAndStoreSnapshots(start, end, snapshotData, hashHex);
+    } catch (err) {
+      console.warn('Snapshot capture failed after locking', err);
+    }
   }
 
   async function handleUnlockClick() {
@@ -5221,6 +5279,202 @@ document.addEventListener('DOMContentLoaded', () => {
     return null;
   }
 
+  async function storeSnapshotSegment(segment, startDate, endDate, payload) {
+    if (!segment || !payload) return;
+    const key = composeSnapshotStorageKey(segment, startDate, endDate);
+    if (!key) return;
+    const writer = (typeof window.writeKV === 'function') ? window.writeKV : null;
+    try {
+      if (writer) {
+        await Promise.resolve(writer(key, payload));
+      } else {
+        localStorage.setItem(key, JSON.stringify(payload));
+      }
+    } catch (err) {
+      console.warn('Snapshot segment persist failed', segment, err);
+      try { localStorage.setItem(key, JSON.stringify(payload)); }
+      catch (storageErr) { console.warn('Snapshot fallback persist failed', storageErr); }
+    }
+  }
+
+  function replaceFormControlsWithText(root, options = {}) {
+    if (!root) return;
+    const skipSelects = !!options.skipSelects;
+    const normalize = (value) => {
+      if (value == null) return '';
+      return String(value).trim();
+    };
+    root.querySelectorAll('input').forEach((input) => {
+      const td = input.closest('td');
+      if (!td) return;
+      let value = '';
+      if (input.type === 'checkbox' || input.type === 'radio') {
+        value = input.checked ? 'Yes' : 'No';
+      } else {
+        value = input.value != null && input.value !== '' ? input.value : input.textContent;
+      }
+      td.textContent = normalize(value);
+    });
+    if (!skipSelects) {
+      root.querySelectorAll('select').forEach((select) => {
+        const td = select.closest('td');
+        if (!td) return;
+        let text = '';
+        try {
+          const idx = select.selectedIndex;
+          if (idx >= 0 && select.options && select.options[idx]) {
+            const opt = select.options[idx];
+            text = opt.textContent || opt.innerText || opt.value || '';
+          } else {
+            text = select.value || '';
+          }
+        } catch (err) {
+          text = select.value || '';
+        }
+        td.textContent = normalize(text);
+      });
+    }
+    root.querySelectorAll('textarea').forEach((textarea) => {
+      const td = textarea.closest('td');
+      if (!td) return;
+      td.textContent = normalize(textarea.value || textarea.textContent);
+    });
+  }
+
+  function extractSnapshotFromClone(clone) {
+    if (!clone) return null;
+    const readRow = (row) => Array.from(row?.cells || []).map((cell) => (cell.textContent || '').trim());
+    const headerRows = clone.tHead ? Array.from(clone.tHead.rows || []) : [];
+    const header = headerRows.length ? readRow(headerRows[headerRows.length - 1]) : [];
+    const rows = [];
+    Array.from(clone.tBodies || []).forEach((tbody) => {
+      Array.from(tbody.rows || []).forEach((tr) => {
+        rows.push(readRow(tr));
+      });
+    });
+    let footer = null;
+    if (clone.tFoot && clone.tFoot.rows && clone.tFoot.rows.length) {
+      footer = readRow(clone.tFoot.rows[clone.tFoot.rows.length - 1]);
+      if (footer && !footer.some((cell) => cell && cell.trim())) {
+        footer = null;
+      }
+    }
+    if (!header.length && !rows.length) return null;
+    const snapshot = { headers: header, rows };
+    if (footer) snapshot.footer = footer;
+    return snapshot;
+  }
+
+  function captureDtrSnapshot() {
+    const table = document.getElementById('resultsTable');
+    if (!table) return null;
+    const selectedTexts = [];
+    table.querySelectorAll('select').forEach((sel) => {
+      let text = '';
+      try {
+        const idx = sel.selectedIndex;
+        if (idx >= 0 && sel.options && sel.options[idx]) {
+          const opt = sel.options[idx];
+          text = opt.textContent || opt.innerText || opt.value || '';
+        } else {
+          text = sel.value || '';
+        }
+      } catch (err) {
+        text = sel.value || '';
+      }
+      selectedTexts.push((text || '').trim());
+    });
+    const clone = table.cloneNode(true);
+    let selIdx = 0;
+    clone.querySelectorAll('select').forEach((sel) => {
+      const td = sel.closest('td');
+      if (!td) return;
+      const text = selectedTexts[selIdx++] || sel.value || '';
+      td.textContent = text.trim();
+    });
+    replaceFormControlsWithText(clone, { skipSelects: true });
+    clone.querySelectorAll('button').forEach((btn) => btn.remove());
+    return extractSnapshotFromClone(clone);
+  }
+
+  function captureDeductionsSnapshot() {
+    const table = document.getElementById('deductionsTable');
+    if (!table) return null;
+    const clone = table.cloneNode(true);
+    replaceFormControlsWithText(clone);
+    clone.querySelectorAll('button').forEach((btn) => btn.remove());
+    return extractSnapshotFromClone(clone);
+  }
+
+  function captureReportsSnapshot() {
+    const table = document.getElementById('r_table');
+    if (!table) return null;
+    const clone = table.cloneNode(true);
+    return extractSnapshotFromClone(clone);
+  }
+
+  function captureMasterSnapshot() {
+    const container = document.getElementById('masterReportContainer');
+    if (!container) return null;
+    const html = container.innerHTML || '';
+    if (!html.trim()) return null;
+    return { html };
+  }
+
+  async function captureAndStoreSnapshots(startDate, endDate, payrollSnapshot, hash) {
+    const timestamp = new Date().toISOString();
+    try { if (typeof window.renderDeductionsTable === 'function') window.renderDeductionsTable(); }
+    catch (err) { console.warn('renderDeductionsTable refresh failed', err); }
+    try { if (typeof window.rebuildReports === 'function') window.rebuildReports(); }
+    catch (err) { console.warn('rebuildReports refresh failed', err); }
+    try { if (typeof window.renderMasterReport === 'function') window.renderMasterReport(); }
+    catch (err) { console.warn('renderMasterReport refresh failed', err); }
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const tasks = [];
+    const dtrSnapshot = captureDtrSnapshot();
+    if (dtrSnapshot) {
+      dtrSnapshot.startDate = startDate;
+      dtrSnapshot.endDate = endDate;
+      dtrSnapshot.capturedAt = timestamp;
+      tasks.push(storeSnapshotSegment('dtr', startDate, endDate, dtrSnapshot));
+    }
+    if (payrollSnapshot) {
+      const payload = Object.assign({}, payrollSnapshot, {
+        startDate,
+        endDate,
+        capturedAt: timestamp
+      });
+      if (hash) payload.hash = hash;
+      tasks.push(storeSnapshotSegment('payroll', startDate, endDate, payload));
+    }
+    const deductionsSnapshot = captureDeductionsSnapshot();
+    if (deductionsSnapshot) {
+      deductionsSnapshot.startDate = startDate;
+      deductionsSnapshot.endDate = endDate;
+      deductionsSnapshot.capturedAt = timestamp;
+      tasks.push(storeSnapshotSegment('deductions', startDate, endDate, deductionsSnapshot));
+    }
+    const reportsSnapshot = captureReportsSnapshot();
+    if (reportsSnapshot) {
+      reportsSnapshot.startDate = startDate;
+      reportsSnapshot.endDate = endDate;
+      reportsSnapshot.capturedAt = timestamp;
+      tasks.push(storeSnapshotSegment('reports', startDate, endDate, reportsSnapshot));
+    }
+    const masterSnapshot = captureMasterSnapshot();
+    if (masterSnapshot) {
+      masterSnapshot.startDate = startDate;
+      masterSnapshot.endDate = endDate;
+      masterSnapshot.capturedAt = timestamp;
+      tasks.push(storeSnapshotSegment('master', startDate, endDate, masterSnapshot));
+    }
+
+    if (tasks.length) {
+      await Promise.allSettled(tasks);
+    }
+  }
+
   const HTML_ESCAPE = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
   function escapeHtml(value) {
     return String(value ?? '').replace(/[&<>"']/g, (ch) => HTML_ESCAPE[ch] || ch);
@@ -5460,7 +5714,8 @@ document.addEventListener('DOMContentLoaded', () => {
       `snap:dtr:${pid}`,
       `snap:payroll:${pid}`,
       `snap:reports:${pid}`,
-      `snap:deductions:${pid}`
+      `snap:deductions:${pid}`,
+      `snap:master:${pid}`
     ];
   }
 
