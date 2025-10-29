@@ -12865,8 +12865,8 @@ document.addEventListener('DOMContentLoaded', async function () {
   try {
     const orig = window.renderDeductionsTable;
     if (typeof orig === 'function' && !orig.__perfWrapped) {
-      const optimized = function(){
-        if (!isDeductionsVisible()) { window.__deductionsDirty = true; return; }
+      const optimized = function(forceRender){
+        if (!forceRender && !isDeductionsVisible()) { window.__deductionsDirty = true; return; }
         window.__deductionsDirty = false;
         try {
           const dtbody = document.querySelector('#deductionsTable tbody');
@@ -13153,6 +13153,7 @@ document.addEventListener('DOMContentLoaded', async function () {
     const reports = serializeTableById('projectTotalsTable') || serializeTableById('r_table') || { headers:[], rows:[] };
     const master = serializeMasterReport() || { html: '' };
     const payroll = (typeof window.buildSnapshot==='function') ? await window.buildSnapshot(p.start, p.end) : null;
+    try { if (typeof window.renderDeductionsTable === 'function') window.renderDeductionsTable(true); } catch{}
     const deductions = serializeTableById('deductionsTable') || { headers:[], rows:[] };
     try { setPayrollLockedUI(true); } catch{}
     const mirrorPayloads = [
