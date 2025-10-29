@@ -4731,7 +4731,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   /**
    * Render the active payrolls table.
-   * Lists snapshots that are not yet locked with Edit and Lock actions.
+   * Lists snapshots that are not yet locked with Edit and Delete actions.
    */
   window.renderActivePayrolls = function renderActivePayrolls() {
     if (!activeTableBody) return;
@@ -4741,14 +4741,13 @@ document.addEventListener('DOMContentLoaded', () => {
       const tr = document.createElement('tr');
       const startText = formatDisplayDate(snap.startDate);
       const endText = formatDisplayDate(snap.endDate);
-      // Build the Active Payroll row. Include Edit, Lock and Delete actions. Deleting
+      // Build the Active Payroll row. Include Edit and Delete actions. Deleting
       // prompts confirmation and removes the snapshot from payrollHistory.
       tr.innerHTML = `
         <td>${startText}</td>
         <td>${endText}</td>
         <td>
           <button type="button" class="editActive" data-index="${index}">Edit</button>
-          <button type="button" class="lockActive" data-index="${index}">Lock</button>
           <button type="button" class="deleteActive" data-index="${index}">Delete</button>
         </td>
       `;
@@ -4756,7 +4755,7 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   };
 
-  // Delegate edit/lock actions on the Active Payrolls table
+  // Delegate edit/delete actions on the Active Payrolls table
   activeTableBody && activeTableBody.addEventListener('click', async (e) => {
     const target = e.target;
     if (!target) return;
@@ -4777,17 +4776,6 @@ document.addEventListener('DOMContentLoaded', () => {
       } catch (err) {}
       // Show the payroll panel
       try { showTab('payroll'); } catch (err) {}
-    } else if (target.classList.contains('lockActive')) {
-      const startDate = snap.startDate;
-      const endDate = snap.endDate;
-      if (!startDate || !endDate) {
-        alert('Invalid payroll dates.');
-        return;
-      }
-      if (dashStart) dashStart.value = startDate;
-      if (dashEnd) dashEnd.value = endDate;
-      await handleLockClick();
-      checkAndToggleEditState();
     } else if (target.classList.contains('deleteActive')) {
       // Delete active (unlocked) snapshot after confirmation
       if (!snap) return;
@@ -4825,10 +4813,9 @@ document.addEventListener('DOMContentLoaded', () => {
         return String(netSource);
       })();
       // Build row HTML; note small hash display for brevity
-      // Build the actions column depending on lock status. Only locked snapshots show export/unlock controls.
+      // Build the actions column depending on lock status.
       const actions = [];
       if (snap.locked) {
-        actions.push(`<button type="button" class="unlockSnapshot" data-index="${index}">Unlock</button>`);
         // For locked snapshots, show a disabled delete button to indicate it cannot be removed
         actions.push(`<button type="button" class="deleteSnapshot" data-index="${index}" disabled>Delete</button>`);
       } else {
@@ -5573,14 +5560,6 @@ document.addEventListener('DOMContentLoaded', () => {
       saveHistory();
       renderHistory();
       renderActivePayrolls();
-      return;
-    }
-    if (actionBtn.classList.contains('unlockSnapshot')) {
-      if (!snap.locked) return;
-      if (dashStart) dashStart.value = snap.startDate || '';
-      if (dashEnd) dashEnd.value = snap.endDate || '';
-      await handleUnlockClick();
-      checkAndToggleEditState();
       return;
     }
   });
@@ -13117,19 +13096,6 @@ document.addEventListener('DOMContentLoaded', async function () {
     document.addEventListener('click', function(ev){
       const t = ev.target;
       if (!t) return;
-      if (t.closest && t.closest('#activePayrollTable') && t.classList && t.classList.contains('lockActive')){
-        setTimeout(lockPeriod, 0);
-      }
-      if (t.classList && t.classList.contains('unlockSnapshot')){
-        setTimeout(unlockPeriod, 0);
-        setTimeout(function(){
-          try {
-            if (!isLocked() && typeof window.checkAndToggleEditState === 'function') {
-              window.checkAndToggleEditState();
-            }
-          } catch (err) {}
-        }, 100);
-      }
     }, true);
 
     try {
