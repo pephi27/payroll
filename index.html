@@ -4613,6 +4613,7 @@ document.addEventListener('DOMContentLoaded', () => {
       const actions = [];
       if (snap.locked) {
         actions.push(`<button type="button" class="exportAllTabs" data-index="${index}">Excel (All Tabs)</button>`);
+        actions.push(`<button type="button" class="exportAllPdf" data-index="${index}">PDF</button>`);
         actions.push(`<button type="button" class="unlockSnapshot" data-index="${index}">Unlock</button>`);
         // For locked snapshots, show a disabled delete button to indicate it cannot be removed
         actions.push(`<button type="button" class="deleteSnapshot" data-index="${index}" disabled>Delete</button>`);
@@ -5092,6 +5093,239 @@ document.addEventListener('DOMContentLoaded', () => {
     if (dashEnd) dashEnd.addEventListener('change', enableOnChange);
   });
 
+  // Helper: build snapshot storage key matching lockPeriod persistence
+  function composeSnapshotStorageKey(segment, startDate, endDate) {
+    try {
+      const startPart = normalizeSnapshotKeyPart(startDate);
+      const endPart = normalizeSnapshotKeyPart(endDate);
+      return `snap:${segment}:p:${startPart}:${endPart}`;
+    } catch (err) {
+      console.warn('Failed to compose snapshot key', err);
+      return '';
+    }
+  }
+
+  async function readSnapshotSegment(segment, startDate, endDate) {
+    const key = composeSnapshotStorageKey(segment, startDate, endDate);
+    if (!key) return null;
+    if (typeof window.readKV === 'function') {
+      try {
+        const remote = await window.readKV(key, null);
+        if (remote != null) return remote;
+      } catch (err) {
+        console.warn('KV read failed for', key, err);
+      }
+    }
+    try {
+      const raw = localStorage.getItem(key);
+      if (raw != null) return JSON.parse(raw);
+    } catch (err) {
+      console.warn('Local snapshot read failed for', key, err);
+    }
+    return null;
+  }
+
+  const HTML_ESCAPE = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
+  function escapeHtml(value) {
+    return String(value ?? '').replace(/[&<>"']/g, (ch) => HTML_ESCAPE[ch] || ch);
+  }
+
+  function normalizeRowLength(row, length) {
+    const out = Array.isArray(row) ? row.slice(0, length) : [];
+    while (out.length < length) out.push('');
+    return out;
+  }
+
+  function buildTableHtml(headers, rows, options = {}) {
+    const cols = Array.isArray(headers) ? headers.slice() : [];
+    const bodyRows = Array.isArray(rows) ? rows : [];
+    const numericCols = new Set(options.numericCols || []);
+    const classes = options.columnClasses || {};
+    const thead = cols.map((text, idx) => {
+      const cls = classes[idx] ? ` class="${classes[idx]}"` : '';
+      return `<th${cls}>${escapeHtml(text)}</th>`;
+    }).join('');
+    const tbody = bodyRows.length ? bodyRows.map((row) => {
+      const cells = normalizeRowLength(row, cols.length).map((cell, idx) => {
+        const raw = cell == null ? '' : cell;
+        const numeric = numericCols.has(idx) || (/^-?\d+(?:\.\d+)?$/.test(String(raw).replace(/,/g, '')));
+        const cls = numeric ? ' class="num"' : '';
+        return `<td${cls}>${escapeHtml(raw)}</td>`;
+      }).join('');
+      return `<tr>${cells}</tr>`;
+    }).join('') : `<tr><td class="muted" colspan="${Math.max(cols.length, 1)}">No data</td></tr>`;
+    let foot = '';
+    if (Array.isArray(options.footerRow)) {
+      const footerCells = normalizeRowLength(options.footerRow, cols.length).map((cell, idx) => {
+        const raw = cell == null ? '' : cell;
+        const numeric = numericCols.has(idx) || (/^-?\d+(?:\.\d+)?$/.test(String(raw).replace(/,/g, '')));
+        const cls = numeric ? ' class="num"' : '';
+        return `<td${cls}>${escapeHtml(raw)}</td>`;
+      }).join('');
+      foot = `<tfoot><tr>${footerCells}</tr></tfoot>`;
+    }
+    return `<table class="report-table"><thead><tr>${thead}</tr></thead><tbody>${tbody}</tbody>${foot}</table>`;
+  }
+
+  function dropColumns(headers, rows, predicate) {
+    const cols = Array.isArray(headers) ? headers.slice() : [];
+    const drop = [];
+    cols.forEach((h, idx) => {
+      if (predicate(h, idx)) drop.push(idx);
+    });
+    if (!drop.length) return { headers: cols, rows };
+    const filteredHeaders = cols.filter((_, idx) => !drop.includes(idx));
+    const filteredRows = (rows || []).map((row) => {
+      const arr = Array.isArray(row) ? row : [];
+      return arr.filter((_, idx) => !drop.includes(idx));
+    });
+    return { headers: filteredHeaders, rows: filteredRows };
+  }
+
+  function formatDateRangeInline(start, end) {
+    try {
+      if (typeof formatDateRange === 'function') return formatDateRange(start, end);
+    } catch (err) {}
+    if (start && end) return `${start} - ${end}`;
+    return start || end || '';
+  }
+
+  function formatNumber(val) {
+    const num = Number(val);
+    if (!isFinite(num)) return '';
+    return num.toFixed(2);
+  }
+
+  function buildPayrollSectionFromSnapshot(snap) {
+    const headers = ['ID','Name','Hourly Rate','Regular Hours','OT Hours','Adjustment Hrs','Total Hours','Regular Pay','OT Pay','Adjustments','Bantay','Gross Pay','Pag-IBIG','PhilHealth','SSS','SSS Loan','Pag-IBIG Loan','Account','Wed Vale','Total Deductions','Net Pay','Adj Deduction'];
+    const numericCols = headers.map((_, idx) => idx).filter(idx => idx > 1);
+    const rows = Array.isArray(snap?.rows) ? snap.rows.map((row) => {
+      return [
+        row.id || '',
+        row.name || '',
+        formatNumber(row.rate),
+        formatNumber(row.regHrs),
+        formatNumber(row.otHrs),
+        formatNumber(row.adjHrs),
+        formatNumber(row.totalHrs),
+        formatNumber(row.regPay),
+        formatNumber(row.otPay),
+        formatNumber(row.adjAmt),
+        formatNumber(row.bantay),
+        formatNumber(row.grossPay),
+        formatNumber(row.pagibig),
+        formatNumber(row.philhealth),
+        formatNumber(row.sss),
+        formatNumber(row.loanSSS),
+        formatNumber(row.loanPI),
+        formatNumber(row.vale),
+        formatNumber(row.valeWed),
+        formatNumber(row.totalDed),
+        formatNumber(row.netPay),
+        formatNumber(row.adjustmentDeduction)
+      ];
+    }) : [];
+    const totals = snap?.totals || {};
+    const footer = headers.map((label, idx) => {
+      if (idx === 0) return 'Totals';
+      if (idx === 1) return '';
+      const keyMap = ['rate','regHrs','otHrs','adjHrs','totalHrs','regPay','otPay','adjAmt','bantay','grossPay','pagibig','philhealth','sss','loanSSS','loanPI','vale','valeWed','totalDed','netPay','adjustmentDeduction'];
+      const key = keyMap[idx - 2];
+      const val = key ? totals[key] : null;
+      return formatNumber(val);
+    });
+    const range = formatDateRangeInline(snap?.startDate, snap?.endDate);
+    const subtitle = range ? `<div class="report-subtitle">${escapeHtml(range)}</div>` : '';
+    const table = buildTableHtml(headers, rows, { numericCols, footerRow: footer });
+    return `<section class="report-block"><h2>Payroll Report</h2>${subtitle}${table}</section>`;
+  }
+
+  function buildDtrSectionFromSnapshot(data, startDate, endDate) {
+    if (!data) return '';
+    const filtered = dropColumns(data.headers || [], data.rows || [], (header) => {
+      const norm = String(header || '').trim().toLowerCase();
+      return norm === 'actions' || norm === 'split' || norm === 'editor';
+    });
+    const range = formatDateRangeInline(startDate, endDate);
+    const subtitle = range ? `<div class="report-subtitle">${escapeHtml(range)}</div>` : '';
+    const table = buildTableHtml(filtered.headers, filtered.rows, { numericCols: [] });
+    return `<section class="report-block"><h2>Daily Time Records</h2>${subtitle}${table}</section>`;
+  }
+
+  function buildDetailedSectionFromSnapshot(data) {
+    if (!data) return '';
+    const headers = Array.isArray(data.headers) ? data.headers : [];
+    const rows = Array.isArray(data.rows) ? data.rows : [];
+    const table = buildTableHtml(headers, rows, {});
+    return `<section class="report-block"><h2>Detailed Report</h2>${table}</section>`;
+  }
+
+  function buildMasterSectionFromSnapshot(master, startDate, endDate) {
+    const range = formatDateRangeInline(startDate, endDate);
+    const subtitle = range ? `<div class="report-subtitle">${escapeHtml(range)}</div>` : '';
+    const inner = master && typeof master.html === 'string' && master.html.trim() ? master.html : '<p class="muted">No master report data available.</p>';
+    return `<section class="report-block"><h2>Master Report</h2>${subtitle}<div class="master-wrapper">${inner}</div></section>`;
+  }
+
+  async function exportCombinedPdfForSnapshot(snap) {
+    if (!snap) return;
+    const startDate = snap.startDate || '';
+    const endDate = snap.endDate || '';
+    const [dtr, reports, master] = await Promise.all([
+      readSnapshotSegment('dtr', startDate, endDate),
+      readSnapshotSegment('reports', startDate, endDate),
+      readSnapshotSegment('master', startDate, endDate)
+    ]);
+
+    const sections = [];
+    sections.push(buildDtrSectionFromSnapshot(dtr, startDate, endDate));
+    sections.push(buildPayrollSectionFromSnapshot({
+      rows: snap.rows || [],
+      totals: snap.totals || {},
+      startDate,
+      endDate
+    }));
+    sections.push(buildDetailedSectionFromSnapshot(reports));
+    sections.push(buildMasterSectionFromSnapshot(master, startDate, endDate));
+
+    const filteredSections = sections.filter(Boolean).join('');
+    if (!filteredSections) {
+      alert('No report data is available for this snapshot.');
+      return;
+    }
+
+    const doc = `<!doctype html><html><head><meta charset="utf-8"><title>Payroll Reports PDF</title><style>
+      @page { margin: 12mm; }
+      html,body{font-family:Arial,Helvetica,sans-serif;margin:0;padding:0;color:#0f172a;}
+      body{padding:16px;background:#fff;}
+      h2{margin:0 0 6px 0;font-size:20px;}
+      .report-subtitle{font-size:12px;color:#475569;margin-bottom:10px;}
+      .report-block{margin-bottom:32px;page-break-inside:avoid;}
+      .report-block:last-of-type{margin-bottom:0;}
+      table{width:100%;border-collapse:collapse;font-size:11px;margin-top:8px;}
+      th,td{border:0.6pt solid #1e293b;padding:4px 6px;vertical-align:middle;}
+      th{background:#e2e8f0;text-align:left;}
+      td.num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap;}
+      thead{display:table-header-group;}
+      tfoot td{font-weight:600;background:#f8fafc;}
+      .muted{color:#94a3b8;text-align:center;}
+      .master-wrapper table{border-color:#1e293b;}
+    </style></head><body>${filteredSections}</body></html>`;
+
+    const w = window.open('', '', 'width=1024,height=768');
+    if (!w) {
+      alert('Popup blocked. Please allow popups to generate the PDF.');
+      return;
+    }
+    w.document.open();
+    w.document.write(doc);
+    w.document.close();
+    setTimeout(() => {
+      try { safePrint(w); }
+      catch (err) { try { w.print(); } catch (_) {} }
+    }, 100);
+  }
+
   // Delegate open/download actions on history table
   function normalizeSnapshotKeyPart(value) {
     if (!value) return '';
@@ -5192,6 +5426,17 @@ document.addEventListener('DOMContentLoaded', () => {
           }, 300);
         }
       } catch(e){}
+      return;
+    }
+    if (actionBtn.classList.contains('exportAllPdf')) {
+      try {
+        if (typeof exportCombinedPdfForSnapshot === 'function') {
+          await exportCombinedPdfForSnapshot(snap);
+        }
+      } catch (err) {
+        console.warn('Combined PDF export failed', err);
+        alert('Unable to build the combined PDF for this snapshot.');
+      }
       return;
     }
     if (actionBtn.classList.contains('deleteSnapshot')) {
