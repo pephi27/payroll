@@ -2950,14 +2950,21 @@ divisorEl.addEventListener('change', () => {
   }
   calculateAll();
 });
-function loadEmployees() {
-  const stored = JSON.parse(localStorage.getItem('att_employees_v2') || '{}');
-  let list = Object.keys(stored).map(id=>({id, name: stored[id]?.name || ''}));
-  if (list.length === 0) list = [{id:'001', name:'Sample Employee'}];
+function buildEmployeeListFromSource(source){
+  const src = (source && typeof source === 'object') ? source : {};
+  let list = Object.keys(src).map(id => ({ id, name: src[id]?.name || '' }));
+  if (list.length === 0) list = [{ id: '001', name: 'Sample Employee' }];
   list.sort((a,b)=> (a.name||'').localeCompare(b.name||''));
   return list;
 }
-const employeeList = loadEmployees();
+function loadEmployees() {
+  let stored = {};
+  try { stored = JSON.parse(localStorage.getItem('att_employees_v2') || '{}'); }
+  catch(_){ stored = {}; }
+  return buildEmployeeListFromSource(stored);
+}
+let employeeList = loadEmployees();
+try { window.employeeList = employeeList; } catch(_){ }
 function getSssTable(){
   let arr = [];
   try { arr = JSON.parse(localStorage.getItem(LS_SSS_TABLE) || '[]'); }
@@ -7757,6 +7764,12 @@ let storedRecords = (typeof window !== 'undefined' && Array.isArray(window.store
   ? window.storedRecords
   : [];
 let storedEmployees = JSON.parse(localStorage.getItem(LS_EMPLOYEES) || '{}');
+function refreshEmployeeList(){
+  try { employeeList = buildEmployeeListFromSource(storedEmployees); }
+  catch(_){ employeeList = loadEmployees(); }
+  try { window.employeeList = employeeList; } catch(_){ }
+}
+refreshEmployeeList();
 let storedSchedules = JSON.parse(localStorage.getItem(LS_SCHEDULES) || 'null');
 let defaultScheduleId = localStorage.getItem(LS_SCHEDULES_DEFAULT) || null;
 let storedProjects = JSON.parse(localStorage.getItem(LS_PROJECTS) || '{}');
@@ -8035,7 +8048,10 @@ function resetRanges(){
 document.getElementById('saveRangesBtn').addEventListener('click', saveRangesFromUI);
 document.getElementById('resetRangesBtn').addEventListener('click', resetRanges);
 
-function saveEmployeesToLS(){ localStorage.setItem(LS_EMPLOYEES, JSON.stringify(storedEmployees)); }
+function saveEmployeesToLS(){
+  localStorage.setItem(LS_EMPLOYEES, JSON.stringify(storedEmployees));
+  refreshEmployeeList();
+}
 function renderEmpScheduleDropdowns(){
   const sel = document.getElementById('empScheduleSelect'); if(!sel) return;
   sel.innerHTML = '';
