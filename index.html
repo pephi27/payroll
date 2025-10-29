@@ -162,9 +162,13 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_KEY)
 window.supabase = supabase;
 window.SUPABASE_TABLE = TABLE;
 
-function queueHydrateRerender() {
+function markHydrated() {
   try { window.__kv_hydrated = true; } catch {}
   try { window.dispatchEvent(new Event('kv-hydrated')); } catch {}
+}
+
+function queueHydrateRerender() {
+  markHydrated();
   const rerender = () => {
     try { if (typeof window.calculateAll === 'function') window.calculateAll(); } catch {}
     try { if (typeof window.renderResults === 'function') window.renderResults(); } catch {}
@@ -327,8 +331,13 @@ Storage.prototype.removeItem = function(k) {
       // Avoid reload: signal hydration complete and re-render once safely.
       try { sessionStorage.removeItem("__kv_reloaded"); } catch {}
       queueHydrateRerender();
+    } else {
+      markHydrated();
     }
-  } catch (e) { console.warn("Initial hydrate failed", e) }
+  } catch (e) {
+    console.warn("Initial hydrate failed", e);
+    markHydrated();
+  }
 })()
 
 function safeStringify(v){
@@ -2849,20 +2858,74 @@ function persistPeriodScopedMap(lsKey, map){
   return Promise.resolve();
 }
 let currentPeriodKey = periodKey();
-const allLoanSSS = loadPeriodScopedMap(LS_LOAN_SSS);
-const allLoanPI = loadPeriodScopedMap(LS_LOAN_PI);
-const allVale = loadPeriodScopedMap(LS_VALE);
-const allValeWed = loadPeriodScopedMap(LS_VALE_WED);
+let allLoanSSS = loadPeriodScopedMap(LS_LOAN_SSS);
+let allLoanPI = loadPeriodScopedMap(LS_LOAN_PI);
+let allVale = loadPeriodScopedMap(LS_VALE);
+let allValeWed = loadPeriodScopedMap(LS_VALE_WED);
 let loanSSS = ensurePeriodData(allLoanSSS, currentPeriodKey);
 let loanPI = ensurePeriodData(allLoanPI, currentPeriodKey);
 let vale = ensurePeriodData(allVale, currentPeriodKey);
 let valeWed = ensurePeriodData(allValeWed, currentPeriodKey);
+let periodPersistenceReady = false;
+try {
+  if (typeof window !== 'undefined' && window.__kv_hydrated === true) periodPersistenceReady = true;
+} catch(_){}
+let allAdjustments = JSON.parse(localStorage.getItem(LS_ADJ) || '{}');
+let adjustments = allAdjustments[currentPeriodKey] || {};
+try { window.adjustments = adjustments; } catch(_){ }
+let allAdjHrs = JSON.parse(localStorage.getItem(LS_ADJ_HRS) || '{}');
+let adjHrs = allAdjHrs[currentPeriodKey] || {};
+let allBantay = JSON.parse(localStorage.getItem(LS_BANTAY) || '{}');
+let bantay = allBantay[currentPeriodKey] || {};
+
+function refreshPeriodScopedCachesFromStorage(){
+  allLoanSSS = loadPeriodScopedMap(LS_LOAN_SSS);
+  allLoanPI = loadPeriodScopedMap(LS_LOAN_PI);
+  allVale = loadPeriodScopedMap(LS_VALE);
+  allValeWed = loadPeriodScopedMap(LS_VALE_WED);
+  loanSSS = ensurePeriodData(allLoanSSS, currentPeriodKey);
+  loanPI = ensurePeriodData(allLoanPI, currentPeriodKey);
+  vale = ensurePeriodData(allVale, currentPeriodKey);
+  valeWed = ensurePeriodData(allValeWed, currentPeriodKey);
+  allAdjustments = JSON.parse(localStorage.getItem(LS_ADJ) || '{}');
+  adjustments = allAdjustments[currentPeriodKey] || {};
+  allAdjHrs = JSON.parse(localStorage.getItem(LS_ADJ_HRS) || '{}');
+  adjHrs = allAdjHrs[currentPeriodKey] || {};
+  allBantay = JSON.parse(localStorage.getItem(LS_BANTAY) || '{}');
+  bantay = allBantay[currentPeriodKey] || {};
+  try {
+    window.loanSSS = loanSSS;
+    window.loanPI = loanPI;
+    window.vale = vale;
+    window.valeWed = valeWed;
+    window.adjustments = adjustments;
+  } catch(_){ }
+}
+
+try {
+  if (typeof window !== 'undefined') {
+    window.addEventListener('kv-hydrated', () => {
+      periodPersistenceReady = true;
+      refreshPeriodScopedCachesFromStorage();
+    });
+  }
+} catch(_){ }
+if (periodPersistenceReady) {
+  refreshPeriodScopedCachesFromStorage();
+}
 async function saveCurrentPeriodDeductions(){
   if (!currentPeriodKey) return;
   allLoanSSS[currentPeriodKey] = loanSSS || {};
   allLoanPI[currentPeriodKey] = loanPI || {};
   allVale[currentPeriodKey] = vale || {};
   allValeWed[currentPeriodKey] = valeWed || {};
+  try {
+    window.loanSSS = loanSSS;
+    window.loanPI = loanPI;
+    window.vale = vale;
+    window.valeWed = valeWed;
+  } catch(e){}
+  if (!periodPersistenceReady) return;
   updatePeriodLatest(allLoanSSS, currentPeriodKey, loanSSS);
   updatePeriodLatest(allLoanPI, currentPeriodKey, loanPI);
   updatePeriodLatest(allVale, currentPeriodKey, vale);
@@ -2874,21 +2937,8 @@ async function saveCurrentPeriodDeductions(){
     persistPeriodScopedMap(LS_VALE_WED, allValeWed)
   ];
   try { await Promise.all(tasks); } catch(_){ }
-  try {
-    window.loanSSS = loanSSS;
-    window.loanPI = loanPI;
-    window.vale = vale;
-    window.valeWed = valeWed;
-  } catch(e){}
 }
 saveCurrentPeriodDeductions();
-let allAdjustments = JSON.parse(localStorage.getItem(LS_ADJ) || '{}');
-let adjustments = allAdjustments[currentPeriodKey] || {};
-try { window.adjustments = adjustments; } catch(_){ }
-let allAdjHrs = JSON.parse(localStorage.getItem(LS_ADJ_HRS) || '{}');
-let adjHrs = allAdjHrs[currentPeriodKey] || {};
-let allBantay = JSON.parse(localStorage.getItem(LS_BANTAY) || '{}');
-let bantay = allBantay[currentPeriodKey] || {};
 function syncPeriodScopedData(){
   const pk = periodKey();
   if (pk === currentPeriodKey) return false;
