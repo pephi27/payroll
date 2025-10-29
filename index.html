@@ -1570,7 +1570,6 @@ window.addEventListener('load', dashReports);
        <tr>
          <th>Start</th>
          <th>End</th>
-         <th style="text-align:center;">No Deductions</th>
          <th>Actions</th>
        </tr>
      </thead>
@@ -4977,104 +4976,6 @@ document.addEventListener('DOMContentLoaded', () => {
     window.unlockCurrentPeriod = unlockCurrentPeriod;
   } catch (err) {}
 
-  function normalizeIsoDate(value) {
-    if (!value) return '';
-    const str = String(value).trim();
-    if (!str) return '';
-    const isoMatch = str.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
-    if (isoMatch) {
-      const [, year, month, day] = isoMatch;
-      return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-    }
-    const altMatch = str.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
-    if (altMatch) {
-      const [, m, d, y] = altMatch;
-      return `${y}-${String(parseInt(m, 10)).padStart(2, '0')}-${String(parseInt(d, 10)).padStart(2, '0')}`;
-    }
-    const dt = new Date(str);
-    if (!Number.isNaN(dt.getTime())) {
-      const y = dt.getFullYear();
-      const m = String(dt.getMonth() + 1).padStart(2, '0');
-      const d = String(dt.getDate()).padStart(2, '0');
-      return `${y}-${m}-${d}`;
-    }
-    return '';
-  }
-
-  function parseDateParts(value) {
-    const iso = normalizeIsoDate(value);
-    if (!iso) return null;
-    const parts = iso.split('-').map(Number);
-    if (parts.length !== 3) return null;
-    const [year, month, day] = parts;
-    if (!year || !month || !day) return null;
-    return { iso, year, month, day };
-  }
-
-  function valueToNumber(val) {
-    if (val == null) return 0;
-    if (typeof val === 'number') return val;
-    const str = String(val).trim();
-    if (!str) return 0;
-    const normalized = str.replace(/,/g, '');
-    const num = Number(normalized);
-    return Number.isFinite(num) ? num : NaN;
-  }
-
-  function approxZero(val) {
-    const num = valueToNumber(val);
-    if (!Number.isFinite(num)) return false;
-    return Math.abs(num) < 0.005;
-  }
-
-  function computeWeekIndexInMonth(targetSnap) {
-    const target = parseDateParts(targetSnap && targetSnap.startDate);
-    if (!target) return null;
-    const sameMonth = (Array.isArray(payrollHistory) ? payrollHistory : [])
-      .filter(entry => {
-        const parts = parseDateParts(entry && entry.startDate);
-        return parts && parts.year === target.year && parts.month === target.month;
-      })
-      .sort((a, b) => {
-        const aIso = parseDateParts(a && a.startDate)?.iso || '';
-        const bIso = parseDateParts(b && b.startDate)?.iso || '';
-        if (aIso === bIso) return 0;
-        return aIso < bIso ? -1 : 1;
-      });
-    if (!sameMonth.length) return null;
-    let idx = sameMonth.findIndex(entry => entry === targetSnap);
-    if (idx < 0) {
-      const targetIso = target.iso;
-      idx = sameMonth.findIndex(entry => {
-        const parts = parseDateParts(entry && entry.startDate);
-        return parts && parts.iso === targetIso;
-      });
-    }
-    return idx >= 0 ? idx + 1 : null;
-  }
-
-  function isFifthWeekNoDeductions(snap) {
-    if (!snap) return false;
-    const weekIndex = computeWeekIndexInMonth(snap);
-    if (!weekIndex || weekIndex < 5) return false;
-    const totals = (snap && typeof snap.totals === 'object') ? snap.totals : null;
-    if (!totals) return false;
-    if (!Object.prototype.hasOwnProperty.call(totals, 'totalDed')) return false;
-    const mandatoryKeys = ['pagibig', 'philhealth', 'sss'];
-    if (!mandatoryKeys.every(key => Object.prototype.hasOwnProperty.call(totals, key))) return false;
-    if (!approxZero(totals.totalDed)) return false;
-    for (const key of mandatoryKeys) {
-      if (!approxZero(totals[key])) return false;
-    }
-    const optionalKeys = ['loanSSS', 'loanPI', 'vale', 'valeWed'];
-    for (const key of optionalKeys) {
-      if (Object.prototype.hasOwnProperty.call(totals, key) && !approxZero(totals[key])) {
-        return false;
-      }
-    }
-    return true;
-  }
-
   /**
    * Render the active payrolls table.
    * Lists snapshots that are not yet locked with Edit and Delete actions.
@@ -5087,15 +4988,11 @@ document.addEventListener('DOMContentLoaded', () => {
       const tr = document.createElement('tr');
       const startText = formatDisplayDate(snap.startDate);
       const endText = formatDisplayDate(snap.endDate);
-      const indicator = isFifthWeekNoDeductions(snap)
-        ? '<span class="no-ded-indicator" role="img" aria-label="Fifth week with no deductions" title="Fifth week with no deductions">✓</span>'
-        : '';
       // Build the Active Payroll row. Include Edit and Delete actions. Deleting
       // prompts confirmation and removes the snapshot from payrollHistory.
       tr.innerHTML = `
         <td>${startText}</td>
         <td>${endText}</td>
-        <td style="text-align:center;">${indicator}</td>
         <td>
           <button type="button" class="editActive" data-index="${index}">Edit</button>
           <button type="button" class="deleteActive" data-index="${index}">Delete</button>
