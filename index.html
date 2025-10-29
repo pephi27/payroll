@@ -1491,11 +1491,7 @@ window.addEventListener('load', dashReports);
           <span style="font-weight:600;color:#374151;">Payroll period:</span>
           <select id="activePayrollSelect" class="date-input activeWeekSelect" style="min-width:260px;"></select>
           <button id="newPayrollPeriod" type="button" class="date-input">New period</button>
-          <div class="lock-controls" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
-            <button id="dashLock" type="button" class="danger" style="padding:8px 14px;border-radius:8px;border:1px solid #dc2626;background:#dc2626;color:#fff;">Lock</button>
-            <button id="dashUnlock" type="button" class="secondary" style="display:none;padding:8px 14px;border-radius:8px;border:1px solid #4b5563;background:#4b5563;color:#fff;">Unlock</button>
-            <span id="dashLockStatus" style="display:none;font-size:12px;color:#111827;font-weight:600;"></span>
-          </div>
+          <span id="dashLockStatus" style="display:none;font-size:12px;color:#111827;font-weight:600;"></span>
         </div>
         <!-- New Period Modal (pre-rendered for instant open) -->
         <style>
@@ -4487,9 +4483,6 @@ document.addEventListener('DOMContentLoaded', () => {
   const dashStart = document.getElementById('weekStart');
   const dashEnd = document.getElementById('weekEnd');
   const dashGenerateBtn = document.getElementById('dashGenerate');
-  // Global lock/unlock controls freeze the current period without generating snapshots.
-  const dashLockBtn = document.getElementById('dashLock');
-  const dashUnlockBtn = document.getElementById('dashUnlock');
   const dashLockStatus = document.getElementById('dashLockStatus');
   const historyTableBody = document.querySelector('#historyTable tbody');
   const snapshotView = document.getElementById('snapshotView');
@@ -4618,14 +4611,6 @@ document.addEventListener('DOMContentLoaded', () => {
     const hasRange = !!(start && end);
     if (!hasRange) {
       enablePayrollInputs();
-      if (dashLockBtn) {
-        dashLockBtn.style.display = 'inline-block';
-        dashLockBtn.disabled = true;
-      }
-      if (dashUnlockBtn) {
-        dashUnlockBtn.style.display = 'none';
-        dashUnlockBtn.disabled = true;
-      }
       updateLockStatusDisplay(null);
       return false;
     }
@@ -4633,30 +4618,15 @@ document.addEventListener('DOMContentLoaded', () => {
     const locked = !!(entry && entry.locked);
     if (locked) {
       disablePayrollInputs();
-      if (dashLockBtn) {
-        dashLockBtn.style.display = 'none';
-      }
-      if (dashUnlockBtn) {
-        dashUnlockBtn.style.display = 'inline-block';
-        dashUnlockBtn.disabled = false;
-      }
       updateLockStatusDisplay(entry);
     } else {
       enablePayrollInputs();
-      if (dashLockBtn) {
-        dashLockBtn.style.display = 'inline-block';
-        dashLockBtn.disabled = false;
-      }
-      if (dashUnlockBtn) {
-        dashUnlockBtn.style.display = 'none';
-        dashUnlockBtn.disabled = true;
-      }
       updateLockStatusDisplay(null);
     }
     return locked;
   }
 
-  async function handleLockClick() {
+  async function lockCurrentPeriod() {
     const { start, end } = getCurrentPeriodRange();
     if (!start || !end) {
       alert('Please select both start and end dates.');
@@ -4683,7 +4653,7 @@ document.addEventListener('DOMContentLoaded', () => {
     applyLockUI();
   }
 
-  async function handleUnlockClick() {
+  async function unlockCurrentPeriod() {
     const { start, end } = getCurrentPeriodRange();
     if (!start || !end) {
       applyLockUI();
@@ -4708,12 +4678,6 @@ document.addEventListener('DOMContentLoaded', () => {
     } catch (err) {}
   }
 
-  if (dashLockBtn) {
-    dashLockBtn.addEventListener('click', handleLockClick);
-  }
-  if (dashUnlockBtn) {
-    dashUnlockBtn.addEventListener('click', handleUnlockClick);
-  }
   if (dashStart) {
     dashStart.addEventListener('change', () => { checkAndToggleEditState(); });
   }
@@ -4725,8 +4689,8 @@ document.addEventListener('DOMContentLoaded', () => {
     window.getPayrollLockEntry = getLockEntry;
     window.setPayrollLock = setPeriodLocked;
     window.applyPayrollLockUI = applyLockUI;
-    window.lockCurrentPeriod = () => handleLockClick();
-    window.unlockCurrentPeriod = () => handleUnlockClick();
+    window.lockCurrentPeriod = lockCurrentPeriod;
+    window.unlockCurrentPeriod = unlockCurrentPeriod;
   } catch (err) {}
 
   /**
@@ -5033,13 +4997,9 @@ document.addEventListener('DOMContentLoaded', () => {
     const ws = document.getElementById('weekStart');
     const we = document.getElementById('weekEnd');
     const genBtn = document.getElementById('dashGenerate');
-    const lockBtn = document.getElementById('dashLock');
-    const unlockBtn = document.getElementById('dashUnlock');
     if (ws) ws.disabled = true;
     if (we) we.disabled = true;
     if (genBtn) genBtn.disabled = true;
-    if (lockBtn) lockBtn.disabled = true;
-    if (unlockBtn) unlockBtn.disabled = false;
     // Ensure the payroll tab reflects the locked state as well
     try { setPayrollLockedUI(true); } catch (err) { /* no-op if helper is unavailable */ }
   }
@@ -5092,13 +5052,9 @@ document.addEventListener('DOMContentLoaded', () => {
     const ws = document.getElementById('weekStart');
     const we = document.getElementById('weekEnd');
     const genBtn = document.getElementById('dashGenerate');
-    const lockBtn = document.getElementById('dashLock');
-    const unlockBtn = document.getElementById('dashUnlock');
     if (ws) ws.disabled = false;
     if (we) we.disabled = false;
     if (genBtn) genBtn.disabled = false;
-    if (lockBtn) lockBtn.disabled = false;
-    if (unlockBtn) unlockBtn.disabled = true;
     // Restore interactivity for the payroll tab when unlocked
     try { setPayrollLockedUI(false); } catch (err) { /* no-op if helper is unavailable */ }
   }
