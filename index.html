@@ -9907,17 +9907,6 @@ function restoreData(file) {
           checkAndToggleEditState();
         }
       } catch(e) {}
-      // If the current period is locked, explicitly disable any new inputs
-      // that may have been added during rendering. This prevents freshly
-      // created controls (e.g., Split buttons or dropdowns) from remaining
-      // interactive after a lock is applied.
-      try {
-        if (typeof isSelectedPeriodLocked === 'function' &&
-            typeof disablePayrollInputs === 'function' &&
-            isSelectedPeriodLocked()) {
-          disablePayrollInputs();
-        }
-      } catch (e) {}
       return res;
     };
     try { addDtrDeleteButtons(); } catch(e){}
