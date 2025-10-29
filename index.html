@@ -1014,9 +1014,6 @@ window.addEventListener('load', dashReports);
 #deductionsTab #deductionsTable tfoot td.label-cell{ text-align:left; }
 #payrollTab #payrollTable tfoot td.num,
 #deductionsTab #deductionsTable tfoot td.num{ text-align:right; }
-#deductionsTab .column-toggle-controls{ display:flex; flex-wrap:wrap; gap:0.35rem 1rem; align-items:center; margin:0.5rem 0 0; font-size:0.95rem; }
-#deductionsTab .column-toggle-controls span{ font-weight:600; margin-right:0.5rem; }
-#deductionsTab .column-toggle-controls label{ display:flex; align-items:center; gap:0.35rem; }
 </style>
     <!-- Added payroll dashboard theme -->
     <style>
@@ -2466,18 +2463,6 @@ window.addEventListener('load', dashReports);
         <option value="5">5</option>
        </select>
       </label>
-      <div class="column-toggle-controls" id="deductionColumnToggles">
-       <span>Show Columns:</span>
-       <label><input type="checkbox" data-col="pagibig" checked/> Pag-IBIG</label>
-       <label><input type="checkbox" data-col="philhealth" checked/> PhilHealth</label>
-       <label><input type="checkbox" data-col="sss" checked/> SSS</label>
-       <label><input type="checkbox" data-col="loanSSS" checked/> SSS Loan</label>
-       <label><input type="checkbox" data-col="loanPI" checked/> Pag-IBIG Loan</label>
-       <label><input type="checkbox" data-col="vale" checked/> Account</label>
-       <label><input type="checkbox" data-col="adjustments" checked/> Adjustments</label>
-       <label><input type="checkbox" data-col="valeWed" checked/> Wed Vale</label>
-       <label><input type="checkbox" data-col="total" checked/> Total Deductions</label>
-      </div>
      </div>
      <div class="section note">
       <strong>File Format:</strong> Use the exported CSV from this table, then edit only these columns:
@@ -2492,17 +2477,17 @@ window.addEventListener('load', dashReports);
      <table id="deductionsTable">
       <thead>
        <tr>
-        <th data-col="id">ID</th>
-        <th data-col="name">Name</th>
-        <th data-col="pagibig">Pag-IBIG</th>
-        <th data-col="philhealth">PhilHealth</th>
-        <th data-col="sss">SSS</th>
-        <th data-col="loanSSS">SSS Loan</th>
-        <th data-col="loanPI">Pag-IBIG Loan</th>
-        <th data-col="vale">Account</th>
-        <th data-col="adjustments">Adjustments</th>
-        <th data-col="valeWed">Wed Vale</th>
-        <th data-col="total">Total Deductions</th>
+        <th>ID</th>
+        <th>Name</th>
+        <th>Pag-IBIG</th>
+        <th>PhilHealth</th>
+        <th>SSS</th>
+        <th>SSS Loan</th>
+        <th>Pag-IBIG Loan</th>
+        <th>Account</th>
+        <th>Adjustments</th>
+        <th>Wed Vale</th>
+        <th>Total Deductions</th>
        </tr>
       </thead>
       <tbody></tbody>
@@ -3069,52 +3054,6 @@ function splitAdjustmentValue(value){
   return { raw: rounded, positive, deduction };
 }
 
-const DEDUCTION_COLUMN_KEYS = ['pagibig','philhealth','sss','loanSSS','loanPI','vale','adjustments','valeWed','total'];
-let deductionColumnVisibility = {};
-try {
-  const stored = localStorage.getItem('deductionColumnVisibility');
-  if (stored) {
-    const parsed = JSON.parse(stored);
-    if (parsed && typeof parsed === 'object') {
-      deductionColumnVisibility = {};
-      Object.keys(parsed).forEach(function(key){
-        if (parsed[key] === false) {
-          deductionColumnVisibility[key] = false;
-        }
-      });
-    }
-  }
-} catch (err) { deductionColumnVisibility = {}; }
-
-function persistDeductionColumnVisibility(){
-  try {
-    if (!deductionColumnVisibility || Object.keys(deductionColumnVisibility).length === 0){
-      localStorage.removeItem('deductionColumnVisibility');
-    } else {
-      localStorage.setItem('deductionColumnVisibility', JSON.stringify(deductionColumnVisibility));
-    }
-  } catch (err) {}
-}
-
-function applyDeductionsColumnVisibility(){
-  const table = document.getElementById('deductionsTable');
-  if (!table) return;
-  const state = deductionColumnVisibility || {};
-  table.querySelectorAll('[data-col]').forEach(el => {
-    const col = el.getAttribute('data-col');
-    if (!col) return;
-    const visible = state[col] !== false;
-    el.style.display = visible ? '' : 'none';
-  });
-  const toggles = document.querySelectorAll('#deductionColumnToggles input[data-col]');
-  toggles.forEach(input => {
-    const col = input.getAttribute('data-col');
-    if (!col) return;
-    const visible = state[col] !== false;
-    input.checked = visible;
-  });
-}
-
 function renderDeductionsTable(){
   syncPeriodScopedData();
   const dtbody = document.querySelector('#deductionsTable tbody');
@@ -3147,46 +3086,21 @@ function renderDeductionsTable(){
     const total = +(pagibig + philhealth + sss + sssLoan + piLoan + v + vW + adjDeduction).toFixed(2);
     const tr = document.createElement('tr');
     tr.innerHTML = [
-      `<td data-col="id">${emp.id}</td>`,
-      `<td class="wrap" data-col="name">${emp.name}</td>`,
-      `<td class="num" data-col="pagibig">${formatDeductionDisplay(pagibig)}</td>`,
-      `<td class="num" data-col="philhealth">${formatDeductionDisplay(philhealth)}</td>`,
-      `<td class="num" data-col="sss">${formatDeductionDisplay(sss)}</td>`,
-      `<td class="num" data-col="loanSSS">${formatDeductionDisplay(sssLoan)}</td>`,
-      `<td class="num" data-col="loanPI">${formatDeductionDisplay(piLoan)}</td>`,
-      `<td class="num" data-col="vale">${formatDeductionDisplay(v)}</td>`,
-      `<td class="num" data-col="adjustments">${formatDeductionDisplay(adjDeduction)}</td>`,
-      `<td class="num" data-col="valeWed">${formatDeductionDisplay(vW)}</td>`,
-      `<td class="num" data-col="total">${formatDeductionDisplay(total)}</td>`
+      `<td>${emp.id}</td>`,
+      `<td class="wrap">${emp.name}</td>`,
+      `<td class="num">${formatDeductionDisplay(pagibig)}</td>`,
+      `<td class="num">${formatDeductionDisplay(philhealth)}</td>`,
+      `<td class="num">${formatDeductionDisplay(sss)}</td>`,
+      `<td class="num">${formatDeductionDisplay(sssLoan)}</td>`,
+      `<td class="num">${formatDeductionDisplay(piLoan)}</td>`,
+      `<td class="num">${formatDeductionDisplay(v)}</td>`,
+      `<td class="num">${formatDeductionDisplay(adjDeduction)}</td>`,
+      `<td class="num">${formatDeductionDisplay(vW)}</td>`,
+      `<td class="num">${formatDeductionDisplay(total)}</td>`
     ].join('');
     dtbody.appendChild(tr);
   });
-  applyDeductionsColumnVisibility();
 }
-document.addEventListener('DOMContentLoaded', function(){
-  try {
-    applyDeductionsColumnVisibility();
-  } catch (err) {}
-  try {
-    const toggles = document.getElementById('deductionColumnToggles');
-    if (toggles && !toggles.__boundColumnToggle){
-      toggles.addEventListener('change', function(ev){
-        const input = ev.target;
-        if (!input || !input.matches('input[data-col]')) return;
-        const col = input.getAttribute('data-col');
-        if (!col || DEDUCTION_COLUMN_KEYS.indexOf(col) === -1) return;
-        if (input.checked) {
-          delete deductionColumnVisibility[col];
-        } else {
-          deductionColumnVisibility[col] = false;
-        }
-        persistDeductionColumnVisibility();
-        applyDeductionsColumnVisibility();
-      });
-      toggles.__boundColumnToggle = true;
-    }
-  } catch (err) {}
-});
 document.addEventListener('click', (e)=>{
   if(e.target && e.target.id === 'exportDeductionsCSV'){
     try {
