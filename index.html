@@ -13296,12 +13296,21 @@ document.addEventListener('DOMContentLoaded', async function () {
       console.warn('unlockPeriod failed', err);
     }
   }
+  const ALLOW_WHEN_LOCKED = new Set([
+    'renderResults',          // Needed to display the DTR grid while locked
+    'rebuildReports',         // Allows read-only report refreshes
+    'renderProjectTotals',    // Keeps project totals visible
+    'renderMasterReport',     // Ensures master report tab still renders
+    'renderTable',            // Employees tab
+    'renderDeductionsTable'   // Deductions tab
+  ]);
+
   function guard(name){
     try {
       const fn = window[name];
       if (typeof fn !== 'function' || fn.__guarded) return;
       const wrapped = function(){
-        if (isLocked()) return;
+        if (isLocked() && !ALLOW_WHEN_LOCKED.has(name)) return;
         return fn.apply(this, arguments);
       };
       wrapped.__guarded = true;
