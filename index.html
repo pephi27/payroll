@@ -3007,6 +3007,11 @@ function splitAdjustmentValue(value){
 }
 
 function renderDeductionsTable(){
+  const snapshot = getActiveLockSnapshot();
+  if (snapshot && snapshot.deductions) {
+    applyTableSections('deductionsTable', snapshot.deductions);
+    return;
+  }
   syncPeriodScopedData();
   const dtbody = document.querySelector('#deductionsTable tbody');
   if (!dtbody) return;
@@ -3292,6 +3297,11 @@ document.addEventListener('click', (e)=>{
   }
 });
 function renderTable(){
+  const snapshot = getActiveLockSnapshot();
+  if (snapshot && snapshot.payroll && snapshot.payroll.table) {
+    applyTableSections('payrollTable', snapshot.payroll.table);
+    return;
+  }
   syncPeriodScopedData();
   // Batch DOM updates to avoid MutationObserver thrash
   window.__suspendTotals = true;
@@ -3894,6 +3904,7 @@ function calculateRow(tr){  const readNum = sel => { const el = tr.querySelector
 }
 
 function calculateAll(){
+  if (getActiveLockSnapshot()) return;
   syncPeriodScopedData();
   document.querySelectorAll('#payrollTable tbody tr').forEach(tr=> calculateRow(tr));
   renderDeductionsTable();
@@ -3902,6 +3913,11 @@ function calculateAll(){
 // === Adjustments Tab ===
 // Render the adjustments table listing all employees with an input field for manual adjustment amounts.
 function renderAdjustmentsTable() {
+  const snapshot = getActiveLockSnapshot();
+  if (snapshot && snapshot.adjustments && snapshot.adjustments.table) {
+    applyTableSections('adjustmentsTable', snapshot.adjustments.table);
+    return;
+  }
   syncPeriodScopedData();
   const atbody = document.querySelector('#adjustmentsTable tbody');
   if (!atbody) return;
@@ -3966,6 +3982,11 @@ function renderAdjustmentsTable() {
 
 // Compute and display the total of all adjustment amounts in the adjustments table footer.
 function renderAdjustmentsFoot() {
+  const snapshot = getActiveLockSnapshot();
+  if (snapshot && snapshot.adjustments && snapshot.adjustments.table && Object.prototype.hasOwnProperty.call(snapshot.adjustments.table, 'foot')) {
+    applyTableSections('adjustmentsTable', snapshot.adjustments.table);
+    return;
+  }
   const amtCell = document.querySelector('#adjustmentsTableFoot [data-col="adjAmt"]');
   const hrsCell = document.querySelector('#adjustmentsTableFoot [data-col="adjHrs"]');
   if (!amtCell) return;
@@ -4554,6 +4575,226 @@ document.addEventListener('DOMContentLoaded', () => {
     return totals;
   }
 
+  function replaceWithSnapshotSpan(el, text) {
+    if (!el) return;
+    try {
+      const span = document.createElement('span');
+      span.textContent = text != null ? text : '';
+      span.className = el.className || '';
+      if (el.style && el.style.cssText) span.style.cssText = el.style.cssText;
+      el.replaceWith(span);
+    } catch (err) {
+      try { el.textContent = text != null ? text : ''; }
+      catch (_) {}
+    }
+  }
+
+  function flattenControlsForSnapshot(root, options = {}) {
+    if (!root) return;
+    const removeButtons = options.removeButtons !== false;
+    const removeSelectors = Array.isArray(options.removeSelectors) ? options.removeSelectors : [];
+    root.querySelectorAll('input').forEach(input => {
+      try {
+        if (input.type && input.type.toLowerCase() === 'hidden') {
+          input.remove();
+          return;
+        }
+        const value = (typeof input.value !== 'undefined') ? input.value : (input.textContent || '');
+        replaceWithSnapshotSpan(input, value);
+      } catch (_) {}
+    });
+    root.querySelectorAll('textarea').forEach(area => {
+      try {
+        const value = (typeof area.value !== 'undefined') ? area.value : (area.textContent || '');
+        replaceWithSnapshotSpan(area, value);
+      } catch (_) {}
+    });
+    root.querySelectorAll('select').forEach(sel => {
+      try {
+        const idx = sel.selectedIndex;
+        const option = (idx >= 0 && sel.options && sel.options[idx]) ? sel.options[idx] : null;
+        const text = option ? (option.textContent || option.innerText || option.value) : (sel.value || '');
+        replaceWithSnapshotSpan(sel, text);
+      } catch (_) {}
+    });
+    if (removeButtons) {
+      root.querySelectorAll('button').forEach(btn => {
+        try { btn.remove(); } catch (_) {}
+      });
+    }
+    removeSelectors.forEach(sel => {
+      root.querySelectorAll(sel).forEach(node => {
+        try { node.remove(); } catch (_) {}
+      });
+    });
+  }
+
+  function captureTableSections(tableId, options = {}) {
+    const table = document.getElementById(tableId);
+    if (!table) return null;
+    const clone = table.cloneNode(true);
+    try { flattenControlsForSnapshot(clone, options); }
+    catch (err) { console.warn('Snapshot flatten failed for', tableId, err); }
+    const sections = {};
+    if (clone.tHead) sections.head = clone.tHead.innerHTML;
+    if (clone.tBodies && clone.tBodies[0]) sections.body = clone.tBodies[0].innerHTML;
+    if (clone.tFoot) sections.foot = clone.tFoot.innerHTML;
+    return sections;
+  }
+
+  function applyTableSections(tableId, sections) {
+    if (!sections || typeof sections !== 'object') return;
+    const table = document.getElementById(tableId);
+    if (!table) return;
+    try {
+      if (Object.prototype.hasOwnProperty.call(sections, 'head')) {
+        let head = table.tHead;
+        if (!head && sections.head != null) head = table.createTHead();
+        if (head) head.innerHTML = sections.head || '';
+      }
+      if (Object.prototype.hasOwnProperty.call(sections, 'body')) {
+        let body = (table.tBodies && table.tBodies[0]) ? table.tBodies[0] : table.createTBody();
+        if (body) body.innerHTML = sections.body || '';
+      }
+      if (Object.prototype.hasOwnProperty.call(sections, 'foot')) {
+        let foot = table.tFoot;
+        if (!foot && sections.foot != null) foot = table.createTFoot();
+        if (foot) foot.innerHTML = sections.foot || '';
+      }
+    } catch (err) {
+      console.warn('Apply table snapshot failed for', tableId, err);
+    }
+  }
+
+  function captureElementHtml(selector) {
+    try {
+      const el = document.querySelector(selector);
+      if (!el) return '';
+      return el.innerHTML;
+    } catch (_) {
+      return '';
+    }
+  }
+
+  function setActiveLockSnapshot(snapshot) {
+    try { window.__lockedPeriodSnapshot = snapshot || null; }
+    catch (_) {}
+  }
+
+  function getActiveLockSnapshot() {
+    try { return window.__lockedPeriodSnapshot || null; }
+    catch (_) { return null; }
+  }
+
+  function applySnapshotDom(snapshot) {
+    if (!snapshot || typeof snapshot !== 'object') return;
+    try {
+      if (snapshot.dtr) {
+        applyTableSections('resultsTable', snapshot.dtr);
+        if (Object.prototype.hasOwnProperty.call(snapshot.dtr, 'summary')) {
+          const sum = document.getElementById('dtrSummary');
+          if (sum) sum.innerHTML = snapshot.dtr.summary || '';
+        }
+      }
+    } catch (err) { console.warn('Apply DTR snapshot failed', err); }
+    try {
+      if (snapshot.payroll && snapshot.payroll.table) {
+        applyTableSections('payrollTable', snapshot.payroll.table);
+      }
+    } catch (err) { console.warn('Apply payroll snapshot failed', err); }
+    try {
+      if (snapshot.deductions) {
+        applyTableSections('deductionsTable', snapshot.deductions);
+      }
+    } catch (err) { console.warn('Apply deductions snapshot failed', err); }
+    try {
+      if (snapshot.adjustments && snapshot.adjustments.table) {
+        applyTableSections('adjustmentsTable', snapshot.adjustments.table);
+      }
+    } catch (err) { console.warn('Apply adjustments snapshot failed', err); }
+    try {
+      if (snapshot.reports) {
+        const detail = document.getElementById('r_table');
+        if (detail && Object.prototype.hasOwnProperty.call(snapshot.reports, 'detailed')) {
+          detail.innerHTML = snapshot.reports.detailed || '';
+        }
+        const msg = document.getElementById('r_msg');
+        if (msg && Object.prototype.hasOwnProperty.call(snapshot.reports, 'message')) {
+          msg.innerHTML = snapshot.reports.message || '';
+        }
+        const master = document.getElementById('masterReportContainer');
+        if (master && Object.prototype.hasOwnProperty.call(snapshot.reports, 'master')) {
+          master.innerHTML = snapshot.reports.master || '';
+        }
+      }
+    } catch (err) { console.warn('Apply reports snapshot failed', err); }
+  }
+
+  function restoreLiveViews() {
+    try { window.__allowLockedRender = false; } catch (_) {}
+    try { setActiveLockSnapshot(null); } catch (_) {}
+    try { renderTable(); } catch (err) { console.warn('Restore payroll table failed', err); }
+    try { renderResults(); } catch (err) { console.warn('Restore DTR failed', err); }
+    try { renderDeductionsTable(); } catch (err) { console.warn('Restore deductions failed', err); }
+    try { renderAdjustmentsTable(); } catch (err) { console.warn('Restore adjustments failed', err); }
+    try { if (typeof renderAdjustmentsFoot === 'function') renderAdjustmentsFoot(); } catch (err) { console.warn('Restore adjustments foot failed', err); }
+    try { if (typeof rebuildReports === 'function') rebuildReports(); } catch (err) { console.warn('Restore reports failed', err); }
+  }
+
+  async function collectLockSnapshots(startDate, endDate) {
+    const snapshot = { capturedAt: new Date().toISOString() };
+    try {
+      if (typeof buildSnapshot === 'function') {
+        const payrollData = await buildSnapshot(startDate, endDate);
+        if (payrollData) {
+          snapshot.payroll = snapshot.payroll || {};
+          snapshot.payroll.data = payrollData;
+        }
+      }
+    } catch (err) { console.warn('Payroll snapshot capture failed', err); }
+
+    try {
+      snapshot.payroll = snapshot.payroll || {};
+      snapshot.payroll.table = captureTableSections('payrollTable', { removeButtons: true });
+    } catch (err) { console.warn('Payroll table capture failed', err); }
+
+    try {
+      const dtrSections = captureTableSections('resultsTable', { removeButtons: true });
+      if (dtrSections) {
+        const summaryEl = document.getElementById('dtrSummary');
+        snapshot.dtr = Object.assign({ summary: summaryEl ? summaryEl.innerHTML : '' }, dtrSections);
+      }
+    } catch (err) { console.warn('DTR snapshot capture failed', err); }
+
+    try {
+      const dedSections = captureTableSections('deductionsTable', { removeButtons: true });
+      if (dedSections) snapshot.deductions = dedSections;
+    } catch (err) { console.warn('Deductions snapshot capture failed', err); }
+
+    try {
+      const adjSections = captureTableSections('adjustmentsTable', { removeButtons: true });
+      if (adjSections) snapshot.adjustments = { table: adjSections };
+    } catch (err) { console.warn('Adjustments snapshot capture failed', err); }
+
+    try {
+      if (typeof rebuildReports === 'function') {
+        try { rebuildReports(); }
+        catch (_) {}
+        await new Promise(resolve => setTimeout(resolve, 60));
+      }
+    } catch (err) { console.warn('Report rebuild before snapshot failed', err); }
+
+    try {
+      snapshot.reports = {
+        detailed: captureElementHtml('#r_table'),
+        message: captureElementHtml('#r_msg'),
+        master: captureElementHtml('#masterReportContainer')
+      };
+    } catch (err) { console.warn('Reports snapshot capture failed', err); }
+
+    return snapshot;
+  }
+
   function syncHistoryLockState(start, end, locked, meta) {
     if (!Array.isArray(payrollHistory) || !start || !end) return;
     let snap = payrollHistory.find(entry => entry && entry.startDate === start && entry.endDate === end);
@@ -4566,6 +4807,13 @@ document.addEventListener('DOMContentLoaded', () => {
     snap.lockedAt = locked ? (meta && meta.lockedAt ? meta.lockedAt : new Date().toISOString()) : '';
     if (locked && meta && meta.totals) {
       snap.totals = meta.totals;
+      if (meta.payrollSnapshot) {
+        snap.rows = meta.payrollSnapshot.rows || snap.rows;
+        snap.totals = meta.payrollSnapshot.totals || snap.totals;
+        if (typeof meta.payrollSnapshot.divisor !== 'undefined') {
+          snap.divisor = meta.payrollSnapshot.divisor;
+        }
+      }
     } else if (!locked) {
       snap.totals = {};
       if (typeof snap.hash !== 'undefined') snap.hash = '';
@@ -4583,7 +4831,8 @@ document.addEventListener('DOMContentLoaded', () => {
       payrollLocks[key] = {
         locked: true,
         lockedAt: meta.lockedAt || new Date().toISOString(),
-        totals: meta.totals || null
+        totals: meta.totals || null,
+        snapshots: meta.snapshots || null
       };
     } else {
       delete payrollLocks[key];
@@ -4627,6 +4876,7 @@ document.addEventListener('DOMContentLoaded', () => {
         dashUnlockBtn.disabled = true;
       }
       updateLockStatusDisplay(null);
+      setActiveLockSnapshot(null);
       return false;
     }
     const entry = getLockEntry(start, end);
@@ -4641,6 +4891,25 @@ document.addEventListener('DOMContentLoaded', () => {
         dashUnlockBtn.disabled = false;
       }
       updateLockStatusDisplay(entry);
+      const snapshot = entry && entry.snapshots ? entry.snapshots : null;
+      setActiveLockSnapshot(snapshot || null);
+      if (snapshot) {
+        applySnapshotDom(snapshot);
+      } else {
+        try {
+          window.__allowLockedRender = true;
+          renderTable();
+          renderResults();
+          renderDeductionsTable();
+          renderAdjustmentsTable();
+          if (typeof renderAdjustmentsFoot === 'function') renderAdjustmentsFoot();
+          if (typeof rebuildReports === 'function') rebuildReports();
+        } catch (err) {
+          console.warn('Locked period live render failed', err);
+        } finally {
+          try { window.__allowLockedRender = false; } catch (_) {}
+        }
+      }
     } else {
       enablePayrollInputs();
       if (dashLockBtn) {
@@ -4652,6 +4921,8 @@ document.addEventListener('DOMContentLoaded', () => {
         dashUnlockBtn.disabled = true;
       }
       updateLockStatusDisplay(null);
+      setActiveLockSnapshot(null);
+      restoreLiveViews();
     }
     return locked;
   }
@@ -4678,8 +4949,21 @@ document.addEventListener('DOMContentLoaded', () => {
     } catch (err) {}
     const totals = captureGrandTotals();
     const lockedAt = new Date().toISOString();
+    let snapshots = null;
+    try {
+      snapshots = await collectLockSnapshots(start, end);
+    } catch (err) {
+      console.warn('Lock snapshot capture failed', err);
+    }
     disablePayrollInputs();
-    setPeriodLocked(start, end, true, { lockedAt, totals });
+    const meta = { lockedAt, totals };
+    if (snapshots) {
+      meta.snapshots = snapshots;
+      if (snapshots.payroll && snapshots.payroll.data) {
+        meta.payrollSnapshot = snapshots.payroll.data;
+      }
+    }
+    setPeriodLocked(start, end, true, meta);
     applyLockUI();
   }
 
@@ -8418,6 +8702,15 @@ function formatHours(value){
 }
 
 function renderResults(){
+  const snapshot = getActiveLockSnapshot();
+  if (snapshot && snapshot.dtr) {
+    applyTableSections('resultsTable', snapshot.dtr);
+    if (Object.prototype.hasOwnProperty.call(snapshot.dtr, 'summary')) {
+      const summaryEl = document.getElementById('dtrSummary');
+      if (summaryEl) summaryEl.innerHTML = snapshot.dtr.summary || '';
+    }
+    return;
+  }
 
 // 12-hour clock formatter for display only (keeps underlying logic 24h)
 function __fmt12Clock(hhmm){
@@ -13057,7 +13350,10 @@ document.addEventListener('DOMContentLoaded', async function () {
     };
   }
   function isLocked(){
-    try { if (typeof isSelectedPeriodLocked === 'function') return !!isSelectedPeriodLocked(); }
+    try {
+      if (window.__allowLockedRender) return false;
+      if (typeof isSelectedPeriodLocked === 'function') return !!isSelectedPeriodLocked();
+    }
     catch (err) {}
     return false;
   }
