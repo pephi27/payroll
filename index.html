@@ -4676,8 +4676,45 @@ document.addEventListener('DOMContentLoaded', () => {
         updatePayrollGrandTotals();
       }
     } catch (err) {}
-    const totals = captureGrandTotals();
+    let snapshot = null;
+    try {
+      if (typeof buildSnapshot === 'function') {
+        snapshot = await Promise.resolve(buildSnapshot(start, end));
+      }
+    } catch (err) {
+      console.warn('Failed to build payroll snapshot for lock', err);
+    }
+    if (!snapshot) {
+      alert('Unable to capture the payroll snapshot. Please try again.');
+      return;
+    }
+    let hashHex = '';
+    try {
+      const json = JSON.stringify(snapshot);
+      const hashBuffer = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(json));
+      const hashArray = Array.from(new Uint8Array(hashBuffer));
+      hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+    } catch (err) {
+      console.warn('Unable to compute snapshot hash for lock', err);
+    }
     const lockedAt = new Date().toISOString();
+    if (!Array.isArray(payrollHistory)) {
+      payrollHistory = [];
+    }
+    let existing = payrollHistory.find(entry => entry && entry.startDate === start && entry.endDate === end);
+    if (!existing) {
+      existing = { startDate: start, endDate: end };
+      payrollHistory.push(existing);
+    }
+    existing.rows = snapshot.rows;
+    existing.totals = snapshot.totals;
+    existing.locked = true;
+    existing.lockedAt = lockedAt;
+    if (hashHex) existing.hash = hashHex;
+    if (typeof saveHistory === 'function') saveHistory();
+    if (typeof renderHistory === 'function') renderHistory();
+    if (typeof renderActivePayrolls === 'function') renderActivePayrolls();
+    const totals = snapshot && snapshot.totals ? snapshot.totals : captureGrandTotals();
     disablePayrollInputs();
     setPeriodLocked(start, end, true, { lockedAt, totals });
     applyLockUI();
