@@ -13050,8 +13050,13 @@ document.addEventListener('DOMContentLoaded', async function () {
     return null;
   }
   async function writeKVMirror(key, value){
-    try { if (window.writeKV) await window.writeKV(key, value); } catch{}
     try { localStorage.setItem(key, JSON.stringify(value)); } catch{}
+    try {
+      if (window.writeKV){
+        const remote = window.writeKV(key, value);
+        if (remote && typeof remote.then === 'function'){ remote.catch(()=>{}); }
+      }
+    } catch{}
   }
   function serializeMasterReport(){
     try {
@@ -13133,13 +13138,18 @@ document.addEventListener('DOMContentLoaded', async function () {
     const master = serializeMasterReport() || { html: '' };
     const payroll = (typeof window.buildSnapshot==='function') ? await window.buildSnapshot(p.start, p.end) : null;
     const deductions = serializeTableById('deductionsTable') || { headers:[], rows:[] };
-    await writeKVMirror(`snap:dtr:${pid}`, dtr);
-    await writeKVMirror(`snap:payroll:${pid}`, payroll);
-    await writeKVMirror(`snap:reports:${pid}`, reports);
-    await writeKVMirror(`snap:deductions:${pid}`, deductions);
-    await writeKVMirror(`snap:master:${pid}`, master);
-    await renderFromSnapshots();
     try { setPayrollLockedUI(true); } catch{}
+    const mirrorPayloads = [
+      [`snap:dtr:${pid}`, dtr],
+      [`snap:payroll:${pid}`, payroll],
+      [`snap:reports:${pid}`, reports],
+      [`snap:deductions:${pid}`, deductions],
+      [`snap:master:${pid}`, master]
+    ];
+    try {
+      await Promise.all(mirrorPayloads.map(([key, value]) => writeKVMirror(key, value)));
+    } catch {}
+    await renderFromSnapshots();
   }
   async function unlockPeriod(){ /* no-op for snapshots; UI will recompute naturally */ try { setPayrollLockedUI(false); } catch{} }
 
