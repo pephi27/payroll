@@ -480,15 +480,36 @@ function safePrint(win){
       totalDeductions: readCell(row, '.totalDed'),
       net: readCell(row, '.netPay')
     };
+    const datasetEffective = key => readRowDeductionDataset(row, key, 'effective');
+    const applyDatasetValue = (prop, key) => {
+      const value = datasetEffective(key);
+      if (value != null) {
+        data[prop] = value;
+      }
+    };
+    applyDatasetValue('pagibig', 'pagibig');
+    applyDatasetValue('philhealth', 'philhealth');
+    applyDatasetValue('sss', 'sss');
+    applyDatasetValue('totalDeductions', 'total');
     var sssLoanRaw = toNum(data.sssLoan);
     var piLoanRaw = toNum(data.piLoan);
     data.sssLoanRaw = sssLoanRaw;
     data.piLoanRaw = piLoanRaw;
-    data.sssLoan = loanSharePerPeriod(sssLoanRaw);
-    data.piLoan = loanSharePerPeriod(piLoanRaw);
+    var datasetLoanSss = datasetEffective('loanSSS');
+    var datasetLoanPi = datasetEffective('loanPI');
+    data.sssLoan = datasetLoanSss != null ? datasetLoanSss : loanSharePerPeriod(sssLoanRaw);
+    data.piLoan = datasetLoanPi != null ? datasetLoanPi : loanSharePerPeriod(piLoanRaw);
+    var datasetVale = datasetEffective('vale');
+    if (datasetVale != null) data.vale = datasetVale;
+    var datasetValeWed = datasetEffective('valeWed');
+    if (datasetValeWed != null) data.valeWed = datasetValeWed;
     var adjRawDataset = row && row.dataset ? toNum(row.dataset.adjustmentRaw) : 0;
     var adjPosDataset = row && row.dataset ? toNum(row.dataset.adjustmentPositive) : 0;
     var adjDedDataset = row && row.dataset ? toNum(row.dataset.adjustmentDeduction) : 0;
+    var datasetAdjDeduction = datasetEffective('adjustments');
+    if (datasetAdjDeduction != null) {
+      adjDedDataset = toNum(datasetAdjDeduction);
+    }
     if (!(adjPosDataset > 0) && !(adjDedDataset > 0)){
       var mapVal = 0;
       try {
@@ -3074,6 +3095,17 @@ function splitAdjustmentValue(value){
 }
 
 const DEDUCTION_COLUMN_KEYS = ['pagibig','philhealth','sss','loanSSS','loanPI','vale','adjustments','valeWed','total'];
+const DEDUCTION_DATASET_SUFFIX = {
+  pagibig: 'Pagibig',
+  philhealth: 'Philhealth',
+  sss: 'Sss',
+  loanSSS: 'LoanSss',
+  loanPI: 'LoanPi',
+  vale: 'Vale',
+  adjustments: 'Adjustments',
+  valeWed: 'ValeWed',
+  total: 'Total'
+};
 let deductionColumnInclusions = {};
 try {
   const stored = localStorage.getItem('deductionColumnVisibility');
@@ -3120,6 +3152,32 @@ function computeEffectiveDeductionValues(rawValues){
   const includeTotal = isDeductionColumnIncluded('total');
   effective.total = includeTotal ? roundToCents(runningTotal) : 0;
   return effective;
+}
+
+function deductionDatasetKey(key, type){
+  if (!key || !DEDUCTION_DATASET_SUFFIX[key]) return null;
+  const suffix = DEDUCTION_DATASET_SUFFIX[key];
+  const normalized = (type === 'raw') ? 'Raw' : 'Effective';
+  return `deduction${suffix}${normalized}`;
+}
+
+function setRowDeductionDataset(tr, key, rawVal, effectiveVal){
+  if (!tr) return;
+  const rawKey = deductionDatasetKey(key, 'raw');
+  const effectiveKey = deductionDatasetKey(key, 'effective');
+  if (!rawKey || !effectiveKey) return;
+  try {
+    tr.dataset[rawKey] = rawVal;
+    tr.dataset[effectiveKey] = effectiveVal;
+  } catch (_) {}
+}
+
+function readRowDeductionDataset(tr, key, type){
+  if (!tr || !tr.dataset) return null;
+  const dataKey = deductionDatasetKey(key, type);
+  if (!dataKey) return null;
+  const value = tr.dataset[dataKey];
+  return value == null ? null : value;
 }
 
 function updateDeductionCellDisplay(cell, raw, effective, included){
@@ -4136,23 +4194,63 @@ function calculateRow(tr){  const readNum = sel => { const el = tr.querySelector
     const cell = tr.querySelector(selector);
     if (!cell) return;
     const rawVal = roundToCents(deductionRaw[key] || 0);
+    const rawStr = rawVal.toFixed(2);
+    const appliedStr = applied.toFixed(2);
     try {
-      cell.dataset.rawValue = rawVal.toFixed(2);
-      cell.dataset.effectiveValue = applied.toFixed(2);
+      cell.dataset.rawValue = rawStr;
+      cell.dataset.effectiveValue = appliedStr;
     } catch (_) {}
+    setRowDeductionDataset(tr, key, rawStr, appliedStr);
     const included = isDeductionColumnIncluded(key);
     if (!included && Math.abs(rawVal) > 0.004) {
       cell.classList.add('deduction-excluded');
-      cell.setAttribute('title', `Excluded (was ${rawVal.toFixed(2)})`);
+      cell.setAttribute('title', `Excluded (was ${rawStr})`);
     } else {
       cell.classList.remove('deduction-excluded');
       cell.removeAttribute('title');
+    }
+  };
+  const applyDeductionInput = (selector, key) => {
+    const input = tr.querySelector(selector);
+    if (!input) {
+      const rawVal = roundToCents(deductionRaw[key] || 0).toFixed(2);
+      const applied = roundToCents(deductionEffective[key] || 0).toFixed(2);
+      setRowDeductionDataset(tr, key, rawVal, applied);
+      return;
+    }
+    const rawVal = roundToCents(deductionRaw[key] || 0);
+    const applied = roundToCents(deductionEffective[key] || 0);
+    const rawStr = rawVal.toFixed(2);
+    const appliedStr = applied.toFixed(2);
+    try {
+      input.dataset.rawValue = rawStr;
+      input.dataset.effectiveValue = appliedStr;
+    } catch (_) {}
+    setRowDeductionDataset(tr, key, rawStr, appliedStr);
+    const included = isDeductionColumnIncluded(key);
+    if (!included && Math.abs(rawVal) > 0.004) {
+      input.classList.add('deduction-excluded');
+      input.setAttribute('title', `Excluded (was ${rawStr})`);
+    } else {
+      input.classList.remove('deduction-excluded');
+      input.removeAttribute('title');
     }
   };
   applyDeductionCell('.pagibig', 'pagibig');
   applyDeductionCell('.philhealth', 'philhealth');
   applyDeductionCell('.sss', 'sss');
   applyDeductionCell('.totalDed', 'total');
+  applyDeductionInput('.loanSSS', 'loanSSS');
+  applyDeductionInput('.loanPI', 'loanPI');
+  applyDeductionInput('.vale', 'vale');
+  applyDeductionInput('.valeWed', 'valeWed');
+  // Adjustments column is displayed as positive earnings; track deduction component separately.
+  setRowDeductionDataset(
+    tr,
+    'adjustments',
+    roundToCents(deductionRaw.adjustments || 0).toFixed(2),
+    roundToCents(deductionEffective.adjustments || 0).toFixed(2)
+  );
   // Populate adjustment cell (if exists) and net pay
   if (tr.querySelector('.adjAmt')) {
     w('.adjAmt', adjPositive);
@@ -10815,14 +10913,22 @@ document.addEventListener('DOMContentLoaded', function(){
         // Sum Bantay allowance from the bantay input
         t.bantay  += _parse(_val(tr.querySelector('.bantay')));
         t.grossPay += _parse(tr.querySelector('.grossPay')?.textContent);
-        t.pagibig  += _parse(tr.querySelector('.pagibig')?.textContent);
-        t.philhealth += _parse(tr.querySelector('.philhealth')?.textContent);
-        t.sss      += _parse(tr.querySelector('.sss')?.textContent);
-        t.loanSSS  += _parse(_val(tr.querySelector('.loanSSS'))) / div;
-        t.loanPI   += _parse(_val(tr.querySelector('.loanPI'))) / div;
-        t.vale     += _parse(_val(tr.querySelector('.vale')));
-        t.valeWed  += _parse(_val(tr.querySelector('.valeWed')));
-        t.totalDed += _parse(tr.querySelector('.totalDed')?.textContent);
+        const dedPagibig = readRowDeductionDataset(tr, 'pagibig', 'effective');
+        const dedPhilhealth = readRowDeductionDataset(tr, 'philhealth', 'effective');
+        const dedSss = readRowDeductionDataset(tr, 'sss', 'effective');
+        const dedLoanSss = readRowDeductionDataset(tr, 'loanSSS', 'effective');
+        const dedLoanPi = readRowDeductionDataset(tr, 'loanPI', 'effective');
+        const dedVale = readRowDeductionDataset(tr, 'vale', 'effective');
+        const dedValeWed = readRowDeductionDataset(tr, 'valeWed', 'effective');
+        const dedTotal = readRowDeductionDataset(tr, 'total', 'effective');
+        t.pagibig  += dedPagibig != null ? _parse(dedPagibig) : _parse(tr.querySelector('.pagibig')?.textContent);
+        t.philhealth += dedPhilhealth != null ? _parse(dedPhilhealth) : _parse(tr.querySelector('.philhealth')?.textContent);
+        t.sss      += dedSss != null ? _parse(dedSss) : _parse(tr.querySelector('.sss')?.textContent);
+        t.loanSSS  += dedLoanSss != null ? _parse(dedLoanSss) : (_parse(_val(tr.querySelector('.loanSSS'))) / div);
+        t.loanPI   += dedLoanPi != null ? _parse(dedLoanPi) : (_parse(_val(tr.querySelector('.loanPI'))) / div);
+        t.vale     += dedVale != null ? _parse(dedVale) : _parse(_val(tr.querySelector('.vale')));
+        t.valeWed  += dedValeWed != null ? _parse(dedValeWed) : _parse(_val(tr.querySelector('.valeWed')));
+        t.totalDed += dedTotal != null ? _parse(dedTotal) : _parse(tr.querySelector('.totalDed')?.textContent);
         t.netPay   += _parse(tr.querySelector('.netPay')?.textContent);
     });
     Object.keys(t).forEach(function(k){
