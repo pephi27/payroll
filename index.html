@@ -145,6 +145,7 @@ const KNOWN_KEYS = [
   ,"payroll_bantay_proj"
   ,"payroll_contrib_flags"
   ,"att_overrides_hours_v1"
+  ,"payroll_lock_state"
 ]
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY)
@@ -1490,6 +1491,11 @@ window.addEventListener('load', dashReports);
           <span style="font-weight:600;color:#374151;">Payroll period:</span>
           <select id="activePayrollSelect" class="date-input activeWeekSelect" style="min-width:260px;"></select>
           <button id="newPayrollPeriod" type="button" class="date-input">New period</button>
+          <div class="lock-controls" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+            <button id="dashLock" type="button" class="danger" style="padding:8px 14px;border-radius:8px;border:1px solid #dc2626;background:#dc2626;color:#fff;">Lock</button>
+            <button id="dashUnlock" type="button" class="secondary" style="display:none;padding:8px 14px;border-radius:8px;border:1px solid #4b5563;background:#4b5563;color:#fff;">Unlock</button>
+            <span id="dashLockStatus" style="display:none;font-size:12px;color:#111827;font-weight:600;"></span>
+          </div>
         </div>
         <!-- New Period Modal (pre-rendered for instant open) -->
         <style>
@@ -1570,7 +1576,7 @@ window.addEventListener('load', dashReports);
          <th>Start</th>
          <th>End</th>
          <th>Locked At</th>
-         <th>Hash</th>
+         <th>Net Pay</th>
          <th>Actions</th>
        </tr>
      </thead>
@@ -4481,12 +4487,247 @@ document.addEventListener('DOMContentLoaded', () => {
   const dashStart = document.getElementById('weekStart');
   const dashEnd = document.getElementById('weekEnd');
   const dashGenerateBtn = document.getElementById('dashGenerate');
-  // The global lock button has been removed; per-row lock buttons are provided in the Active Payrolls table.
+  // Global lock/unlock controls freeze the current period without generating snapshots.
   const dashLockBtn = document.getElementById('dashLock');
+  const dashUnlockBtn = document.getElementById('dashUnlock');
+  const dashLockStatus = document.getElementById('dashLockStatus');
   const historyTableBody = document.querySelector('#historyTable tbody');
   const snapshotView = document.getElementById('snapshotView');
   // Reference to the Active Payrolls table body
   const activeTableBody = document.querySelector('#activePayrollTable tbody');
+
+  const PAYROLL_LOCKS_KEY = 'payroll_lock_state';
+
+  function loadLockMap() {
+    try {
+      const raw = localStorage.getItem(PAYROLL_LOCKS_KEY);
+      if (!raw) return { __meta: { lastUpdatedAt: Date.now() } };
+      const parsed = JSON.parse(raw);
+      if (!parsed || typeof parsed !== 'object') return { __meta: { lastUpdatedAt: Date.now() } };
+      if (!parsed.__meta) parsed.__meta = {};
+      return parsed;
+    } catch (err) {
+      return { __meta: {} };
+    }
+  }
+
+  let payrollLocks = loadLockMap();
+  try { window.payrollLocks = payrollLocks; } catch (err) {}
+
+  function persistLocks() {
+    try {
+      if (!payrollLocks || typeof payrollLocks !== 'object') payrollLocks = { __meta: {} };
+      if (!payrollLocks.__meta) payrollLocks.__meta = {};
+      payrollLocks.__meta.lastUpdatedAt = Date.now();
+      localStorage.setItem(PAYROLL_LOCKS_KEY, JSON.stringify(payrollLocks));
+    } catch (err) {
+      console.warn('Unable to persist payroll lock state', err);
+    }
+  }
+
+  function periodKey(start, end) {
+    return `${start || ''}__${end || ''}`;
+  }
+
+  function getCurrentPeriodRange() {
+    return {
+      start: dashStart && dashStart.value ? dashStart.value : '',
+      end: dashEnd && dashEnd.value ? dashEnd.value : ''
+    };
+  }
+
+  function getLockEntry(start, end) {
+    if (!start || !end) return null;
+    const entry = payrollLocks && payrollLocks[periodKey(start, end)];
+    return entry && typeof entry === 'object' ? entry : null;
+  }
+
+  function captureGrandTotals() {
+    const foot = document.getElementById('payrollTotalsFoot');
+    if (!foot) return null;
+    const totals = {};
+    foot.querySelectorAll('[data-col]').forEach(td => {
+      const col = td.dataset.col;
+      if (!col) return;
+      totals[col] = (td.textContent || '').trim();
+    });
+    return totals;
+  }
+
+  function syncHistoryLockState(start, end, locked, meta) {
+    if (!Array.isArray(payrollHistory) || !start || !end) return;
+    let snap = payrollHistory.find(entry => entry && entry.startDate === start && entry.endDate === end);
+    if (!snap && locked) {
+      snap = { startDate: start, endDate: end };
+      payrollHistory.push(snap);
+    }
+    if (!snap) return;
+    snap.locked = locked;
+    snap.lockedAt = locked ? (meta && meta.lockedAt ? meta.lockedAt : new Date().toISOString()) : '';
+    if (locked && meta && meta.totals) {
+      snap.totals = meta.totals;
+    } else if (!locked) {
+      snap.totals = {};
+      if (typeof snap.hash !== 'undefined') snap.hash = '';
+    }
+    if (typeof saveHistory === 'function') saveHistory();
+    if (typeof renderHistory === 'function') renderHistory();
+    if (typeof renderActivePayrolls === 'function') renderActivePayrolls();
+  }
+
+  function setPeriodLocked(start, end, locked, meta = {}) {
+    if (!start || !end) return;
+    if (!payrollLocks || typeof payrollLocks !== 'object') payrollLocks = { __meta: {} };
+    const key = periodKey(start, end);
+    if (locked) {
+      payrollLocks[key] = {
+        locked: true,
+        lockedAt: meta.lockedAt || new Date().toISOString(),
+        totals: meta.totals || null
+      };
+    } else {
+      delete payrollLocks[key];
+    }
+    persistLocks();
+    syncHistoryLockState(start, end, locked, meta);
+    try { window.payrollLocks = payrollLocks; } catch (err) {}
+  }
+
+  function updateLockStatusDisplay(entry) {
+    if (!dashLockStatus) return;
+    if (!entry || !entry.locked) {
+      dashLockStatus.style.display = 'none';
+      dashLockStatus.textContent = '';
+      return;
+    }
+    const parts = ['Locked'];
+    if (entry.lockedAt) {
+      try {
+        parts.push(new Date(entry.lockedAt).toLocaleString());
+      } catch (err) {}
+    }
+    if (entry.totals && entry.totals.netPay) {
+      parts.push(`Net ${entry.totals.netPay}`);
+    }
+    dashLockStatus.textContent = parts.join(' · ');
+    dashLockStatus.style.display = 'inline';
+  }
+
+  function applyLockUI() {
+    const { start, end } = getCurrentPeriodRange();
+    const hasRange = !!(start && end);
+    if (!hasRange) {
+      enablePayrollInputs();
+      if (dashLockBtn) {
+        dashLockBtn.style.display = 'inline-block';
+        dashLockBtn.disabled = true;
+      }
+      if (dashUnlockBtn) {
+        dashUnlockBtn.style.display = 'none';
+        dashUnlockBtn.disabled = true;
+      }
+      updateLockStatusDisplay(null);
+      return false;
+    }
+    const entry = getLockEntry(start, end);
+    const locked = !!(entry && entry.locked);
+    if (locked) {
+      disablePayrollInputs();
+      if (dashLockBtn) {
+        dashLockBtn.style.display = 'none';
+      }
+      if (dashUnlockBtn) {
+        dashUnlockBtn.style.display = 'inline-block';
+        dashUnlockBtn.disabled = false;
+      }
+      updateLockStatusDisplay(entry);
+    } else {
+      enablePayrollInputs();
+      if (dashLockBtn) {
+        dashLockBtn.style.display = 'inline-block';
+        dashLockBtn.disabled = false;
+      }
+      if (dashUnlockBtn) {
+        dashUnlockBtn.style.display = 'none';
+        dashUnlockBtn.disabled = true;
+      }
+      updateLockStatusDisplay(null);
+    }
+    return locked;
+  }
+
+  async function handleLockClick() {
+    const { start, end } = getCurrentPeriodRange();
+    if (!start || !end) {
+      alert('Please select both start and end dates.');
+      return;
+    }
+    if (getLockEntry(start, end)?.locked) {
+      applyLockUI();
+      return;
+    }
+    try {
+      if (typeof calculateAll === 'function') {
+        await Promise.resolve(calculateAll());
+      }
+    } catch (err) {}
+    try {
+      if (typeof updatePayrollGrandTotals === 'function') {
+        updatePayrollGrandTotals();
+      }
+    } catch (err) {}
+    const totals = captureGrandTotals();
+    const lockedAt = new Date().toISOString();
+    disablePayrollInputs();
+    setPeriodLocked(start, end, true, { lockedAt, totals });
+    applyLockUI();
+  }
+
+  async function handleUnlockClick() {
+    const { start, end } = getCurrentPeriodRange();
+    if (!start || !end) {
+      applyLockUI();
+      return;
+    }
+    if (!getLockEntry(start, end)) {
+      applyLockUI();
+      return;
+    }
+    setPeriodLocked(start, end, false);
+    enablePayrollInputs();
+    applyLockUI();
+    try {
+      if (typeof calculateAll === 'function') {
+        await Promise.resolve(calculateAll());
+      }
+    } catch (err) {}
+    try {
+      if (typeof updatePayrollGrandTotals === 'function') {
+        updatePayrollGrandTotals();
+      }
+    } catch (err) {}
+  }
+
+  if (dashLockBtn) {
+    dashLockBtn.addEventListener('click', handleLockClick);
+  }
+  if (dashUnlockBtn) {
+    dashUnlockBtn.addEventListener('click', handleUnlockClick);
+  }
+  if (dashStart) {
+    dashStart.addEventListener('change', () => { checkAndToggleEditState(); });
+  }
+  if (dashEnd) {
+    dashEnd.addEventListener('change', () => { checkAndToggleEditState(); });
+  }
+  checkAndToggleEditState();
+  try {
+    window.getPayrollLockEntry = getLockEntry;
+    window.setPayrollLock = setPeriodLocked;
+    window.applyPayrollLockUI = applyLockUI;
+    window.lockCurrentPeriod = () => handleLockClick();
+    window.unlockCurrentPeriod = () => handleUnlockClick();
+  } catch (err) {}
 
   /**
    * Render the active payrolls table.
@@ -4537,51 +4778,16 @@ document.addEventListener('DOMContentLoaded', () => {
       // Show the payroll panel
       try { showTab('payroll'); } catch (err) {}
     } else if (target.classList.contains('lockActive')) {
-      // Lock this active payroll: update its snapshot and mark locked
       const startDate = snap.startDate;
       const endDate = snap.endDate;
       if (!startDate || !endDate) {
-        alert('Invalid snapshot dates.');
+        alert('Invalid payroll dates.');
         return;
       }
-      const newSnap = await buildSnapshot(startDate, endDate);
-      if (!newSnap) {
-        alert('Payroll table is missing or empty.');
-        return;
-      }
-      const json = JSON.stringify(newSnap);
-      const hashBuffer = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(json));
-      const hashArray = Array.from(new Uint8Array(hashBuffer));
-      const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
-      const now = new Date().toISOString();
-      snap.rows = newSnap.rows;
-      snap.totals = newSnap.totals;
-      snap.hash = hashHex;
-      snap.lockedAt = now;
-      snap.locked = true;
-      saveHistory();
-      renderHistory();
-      renderActivePayrolls();
-      // Disable payroll and DTR editing via helper until date range changes
-      disablePayrollInputs();
-      const wsEl2 = document.getElementById('weekStart');
-      const weEl2 = document.getElementById('weekEnd');
-      // Mark date inputs as forced to prevent showTab from re-enabling prematurely
-      if (wsEl2) wsEl2.dataset.forced = 'true';
-      if (weEl2) weEl2.dataset.forced = 'true';
-      function enableOnChange() {
-        if (wsEl2) wsEl2.removeEventListener('change', enableOnChange);
-        if (weEl2) weEl2.removeEventListener('change', enableOnChange);
-        // Determine if the newly selected period is locked. If locked, keep
-        // editing disabled; otherwise enable editing and clear forced flags.
-        if (typeof checkAndToggleEditState === 'function') {
-          checkAndToggleEditState();
-        } else {
-          enablePayrollInputs();
-        }
-      }
-      if (wsEl2) wsEl2.addEventListener('change', enableOnChange);
-      if (weEl2) weEl2.addEventListener('change', enableOnChange);
+      if (dashStart) dashStart.value = startDate;
+      if (dashEnd) dashEnd.value = endDate;
+      await handleLockClick();
+      checkAndToggleEditState();
     } else if (target.classList.contains('deleteActive')) {
       // Delete active (unlocked) snapshot after confirmation
       if (!snap) return;
@@ -4608,12 +4814,20 @@ document.addEventListener('DOMContentLoaded', () => {
       tr.tabIndex = 0;
       const startText = formatDisplayDate(snap.startDate);
       const endText = formatDisplayDate(snap.endDate);
+      const lockEntry = getLockEntry(snap.startDate, snap.endDate);
+      const netSource = (lockEntry && lockEntry.totals && lockEntry.totals.netPay) || (snap.totals && snap.totals.netPay) || '';
+      const netText = (() => {
+        if (!netSource && netSource !== 0) return '';
+        const numeric = Number(String(netSource).replace(/,/g, ''));
+        if (!Number.isNaN(numeric) && Number.isFinite(numeric)) {
+          return numeric.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        }
+        return String(netSource);
+      })();
       // Build row HTML; note small hash display for brevity
       // Build the actions column depending on lock status. Only locked snapshots show export/unlock controls.
       const actions = [];
       if (snap.locked) {
-        actions.push(`<button type="button" class="exportAllTabs" data-index="${index}">Excel (All Tabs)</button>`);
-        actions.push(`<button type="button" class="exportAllPdf" data-index="${index}">PDF</button>`);
         actions.push(`<button type="button" class="unlockSnapshot" data-index="${index}">Unlock</button>`);
         // For locked snapshots, show a disabled delete button to indicate it cannot be removed
         actions.push(`<button type="button" class="deleteSnapshot" data-index="${index}" disabled>Delete</button>`);
@@ -4625,7 +4839,7 @@ document.addEventListener('DOMContentLoaded', () => {
         <td>${startText}</td>
         <td>${endText}</td>
         <td>${snap.lockedAt ? new Date(snap.lockedAt).toLocaleString() : ''}</td>
-        <td><span style="font-size:10px;">${snap.hash ? snap.hash.slice(0, 12) + '...' : ''}</span></td>
+        <td>${netText}</td>
         <td>${actions.join(' ')}</td>
       `;
       historyTableBody.appendChild(tr);
@@ -4833,10 +5047,12 @@ document.addEventListener('DOMContentLoaded', () => {
     const we = document.getElementById('weekEnd');
     const genBtn = document.getElementById('dashGenerate');
     const lockBtn = document.getElementById('dashLock');
+    const unlockBtn = document.getElementById('dashUnlock');
     if (ws) ws.disabled = true;
     if (we) we.disabled = true;
     if (genBtn) genBtn.disabled = true;
     if (lockBtn) lockBtn.disabled = true;
+    if (unlockBtn) unlockBtn.disabled = false;
     // Ensure the payroll tab reflects the locked state as well
     try { setPayrollLockedUI(true); } catch (err) { /* no-op if helper is unavailable */ }
   }
@@ -4890,10 +5106,12 @@ document.addEventListener('DOMContentLoaded', () => {
     const we = document.getElementById('weekEnd');
     const genBtn = document.getElementById('dashGenerate');
     const lockBtn = document.getElementById('dashLock');
+    const unlockBtn = document.getElementById('dashUnlock');
     if (ws) ws.disabled = false;
     if (we) we.disabled = false;
     if (genBtn) genBtn.disabled = false;
     if (lockBtn) lockBtn.disabled = false;
+    if (unlockBtn) unlockBtn.disabled = true;
     // Restore interactivity for the payroll tab when unlocked
     try { setPayrollLockedUI(false); } catch (err) { /* no-op if helper is unavailable */ }
   }
@@ -4901,65 +5119,15 @@ document.addEventListener('DOMContentLoaded', () => {
   window.enablePayrollInputs = enablePayrollInputs;
 
   /**
-   * Determine whether the currently selected payroll period (weekStart/weekEnd values)
-   * corresponds to a locked snapshot. This reads from the global payrollHistory
-   * array if available, otherwise loads history from localStorage. It returns
-   * true if a matching snapshot exists and its `locked` property is truthy.
+   * Determine whether the currently selected payroll period is locked by
+   * consulting the persisted lock map. Returns true when the range has an
+   * active lock entry.
    */
   function isSelectedPeriodLocked() {
-    const wsEl = document.getElementById('weekStart');
-    const weEl = document.getElementById('weekEnd');
-    if (!wsEl || !weEl) return false;
-    const start = wsEl.value;
-    const end = weEl.value;
-    // Helper to parse either ISO (yyyy-mm-dd) or US (m/d/yyyy) date strings
-    function parseDateStr(str) {
-      if (!str) return null;
-      // If contains dash, assume ISO format yyyy-mm-dd or yyyy-m-d
-      if (str.includes('-')) {
-        const isoParts = str.split('-');
-        if (isoParts.length === 3) {
-          const y = parseInt(isoParts[0], 10);
-          const m = parseInt(isoParts[1], 10);
-          const d = parseInt(isoParts[2], 10);
-          if (!isNaN(y) && !isNaN(m) && !isNaN(d)) {
-            return new Date(y, m - 1, d);
-          }
-        }
-        // Fallback: let Date constructor try parsing
-        const dt = new Date(str);
-        return isNaN(dt.getTime()) ? null : dt;
-      }
-      // If contains slash, assume m/d/yyyy or mm/dd/yyyy
-      if (str.includes('/')) {
-        const parts = str.split('/');
-        if (parts.length === 3) {
-          const m = parseInt(parts[0], 10);
-          const d = parseInt(parts[1], 10);
-          const y = parseInt(parts[2], 10);
-          if (!isNaN(m) && !isNaN(d) && !isNaN(y)) {
-            return new Date(y, m - 1, d);
-          }
-        }
-      }
-      // Final attempt: parse using Date constructor
-      const dt2 = new Date(str);
-      return isNaN(dt2.getTime()) ? null : dt2;
-    }
-    const startDateObj = parseDateStr(start);
-    const endDateObj = parseDateStr(end);
-    if (!startDateObj || !endDateObj) return false;
-    // Use the in-memory payrollHistory if available; else load from storage
-    const hist = Array.isArray(window.payrollHistory) ? window.payrollHistory : (typeof loadHistory === 'function' ? loadHistory() : []);
-    if (!Array.isArray(hist)) return false;
-    return hist.some(s => {
-      if (!s || !s.startDate || !s.endDate) return false;
-      // Parse snapshot dates similarly; handle leading zero differences
-      const sStart = parseDateStr(s.startDate);
-      const sEnd = parseDateStr(s.endDate);
-      if (!sStart || !sEnd) return false;
-      return s.locked && sStart.getTime() === startDateObj.getTime() && sEnd.getTime() === endDateObj.getTime();
-    });
+    const range = getCurrentPeriodRange();
+    if (!range.start || !range.end) return false;
+    const entry = getLockEntry(range.start, range.end);
+    return !!(entry && entry.locked);
   }
   window.isSelectedPeriodLocked = isSelectedPeriodLocked;
 
@@ -4969,19 +5137,16 @@ document.addEventListener('DOMContentLoaded', () => {
    * date inputs are marked as forced. If the period is not locked, editing is
    * enabled and the forced flags are removed. This helper centralizes the
    * logic of determining lock status and applying the appropriate UI state.
-   */
+  */
   function checkAndToggleEditState() {
     const wsEl = document.getElementById('weekStart');
     const weEl = document.getElementById('weekEnd');
     if (!wsEl || !weEl) return;
-    const locked = isSelectedPeriodLocked();
+    const locked = applyLockUI();
     if (locked) {
-      disablePayrollInputs();
-      // Mark inputs as forced so other logic (showTab) doesn't re-enable them
       wsEl.dataset.forced = 'true';
       weEl.dataset.forced = 'true';
     } else {
-      enablePayrollInputs();
       if (wsEl.dataset) delete wsEl.dataset.forced;
       if (weEl.dataset) delete weEl.dataset.forced;
     }
@@ -5035,62 +5200,6 @@ document.addEventListener('DOMContentLoaded', () => {
     // Update both history and active payroll tables after creating a new snapshot
     renderHistory();
     if (typeof renderActivePayrolls === 'function') renderActivePayrolls();
-  });
-
-  // Handler for Lock button: build snapshot, mark locked and disable payroll editing
-  dashLockBtn && dashLockBtn.addEventListener('click', async () => {
-    const start = dashStart && dashStart.value;
-    const end = dashEnd && dashEnd.value;
-    if (!start || !end) {
-      alert('Please select both start and end dates.');
-      return;
-    }
-    // Recompute all payroll row values prior to building the snapshot. Without this
-    // call, some columns (e.g. contributions, total deductions, adjustments and
-    // net pay) may not be up to date if the user has edited values but not
-    // triggered a recalculation. Ensuring calculateAll() runs here fills all
-    // numeric columns before locking.
-    try {
-      if (typeof calculateAll === 'function') {
-        calculateAll();
-      }
-    } catch (e) {
-      // Ignore errors in calculation; snapshot will still be built from current cells
-    }
-    const snap = await buildSnapshot(start, end);
-    if (!snap) {
-      alert('Payroll table is missing or empty.');
-      return;
-    }
-    const json = JSON.stringify(snap);
-    const hashBuffer = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(json));
-    const hashArray = Array.from(new Uint8Array(hashBuffer));
-    const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
-    const now = new Date().toISOString();
-    payrollHistory.push({ startDate: start, endDate: end, rows: snap.rows, totals: snap.totals, hash: hashHex, lockedAt: now, locked: true });
-    saveHistory();
-    renderHistory();
-    // Disable payroll and DTR editing via helper until date range changes
-    disablePayrollInputs();
-    // Mark date inputs as forced so showTab logic doesn't re-enable them prematurely
-    if (dashStart) dashStart.dataset.forced = 'true';
-    if (dashEnd) dashEnd.dataset.forced = 'true';
-    // Listener to re-enable controls on date change
-    function enableOnChange() {
-      if (dashStart) dashStart.removeEventListener('change', enableOnChange);
-      if (dashEnd) dashEnd.removeEventListener('change', enableOnChange);
-      // Check the new period and toggle edit state accordingly. If the new
-      // selection is locked, keep editing disabled; otherwise enable it.
-      if (typeof checkAndToggleEditState === 'function') {
-        checkAndToggleEditState();
-      } else {
-        enablePayrollInputs();
-        if (dashStart && dashStart.dataset) delete dashStart.dataset.forced;
-        if (dashEnd && dashEnd.dataset) delete dashEnd.dataset.forced;
-      }
-    }
-    if (dashStart) dashStart.addEventListener('change', enableOnChange);
-    if (dashEnd) dashEnd.addEventListener('change', enableOnChange);
   });
 
   // Helper: build snapshot storage key matching lockPeriod persistence
@@ -5451,22 +5560,11 @@ document.addEventListener('DOMContentLoaded', () => {
       return;
     }
     if (actionBtn.classList.contains('unlockSnapshot')) {
-      // Unlock this locked snapshot: remove stored snapshot payload and mark unlocked
       if (!snap.locked) return;
-      try {
-        await purgeStoredSnapshot(snap.startDate, snap.endDate);
-      } catch (err) {
-        console.warn('Failed to purge stored snapshot', err);
-      }
-      snap.locked = false;
-      snap.lockedAt = '';
-      snap.hash = '';
-      snap.rows = [];
-      snap.totals = {};
-      if ('divisor' in snap) delete snap.divisor;
-      saveHistory();
-      renderHistory();
-      renderActivePayrolls();
+      if (dashStart) dashStart.value = snap.startDate || '';
+      if (dashEnd) dashEnd.value = snap.endDate || '';
+      await handleUnlockClick();
+      checkAndToggleEditState();
       return;
     }
   });
@@ -12953,253 +13051,113 @@ document.addEventListener('DOMContentLoaded', async function () {
 })();
 </script>
 <script>
-// Minimal Lock Snapshots: capture DTR/Payroll/Reports and render from snapshots when locked.
+// Minimal lock handler: reuse freeze helpers instead of serializing snapshots.
 (function(){
   function getPeriod(){
     const ws = document.getElementById('weekStart');
     const we = document.getElementById('weekEnd');
-    const start = ws && ws.value ? ws.value : '';
-    const end   = we && we.value ? we.value : '';
-    return { start, end };
-  }
-  function pidFromDates(start, end){
-    const norm = (s)=>{ if(!s) return ''; const m = s.match(/^(\d{4})-(\d{2})-(\d{2})$/); if(m) return m[1]+m[2]+m[3]; const d=new Date(s); if(!isNaN(d)) return ''+d.getFullYear()+String(d.getMonth()+1).padStart(2,'0')+String(d.getDate()).padStart(2,'0'); return String(s).replace(/[^0-9]/g,''); };
-    return `p:${norm(start)}:${norm(end)}`;
-  }
-  function serializeTableById(id){
-    const tbl = document.getElementById(id);
-    if (!tbl) return null;
-
-    const headers = [];
-    try {
-      const thead = tbl.tHead;
-      if (thead && thead.rows){
-        for (let i = 0; i < thead.rows.length; i++){
-          const cells = thead.rows[i].cells;
-          for (let j = 0; j < cells.length; j++){
-            headers.push((cells[j].textContent || '').trim());
-          }
-        }
-      } else {
-        tbl.querySelectorAll('thead tr th').forEach(th=> headers.push((th.textContent||'').trim()));
-      }
-    } catch {}
-
-    function findControl(td){
-      let el = td.firstElementChild;
-      while (el){
-        const tag = el.tagName && el.tagName.toUpperCase();
-        if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return el;
-        if (el.firstElementChild){
-          const nested = el.querySelector && el.querySelector('input,select,textarea');
-          if (nested) return nested;
-        }
-        el = el.nextElementSibling;
-      }
-      return td.querySelector('input,select,textarea');
-    }
-
-    const rows = [];
-    const bodies = tbl.tBodies;
-    for (let b = 0; b < bodies.length; b++){
-      const body = bodies[b];
-      const trs = body.rows;
-      for (let r = 0; r < trs.length; r++){
-        const tr = trs[r];
-        const arr = [];
-        const cells = tr.cells;
-        for (let c = 0; c < cells.length; c++){
-          const td = cells[c];
-          const el = findControl(td);
-          if (el) {
-            const tag = el.tagName && el.tagName.toUpperCase();
-            if (tag === 'SELECT'){
-              const opt = el.options && el.selectedIndex>=0 ? el.options[el.selectedIndex] : null;
-              arr.push(String((opt && (opt.textContent||opt.label)) || el.value || '').trim());
-            } else {
-              arr.push(String((typeof el.value!== 'undefined' ? el.value : el.textContent)||'').trim());
-            }
-          } else {
-            arr.push((td.textContent||'').trim());
-          }
-        }
-        rows.push(arr);
-      }
-    }
-    return { headers, rows };
-  }
-  function renderSimpleTableSnapshot(id, snap){
-    if (!snap) return false;
-    const tbl = document.getElementById(id);
-    if (!tbl) return false;
-    const tb = tbl.tBodies && tbl.tBodies[0] || tbl.querySelector('tbody');
-    if (tb){ tb.innerHTML = (snap.rows||[]).map(r=>'<tr>'+r.map(c=>`<td>${String(c==null?'':c)}</td>`).join('')+'</tr>').join(''); return true; }
-    return false;
+    return {
+      start: ws && ws.value ? ws.value : '',
+      end: we && we.value ? we.value : ''
+    };
   }
   function isLocked(){
-    try { if (typeof isSelectedPeriodLocked==='function') return !!isSelectedPeriodLocked(); } catch{}
-    try {
-      const hist = Array.isArray(window.payrollHistory) ? window.payrollHistory : [];
-      const p = getPeriod();
-      return hist.some(s=> s && s.locked && s.startDate===p.start && s.endDate===p.end);
-    } catch { return false; }
-  }
-  async function readKVWithLocal(key){
-    try { const v = await (window.readKV ? window.readKV(key, null) : Promise.resolve(null)); if (v!=null) return v; } catch{}
-    try { const raw = localStorage.getItem(key); if (raw!=null) return JSON.parse(raw); } catch{}
-    return null;
-  }
-  async function writeKVMirror(key, value){
-    try { localStorage.setItem(key, JSON.stringify(value)); } catch{}
-    try {
-      if (window.writeKV){
-        const remote = window.writeKV(key, value);
-        if (remote && typeof remote.then === 'function'){ remote.catch(()=>{}); }
-      }
-    } catch{}
-  }
-  function serializeMasterReport(){
-    try {
-      const node = document.getElementById('masterReportContainer');
-      if (!node) return null;
-      return { html: node.innerHTML || '' };
-    } catch (e) {
-      return null;
-    }
-  }
-
-  async function renderFromSnapshots(){
-    const p = getPeriod();
-    const pid = pidFromDates(p.start, p.end);
-    const [dtr, payroll, reports, deductions, master] = await Promise.all([
-      readKVWithLocal(`snap:dtr:${pid}`),
-      readKVWithLocal(`snap:payroll:${pid}`),
-      readKVWithLocal(`snap:reports:${pid}`),
-      readKVWithLocal(`snap:deductions:${pid}`),
-      readKVWithLocal(`snap:master:${pid}`)
-    ]);
-    if (dtr) renderSimpleTableSnapshot('resultsTable', dtr);
-    if (reports){ if (!renderSimpleTableSnapshot('projectTotalsTable', reports)) renderSimpleTableSnapshot('r_table', reports); }
-    if (deductions){
-      const ok = renderSimpleTableSnapshot('deductionsTable', deductions);
-      if (ok){
-        try { window.__deductionsDirty = false; } catch {}
-      }
-    }
-    if (master && typeof master.html === 'string'){
-      try {
-        const host = document.getElementById('masterReportContainer');
-        if (host) host.innerHTML = master.html;
-      } catch {}
-    }
-    if (payroll){
-      try {
-        const tb = document.querySelector('#payrollTable tbody');
-        const fmt = (n)=> Number(n||0).toFixed(2);
-        tb.innerHTML = (payroll.rows||[]).map(r=>{
-          return '<tr>' +
-            `<td>${r.id||''}</td><td class="wrap">${r.name||''}</td>`+
-            `<td class="rate num">${fmt(r.rate)}</td>`+
-            `<td class="regHrs num">${fmt(r.regHrs)}</td>`+
-            `<td class="otHrs num">${fmt(r.otHrs)}</td>`+
-            `<td class="adjHrs num">${fmt(r.adjHrs)}</td>`+
-            `<td class="totalHrs num">${fmt(r.totalHrs)}</td>`+
-            `<td class="regPay num">${fmt(r.regPay)}</td>`+
-            `<td class="otPay num">${fmt(r.otPay)}</td>`+
-            `<td class="adjAmt num">${fmt(r.adjAmt)}</td>`+
-            `<td class="bantay num">${fmt(r.bantay)}</td>`+
-            `<td class="grossPay num">${fmt(r.grossPay)}</td>`+
-            `<td class="pagibig num">${fmt(r.pagibig)}</td>`+
-            `<td class="philhealth num">${fmt(r.philhealth)}</td>`+
-            `<td class="sss num">${fmt(r.sss)}</td>`+
-            `<td class="loanSSS num">${fmt(r.loanSSS)}</td>`+
-            `<td class="loanPI num">${fmt(r.loanPI)}</td>`+
-            `<td class="vale num">${fmt(r.vale)}</td>`+
-            `<td class="valeWed num">${fmt(r.valeWed)}</td>`+
-            `<td class="totalDed num">${fmt(r.totalDed)}</td>`+
-            `<td class="netPay num">${fmt(r.netPay)}</td>`+
-            `<td></td>`+
-          '</tr>';
-        }).join('');
-        const totals = payroll.totals || {};
-        document.querySelectorAll('#payrollTable tfoot [data-col]').forEach(td=>{ const k=td.dataset.col; td.textContent = Number(totals[k]||0).toFixed(2); });
-      } catch{}
-    }
-    try { setPayrollLockedUI(true); } catch{}
+    try { if (typeof isSelectedPeriodLocked === 'function') return !!isSelectedPeriodLocked(); }
+    catch (err) {}
+    return false;
   }
   async function lockPeriod(){
-    const p = getPeriod(); if (!p.start || !p.end) { alert('Select a period first.'); return; }
-    try { if (typeof window.renderResults==='function') window.renderResults(); } catch{}
-    try { if (typeof window.rebuildReports==='function') window.rebuildReports(); else if (typeof window.renderProjectTotals==='function') window.renderProjectTotals(); } catch{}
-    try { if (typeof window.renderMasterReport==='function') window.renderMasterReport(); } catch{}
-    const pid = pidFromDates(p.start, p.end);
-    const dtr = serializeTableById('resultsTable') || { headers:[], rows:[] };
-    const reports = serializeTableById('projectTotalsTable') || serializeTableById('r_table') || { headers:[], rows:[] };
-    const master = serializeMasterReport() || { html: '' };
-    const payroll = (typeof window.buildSnapshot==='function') ? await window.buildSnapshot(p.start, p.end) : null;
-    const deductions = serializeTableById('deductionsTable') || { headers:[], rows:[] };
-    try { setPayrollLockedUI(true); } catch{}
-    const mirrorPayloads = [
-      [`snap:dtr:${pid}`, dtr],
-      [`snap:payroll:${pid}`, payroll],
-      [`snap:reports:${pid}`, reports],
-      [`snap:deductions:${pid}`, deductions],
-      [`snap:master:${pid}`, master]
-    ];
     try {
-      await Promise.all(mirrorPayloads.map(([key, value]) => writeKVMirror(key, value)));
-    } catch {}
-    await renderFromSnapshots();
+      if (typeof window.lockCurrentPeriod === 'function') {
+        await Promise.resolve(window.lockCurrentPeriod());
+      }
+    } catch (err) {
+      console.warn('lockPeriod failed', err);
+    }
   }
-  async function unlockPeriod(){ /* no-op for snapshots; UI will recompute naturally */ try { setPayrollLockedUI(false); } catch{} }
-
+  async function unlockPeriod(){
+    try {
+      if (typeof window.unlockCurrentPeriod === 'function') {
+        await Promise.resolve(window.unlockCurrentPeriod());
+      }
+    } catch (err) {
+      console.warn('unlockPeriod failed', err);
+    }
+  }
   function guard(name){
     try {
-      const fn = window[name]; if (typeof fn !== 'function' || fn.__guarded) return;
-      const wrapped = function(){ if (isLocked()){ renderFromSnapshots(); return; } return fn.apply(this, arguments); };
-      wrapped.__guarded = true; window[name] = wrapped;
-    } catch{}
+      const fn = window[name];
+      if (typeof fn !== 'function' || fn.__guarded) return;
+      const wrapped = function(){
+        if (isLocked()) return;
+        return fn.apply(this, arguments);
+      };
+      wrapped.__guarded = true;
+      window[name] = wrapped;
+    } catch (err) {}
   }
   ['renderResults','calculatePayrollFromResultsTable','calculatePayrollFromRecords','rebuildReports','renderProjectTotals','renderMasterReport','calculateAll','renderTable','renderDeductionsTable'].forEach(guard);
-
   document.addEventListener('DOMContentLoaded', function(){
-    // Delegate to existing dashboard lock/unlock buttons if present
     document.addEventListener('click', function(ev){
       const t = ev.target;
       if (!t) return;
-      if (t.closest && t.closest('#activePayrollTable') && t.classList && t.classList.contains('lockActive')){ setTimeout(lockPeriod, 0); }
-      if (t.classList && t.classList.contains('unlockSnapshot')){ setTimeout(unlockPeriod, 0); setTimeout(function(){ if (!isLocked()) renderFromSnapshots(); }, 100); }
+      if (t.closest && t.closest('#activePayrollTable') && t.classList && t.classList.contains('lockActive')){
+        setTimeout(lockPeriod, 0);
+      }
+      if (t.classList && t.classList.contains('unlockSnapshot')){
+        setTimeout(unlockPeriod, 0);
+        setTimeout(function(){
+          try {
+            if (!isLocked() && typeof window.checkAndToggleEditState === 'function') {
+              window.checkAndToggleEditState();
+            }
+          } catch (err) {}
+        }, 100);
+      }
     }, true);
-    // On load, if selected period is locked, render snapshots immediately
-    try { if (isLocked()) { renderFromSnapshots(); setPayrollLockedUI(true);} else { setPayrollLockedUI(false);} } catch{}
 
-    // Ensure Payroll tab restores snapshot on activation when locked
+    try {
+      if (isLocked()) {
+        if (typeof window.checkAndToggleEditState === 'function') window.checkAndToggleEditState();
+      } else if (typeof window.applyPayrollLockUI === 'function') {
+        window.applyPayrollLockUI(false);
+      }
+    } catch (err) {}
+
     try {
       var tp = document.getElementById('tabPayroll');
       var tp2 = document.getElementById('old-tabPayroll');
-      function onOpenPayroll(){ try { if (isLocked()) { renderFromSnapshots(); setPayrollLockedUI(true); } } catch(e){} }
+      function onOpenPayroll(){
+        try {
+          if (isLocked() && typeof window.checkAndToggleEditState === 'function') {
+            window.checkAndToggleEditState();
+          }
+        } catch (e) {}
+      }
       if (tp && !tp.__lockBind){ tp.addEventListener('click', onOpenPayroll); tp.__lockBind = true; }
       if (tp2 && !tp2.__lockBind){ tp2.addEventListener('click', onOpenPayroll); tp2.__lockBind = true; }
-    } catch(e){}
+    } catch (e) {}
 
-    // Period change stabilization to avoid flashing stale locked snapshots
     var __lockStableAt = 0;
     function markPeriodChanged(){ try { __lockStableAt = Date.now() + 250; } catch(e){} }
     function isStable(){ try { return Date.now() >= __lockStableAt; } catch(e){ return true; } }
-    // Wrap isLocked to respect stabilization window
     try {
       var _isLocked = isLocked;
       isLocked = function(){ if (!isStable()) return false; return _isLocked(); };
-    } catch(e){}
-    function scheduleUiReeval(){ setTimeout(function(){ try { setPayrollLockedUI(isLocked()); if (isLocked()) renderFromSnapshots(); } catch(e){} }, 260); }
+    } catch (e) {}
+    function scheduleUiReeval(){
+      setTimeout(function(){
+        try {
+          if (typeof window.checkAndToggleEditState === 'function') window.checkAndToggleEditState();
+        } catch (e) {}
+      }, 260);
+    }
     try { var ws = document.getElementById('weekStart'); if (ws && !ws.__lockBind){ ws.addEventListener('change', function(){ markPeriodChanged(); scheduleUiReeval(); }); ws.__lockBind = true; } } catch(e){}
     try { var we = document.getElementById('weekEnd'); if (we && !we.__lockBind){ we.addEventListener('change', function(){ markPeriodChanged(); scheduleUiReeval(); }); we.__lockBind = true; } } catch(e){}
     try { var sel = document.getElementById('activePayrollSelect'); if (sel && !sel.__lockBind){ sel.addEventListener('change', function(){ markPeriodChanged(); scheduleUiReeval(); }); sel.__lockBind = true; } } catch(e){}
   });
-
-  try { window.lockPeriod = lockPeriod; window.unlockPeriod = unlockPeriod; } catch{}
+  try { window.lockPeriod = lockPeriod; window.unlockPeriod = unlockPeriod; } catch (err) {}
 })();
-
 // Toggle Payroll table inputs read-only state based on lock
 function setPayrollLockedUI(locked){
   try {
