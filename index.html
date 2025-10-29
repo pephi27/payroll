@@ -5269,13 +5269,33 @@ document.addEventListener('DOMContentLoaded', () => {
 
   async function exportCombinedPdfForSnapshot(snap) {
     if (!snap) return;
+    const w = window.open('', '_blank', 'width=1024,height=768');
+    if (!w) {
+      alert('Popup blocked. Please allow popups to generate the PDF.');
+      return;
+    }
+
+    try {
+      w.document.write('<!doctype html><html><head><title>Preparing PDF…</title><style>body{font-family:Arial,Helvetica,sans-serif;margin:0;padding:24px;color:#0f172a;}p{margin:0;font-size:14px;}</style></head><body><p>Preparing PDF…</p></body></html>');
+      w.document.close();
+    } catch (err) {
+      console.warn('Unable to seed PDF window', err);
+    }
+
     const startDate = snap.startDate || '';
     const endDate = snap.endDate || '';
-    const [dtr, reports, master] = await Promise.all([
-      readSnapshotSegment('dtr', startDate, endDate),
-      readSnapshotSegment('reports', startDate, endDate),
-      readSnapshotSegment('master', startDate, endDate)
-    ]);
+    let dtr, reports, master;
+    try {
+      [dtr, reports, master] = await Promise.all([
+        readSnapshotSegment('dtr', startDate, endDate),
+        readSnapshotSegment('reports', startDate, endDate),
+        readSnapshotSegment('master', startDate, endDate)
+      ]);
+    } catch (err) {
+      console.warn('Failed to read snapshot segments', err);
+      try { w.document.body.innerHTML = '<p style="color:#dc2626;">Unable to load snapshot data for PDF export.</p>'; } catch {}
+      return;
+    }
 
     const sections = [];
     sections.push(buildDtrSectionFromSnapshot(dtr, startDate, endDate));
@@ -5291,6 +5311,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const filteredSections = sections.filter(Boolean).join('');
     if (!filteredSections) {
       alert('No report data is available for this snapshot.');
+      try { w.close(); } catch {}
       return;
     }
 
@@ -5312,11 +5333,6 @@ document.addEventListener('DOMContentLoaded', () => {
       .master-wrapper table{border-color:#1e293b;}
     </style></head><body>${filteredSections}</body></html>`;
 
-    const w = window.open('', '', 'width=1024,height=768');
-    if (!w) {
-      alert('Popup blocked. Please allow popups to generate the PDF.');
-      return;
-    }
     w.document.open();
     w.document.write(doc);
     w.document.close();
