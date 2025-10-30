@@ -2918,6 +2918,23 @@ let adjHrs = allAdjHrs[currentPeriodKey] || {};
 let allBantay = JSON.parse(localStorage.getItem(LS_BANTAY) || '{}');
 let bantay = allBantay[currentPeriodKey] || {};
 
+function persistCurrentAdjustments(){
+  if (!isPlainObject(allAdjustments)) allAdjustments = {};
+  if (!isPlainObject(adjustments)) adjustments = {};
+  allAdjustments[currentPeriodKey] = adjustments;
+  updatePeriodLatest(allAdjustments, currentPeriodKey, adjustments);
+  persistPeriodScopedMap(LS_ADJ, allAdjustments);
+  try { window.adjustments = adjustments; } catch(_){ }
+}
+
+function persistCurrentAdjustmentHours(){
+  if (!isPlainObject(allAdjHrs)) allAdjHrs = {};
+  if (!isPlainObject(adjHrs)) adjHrs = {};
+  allAdjHrs[currentPeriodKey] = adjHrs;
+  updatePeriodLatest(allAdjHrs, currentPeriodKey, adjHrs);
+  persistPeriodScopedMap(LS_ADJ_HRS, allAdjHrs);
+}
+
 function refreshPeriodScopedCachesFromStorage(){
   allLoanSSS = loadPeriodScopedMap(LS_LOAN_SSS);
   allLoanPI = loadPeriodScopedMap(LS_LOAN_PI);
@@ -3558,9 +3575,7 @@ document.addEventListener('click', (e)=>{
         // Save to localStorage + Supabase (wait for persistence before alerting success)
         await saveCurrentPeriodDeductions();
         if (hasAdjustmentsCol) {
-          allAdjustments[currentPeriodKey] = adjustments;
-          try { window.adjustments = adjustments; } catch(_){ }
-          localStorage.setItem(LS_ADJ, JSON.stringify(allAdjustments));
+          persistCurrentAdjustments();
         }
 
         // Refresh displays
@@ -4307,9 +4322,7 @@ function renderAdjustmentsTable() {
         // Remove the entry when zero or invalid
         delete adjustments[empId];
       }
-      allAdjustments[currentPeriodKey] = adjustments;
-      try { window.adjustments = adjustments; } catch(_){ }
-      localStorage.setItem(LS_ADJ, JSON.stringify(allAdjustments));
+      persistCurrentAdjustments();
       calculateAll();
       renderAdjustmentsFoot();
     });
@@ -4326,8 +4339,7 @@ function renderAdjustmentsTable() {
         // Remove the entry when zero or invalid
         delete adjHrs[empId];
       }
-      allAdjHrs[currentPeriodKey] = adjHrs;
-      localStorage.setItem(LS_ADJ_HRS, JSON.stringify(allAdjHrs));
+      persistCurrentAdjustmentHours();
       calculateAll();
       renderAdjustmentsFoot();
     });
@@ -5068,6 +5080,9 @@ document.addEventListener('DOMContentLoaded', () => {
       if (typeof valeWed === 'object' && valeWed) valeWed[empId] = Number(data.valeWed) || 0;
       if (typeof adjustments === 'object' && adjustments) adjustments[empId] = adjRaw;
     });
+
+    persistCurrentAdjustments();
+    persistCurrentAdjustmentHours();
 
     const foot = document.getElementById('payrollTotalsFoot');
     if (foot && snapshot.totals && typeof snapshot.totals === 'object') {
