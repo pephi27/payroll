@@ -7510,6 +7510,11 @@ rows += `<tr class="allowance">
       const div = Number(typeof divisor!=='undefined' ? divisor : 1) || 1;
       const lSSS = (typeof loanSSS!=='undefined' && loanSSS) ? loanSSS : {};
       const lPI  = (typeof loanPI!=='undefined'  && loanPI ) ? loanPI  : {};
+      const includePagibig = isDeductionColumnIncluded('pagibig');
+      const includePhilhealth = isDeductionColumnIncluded('philhealth');
+      const includeSSS = isDeductionColumnIncluded('sss');
+      const includeLoanSSS = isDeductionColumnIncluded('loanSSS');
+      const includeLoanPI = isDeductionColumnIncluded('loanPI');
       list.forEach(emp=>{
         const id = emp.id;
         const rH = num(rHours[id]);
@@ -7526,15 +7531,17 @@ rows += `<tr class="allowance">
         const sssFull = (typeof sssShareByMonthly==='function') ? sssShareByMonthly(monthly) : 0;
         const sssEmployerFull = (typeof sssEmployerShareByMonthly==='function') ? sssEmployerShareByMonthly(monthly) : sssFull;
         const flags = flagsAll[id] || {};
-        const pi = (flags.pagibig===false) ? 0 : +(regPay * piRate).toFixed(2);
-        const ph = (flags.philhealth===false) ? 0 : +(regPay * phRate).toFixed(2);
-        const sssEE = (flags.sss===false) ? 0 : +(sssFull/div).toFixed(2);
-        const sssER = (flags.sss===false) ? 0 : +(sssEmployerFull/div).toFixed(2);
+        const pi = (!includePagibig || flags.pagibig===false) ? 0 : +(regPay * piRate).toFixed(2);
+        const ph = (!includePhilhealth || flags.philhealth===false) ? 0 : +(regPay * phRate).toFixed(2);
+        const sssEE = (!includeSSS || flags.sss===false) ? 0 : +(sssFull/div).toFixed(2);
+        const sssER = (!includeSSS || flags.sss===false) ? 0 : +(sssEmployerFull/div).toFixed(2);
+        const loanSssVal = includeLoanSSS ? +(num(lSSS[id]) / div).toFixed(2) : 0;
+        const loanPiVal  = includeLoanPI  ? +(num(lPI[id])  / div).toFixed(2) : 0;
         bucket.piEE += pi; bucket.piER += pi;
         bucket.phEE += ph; bucket.phER += ph;
         bucket.sssEE += sssEE; bucket.sssER += sssER;
-        bucket.loanSSS += +(num(lSSS[id]) / div).toFixed(2);
-        bucket.loanPI  += +(num(lPI[id])  / div).toFixed(2);
+        bucket.loanSSS += loanSssVal;
+        bucket.loanPI  += loanPiVal;
       });
     }catch(e){}
     return sums;
