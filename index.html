@@ -601,6 +601,7 @@ h3{margin:0 0 3px 0;font-size:10px;}
   window.PAYSLIP_PRINT_STYLES = styles;
 })();
 </script>
+
 <script>
 document.addEventListener('DOMContentLoaded', function() {
   var multiBtn = document.getElementById('printAllPayslipsBtn');
@@ -1319,6 +1320,7 @@ window.addEventListener('load', dashReports);
   #tabProjects .nav-icon::before  { content: "🚀"; font-size: 14px; }
   #tabPayroll .nav-icon::before   { content: "💰"; font-size: 14px; }
   #tabProjectTotals .nav-icon::before { content: "📈"; font-size: 14px; }
+  #tabContributionSummary .nav-icon::before { content: "💳"; font-size: 14px; }
   /* Sidebar duplicates */
   #old-tabDashboard .nav-icon::before { content: "📊"; }
   #old-tabMain .nav-icon::before      { content: "🕒"; }
@@ -1327,6 +1329,7 @@ window.addEventListener('load', dashReports);
   #old-tabProjects .nav-icon::before  { content: "🚀"; }
   #old-tabPayroll .nav-icon::before   { content: "💰"; }
   #old-tabProjectTotals .nav-icon::before { content: "📈"; }
+  #old-tabContributionSummary .nav-icon::before { content: "💳"; }
 
   /* Mobile menu icon */
   .mobile-menu-btn span { font-size: 0; }
@@ -1451,6 +1454,7 @@ window.addEventListener('load', dashReports);
               <li class="nav-item"><button class="nav-link tab-btn" id="tabProjects" data-page="projects"><span class="nav-icon">ðŸš€</span> Projects</button></li>
               <li class="nav-item"><button class="nav-link tab-btn" id="tabPayroll" data-page="payroll"><span class="nav-icon">ðŸ’°</span> Payroll</button></li>
               <li class="nav-item"><button class="nav-link tab-btn" id="tabProjectTotals" data-page="totals"><span class="nav-icon">ðŸ“ˆ</span> Reports</button></li>
+              <li class="nav-item"><button class="nav-link tab-btn" id="tabContributionSummary" data-page="contribSummary"><span class="nav-icon">ðŸ’³</span> Contributions</button></li>
             </ul>
           </nav>
         </div>
@@ -1503,6 +1507,12 @@ window.addEventListener('load', dashReports);
             <button class="nav-link tab-btn" id="old-tabProjectTotals" data-page="totals">
               <span class="nav-icon">ðŸ“ˆ</span>
               Reports
+            </button>
+          </li>
+          <li class="nav-item">
+            <button class="nav-link tab-btn" id="old-tabContributionSummary" data-page="contribSummary">
+              <span class="nav-icon">ðŸ’³</span>
+              Contributions
             </button>
           </li>
         </ul>
@@ -7880,6 +7890,309 @@ rows += `<tr class="allowance">
   }catch(e){}
 })();
 </script>
+
+  <section class="panel" id="panelContributionSummary">
+    <style>
+      #panelContributionSummary .card{background:#fff;border:1px solid #e5e7eb;border-radius:14px;padding:18px;box-shadow:0 4px 18px rgba(0,0,0,.06)}
+      #panelContributionSummary .controls{display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-bottom:12px}
+      #panelContributionSummary .controls label{font-size:13px;color:#334155;font-weight:600;display:flex;align-items:center;gap:8px}
+      #panelContributionSummary .controls input[type=month]{padding:6px 10px;border:1px solid #cbd5e1;border-radius:8px;font-size:14px;min-width:160px}
+      #panelContributionSummary .summary-meta{font-size:13px;color:#475569;margin-bottom:10px}
+      #panelContributionSummary .empty-state{padding:16px;border:1px dashed #cbd5e1;border-radius:10px;background:#f8fafc;color:#64748b;font-size:14px;text-align:center}
+      #panelContributionSummary .table-wrap{overflow-x:auto}
+      #panelContributionSummary table{width:100%;border-collapse:collapse;margin-top:8px;font-size:13px}
+      #panelContributionSummary th,#panelContributionSummary td{border:1px solid #dbe3ef;padding:8px 10px;text-align:right}
+      #panelContributionSummary th:first-child,#panelContributionSummary td:first-child{ text-align:left; white-space:nowrap }
+      #panelContributionSummary th:nth-child(2),#panelContributionSummary td:nth-child(2){ text-align:left }
+      #panelContributionSummary thead th{background:#eef4fb;color:#0f172a;text-align:center}
+      #panelContributionSummary tfoot th,#panelContributionSummary tfoot td{font-weight:600;background:#fff7ed}
+    </style>
+    <div class="card">
+      <h3 style="margin:0 0 12px 0;">Contribution &amp; Loan Summary</h3>
+      <div class="controls">
+        <label class="month-control">Month
+          <input type="month" id="contribMonthSelect">
+        </label>
+      </div>
+      <div id="contribSummaryMeta" class="summary-meta">Choose a month to view contribution totals from payroll history.</div>
+      <div id="contribSummaryEmpty" class="empty-state">Select a month to view contribution totals.</div>
+      <div class="table-wrap">
+        <table id="contribSummaryTable" style="display:none">
+          <thead>
+            <tr>
+              <th>Employee ID</th>
+              <th>Name</th>
+              <th>Pag-IBIG</th>
+              <th>PhilHealth</th>
+              <th>SSS</th>
+              <th>SSS Loan</th>
+              <th>Pag-IBIG Loan</th>
+              <th>Total</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+          <tfoot>
+            <tr>
+              <th colspan="2">Grand Total</th>
+              <td>0.00</td>
+              <td>0.00</td>
+              <td>0.00</td>
+              <td>0.00</td>
+              <td>0.00</td>
+              <td>0.00</td>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <script>
+  (function(){
+    const HIST_KEY = 'payroll_hist';
+    const MONTH_INPUT_ID = 'contribMonthSelect';
+    const EMPTY_ID = 'contribSummaryEmpty';
+    const META_ID = 'contribSummaryMeta';
+    const TABLE_ID = 'contribSummaryTable';
+
+    function readHistory(){
+      if (Array.isArray(window.payrollHistory)) return window.payrollHistory.slice();
+      try {
+        const raw = localStorage.getItem(HIST_KEY);
+        if (!raw) return [];
+        const parsed = JSON.parse(raw);
+        return Array.isArray(parsed) ? parsed : [];
+      } catch (e) {
+        return [];
+      }
+    }
+
+    function toIsoDate(value){
+      if (!value) return '';
+      const str = String(value).trim();
+      if (!str) return '';
+      if (/^\d{4}-\d{2}-\d{2}$/.test(str)) return str;
+      const parsed = new Date(str);
+      if (!isNaN(parsed)){
+        const year = parsed.getFullYear();
+        const month = String(parsed.getMonth()+1).padStart(2,'0');
+        const day = String(parsed.getDate()).padStart(2,'0');
+        return `${year}-${month}-${day}`;
+      }
+      return '';
+    }
+
+    function toMonthValue(value){
+      const iso = toIsoDate(value);
+      return iso ? iso.slice(0,7) : '';
+    }
+
+    function formatMonth(value){
+      const month = (value || '').slice(0,7);
+      if (!month) return '';
+      const parts = month.split('-');
+      if (parts.length !== 2) return month;
+      const year = Number(parts[0]);
+      const monthIdx = Number(parts[1]) - 1;
+      if (!Number.isFinite(year) || !Number.isFinite(monthIdx)) return month;
+      const date = new Date(year, monthIdx, 1);
+      if (isNaN(date)) return month;
+      return date.toLocaleString(undefined, { month: 'long', year: 'numeric' });
+    }
+
+    function toNumber(value){
+      if (value == null || value === '') return 0;
+      const num = Number(String(value).replace(/,/g,''));
+      return Number.isFinite(num) ? num : 0;
+    }
+
+    function escapeHtml(value){
+      return String(value == null ? '' : value)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+    }
+
+    function getDefaultMonth(){
+      const history = readHistory();
+      if (!history.length){
+        const today = new Date();
+        return `${today.getFullYear()}-${String(today.getMonth()+1).padStart(2,'0')}`;
+      }
+      const sorted = history.slice().sort((a,b)=>{
+        const aDate = toIsoDate(a && (a.endDate || a.startDate));
+        const bDate = toIsoDate(b && (b.endDate || b.startDate));
+        return aDate.localeCompare(bDate);
+      });
+      const latest = sorted[sorted.length-1] || null;
+      return toMonthValue(latest && (latest.endDate || latest.startDate));
+    }
+
+    function computeSummary(monthValue){
+      const normalized = (monthValue || '').slice(0,7);
+      const history = readHistory();
+      const periods = [];
+      const seenPeriods = new Set();
+      const map = new Map();
+      if (!normalized){
+        return { entries: [], totals: { pagibig:0, philhealth:0, sss:0, loanSSS:0, loanPI:0, total:0 }, periods: [], month: normalized };
+      }
+      history.forEach(snap => {
+        if (!snap) return;
+        const startMonth = toMonthValue(snap.startDate);
+        const endMonth = toMonthValue(snap.endDate);
+        if (startMonth !== normalized && endMonth !== normalized) return;
+        const start = toIsoDate(snap.startDate) || (snap.startDate || '');
+        const end = toIsoDate(snap.endDate) || (snap.endDate || '');
+        const key = `${start}__${end}`;
+        if (!seenPeriods.has(key)){
+          seenPeriods.add(key);
+          periods.push({ start, end });
+        }
+        const rows = Array.isArray(snap.rows) ? snap.rows : [];
+        rows.forEach(row => {
+          if (!row) return;
+          const id = row.id != null ? String(row.id).trim() : '';
+          if (!id) return;
+          const record = map.get(id) || { id, name: '', pagibig:0, philhealth:0, sss:0, loanSSS:0, loanPI:0 };
+          const name = row.name != null ? String(row.name).trim() : '';
+          if (name && !record.name) record.name = name;
+          record.pagibig += toNumber(row.pagibig);
+          record.philhealth += toNumber(row.philhealth);
+          record.sss += toNumber(row.sss);
+          record.loanSSS += toNumber(row.loanSSS);
+          record.loanPI += toNumber(row.loanPI);
+          map.set(id, record);
+        });
+      });
+      const entries = Array.from(map.values()).map(entry => {
+        const total = entry.pagibig + entry.philhealth + entry.sss + entry.loanSSS + entry.loanPI;
+        return { ...entry, name: entry.name || entry.id, total };
+      }).sort((a,b) => {
+        const nameComp = a.name.localeCompare(b.name, undefined, { sensitivity: 'base' });
+        if (nameComp) return nameComp;
+        return a.id.localeCompare(b.id, undefined, { sensitivity: 'base' });
+      });
+      const totals = entries.reduce((acc, entry) => {
+        acc.pagibig += entry.pagibig;
+        acc.philhealth += entry.philhealth;
+        acc.sss += entry.sss;
+        acc.loanSSS += entry.loanSSS;
+        acc.loanPI += entry.loanPI;
+        acc.total += entry.total;
+        return acc;
+      }, { pagibig:0, philhealth:0, sss:0, loanSSS:0, loanPI:0, total:0 });
+      return { entries, totals, periods, month: normalized };
+    }
+
+    function formatNumber(value){
+      return Number(value || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    }
+
+    function updateMeta(periods, monthValue){
+      const metaEl = document.getElementById(META_ID);
+      if (!metaEl) return;
+      const label = formatMonth(monthValue);
+      if (!monthValue){
+        metaEl.textContent = 'Choose a month to view contribution totals from payroll history.';
+        return;
+      }
+      if (!periods.length){
+        metaEl.textContent = `No payroll history snapshots were found for ${label || monthValue}.`;
+        return;
+      }
+      const list = periods.map(period => {
+        const start = period.start || '—';
+        const end = period.end || '—';
+        return `${start} – ${end}`;
+      });
+      const labelSafe = escapeHtml(label || monthValue);
+      const joined = list.map(escapeHtml).join(', ');
+      metaEl.innerHTML = `<strong>${labelSafe}</strong> · Included payroll periods: ${joined}`;
+    }
+
+    function render(){
+      const monthInput = document.getElementById(MONTH_INPUT_ID);
+      const monthValue = monthInput ? monthInput.value : '';
+      const { entries, totals, periods, month } = computeSummary(monthValue);
+      const table = document.getElementById(TABLE_ID);
+      const emptyEl = document.getElementById(EMPTY_ID);
+      if (!table) return;
+      const tbody = table.querySelector('tbody');
+      const tfoot = table.querySelector('tfoot');
+      if (!tbody || !tfoot) return;
+
+      tbody.innerHTML = '';
+      if (entries.length){
+        entries.forEach(entry => {
+          const tr = document.createElement('tr');
+          tr.innerHTML = `<td>${escapeHtml(entry.id)}</td>` +
+            `<td>${escapeHtml(entry.name)}</td>` +
+            `<td>${formatNumber(entry.pagibig)}</td>` +
+            `<td>${formatNumber(entry.philhealth)}</td>` +
+            `<td>${formatNumber(entry.sss)}</td>` +
+            `<td>${formatNumber(entry.loanSSS)}</td>` +
+            `<td>${formatNumber(entry.loanPI)}</td>` +
+            `<td>${formatNumber(entry.total)}</td>`;
+          tbody.appendChild(tr);
+        });
+      }
+
+      tfoot.innerHTML = `<tr><th colspan="2">Grand Total</th>` +
+        `<td>${formatNumber(totals.pagibig)}</td>` +
+        `<td>${formatNumber(totals.philhealth)}</td>` +
+        `<td>${formatNumber(totals.sss)}</td>` +
+        `<td>${formatNumber(totals.loanSSS)}</td>` +
+        `<td>${formatNumber(totals.loanPI)}</td>` +
+        `<td>${formatNumber(totals.total)}</td></tr>`;
+
+      const hasData = entries.length > 0;
+      table.style.display = hasData ? 'table' : 'none';
+      if (emptyEl){
+        if (!month){
+          emptyEl.textContent = 'Select a month to view contribution totals.';
+        } else if (!hasData){
+          emptyEl.textContent = `No payroll data found for ${formatMonth(month) || month}.`;
+        }
+        emptyEl.style.display = hasData ? 'none' : '';
+      }
+
+      updateMeta(periods, month);
+    }
+
+    function ensureDefaultMonth(){
+      const monthInput = document.getElementById(MONTH_INPUT_ID);
+      if (!monthInput) return;
+      if (monthInput.value) return;
+      const fallback = getDefaultMonth();
+      if (fallback) monthInput.value = fallback;
+    }
+
+    function bind(){
+      const monthInput = document.getElementById(MONTH_INPUT_ID);
+      if (monthInput && !monthInput.__wired){
+        monthInput.addEventListener('change', render);
+        monthInput.__wired = true;
+      }
+    }
+
+    function init(){
+      ensureDefaultMonth();
+      bind();
+      render();
+    }
+
+    if (document.readyState === 'loading'){
+      document.addEventListener('DOMContentLoaded', init);
+    } else {
+      init();
+    }
+
+    try { window.renderContributionSummary = render; } catch (e) {}
+  })();
+  </script>
       </main>
     </div>
     <!-- Sidebar navigation behaviour -->
@@ -7892,7 +8205,8 @@ rows += `<tr class="allowance">
         employees: '👥',
         projects: '🚀',
         payroll: '💰',
-        totals: '📈'
+        totals: '📈',
+        contribSummary: '💳'
       };
       function setTitleFrom(btn){
         try{
@@ -8231,7 +8545,11 @@ const tabs = {
   panelEmployees: document.getElementById('panelEmployees'),
   panelProjects: document.getElementById('panelProjects'),
   tabPayroll: document.getElementById('tabPayroll'),
-  panelPayroll: document.getElementById('panelPayroll')
+  panelPayroll: document.getElementById('panelPayroll'),
+  tabProjectTotals: document.getElementById('tabProjectTotals'),
+  panelProjectTotals: document.getElementById('panelProjectTotals'),
+  tabContributionSummary: document.getElementById('tabContributionSummary'),
+  panelContributionSummary: document.getElementById('panelContributionSummary')
 };
 function showTab(name){
   Object.values(tabs).forEach(el => el && el.classList && el.classList.remove('active'));
@@ -8258,6 +8576,8 @@ function showTab(name){
   if(name==='projects'){ tabs.tabProjects.classList.add('active'); tabs.panelProjects.classList.add('active'); renderProjects(); }
 
   if(name==='payroll'){ tabs.tabPayroll && tabs.tabPayroll.classList.add('active'); tabs.panelPayroll && tabs.panelPayroll.classList.add('active'); }
+  if(name==='projectTotals'){ tabs.tabProjectTotals && tabs.tabProjectTotals.classList.add('active'); tabs.panelProjectTotals && tabs.panelProjectTotals.classList.add('active'); }
+  if(name==='contribSummary'){ tabs.tabContributionSummary && tabs.tabContributionSummary.classList.add('active'); tabs.panelContributionSummary && tabs.panelContributionSummary.classList.add('active'); }
 }
 window.__dtrFilterBackup = null;
 // When switching to the main (DTR) tab, render results and then toggle the edit
@@ -10337,8 +10657,10 @@ function restoreData(file) {
 
   // Extend tabs registry
   if (typeof tabs !== 'undefined' && tabs){
-    tabs.tabProjectTotals   = document.getElementById('tabProjectTotals');
-    tabs.panelProjectTotals = document.getElementById('panelProjectTotals');
+    tabs.tabProjectTotals   = tabs.tabProjectTotals || document.getElementById('tabProjectTotals');
+    tabs.panelProjectTotals = tabs.panelProjectTotals || document.getElementById('panelProjectTotals');
+    tabs.tabContributionSummary = tabs.tabContributionSummary || document.getElementById('tabContributionSummary');
+    tabs.panelContributionSummary = tabs.panelContributionSummary || document.getElementById('panelContributionSummary');
   }
 
   // Wrap showTab to support projectTotals
@@ -10350,6 +10672,11 @@ function restoreData(file) {
         if (tabs.tabProjectTotals) tabs.tabProjectTotals.classList.add('active');
         if (tabs.panelProjectTotals) tabs.panelProjectTotals.classList.add('active');
         renderProjectTotals();
+      }
+      if (name === 'contribSummary'){
+        if (tabs.tabContributionSummary) tabs.tabContributionSummary.classList.add('active');
+        if (tabs.panelContributionSummary) tabs.panelContributionSummary.classList.add('active');
+        try { if (typeof window.renderContributionSummary === 'function') window.renderContributionSummary(); } catch(e){}
       }
     };
   }
@@ -10380,6 +10707,24 @@ function restoreData(file) {
       try { renderResults(); } catch (e) {}
       showTab('projectTotals');
     });
+  }
+
+  const contribBtn = tabs && tabs.tabContributionSummary;
+  if (contribBtn && !contribBtn.__wired){
+    contribBtn.addEventListener('click', function(){
+      showTab('contribSummary');
+      try { if (typeof window.renderContributionSummary === 'function') window.renderContributionSummary(); } catch(e){}
+    });
+    contribBtn.__wired = true;
+  }
+
+  const contribSidebar = document.getElementById('old-tabContributionSummary');
+  if (contribSidebar && !contribSidebar.__wired){
+    contribSidebar.addEventListener('click', function(){
+      showTab('contribSummary');
+      try { if (typeof window.renderContributionSummary === 'function') window.renderContributionSummary(); } catch(e){}
+    });
+    contribSidebar.__wired = true;
   }
 
   // Re-render when date range changes while active
