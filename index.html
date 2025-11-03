@@ -3026,8 +3026,6 @@ function syncPeriodScopedData(){
   adjHrs = allAdjHrs[pk] || {};
   bantay = allBantay[pk] || {};
   currentPeriodKey = pk;
-  try { refreshCurrentDeductionColumnInclusions(); } catch(_){ }
-  try { applyDeductionColumnState(); } catch(_){ }
   saveCurrentPeriodDeductions();
   return true;
 }
@@ -3135,75 +3133,21 @@ const DEDUCTION_DATASET_SUFFIX = {
   valeWed: 'ValeWed',
   total: 'Total'
 };
-const DEDUCTION_COLUMN_KEY_SET = new Set(DEDUCTION_COLUMN_KEYS);
-const LS_DEDUCTION_COLUMN_VISIBILITY = 'deductionColumnVisibility';
-const DEDUCTION_DEFAULT_PERIOD_KEY = '__default';
-
-function sanitizeDeductionVisibilityObject(obj){
-  const clean = {};
-  if (!obj || typeof obj !== 'object') return clean;
-  DEDUCTION_COLUMN_KEYS.forEach(function(key){
-    if (obj[key] === false) {
-      clean[key] = false;
-    }
-  });
-  return clean;
-}
-
-function normalizeDeductionPeriodKey(rawKey){
-  if (typeof rawKey !== 'string') return DEDUCTION_DEFAULT_PERIOD_KEY;
-  const trimmed = rawKey.trim();
-  if (!trimmed || trimmed === '_') return DEDUCTION_DEFAULT_PERIOD_KEY;
-  return trimmed;
-}
-
-function activeDeductionPeriodKey(){
-  const raw = (typeof currentPeriodKey === 'string' && currentPeriodKey) ? currentPeriodKey : '';
-  const fallback = (typeof periodKey === 'function') ? periodKey() : '';
-  return normalizeDeductionPeriodKey(raw || fallback || '');
-}
-
-function getStoredDeductionInclusionsForPeriod(period){
-  const key = normalizeDeductionPeriodKey(period);
-  if (deductionColumnVisibilityByPeriod[key]) {
-    return Object.assign({}, deductionColumnVisibilityByPeriod[key]);
-  }
-  if (key !== DEDUCTION_DEFAULT_PERIOD_KEY && deductionColumnVisibilityByPeriod[DEDUCTION_DEFAULT_PERIOD_KEY]){
-    return Object.assign({}, deductionColumnVisibilityByPeriod[DEDUCTION_DEFAULT_PERIOD_KEY]);
-  }
-  return {};
-}
-
-let deductionColumnVisibilityByPeriod = {};
+let deductionColumnInclusions = {};
 try {
-  const stored = localStorage.getItem(LS_DEDUCTION_COLUMN_VISIBILITY);
+  const stored = localStorage.getItem('deductionColumnVisibility');
   if (stored) {
     const parsed = JSON.parse(stored);
     if (parsed && typeof parsed === 'object') {
-      const keys = Object.keys(parsed);
-      const legacyFormat = keys.some(key => DEDUCTION_COLUMN_KEY_SET.has(key));
-      if (legacyFormat) {
-        const legacy = sanitizeDeductionVisibilityObject(parsed);
-        if (Object.keys(legacy).length > 0) {
-          deductionColumnVisibilityByPeriod[DEDUCTION_DEFAULT_PERIOD_KEY] = legacy;
+      deductionColumnInclusions = {};
+      Object.keys(parsed).forEach(function(key){
+        if (parsed[key] === false) {
+          deductionColumnInclusions[key] = false;
         }
-      } else {
-        keys.forEach(function(key){
-          const clean = sanitizeDeductionVisibilityObject(parsed[key]);
-          if (Object.keys(clean).length > 0) {
-            deductionColumnVisibilityByPeriod[normalizeDeductionPeriodKey(key)] = clean;
-          }
-        });
-      }
+      });
     }
   }
-} catch (err) { deductionColumnVisibilityByPeriod = {}; }
-
-let deductionColumnInclusions = getStoredDeductionInclusionsForPeriod(activeDeductionPeriodKey());
-
-function refreshCurrentDeductionColumnInclusions(){
-  deductionColumnInclusions = getStoredDeductionInclusionsForPeriod(activeDeductionPeriodKey());
-}
+} catch (err) { deductionColumnInclusions = {}; }
 
 function isDeductionColumnIncluded(key){
   if (!key) return true;
@@ -3212,25 +3156,10 @@ function isDeductionColumnIncluded(key){
 
 function persistDeductionColumnInclusions(){
   try {
-    const periodKeyForStore = activeDeductionPeriodKey();
-    const cleanCurrent = sanitizeDeductionVisibilityObject(deductionColumnInclusions);
-    deductionColumnInclusions = cleanCurrent;
-    if (Object.keys(cleanCurrent).length === 0) {
-      delete deductionColumnVisibilityByPeriod[periodKeyForStore];
+    if (!deductionColumnInclusions || Object.keys(deductionColumnInclusions).length === 0){
+      localStorage.removeItem('deductionColumnVisibility');
     } else {
-      deductionColumnVisibilityByPeriod[periodKeyForStore] = cleanCurrent;
-    }
-    const payload = {};
-    Object.keys(deductionColumnVisibilityByPeriod).forEach(function(key){
-      const clean = sanitizeDeductionVisibilityObject(deductionColumnVisibilityByPeriod[key]);
-      if (Object.keys(clean).length > 0) {
-        payload[key] = clean;
-      }
-    });
-    if (Object.keys(payload).length === 0) {
-      localStorage.removeItem(LS_DEDUCTION_COLUMN_VISIBILITY);
-    } else {
-      localStorage.setItem(LS_DEDUCTION_COLUMN_VISIBILITY, JSON.stringify(payload));
+      localStorage.setItem('deductionColumnVisibility', JSON.stringify(deductionColumnInclusions));
     }
   } catch (err) {}
 }
@@ -3297,7 +3226,6 @@ function updateDeductionCellDisplay(cell, raw, effective, included){
 }
 
 function applyDeductionColumnState(){
-  try { refreshCurrentDeductionColumnInclusions(); } catch(_){ }
   const toggles = document.querySelectorAll('#deductionColumnToggles input[data-col]');
   toggles.forEach(function(input){
     const col = input.getAttribute('data-col');
