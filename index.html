@@ -10008,42 +10008,6 @@ async function initApp(){
   renderResults();
 }
 initApp();
-document.addEventListener('DOMContentLoaded', function () {
-  const dlBtn = document.getElementById('downloadEmployeesCSV');
-  if (dlBtn) {
-    dlBtn.addEventListener('click', () => {
-      const header = ['ID','Name','Hourly Rate','Company','Bank Account','Schedule Name','Schedule ID','Project Name','Project ID','Deduct Pag-IBIG','Deduct PhilHealth','Deduct SSS'];
-      const rows = [header];
-      Object.keys(storedEmployees).forEach(id => {
-        const emp = storedEmployees[id] || {};
-        const schedId = emp.scheduleId || '';
-        const schedName = (storedSchedules && storedSchedules[schedId]?.name) || '';
-        const projId = emp.projectId || '';
-        const projName = (storedProjects && storedProjects[projId]?.name) || '';
-        const bank = emp.bankAccount || '';
-        const company = emp.company || COMPANY_OPTIONS[0] || '';
-        const flags = (typeof contribFlags !== 'undefined' && contribFlags[id]) || {};
-        const fPI = (flags.pagibig !== false) ? 'Yes' : 'No';
-        const fPH = (flags.philhealth !== false) ? 'Yes' : 'No';
-        const fSSS = (flags.sss !== false) ? 'Yes' : 'No';
-        rows.push([id, emp.name || '', emp.hourlyRate || '', company, bank, schedName, schedId, projName, projId, fPI, fPH, fSSS]);
-      });
-      const csv = rows.map(r => r.map(v => {
-        const s = String(v ?? '');
-        return (s.includes(',') || s.includes('"') || s.includes('\\n'))
-          ? '"' + s.replace(/"/g,'""') + '"'
-          : s;
-      }).join(',')).join('\\n');
-      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-      const a = document.createElement('a');
-      a.href = URL.createObjectURL(blob);
-      a.download = 'employees_backup.csv';
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-    });
-  }
-});
   </script>
   <script>
 function computeHoursForDateRange(startDate, endDate) {
