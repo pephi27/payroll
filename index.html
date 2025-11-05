@@ -9026,7 +9026,7 @@ function renderEmployees(){
     const tr = document.createElement('tr');
     tr.innerHTML = `<td>${id}</td>
       <td><input class="cell emp-name-input" data-id="${id}" value="${emp.name}"></td>
-      <td><input class="cell emp-rate-input" type="number" step="0.01" min="0" data-id="${id}" value="${emp.hourlyRate != null ? emp.hourlyRate : ''}" disabled></td>
+      <td><input class="cell emp-rate-input" type="number" step="0.01" min="0" data-id="${id}" value="${emp.hourlyRate != null ? emp.hourlyRate : ''}"></td>
       <td><select class="emp-sel-schedule" data-id="${id}">${scheduleOptionsHtml}</select></td>
       <td><select class="emp-sel-project" data-id="${id}">${projectOptionsHtml}</select></td>
       <td><select class="emp-company-select" data-id="${id}">${companyOptionsHtml}</select></td>
