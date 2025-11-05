@@ -8120,11 +8120,15 @@ rows += `<tr class="allowance">
     function computeSummary(monthValue){
       const normalized = (monthValue || '').slice(0,7);
       const history = readHistory();
-      const periods = [];
-      const seenPeriods = new Set();
+      const periodMeta = new Map();
       const map = new Map();
       if (!normalized){
-        return { entries: [], totals: { pagibig:0, philhealth:0, sss:0, loanSSS:0, loanPI:0, total:0 }, periods: [], month: normalized };
+        return {
+          entries: [],
+          totals: { pagibig:0, philhealth:0, sss:0, loanSSS:0, loanPI:0, total:0, perPeriod: [] },
+          periods: [],
+          month: normalized
+        };
       }
       history.forEach(snap => {
         if (!snap) return;
@@ -8134,44 +8138,104 @@ rows += `<tr class="allowance">
         const start = toIsoDate(snap.startDate) || (snap.startDate || '');
         const end = toIsoDate(snap.endDate) || (snap.endDate || '');
         const key = `${start}__${end}`;
-        if (!seenPeriods.has(key)){
-          seenPeriods.add(key);
-          periods.push({ start, end });
+        if (!periodMeta.has(key)){
+          periodMeta.set(key, { key, start, end });
         }
         const rows = Array.isArray(snap.rows) ? snap.rows : [];
         rows.forEach(row => {
           if (!row) return;
           const id = row.id != null ? String(row.id).trim() : '';
           if (!id) return;
-          const record = map.get(id) || { id, name: '', pagibig:0, philhealth:0, sss:0, loanSSS:0, loanPI:0 };
+          const record = map.get(id) || {
+            id,
+            name: '',
+            pagibig: 0,
+            philhealth: 0,
+            sss: 0,
+            loanSSS: 0,
+            loanPI: 0,
+            byPeriod: {}
+          };
           const name = row.name != null ? String(row.name).trim() : '';
           if (name && !record.name) record.name = name;
-          record.pagibig += toNumber(row.pagibig);
-          record.philhealth += toNumber(row.philhealth);
-          record.sss += toNumber(row.sss);
-          record.loanSSS += toNumber(row.loanSSS);
-          record.loanPI += toNumber(row.loanPI);
+          const pagibigVal = toNumber(row.pagibig);
+          const philVal = toNumber(row.philhealth);
+          const sssVal = toNumber(row.sss);
+          const loanSssVal = toNumber(row.loanSSS);
+          const loanPiVal = toNumber(row.loanPI);
+          record.pagibig += pagibigVal;
+          record.philhealth += philVal;
+          record.sss += sssVal;
+          record.loanSSS += loanSssVal;
+          record.loanPI += loanPiVal;
+          const perPeriod = record.byPeriod[key] || { pagibig:0, philhealth:0, sss:0, loanSSS:0, loanPI:0 };
+          perPeriod.pagibig += pagibigVal;
+          perPeriod.philhealth += philVal;
+          perPeriod.sss += sssVal;
+          perPeriod.loanSSS += loanSssVal;
+          perPeriod.loanPI += loanPiVal;
+          record.byPeriod[key] = perPeriod;
           map.set(id, record);
         });
       });
+      const orderedPeriods = Array.from(periodMeta.values()).sort((a, b) => {
+        const startA = (a.start || '').trim();
+        const startB = (b.start || '').trim();
+        const compStart = startA.localeCompare(startB);
+        if (compStart) return compStart;
+        return (a.end || '').trim().localeCompare((b.end || '').trim());
+      }).map((period, idx) => ({ ...period, index: idx }));
+      const periodKeys = orderedPeriods.map(p => p.key);
       const entries = Array.from(map.values()).map(entry => {
+        const perPeriod = periodKeys.map(key => {
+          const values = entry.byPeriod && entry.byPeriod[key] ? entry.byPeriod[key] : {};
+          return {
+            pagibig: values.pagibig || 0,
+            philhealth: values.philhealth || 0,
+            sss: values.sss || 0,
+            loanSSS: values.loanSSS || 0,
+            loanPI: values.loanPI || 0
+          };
+        });
         const total = entry.pagibig + entry.philhealth + entry.sss + entry.loanSSS + entry.loanPI;
-        return { ...entry, name: entry.name || entry.id, total };
+        const { byPeriod, ...rest } = entry;
+        return { ...rest, name: rest.name || rest.id, total, perPeriod };
       }).sort((a,b) => {
         const nameComp = a.name.localeCompare(b.name, undefined, { sensitivity: 'base' });
         if (nameComp) return nameComp;
         return a.id.localeCompare(b.id, undefined, { sensitivity: 'base' });
       });
-      const totals = entries.reduce((acc, entry) => {
-        acc.pagibig += entry.pagibig;
-        acc.philhealth += entry.philhealth;
-        acc.sss += entry.sss;
-        acc.loanSSS += entry.loanSSS;
-        acc.loanPI += entry.loanPI;
-        acc.total += entry.total;
-        return acc;
-      }, { pagibig:0, philhealth:0, sss:0, loanSSS:0, loanPI:0, total:0 });
-      return { entries, totals, periods, month: normalized };
+      const totals = {
+        pagibig: 0,
+        philhealth: 0,
+        sss: 0,
+        loanSSS: 0,
+        loanPI: 0,
+        total: 0,
+        perPeriod: periodKeys.map(() => ({ pagibig:0, philhealth:0, sss:0, loanSSS:0, loanPI:0 }))
+      };
+      entries.forEach(entry => {
+        totals.pagibig += entry.pagibig;
+        totals.philhealth += entry.philhealth;
+        totals.sss += entry.sss;
+        totals.loanSSS += entry.loanSSS;
+        totals.loanPI += entry.loanPI;
+        totals.total += entry.total;
+        entry.perPeriod.forEach((periodData, idx) => {
+          const slot = totals.perPeriod[idx];
+          if (!slot) return;
+          slot.pagibig += periodData.pagibig;
+          slot.philhealth += periodData.philhealth;
+          slot.sss += periodData.sss;
+          slot.loanSSS += periodData.loanSSS;
+          slot.loanPI += periodData.loanPI;
+        });
+      });
+      totals.perPeriod.forEach(slot => {
+        if (!slot) return;
+        slot.total = slot.pagibig + slot.philhealth + slot.sss + slot.loanSSS + slot.loanPI;
+      });
+      return { entries, totals, periods: orderedPeriods, month: normalized };
     }
 
     function formatNumber(value){
@@ -8190,10 +8254,11 @@ rows += `<tr class="allowance">
         metaEl.textContent = `No payroll history snapshots were found for ${label || monthValue}.`;
         return;
       }
-      const list = periods.map(period => {
+      const list = periods.map((period, idx) => {
         const start = period.start || '—';
         const end = period.end || '—';
-        return `${start} – ${end}`;
+        const label = `Week ${idx + 1}`;
+        return `${label}: ${start} – ${end}`;
       });
       const labelSafe = escapeHtml(label || monthValue);
       const joined = list.map(escapeHtml).join(', ');
@@ -8207,33 +8272,72 @@ rows += `<tr class="allowance">
       const table = document.getElementById(TABLE_ID);
       const emptyEl = document.getElementById(EMPTY_ID);
       if (!table) return;
+      const thead = table.querySelector('thead');
       const tbody = table.querySelector('tbody');
       const tfoot = table.querySelector('tfoot');
-      if (!tbody || !tfoot) return;
+      if (!thead || !tbody || !tfoot) return;
+
+      const categories = [
+        { key: 'pagibig', label: 'Pag-IBIG' },
+        { key: 'philhealth', label: 'PhilHealth' },
+        { key: 'sss', label: 'SSS' },
+        { key: 'loanSSS', label: 'SSS Loan' },
+        { key: 'loanPI', label: 'Pag-IBIG Loan' }
+      ];
+      const periodList = Array.isArray(periods) ? periods : [];
+      const perPeriodTotals = Array.isArray(totals.perPeriod) ? totals.perPeriod : [];
+      const formatPeriodRange = (start, end) => {
+        if (start && end) return `${start} – ${end}`;
+        return start || end || '';
+      };
+
+      const headerCells = [];
+      headerCells.push('<th>Employee ID</th>');
+      headerCells.push('<th>Name</th>');
+      categories.forEach(cat => {
+        periodList.forEach((period, idx) => {
+          const headerLabel = `${cat.label} W${idx + 1}`;
+          const range = formatPeriodRange(period.start, period.end);
+          const titleAttr = range ? ` title="${escapeHtml(range)}"` : '';
+          headerCells.push(`<th${titleAttr}>${escapeHtml(headerLabel)}</th>`);
+        });
+        headerCells.push(`<th>${escapeHtml(cat.label + ' Total')}</th>`);
+      });
+      headerCells.push('<th>Grand Total</th>');
+      thead.innerHTML = `<tr>${headerCells.join('')}</tr>`;
 
       tbody.innerHTML = '';
       if (entries.length){
         entries.forEach(entry => {
           const tr = document.createElement('tr');
-          tr.innerHTML = `<td>${escapeHtml(entry.id)}</td>` +
-            `<td>${escapeHtml(entry.name)}</td>` +
-            `<td>${formatNumber(entry.pagibig)}</td>` +
-            `<td>${formatNumber(entry.philhealth)}</td>` +
-            `<td>${formatNumber(entry.sss)}</td>` +
-            `<td>${formatNumber(entry.loanSSS)}</td>` +
-            `<td>${formatNumber(entry.loanPI)}</td>` +
-            `<td>${formatNumber(entry.total)}</td>`;
+          const cells = [];
+          cells.push(`<td>${escapeHtml(entry.id)}</td>`);
+          cells.push(`<td>${escapeHtml(entry.name)}</td>`);
+          categories.forEach(cat => {
+            periodList.forEach((_, idx) => {
+              const periodData = entry.perPeriod && entry.perPeriod[idx] ? entry.perPeriod[idx] : {};
+              const value = periodData[cat.key] || 0;
+              cells.push(`<td>${formatNumber(value)}</td>`);
+            });
+            cells.push(`<td>${formatNumber(entry[cat.key] || 0)}</td>`);
+          });
+          cells.push(`<td>${formatNumber(entry.total)}</td>`);
+          tr.innerHTML = cells.join('');
           tbody.appendChild(tr);
         });
       }
 
-      tfoot.innerHTML = `<tr><th colspan="2">Grand Total</th>` +
-        `<td>${formatNumber(totals.pagibig)}</td>` +
-        `<td>${formatNumber(totals.philhealth)}</td>` +
-        `<td>${formatNumber(totals.sss)}</td>` +
-        `<td>${formatNumber(totals.loanSSS)}</td>` +
-        `<td>${formatNumber(totals.loanPI)}</td>` +
-        `<td>${formatNumber(totals.total)}</td></tr>`;
+      const totalCells = [];
+      categories.forEach(cat => {
+        periodList.forEach((_, idx) => {
+          const slot = perPeriodTotals[idx] || {};
+          const value = slot[cat.key] || 0;
+          totalCells.push(`<td>${formatNumber(value)}</td>`);
+        });
+        totalCells.push(`<td>${formatNumber(totals[cat.key] || 0)}</td>`);
+      });
+      totalCells.push(`<td>${formatNumber(totals.total || 0)}</td>`);
+      tfoot.innerHTML = `<tr><th colspan="2">Grand Total</th>${totalCells.join('')}</tr>`;
 
       const hasData = entries.length > 0;
       table.style.display = hasData ? 'table' : 'none';
