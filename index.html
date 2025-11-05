@@ -3120,6 +3120,13 @@ function roundToCents(value){
   return Math.round(num * 100) / 100;
 }
 
+function formatDeductionInputValue(value){
+  const num = Number(value);
+  if (!Number.isFinite(num)) return '';
+  const rounded = roundToCents(num);
+  return Math.abs(rounded) < 0.005 ? '' : rounded.toFixed(2);
+}
+
 function splitAdjustmentValue(value){
   const rounded = roundToCents(value);
   const positive = rounded > 0 ? +rounded.toFixed(2) : 0;
@@ -3466,7 +3473,7 @@ function renderDeductionsTable(){
         input.setAttribute('inputmode', 'decimal');
         let displayValue = Number(editableRawValues[key] || 0);
         if (!Number.isFinite(displayValue)) displayValue = 0;
-        input.value = displayValue.toFixed(2);
+        input.value = formatDeductionInputValue(displayValue);
         if (key === 'adjustments') {
           input.dataset.adjustmentRaw = rawAdjustment.toFixed(2);
           input.setAttribute('aria-label', `Adjustments deduction for ${emp.name}`);
@@ -3555,7 +3562,7 @@ document.addEventListener('change', async (event) => {
   let value = parseFloat(input.value);
   if (!Number.isFinite(value) || value < 0) value = 0;
   value = roundToCents(value);
-  input.value = value.toFixed(2);
+  input.value = formatDeductionInputValue(value);
   let needsSave = false;
   let adjustmentsChanged = false;
   switch (key) {
