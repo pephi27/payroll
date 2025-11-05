@@ -1041,6 +1041,21 @@ window.addEventListener('load', dashReports);
 #deductionsTab .column-toggle-controls label{ display:flex; align-items:center; gap:0.35rem; }
 #deductionsTab [data-col].deduction-excluded{ opacity:0.45; position:relative; }
 #deductionsTab [data-col].deduction-excluded::after{ content:'Excluded'; font-size:0.65rem; font-weight:600; letter-spacing:0.03em; text-transform:uppercase; color:#c2410c; position:absolute; inset:auto 0.25rem 0.15rem auto; background:rgba(255,247,237,0.9); padding:0.1rem 0.3rem; border-radius:0.35rem; }
+#deductionsTab #deductionsTable td.editable-deduction{ padding:4px 8px; }
+#deductionsTab #deductionsTable td.editable-deduction input.deduction-input{
+  width:100%;
+  box-sizing:border-box;
+  text-align:right;
+  padding:6px 8px;
+  border:1px solid #cbd5e1;
+  border-radius:6px;
+  background:#ffffff;
+  color:#0f172a;
+  font-size:13px;
+}
+#deductionsTab #deductionsTable td.editable-deduction input.deduction-input.deduction-excluded{
+  opacity:0.6;
+}
 #payrollTable .deduction-excluded{ opacity:0.55; position:relative; }
 #payrollTable .deduction-excluded::after{ content:'Excluded'; font-size:0.6rem; font-weight:600; letter-spacing:0.02em; text-transform:uppercase; color:#9a3412; position:absolute; inset:auto 0.2rem 0.1rem auto; background:rgba(254,242,242,0.9); padding:0.1rem 0.25rem; border-radius:0.3rem; }
 </style>
@@ -2482,13 +2497,6 @@ window.addEventListener('load', dashReports);
     <div class="tab" id="deductionsTab">
      <div id="dedMainSection" class="subtab-panel active">
      <div class="controls">
-      <label>
-       Upload Excel/CSV (ID, Pag-IBIG Loan, SSS Loan, Vale, Wed Vale):
-       <br/>
-       <input accept=".xlsx,.xls,.csv" id="deductionsFileInput" type="file"/>
-      </label>
-      <button id="exportDeductionsCSV">Export CSV</button>
-
       <!-- Divisor selector for splitting deductions across pay periods (Deductions tab) -->
       <label>
        Divide Deductions By
@@ -2515,14 +2523,10 @@ window.addEventListener('load', dashReports);
       </div>
      </div>
      <div class="section note">
-      <strong>File Format:</strong> Use the exported CSV from this table, then edit only these columns:
-      <br/>â€¢ <strong>Column 6:</strong> SSS Loan (edit this value)
-      <br/>â€¢ <strong>Column 7:</strong> Pag-IBIG Loan (edit this value)
-      <br/>â€¢ <strong>Column 8:</strong> Account (edit this value)
-      <br/>â€¢ <strong>Column 9:</strong> Adjustments (auto-filled from negative manual adjustments, edit if needed)
-      <br/>â€¢ <strong>Column 10:</strong> Wed Vale (edit this value)
-      <br/><strong>Important:</strong> Don't change columns 1-5 or 11 (they're calculated automatically)
-      <br/><strong>Note:</strong> If employee names are split into 2 columns, the system automatically adjusts
+      Columns 6 to 10 are editable directly in this table. Enter the full loan or vale amount (before it is divided across the
+      payroll periods) and use a positive value for deductions under Adjustments. All values are saved for the active payroll
+      period and will carry over automatically to newly created periods without altering any historical payroll data. Set a field
+      to 0 to clear it for the current period.
      </div>
      <table id="deductionsTable">
       <thead>
@@ -3124,6 +3128,7 @@ function splitAdjustmentValue(value){
 }
 
 const DEDUCTION_COLUMN_KEYS = ['pagibig','philhealth','sss','loanSSS','loanPI','vale','adjustments','valeWed','total'];
+const DEDUCTION_EDITABLE_KEYS = new Set(['loanSSS','loanPI','vale','adjustments','valeWed']);
 const DEDUCTION_DATASET_SUFFIX = {
   pagibig: 'Pagibig',
   philhealth: 'Philhealth',
@@ -3299,15 +3304,34 @@ function updateDeductionCellDisplay(cell, raw, effective, included){
   const cleanEffective = Number.isFinite(effective) ? roundToCents(effective) : 0;
   cell.setAttribute('data-raw', cleanRaw);
   cell.setAttribute('data-effective', cleanEffective);
-  if (cell.tagName === 'TD' || cell.tagName === 'TH') {
-    cell.textContent = formatDeductionDisplay(cleanEffective);
+  const input = cell.querySelector('input.deduction-input');
+  if (!input) {
+    if (cell.tagName === 'TD' || cell.tagName === 'TH') {
+      cell.textContent = formatDeductionDisplay(cleanEffective);
+    }
+    if (!included && Math.abs(cleanRaw) > 0.004) {
+      cell.classList.add('deduction-excluded');
+      cell.setAttribute('title', `Excluded (was ${cleanRaw.toFixed(2)})`);
+    } else {
+      cell.classList.remove('deduction-excluded');
+      cell.removeAttribute('title');
+    }
+    return;
   }
+  try {
+    input.dataset.effectiveValue = cleanEffective.toFixed(2);
+    input.dataset.perPeriodValue = cleanRaw.toFixed(2);
+  } catch (_) {}
   if (!included && Math.abs(cleanRaw) > 0.004) {
     cell.classList.add('deduction-excluded');
     cell.setAttribute('title', `Excluded (was ${cleanRaw.toFixed(2)})`);
+    input.classList.add('deduction-excluded');
+    input.setAttribute('title', `Excluded (was ${cleanRaw.toFixed(2)})`);
   } else {
     cell.classList.remove('deduction-excluded');
     cell.removeAttribute('title');
+    input.classList.remove('deduction-excluded');
+    input.removeAttribute('title');
   }
 }
 
@@ -3362,11 +3386,12 @@ function renderDeductionsTable(){
     const rH = Number(regHours[emp.id] ?? 0);
     const rate = Number((storedEmployees[emp.id]?.hourlyRate) ?? (payrollRates[emp.id] ?? 0));
     payrollRates[emp.id] = isNaN(rate) ? 0 : rate;
-    const lSSS = Number(loanSSS[emp.id] ?? 0);
-    const lPI = Number(loanPI[emp.id] ?? 0);
-    const v = Number(vale[emp.id] ?? 0);
-    const vW = Number(valeWed[emp.id] ?? 0);
-    const adjParts = splitAdjustmentValue(adjustments[emp.id]);
+    const lSSS = roundToCents(loanSSS[emp.id] ?? 0);
+    const lPI = roundToCents(loanPI[emp.id] ?? 0);
+    const v = roundToCents(vale[emp.id] ?? 0);
+    const vW = roundToCents(valeWed[emp.id] ?? 0);
+    const rawAdjustment = roundToCents(adjustments[emp.id] ?? 0);
+    const adjParts = splitAdjustmentValue(rawAdjustment);
     const adjDeduction = adjParts.deduction;
     const regPay = +(rH * rate).toFixed(2);
     // Use dynamic contribution tables for Pag-IBIG and PhilHealth.  Determine the
@@ -3394,6 +3419,13 @@ function renderDeductionsTable(){
     };
     rowRaw.total = roundToCents(pagibig + philhealth + sss + sssLoan + piLoan + v + vW + adjDeduction);
     const rowEffective = computeEffectiveDeductionValues(rowRaw);
+    const editableRawValues = {
+      loanSSS: lSSS,
+      loanPI: lPI,
+      vale: v,
+      adjustments: adjDeduction,
+      valeWed: vW
+    };
     const tr = document.createElement('tr');
     const idCell = document.createElement('td');
     idCell.setAttribute('data-col', 'id');
@@ -3410,7 +3442,28 @@ function renderDeductionsTable(){
       td.setAttribute('data-col', key);
       const raw = Object.prototype.hasOwnProperty.call(rowRaw, key) ? rowRaw[key] : 0;
       const effective = Object.prototype.hasOwnProperty.call(rowEffective, key) ? rowEffective[key] : 0;
-      updateDeductionCellDisplay(td, raw, effective, isDeductionColumnIncluded(key));
+      if (DEDUCTION_EDITABLE_KEYS.has(key)) {
+        td.classList.add('editable-deduction');
+        const input = document.createElement('input');
+        input.type = 'number';
+        input.step = '0.01';
+        input.min = '0';
+        input.classList.add('deduction-input');
+        input.dataset.empId = emp.id;
+        input.dataset.col = key;
+        input.setAttribute('inputmode', 'decimal');
+        let displayValue = Number(editableRawValues[key] || 0);
+        if (!Number.isFinite(displayValue)) displayValue = 0;
+        input.value = displayValue.toFixed(2);
+        if (key === 'adjustments') {
+          input.dataset.adjustmentRaw = rawAdjustment.toFixed(2);
+          input.setAttribute('aria-label', `Adjustments deduction for ${emp.name}`);
+        }
+        td.appendChild(input);
+        updateDeductionCellDisplay(td, raw, effective, isDeductionColumnIncluded(key));
+      } else {
+        updateDeductionCellDisplay(td, raw, effective, isDeductionColumnIncluded(key));
+      }
       tr.appendChild(td);
     });
     dtbody.appendChild(tr);
@@ -3452,257 +3505,89 @@ document.addEventListener('DOMContentLoaded', function(){
     }
   } catch (err) {}
 });
-document.addEventListener('click', (e)=>{
-  if(e.target && e.target.id === 'exportDeductionsCSV'){
-    try {
-      const header = ['ID','Name','Pag-IBIG','PhilHealth','SSS','SSS Loan','Pag-IBIG Loan','Account','Adjustments','Wed Vale','Total Deductions'];
-      const rows = [header];
 
-      const div = Number(typeof divisor !== 'undefined' ? divisor : 1) || 1;
-
-      (employeeList || []).forEach(emp => {
-        const id = emp.id;
-        const name = (typeof storedEmployees !== 'undefined' && storedEmployees && storedEmployees[id] && storedEmployees[id].name) ? storedEmployees[id].name : (emp.name || '');
-
-        const rate = Number((typeof storedEmployees !== 'undefined' && storedEmployees?.[id]?.hourlyRate) ?? (typeof payrollRates !== 'undefined' ? payrollRates?.[id] : 0)) || 0;
-        const rH   = Number((typeof regHours !== 'undefined' ? regHours?.[id] : 0)) || 0;
-        const regPay = +(rH * rate).toFixed(2);
-
-        const monthly  = rate * 8 * 24;
-        const piRate   = (typeof pagibigRateByMonthly === 'function') ? pagibigRateByMonthly(monthly) : 0;
-        const phRate   = (typeof philhealthRateByMonthly === 'function') ? philhealthRateByMonthly(monthly) : 0;
-        const sssFull  = (typeof sssShareByMonthly === 'function') ? sssShareByMonthly(monthly) : 0;
-
-        const flags = (typeof contribFlags !== 'undefined' && contribFlags?.[id]) || {};
-
-        const pagibig    = (flags.pagibig === false) ? 0 : +((regPay * piRate).toFixed(2));
-        const philhealth = (flags.philhealth === false) ? 0 : +((regPay * phRate).toFixed(2));
-        const sssPer     = (flags.sss === false) ? 0 : +((sssFull / div).toFixed(2));
-
-        // RAW totals from storage (NOT divided) for editable columns
-        const sssLoanRaw = +(Number((typeof loanSSS !== 'undefined' ? loanSSS?.[id] : 0)) || 0).toFixed(2);
-        const piLoanRaw  = +(Number((typeof loanPI  !== 'undefined' ? loanPI?.[id]  : 0)) || 0).toFixed(2);
-        const valeRaw    = +(Number((typeof vale   !== 'undefined' ? vale?.[id]   : 0)) || 0).toFixed(2);
-        const adjRawVal  = Number((typeof adjustments !== 'undefined' ? adjustments?.[id] : 0)) || 0;
-        const adjSplit   = splitAdjustmentValue(adjRawVal);
-        const adjDeduct  = adjSplit.deduction;
-        const wedValeRaw = +(Number((typeof valeWed!== 'undefined' ? valeWed?.[id]: 0)) || 0).toFixed(2);
-
-        // Total per-period (loans contribute their per-period share here)
-        const loanSssPer = +((sssLoanRaw / div)).toFixed(2);
-        const loanPiPer  = +((piLoanRaw / div)).toFixed(2);
-        const rowRawForTotals = {
-          pagibig,
-          philhealth,
-          sss: sssPer,
-          loanSSS: loanSssPer,
-          loanPI: loanPiPer,
-          vale: valeRaw,
-          adjustments: adjDeduct,
-          valeWed: wedValeRaw
-        };
-        const rowEffective = computeEffectiveDeductionValues(rowRawForTotals);
-        const pagibigApplied = roundToCents(rowEffective.pagibig || 0);
-        const philhealthApplied = roundToCents(rowEffective.philhealth || 0);
-        const sssApplied = roundToCents(rowEffective.sss || 0);
-        const totalPer  = roundToCents(rowEffective.total || 0);
-
-        rows.push([
-          id, name,
-          pagibigApplied.toFixed(2),
-          philhealthApplied.toFixed(2),
-          sssApplied.toFixed(2),
-          sssLoanRaw.toFixed(2),
-          piLoanRaw.toFixed(2),
-          valeRaw.toFixed(2),
-          adjDeduct.toFixed(2),
-          wedValeRaw.toFixed(2),
-          totalPer.toFixed(2)
-        ]);
-      });
-
-      const csv = rows.map(r => r.map(s => {
-        s = String(s ?? '');
-        return /[",\n]/.test(s) ? '"' + s.replace(/"/g,'""') + '"' : s;
-      }).join(',')).join('\n');
-
-      const blob = new Blob([csv], {type:'text/csv'});
-      const url  = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url; a.download = 'deductions.csv';
-      document.body.appendChild(a); a.click(); a.remove();
-    } catch(err){
-      console.error('Export (Deductions) failed:', err);
-      alert('Export failed. Please try again.');
+function findPayrollRowById(empId){
+  const rows = document.querySelectorAll('#payrollTable tbody tr');
+  for (const tr of rows){
+    const firstCell = tr.cells && tr.cells[0];
+    if (firstCell && firstCell.textContent && firstCell.textContent.trim() === empId) {
+      return tr;
     }
   }
-});document.addEventListener('change', (e)=>{
-  if(e.target && e.target.id === 'deductionsFileInput'){
-    const file = e.target.files && e.target.files[0]; 
-    if (!file) return;
-    
-    const reader = new FileReader();
-    reader.onload = async function(e) {
-      try {
-        let rows = [];
-        
-        // Check if employeeList is available
-        if (!employeeList || employeeList.length === 0) {
-          alert('No employees found. Please add employees first in the Employees tab.');
-          return;
-        }
-        
-        console.log('Available employees:', employeeList.map(e => e.id));
-        
-        if (file.name.toLowerCase().endsWith('.csv')) {
-          // Handle CSV files
-          
-          const text = String(e.target.result || '');
-          // Robust CSV parsing with quoted field support
-          rows = text.split(/\r?\n/).filter(line => line.trim().length>0).map(line => {
-            const out = []; let cur = ''; let inQ = false;
-            for (let i=0;i<line.length;i++){
-              const ch = line[i]; const nx = line[i+1];
-              if (ch === '"'){
-                if (inQ && nx === '"'){ cur += '"'; i++; } 
-                else { inQ = !inQ; }
-              } else if (ch === ',' && !inQ){
-                out.push(cur); cur = '';
-              } else {
-                cur += ch;
-              }
-            }
-            out.push(cur);
-            return out.map(cell => cell.trim());
-          });
-    } else {
-          // Handle Excel files
-          const data = new Uint8Array(e.target.result);
-          const workbook = XLSX.read(data, { type: 'array' });
-          const sheet = workbook.Sheets[workbook.SheetNames[0]];
-          rows = XLSX.utils.sheet_to_json(sheet, { header: 1 });
-        }
-        
-        if (rows.length < 2) {
-          alert('File must have at least a header row and one data row.');
-          return;
-        }
-        
-        // Process the data
-        let updated = 0;
-        let errors = [];
-        
-        console.log('Processing file with rows:', rows.length);
-        console.log('First row (headers):', rows[0]);
-        console.log('Second row (sample data):', rows[1]);
-        
-        
-        // Map column indexes by header names to tolerate column reordering
-        const header = rows[0].map(h => String(h).trim().toLowerCase());
-        const idxId = header.indexOf('id');
-        const idxName = header.indexOf('name');
-        const idxSSSLoan = header.indexOf('sss loan');
-        const idxPagibigLoan = header.indexOf('pag-ibig loan');
-        const idxVale = header.indexOf('vale');
-        const idxAccount = header.indexOf('account');
-        const idxAdjustments = header.indexOf('adjustments');
-        const idxAdjust = header.indexOf('adjustment');
-        const idxWedVale = header.indexOf('wed vale');
-        const IDX = {
-          id: idxId,
-          name: idxName,
-          sssloan: idxSSSLoan,
-          pagibigloan: idxPagibigLoan,
-          vale: (idxAccount >= 0 ? idxAccount : idxVale),
-          adjustments: (idxAdjustments >= 0 ? idxAdjustments : idxAdjust),
-          wedvale: idxWedVale
-        };
-        if (IDX.id < 0) { alert('Upload missing column: id'); return; }
-        if (IDX.sssloan < 0) { alert('Upload missing column: sss loan'); return; }
-        if (IDX.pagibigloan < 0) { alert('Upload missing column: pag-ibig loan'); return; }
-        if (IDX.vale < 0) { alert('Upload missing column: account (or vale)'); return; }
-        if (IDX.wedvale < 0) { alert('Upload missing column: wed vale'); return; }
-        const hasAdjustmentsCol = IDX.adjustments >= 0;
-        if (!hasAdjustmentsCol) {
-          console.warn('Upload missing column: adjustments – existing adjustments will remain unchanged.');
-        }
-        for (let i = 1; i < rows.length; i++) {
-          const row = rows[i];
-          if (row.length < 10) {
-            console.log(`Row ${i} too short (${row.length} columns):`, row);
-            continue;
-          }
-          
-          const empId = String(row[0] || '').trim();
-          
-          // Only read the specific columns we need for loans and vales
-          // Skip the calculated fields (Pag-IBIG, PhilHealth, SSS, Total Deductions)
-          // Note: If name is split into 2 columns, adjust accordingly
-          const sssLoan = parseFloat(row[IDX.sssloan]) || 0; const pagibigLoan = parseFloat(row[IDX.pagibigloan]) || 0; const valeVal = parseFloat(row[IDX.vale]) || 0; const adjVal = hasAdjustmentsCol ? (parseFloat(row[IDX.adjustments]) || 0) : (adjustments[empId] || 0); const wedValeVal = parseFloat(row[IDX.wedvale]) || 0;       // Column 10: Wed Vale (was 9)
+  return null;
+}
 
-          console.log(`Row ${i}: ID=${empId}, SSS Loan=${sssLoan}, Pag-IBIG Loan=${pagibigLoan}, Vale=${valeVal}, Adjustments=${hasAdjustmentsCol ? adjVal : '(unchanged)'}, Wed Vale=${wedValeVal}`);
-          
-          if (!empId) continue;
-          
-          // Check if employee exists in employeeList
-          const employeeExists = employeeList.some(emp => emp.id === empId);
-          if (employeeExists) {
-            // Update the loan and vale amounts
-            loanPI[empId] = pagibigLoan;
-            loanSSS[empId] = sssLoan;
-            vale[empId] = valeVal;
-            if (hasAdjustmentsCol) {
-              if (!isNaN(adjVal) && adjVal !== 0) {
-                adjustments[empId] = +(adjVal.toFixed(2));
-              } else {
-                delete adjustments[empId];
-              }
-            }
-            valeWed[empId] = wedValeVal;
-            updated++;
-            const updateLog = { pagibigLoan, sssLoan, vale: valeVal, wedVale: wedValeVal };
-            if (hasAdjustmentsCol) updateLog.adjustments = adjVal;
-            console.log(`Updated employee ${empId}:`, updateLog);
-          } else {
-            errors.push(`Employee ID ${empId} not found`);
-            console.log(`Employee ${empId} not found in:`, employeeList.map(e => e.id));
-          }
-        }
+function syncPayrollRowFromDeduction(empId){
+  const row = findPayrollRowById(empId);
+  if (!row) { return; }
+  const setValue = (selector, value) => {
+    const el = row.querySelector(selector);
+    if (el && typeof el.value !== 'undefined') {
+      el.value = roundToCents(value || 0).toFixed(2);
+    }
+  };
+  setValue('.loanSSS', loanSSS?.[empId] ?? 0);
+  setValue('.loanPI', loanPI?.[empId] ?? 0);
+  setValue('.vale', vale?.[empId] ?? 0);
+  setValue('.valeWed', valeWed?.[empId] ?? 0);
+  try { calculateRow(row); } catch (_) {}
+}
 
-        // Save to localStorage + Supabase (wait for persistence before alerting success)
-        await saveCurrentPeriodDeductions();
-        if (hasAdjustmentsCol) {
-          persistCurrentAdjustments();
-        }
-
-        // Refresh displays
-        if (typeof renderDeductionsTable === 'function') renderDeductionsTable();
-        if (typeof renderTable === 'function') renderTable();
-        if (hasAdjustmentsCol && typeof renderAdjustmentsTable === 'function') renderAdjustmentsTable();
-        else if (typeof renderAdjustmentsFoot === 'function') renderAdjustmentsFoot();
-        
-        // Show results
-        let message = `Updated ${updated} employees.`;
-        if (errors.length > 0) {
-          message += `\n\nErrors:\n${errors.slice(0, 5).join('\n')}`;
-          if (errors.length > 5) message += `\n...and ${errors.length - 5} more.`;
-        }
-        alert(message);
-        
-      } catch (err) {
-        console.error(err);
-        alert('Error reading file. Please check the file format.');
-      } finally {
-        e.target.value = '';
+document.addEventListener('change', async (event) => {
+  const input = event.target;
+  if (!input || !input.matches('.deduction-input')) return;
+  syncPeriodScopedData();
+  const empId = input.dataset.empId;
+  const key = input.dataset.col;
+  if (!empId || !key) return;
+  let value = parseFloat(input.value);
+  if (!Number.isFinite(value) || value < 0) value = 0;
+  value = roundToCents(value);
+  input.value = value.toFixed(2);
+  let needsSave = false;
+  let adjustmentsChanged = false;
+  switch (key) {
+    case 'loanSSS':
+      loanSSS[empId] = value;
+      needsSave = true;
+      break;
+    case 'loanPI':
+      loanPI[empId] = value;
+      needsSave = true;
+      break;
+    case 'vale':
+      vale[empId] = value;
+      needsSave = true;
+      break;
+    case 'valeWed':
+      valeWed[empId] = value;
+      needsSave = true;
+      break;
+    case 'adjustments':
+      if (value > 0) {
+        adjustments[empId] = -value;
+      } else {
+        delete adjustments[empId];
       }
-    };
-    
-    if (file.name.toLowerCase().endsWith('.csv')) {
-      reader.readAsText(file);
-    } else {
-      reader.readAsArrayBuffer(file);
+      adjustmentsChanged = true;
+      persistCurrentAdjustments();
+      break;
+    default:
+      break;
+  }
+  if (needsSave) {
+    try { await saveCurrentPeriodDeductions(); } catch (err) { console.warn('Failed to save deductions', err); }
+  }
+  syncPayrollRowFromDeduction(empId);
+  if (adjustmentsChanged) {
+    if (typeof renderAdjustmentsTable === 'function') {
+      try { renderAdjustmentsTable(); } catch (_) {}
+    } else if (typeof renderAdjustmentsFoot === 'function') {
+      try { renderAdjustmentsFoot(); } catch (_) {}
     }
   }
+  try { renderDeductionsTable(); } catch (err) { console.warn('Failed to re-render deductions', err); }
+  try { (typeof scheduleTotals === 'function' ? scheduleTotals : updateDeductionsGrandTotals)(); } catch (_) {}
 });
 function renderTable(){
   syncPeriodScopedData();
@@ -14097,7 +13982,7 @@ document.addEventListener('DOMContentLoaded', async function () {
   } catch(e) { /* no-op */ }
 })();
 
-// === Deductions render: skip work when hidden; build via fragment ===
+// === Deductions render: skip work when hidden; defer to original builder when visible ===
 (function(){
   function isDeductionsVisible(){
     const el = document.getElementById('deductionsTab');
@@ -14109,86 +13994,15 @@ document.addEventListener('DOMContentLoaded', async function () {
       const optimized = function(){
         if (!isDeductionsVisible()) { window.__deductionsDirty = true; return; }
         window.__deductionsDirty = false;
+        let result;
         try {
-          const dtbody = document.querySelector('#deductionsTable tbody');
-          if (!dtbody) return;
-          const frag = document.createDocumentFragment();
-          const div = Number(typeof divisor !== 'undefined' ? divisor : (window.divisor || 1)) || 1;
-          dtbody.innerHTML = '';
-          const _employees = (typeof employeeList !== 'undefined' ? employeeList : (window.employeeList || []));
-          const _regHours = (typeof regHours !== 'undefined' ? regHours : (window.regHours || {}));
-          const _storedEmployees = (typeof storedEmployees !== 'undefined' ? storedEmployees : (window.storedEmployees || {}));
-          const _rates = (typeof payrollRates !== 'undefined' ? payrollRates : (window.payrollRates || {}));
-          const _loanSSS = (typeof loanSSS !== 'undefined' ? loanSSS : (window.loanSSS || {}));
-          const _loanPI = (typeof loanPI !== 'undefined' ? loanPI : (window.loanPI || {}));
-          const _vale = (typeof vale !== 'undefined' ? vale : (window.vale || {}));
-          const _adjustments = (typeof adjustments !== 'undefined' ? adjustments : (window.adjustments || {}));
-          const _valeWed = (typeof valeWed !== 'undefined' ? valeWed : (window.valeWed || {}));
-          const _piRateFn = (typeof pagibigRateByMonthly === 'function' ? pagibigRateByMonthly : (window.pagibigRateByMonthly || null));
-          const _phRateFn = (typeof philhealthRateByMonthly === 'function' ? philhealthRateByMonthly : (window.philhealthRateByMonthly || null));
-          const _sssFn = (typeof sssShareByMonthly === 'function' ? sssShareByMonthly : (window.sssShareByMonthly || null));
-          const _piFlat = (typeof pagibigRate !== 'undefined' ? pagibigRate : (window.pagibigRate || 0));
-          const _phFlat = (typeof philhealthRate !== 'undefined' ? philhealthRate : (window.philhealthRate || 0));
-          _employees.forEach(emp => {
-            const id = emp.id;
-            const rH = Number(_regHours[id] || 0);
-            const stored = _storedEmployees[id];
-            const rate = Number((stored && stored.hourlyRate) ?? (_rates[id] ?? 0)) || 0;
-            if (_rates) _rates[id] = rate;
-            const lSSS = Number(_loanSSS[id] || 0);
-            const lPI = Number(_loanPI[id] || 0);
-            const v = Number(_vale[id] || 0);
-            const adjVal = Number(_adjustments[id] || 0);
-            const adjSplit = splitAdjustmentValue(adjVal);
-            const adjDeduction = adjSplit.deduction;
-            const vW = Number(_valeWed[id] || 0);
-            const regPay = +(rH * rate).toFixed(2);
-            const monthly = rate * 8 * 24;
-            const piRate = (_piRateFn ? _piRateFn(monthly) : _piFlat);
-            const phRate = (_phRateFn ? _phRateFn(monthly) : _phFlat);
-            const pagibig = +((regPay * piRate)).toFixed(2);
-            const philhealth = +((regPay * phRate)).toFixed(2);
-            const sssFull = (_sssFn ? _sssFn(monthly) : 0);
-            const sss = +(sssFull / div).toFixed(2);
-            const sssLoan = +(lSSS / div).toFixed(2);
-            const piLoan = +(lPI / div).toFixed(2);
-            const rowRaw = {
-              pagibig,
-              philhealth,
-              sss,
-              loanSSS: sssLoan,
-              loanPI: piLoan,
-              vale: v,
-              adjustments: adjDeduction,
-              valeWed: vW
-            };
-            rowRaw.total = roundToCents(pagibig + philhealth + sss + sssLoan + piLoan + v + vW + adjDeduction);
-            const rowEffective = computeEffectiveDeductionValues(rowRaw);
-            const tr = document.createElement('tr');
-            const idCell = document.createElement('td');
-            idCell.textContent = id;
-            idCell.setAttribute('data-col','id');
-            tr.appendChild(idCell);
-            const nameCell = document.createElement('td');
-            nameCell.classList.add('wrap');
-            nameCell.setAttribute('data-col','name');
-            nameCell.textContent = emp.name || '';
-            tr.appendChild(nameCell);
-            DEDUCTION_COLUMN_KEYS.forEach(function(key){
-              const td = document.createElement('td');
-              td.classList.add('num');
-              td.setAttribute('data-col', key);
-              const raw = Object.prototype.hasOwnProperty.call(rowRaw, key) ? rowRaw[key] : 0;
-              const effective = Object.prototype.hasOwnProperty.call(rowEffective, key) ? rowEffective[key] : 0;
-              updateDeductionCellDisplay(td, raw, effective, isDeductionColumnIncluded(key));
-              tr.appendChild(td);
-            });
-            frag.appendChild(tr);
-          });
-          dtbody.appendChild(frag);
-          try { applyDeductionColumnState(); } catch (_) {}
-        } catch(e) { try { return orig(); } catch(_){} }
+          result = orig.apply(this, arguments);
+        } catch (e) {
+          console.warn('renderDeductionsTable fallback', e);
+          try { result = orig.apply(this, arguments); } catch (_) { return; }
+        }
         try { (window.scheduleTotals||window.updateDeductionsGrandTotals||function(){})(); } catch(e){}
+        return result;
       };
       optimized.__perfWrapped = true;
       window.renderDeductionsTable = optimized;
@@ -14345,7 +14159,7 @@ function setPayrollLockedUI(locked){
       inputs.forEach(function(el){ el.disabled = !!locked; });
       // Explicitly disable file-import fields when locked
       if (locked){
-        panel.querySelectorAll('#importSss, #deductionsFileInput').forEach(function(el){ el.disabled = true; });
+        panel.querySelectorAll('#importSss').forEach(function(el){ el.disabled = true; });
       }
     }
     // 2) Also toggle just the payroll grid controls for safety
