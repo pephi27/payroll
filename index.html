@@ -7983,7 +7983,7 @@ rows += `<tr class="allowance">
       #panelContributionSummary .card{background:#fff;border:1px solid #e5e7eb;border-radius:14px;padding:18px;box-shadow:0 4px 18px rgba(0,0,0,.06)}
       #panelContributionSummary .controls{display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-bottom:12px}
       #panelContributionSummary .controls label{font-size:13px;color:#334155;font-weight:600;display:flex;align-items:center;gap:8px}
-      #panelContributionSummary .controls select{padding:6px 10px;border:1px solid #cbd5e1;border-radius:8px;font-size:14px;min-width:220px;background:#fff;color:#0f172a}
+      #panelContributionSummary .controls input[type=month]{padding:6px 10px;border:1px solid #cbd5e1;border-radius:8px;font-size:14px;min-width:160px}
       #panelContributionSummary .summary-meta{font-size:13px;color:#475569;margin-bottom:10px}
       #panelContributionSummary .empty-state{padding:16px;border:1px dashed #cbd5e1;border-radius:10px;background:#f8fafc;color:#64748b;font-size:14px;text-align:center}
       #panelContributionSummary .table-wrap{overflow-x:auto}
@@ -7997,12 +7997,12 @@ rows += `<tr class="allowance">
     <div class="card">
       <h3 style="margin:0 0 12px 0;">Contribution &amp; Loan Summary</h3>
       <div class="controls">
-        <label class="period-control">Payroll Period
-          <select id="contribPeriodSelect"></select>
+        <label class="month-control">Month
+          <input type="month" id="contribMonthSelect">
         </label>
       </div>
-      <div id="contribSummaryMeta" class="summary-meta">Choose a payroll period to view contribution totals from payroll history.</div>
-      <div id="contribSummaryEmpty" class="empty-state">Select a payroll period to view contribution totals.</div>
+      <div id="contribSummaryMeta" class="summary-meta">Choose a month to view contribution totals from payroll history.</div>
+      <div id="contribSummaryEmpty" class="empty-state">Select a month to view contribution totals.</div>
       <div class="table-wrap">
         <table id="contribSummaryTable" style="display:none">
           <thead>
@@ -8037,7 +8037,7 @@ rows += `<tr class="allowance">
   <script>
   (function(){
     const HIST_KEY = 'payroll_hist';
-    const PERIOD_SELECT_ID = 'contribPeriodSelect';
+    const MONTH_INPUT_ID = 'contribMonthSelect';
     const EMPTY_ID = 'contribSummaryEmpty';
     const META_ID = 'contribSummaryMeta';
     const TABLE_ID = 'contribSummaryTable';
@@ -8069,6 +8069,24 @@ rows += `<tr class="allowance">
       return '';
     }
 
+    function toMonthValue(value){
+      const iso = toIsoDate(value);
+      return iso ? iso.slice(0,7) : '';
+    }
+
+    function formatMonth(value){
+      const month = (value || '').slice(0,7);
+      if (!month) return '';
+      const parts = month.split('-');
+      if (parts.length !== 2) return month;
+      const year = Number(parts[0]);
+      const monthIdx = Number(parts[1]) - 1;
+      if (!Number.isFinite(year) || !Number.isFinite(monthIdx)) return month;
+      const date = new Date(year, monthIdx, 1);
+      if (isNaN(date)) return month;
+      return date.toLocaleString(undefined, { month: 'long', year: 'numeric' });
+    }
+
     function toNumber(value){
       if (value == null || value === '') return 0;
       const num = Number(String(value).replace(/,/g,''));
@@ -8084,98 +8102,23 @@ rows += `<tr class="allowance">
         .replace(/'/g, '&#39;');
     }
 
-    function formatNumber(value){
-      return Number(value || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-    }
-
-    function formatDisplayDate(value){
-      const str = value != null ? String(value).trim() : '';
-      if (!str) return '';
-      const parsed = new Date(str);
-      if (!isNaN(parsed)){
-        return parsed.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
-      }
-      return str;
-    }
-
-    function createPeriodKey(start, end){
-      const safeStart = (start || '').trim();
-      const safeEnd = (end || '').trim();
-      return `${safeStart}__${safeEnd}`;
-    }
-
-    function createPeriodDescriptor(snap){
-      if (!snap) return null;
-      const rawStart = snap.startDate != null ? String(snap.startDate).trim() : '';
-      const rawEnd = snap.endDate != null ? String(snap.endDate).trim() : '';
-      const startIso = toIsoDate(rawStart);
-      const endIso = toIsoDate(rawEnd);
-      const start = startIso || rawStart;
-      const end = endIso || rawEnd;
-      if (!start && !end) return null;
-      const key = createPeriodKey(start, end);
-      const displayStart = formatDisplayDate(start || rawStart);
-      const displayEnd = formatDisplayDate(end || rawEnd);
-      const label = displayStart && displayEnd
-        ? `${displayStart} – ${displayEnd}`
-        : displayStart || displayEnd || 'Unnamed period';
-      const sortValue = endIso || startIso || end || start || '';
-      return { key, start, end, startIso, endIso, displayStart, displayEnd, label, sortValue };
-    }
-
-    function listPeriods(){
+    function getDefaultMonth(){
       const history = readHistory();
-      const map = new Map();
-      history.forEach(snap => {
-        const descriptor = createPeriodDescriptor(snap);
-        if (!descriptor) return;
-        if (!map.has(descriptor.key)) map.set(descriptor.key, descriptor);
-      });
-      return Array.from(map.values()).sort((a, b) => {
-        const aSort = (a.sortValue || '').trim();
-        const bSort = (b.sortValue || '').trim();
-        if (aSort || bSort){
-          const comp = (bSort || '').localeCompare(aSort || '');
-          if (comp) return comp;
-        }
-        const aStart = (a.startIso || a.start || '').trim();
-        const bStart = (b.startIso || b.start || '').trim();
-        return (bStart || '').localeCompare(aStart || '');
-      });
-    }
-
-    function populatePeriodSelect({ preserveSelection = false } = {}){
-      const select = document.getElementById(PERIOD_SELECT_ID);
-      if (!select) return [];
-      const periods = listPeriods();
-      const previous = preserveSelection ? select.value : '';
-      const options = ['<option value="">Select a payroll period</option>'];
-      periods.forEach(period => {
-        options.push(`<option value="${escapeHtml(period.key)}">${escapeHtml(period.label)}</option>`);
-      });
-      select.innerHTML = options.join('');
-      if (previous && periods.some(period => period.key === previous)){
-        select.value = previous;
+      if (!history.length){
+        const today = new Date();
+        return `${today.getFullYear()}-${String(today.getMonth()+1).padStart(2,'0')}`;
       }
-      return periods;
+      const sorted = history.slice().sort((a,b)=>{
+        const aDate = toIsoDate(a && (a.endDate || a.startDate));
+        const bDate = toIsoDate(b && (b.endDate || b.startDate));
+        return aDate.localeCompare(bDate);
+      });
+      const latest = sorted[sorted.length-1] || null;
+      return toMonthValue(latest && (latest.endDate || latest.startDate));
     }
 
-    function ensureDefaultPeriod(periods){
-      const select = document.getElementById(PERIOD_SELECT_ID);
-      if (!select || select.value) return;
-      const list = Array.isArray(periods) ? periods : listPeriods();
-      if (!list.length) return;
-      const defaultKey = list[0].key;
-      for (let i = 0; i < select.options.length; i += 1){
-        if (select.options[i].value === defaultKey){
-          select.value = defaultKey;
-          break;
-        }
-      }
-    }
-
-    function computeSummary(periodKey){
-      const normalized = (periodKey || '').trim();
+    function computeSummary(monthValue){
+      const normalized = (monthValue || '').slice(0,7);
       const history = readHistory();
       const periodMeta = new Map();
       const map = new Map();
@@ -8184,14 +8127,19 @@ rows += `<tr class="allowance">
           entries: [],
           totals: { pagibig:0, philhealth:0, sss:0, loanSSS:0, loanPI:0, total:0, perPeriod: [] },
           periods: [],
-          periodKey: normalized
+          month: normalized
         };
       }
       history.forEach(snap => {
-        const descriptor = createPeriodDescriptor(snap);
-        if (!descriptor || descriptor.key !== normalized) return;
-        if (!periodMeta.has(descriptor.key)){
-          periodMeta.set(descriptor.key, { ...descriptor });
+        if (!snap) return;
+        const startMonth = toMonthValue(snap.startDate);
+        const endMonth = toMonthValue(snap.endDate);
+        if (startMonth !== normalized && endMonth !== normalized) return;
+        const start = toIsoDate(snap.startDate) || (snap.startDate || '');
+        const end = toIsoDate(snap.endDate) || (snap.endDate || '');
+        const key = `${start}__${end}`;
+        if (!periodMeta.has(key)){
+          periodMeta.set(key, { key, start, end });
         }
         const rows = Array.isArray(snap.rows) ? snap.rows : [];
         rows.forEach(row => {
@@ -8220,24 +8168,22 @@ rows += `<tr class="allowance">
           record.sss += sssVal;
           record.loanSSS += loanSssVal;
           record.loanPI += loanPiVal;
-          const perPeriod = record.byPeriod[descriptor.key] || { pagibig:0, philhealth:0, sss:0, loanSSS:0, loanPI:0 };
+          const perPeriod = record.byPeriod[key] || { pagibig:0, philhealth:0, sss:0, loanSSS:0, loanPI:0 };
           perPeriod.pagibig += pagibigVal;
           perPeriod.philhealth += philVal;
           perPeriod.sss += sssVal;
           perPeriod.loanSSS += loanSssVal;
           perPeriod.loanPI += loanPiVal;
-          record.byPeriod[descriptor.key] = perPeriod;
+          record.byPeriod[key] = perPeriod;
           map.set(id, record);
         });
       });
       const orderedPeriods = Array.from(periodMeta.values()).sort((a, b) => {
-        const aSort = (a.sortValue || '').trim();
-        const bSort = (b.sortValue || '').trim();
-        const comp = aSort.localeCompare(bSort);
-        if (comp) return comp;
-        const aStart = (a.startIso || a.start || '').trim();
-        const bStart = (b.startIso || b.start || '').trim();
-        return aStart.localeCompare(bStart);
+        const startA = (a.start || '').trim();
+        const startB = (b.start || '').trim();
+        const compStart = startA.localeCompare(startB);
+        if (compStart) return compStart;
+        return (a.end || '').trim().localeCompare((b.end || '').trim());
       }).map((period, idx) => ({ ...period, index: idx }));
       const periodKeys = orderedPeriods.map(p => p.key);
       const entries = Array.from(map.values()).map(entry => {
@@ -8289,37 +8235,40 @@ rows += `<tr class="allowance">
         if (!slot) return;
         slot.total = slot.pagibig + slot.philhealth + slot.sss + slot.loanSSS + slot.loanPI;
       });
-      return { entries, totals, periods: orderedPeriods, periodKey: normalized };
+      return { entries, totals, periods: orderedPeriods, month: normalized };
     }
 
-    function updateMeta(periods, selectedKey){
+    function formatNumber(value){
+      return Number(value || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    }
+
+    function updateMeta(periods, monthValue){
       const metaEl = document.getElementById(META_ID);
       if (!metaEl) return;
-      if (!selectedKey){
-        metaEl.textContent = 'Choose a payroll period to view contribution totals from payroll history.';
+      const label = formatMonth(monthValue);
+      if (!monthValue){
+        metaEl.textContent = 'Choose a month to view contribution totals from payroll history.';
         return;
       }
-      const periodList = Array.isArray(periods) ? periods : [];
-      const selected = periodList.find(period => period.key === selectedKey) || periodList[0];
-      if (!selected){
-        metaEl.textContent = 'Selected payroll period was not found in payroll history.';
+      if (!periods.length){
+        metaEl.textContent = `No payroll history snapshots were found for ${label || monthValue}.`;
         return;
       }
-      const range = selected.label || 'Selected payroll period';
-      if (periodList.length > 1){
-        const joined = periodList.map(period => period.label || period.key).join(', ');
-        metaEl.innerHTML = `Viewing contribution totals for <strong>${escapeHtml(range)}</strong>. Combined snapshots: ${escapeHtml(joined)}.`;
-      } else {
-        metaEl.innerHTML = `Viewing contribution totals for <strong>${escapeHtml(range)}</strong>.`;
-      }
+      const list = periods.map((period, idx) => {
+        const start = period.start || '—';
+        const end = period.end || '—';
+        const label = `Week ${idx + 1}`;
+        return `${label}: ${start} – ${end}`;
+      });
+      const labelSafe = escapeHtml(label || monthValue);
+      const joined = list.map(escapeHtml).join(', ');
+      metaEl.innerHTML = `<strong>${labelSafe}</strong> · Included payroll periods: ${joined}`;
     }
 
     function render(){
-      const periods = populatePeriodSelect({ preserveSelection: true });
-      ensureDefaultPeriod(periods);
-      const select = document.getElementById(PERIOD_SELECT_ID);
-      const selectedKey = select ? select.value : '';
-      const { entries, totals, periods: periodDetails, periodKey } = computeSummary(selectedKey);
+      const monthInput = document.getElementById(MONTH_INPUT_ID);
+      const monthValue = monthInput ? monthInput.value : '';
+      const { entries, totals, periods, month } = computeSummary(monthValue);
       const table = document.getElementById(TABLE_ID);
       const emptyEl = document.getElementById(EMPTY_ID);
       if (!table) return;
@@ -8335,12 +8284,9 @@ rows += `<tr class="allowance">
         { key: 'loanSSS', label: 'SSS Loan' },
         { key: 'loanPI', label: 'Pag-IBIG Loan' }
       ];
-      const periodList = Array.isArray(periodDetails) ? periodDetails : [];
+      const periodList = Array.isArray(periods) ? periods : [];
       const perPeriodTotals = Array.isArray(totals.perPeriod) ? totals.perPeriod : [];
-      const formatPeriodRange = (period) => {
-        if (!period) return '';
-        const start = period.displayStart || formatDisplayDate(period.start);
-        const end = period.displayEnd || formatDisplayDate(period.end);
+      const formatPeriodRange = (start, end) => {
         if (start && end) return `${start} – ${end}`;
         return start || end || '';
       };
@@ -8351,7 +8297,7 @@ rows += `<tr class="allowance">
       categories.forEach(cat => {
         periodList.forEach((period, idx) => {
           const headerLabel = `${cat.label} W${idx + 1}`;
-          const range = formatPeriodRange(period);
+          const range = formatPeriodRange(period.start, period.end);
           const titleAttr = range ? ` title="${escapeHtml(range)}"` : '';
           headerCells.push(`<th${titleAttr}>${escapeHtml(headerLabel)}</th>`);
         });
@@ -8396,29 +8342,37 @@ rows += `<tr class="allowance">
       const hasData = entries.length > 0;
       table.style.display = hasData ? 'table' : 'none';
       if (emptyEl){
-        if (!periodKey){
-          emptyEl.textContent = 'Select a payroll period to view contribution totals.';
+        if (!month){
+          emptyEl.textContent = 'Select a month to view contribution totals.';
         } else if (!hasData){
-          const label = formatPeriodRange(periodList[0]) || 'the selected payroll period';
-          emptyEl.textContent = `No payroll data found for ${label}.`;
+          emptyEl.textContent = `No payroll data found for ${formatMonth(month) || month}.`;
         }
         emptyEl.style.display = hasData ? 'none' : '';
       }
 
-      updateMeta(periodDetails, periodKey);
+      updateMeta(periods, month);
+    }
+
+    function ensureDefaultMonth(){
+      const monthInput = document.getElementById(MONTH_INPUT_ID);
+      if (!monthInput) return;
+      if (monthInput.value) return;
+      const fallback = getDefaultMonth();
+      if (fallback) monthInput.value = fallback;
     }
 
     function bind(){
-      const select = document.getElementById(PERIOD_SELECT_ID);
-      if (select && !select.__wired){
-        select.addEventListener('change', render);
-        select.__wired = true;
+      const monthInput = document.getElementById(MONTH_INPUT_ID);
+      if (monthInput && !monthInput.__wired){
+        monthInput.addEventListener('change', render);
+        monthInput.__wired = true;
       }
     }
 
     function init(){
-      render();
+      ensureDefaultMonth();
       bind();
+      render();
     }
 
     if (document.readyState === 'loading'){
