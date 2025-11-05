@@ -8193,12 +8193,23 @@ rows += `<tr class="allowance">
         };
       }
       const keySet = new Set(uniqueKeys);
+      const normalizeDivisor = (value) => {
+        const num = Number(value);
+        return (Number.isFinite(num) && num > 0) ? num : 1;
+      };
+      const normalizeLoanValue = (raw, divisor) => {
+        const base = toNumber(raw);
+        if (!divisor || !Number.isFinite(divisor) || divisor <= 0) return base;
+        return Number(((base || 0) / divisor).toFixed(2));
+      };
+
       history.forEach(snap => {
         const descriptor = createPeriodDescriptor(snap);
         if (!descriptor || !keySet.has(descriptor.key)) return;
         if (!periodMeta.has(descriptor.key)){
           periodMeta.set(descriptor.key, { ...descriptor });
         }
+        const divisor = normalizeDivisor(snap && snap.divisor);
         const rows = Array.isArray(snap.rows) ? snap.rows : [];
         rows.forEach(row => {
           if (!row) return;
@@ -8219,8 +8230,8 @@ rows += `<tr class="allowance">
           const pagibigVal = toNumber(row.pagibig);
           const philVal = toNumber(row.philhealth);
           const sssVal = toNumber(row.sss);
-          const loanSssVal = toNumber(row.loanSSS);
-          const loanPiVal = toNumber(row.loanPI);
+          const loanSssVal = normalizeLoanValue(row.loanSSS, divisor);
+          const loanPiVal = normalizeLoanValue(row.loanPI, divisor);
           record.pagibig += pagibigVal;
           record.philhealth += philVal;
           record.sss += sssVal;
