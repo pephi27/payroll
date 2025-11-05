@@ -3322,6 +3322,18 @@ function updateDeductionCellDisplay(cell, raw, effective, included){
     input.dataset.effectiveValue = cleanEffective.toFixed(2);
     input.dataset.perPeriodValue = cleanRaw.toFixed(2);
   } catch (_) {}
+  if (input) {
+    if (!included) {
+      try { input.disabled = true; } catch (_) {}
+      input.setAttribute('aria-disabled', 'true');
+      input.tabIndex = -1;
+    } else {
+      try { input.disabled = false; } catch (_) {}
+      input.removeAttribute('aria-disabled');
+      input.tabIndex = 0;
+    }
+  }
+
   if (!included && Math.abs(cleanRaw) > 0.004) {
     cell.classList.add('deduction-excluded');
     cell.setAttribute('title', `Excluded (was ${cleanRaw.toFixed(2)})`);
