@@ -13982,7 +13982,7 @@ document.addEventListener('DOMContentLoaded', async function () {
   } catch(e) { /* no-op */ }
 })();
 
-// === Deductions render: skip work when hidden; build via fragment ===
+// === Deductions render: skip work when hidden; defer to original builder when visible ===
 (function(){
   function isDeductionsVisible(){
     const el = document.getElementById('deductionsTab');
@@ -13994,86 +13994,15 @@ document.addEventListener('DOMContentLoaded', async function () {
       const optimized = function(){
         if (!isDeductionsVisible()) { window.__deductionsDirty = true; return; }
         window.__deductionsDirty = false;
+        let result;
         try {
-          const dtbody = document.querySelector('#deductionsTable tbody');
-          if (!dtbody) return;
-          const frag = document.createDocumentFragment();
-          const div = Number(typeof divisor !== 'undefined' ? divisor : (window.divisor || 1)) || 1;
-          dtbody.innerHTML = '';
-          const _employees = (typeof employeeList !== 'undefined' ? employeeList : (window.employeeList || []));
-          const _regHours = (typeof regHours !== 'undefined' ? regHours : (window.regHours || {}));
-          const _storedEmployees = (typeof storedEmployees !== 'undefined' ? storedEmployees : (window.storedEmployees || {}));
-          const _rates = (typeof payrollRates !== 'undefined' ? payrollRates : (window.payrollRates || {}));
-          const _loanSSS = (typeof loanSSS !== 'undefined' ? loanSSS : (window.loanSSS || {}));
-          const _loanPI = (typeof loanPI !== 'undefined' ? loanPI : (window.loanPI || {}));
-          const _vale = (typeof vale !== 'undefined' ? vale : (window.vale || {}));
-          const _adjustments = (typeof adjustments !== 'undefined' ? adjustments : (window.adjustments || {}));
-          const _valeWed = (typeof valeWed !== 'undefined' ? valeWed : (window.valeWed || {}));
-          const _piRateFn = (typeof pagibigRateByMonthly === 'function' ? pagibigRateByMonthly : (window.pagibigRateByMonthly || null));
-          const _phRateFn = (typeof philhealthRateByMonthly === 'function' ? philhealthRateByMonthly : (window.philhealthRateByMonthly || null));
-          const _sssFn = (typeof sssShareByMonthly === 'function' ? sssShareByMonthly : (window.sssShareByMonthly || null));
-          const _piFlat = (typeof pagibigRate !== 'undefined' ? pagibigRate : (window.pagibigRate || 0));
-          const _phFlat = (typeof philhealthRate !== 'undefined' ? philhealthRate : (window.philhealthRate || 0));
-          _employees.forEach(emp => {
-            const id = emp.id;
-            const rH = Number(_regHours[id] || 0);
-            const stored = _storedEmployees[id];
-            const rate = Number((stored && stored.hourlyRate) ?? (_rates[id] ?? 0)) || 0;
-            if (_rates) _rates[id] = rate;
-            const lSSS = Number(_loanSSS[id] || 0);
-            const lPI = Number(_loanPI[id] || 0);
-            const v = Number(_vale[id] || 0);
-            const adjVal = Number(_adjustments[id] || 0);
-            const adjSplit = splitAdjustmentValue(adjVal);
-            const adjDeduction = adjSplit.deduction;
-            const vW = Number(_valeWed[id] || 0);
-            const regPay = +(rH * rate).toFixed(2);
-            const monthly = rate * 8 * 24;
-            const piRate = (_piRateFn ? _piRateFn(monthly) : _piFlat);
-            const phRate = (_phRateFn ? _phRateFn(monthly) : _phFlat);
-            const pagibig = +((regPay * piRate)).toFixed(2);
-            const philhealth = +((regPay * phRate)).toFixed(2);
-            const sssFull = (_sssFn ? _sssFn(monthly) : 0);
-            const sss = +(sssFull / div).toFixed(2);
-            const sssLoan = +(lSSS / div).toFixed(2);
-            const piLoan = +(lPI / div).toFixed(2);
-            const rowRaw = {
-              pagibig,
-              philhealth,
-              sss,
-              loanSSS: sssLoan,
-              loanPI: piLoan,
-              vale: v,
-              adjustments: adjDeduction,
-              valeWed: vW
-            };
-            rowRaw.total = roundToCents(pagibig + philhealth + sss + sssLoan + piLoan + v + vW + adjDeduction);
-            const rowEffective = computeEffectiveDeductionValues(rowRaw);
-            const tr = document.createElement('tr');
-            const idCell = document.createElement('td');
-            idCell.textContent = id;
-            idCell.setAttribute('data-col','id');
-            tr.appendChild(idCell);
-            const nameCell = document.createElement('td');
-            nameCell.classList.add('wrap');
-            nameCell.setAttribute('data-col','name');
-            nameCell.textContent = emp.name || '';
-            tr.appendChild(nameCell);
-            DEDUCTION_COLUMN_KEYS.forEach(function(key){
-              const td = document.createElement('td');
-              td.classList.add('num');
-              td.setAttribute('data-col', key);
-              const raw = Object.prototype.hasOwnProperty.call(rowRaw, key) ? rowRaw[key] : 0;
-              const effective = Object.prototype.hasOwnProperty.call(rowEffective, key) ? rowEffective[key] : 0;
-              updateDeductionCellDisplay(td, raw, effective, isDeductionColumnIncluded(key));
-              tr.appendChild(td);
-            });
-            frag.appendChild(tr);
-          });
-          dtbody.appendChild(frag);
-          try { applyDeductionColumnState(); } catch (_) {}
-        } catch(e) { try { return orig(); } catch(_){} }
+          result = orig.apply(this, arguments);
+        } catch (e) {
+          console.warn('renderDeductionsTable fallback', e);
+          try { result = orig.apply(this, arguments); } catch (_) { return; }
+        }
         try { (window.scheduleTotals||window.updateDeductionsGrandTotals||function(){})(); } catch(e){}
+        return result;
       };
       optimized.__perfWrapped = true;
       window.renderDeductionsTable = optimized;
