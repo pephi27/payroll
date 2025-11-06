@@ -10410,8 +10410,17 @@ function calculatePayrollFromRecords(){
         if (dtrStartElTmp) dtrStartElTmp.value = origFrom;
         if (dtrEndElTmp)   dtrEndElTmp.value   = origTo;
       } catch(_) {}
+      // Ensure the visible DTR table reflects the restored date range.
+      try {
+        if (typeof window.applyDtrDateFilter === 'function') applyDtrDateFilter();
+      } catch (_) {}
       // Re-render the DTR table with the original filter/search and date range
       if (typeof renderResults === 'function') renderResults();
+      // Some pages patch renderResults to invoke the filter automatically,
+      // but call it explicitly as a safeguard so the restored range is respected.
+      try {
+        if (typeof window.applyDtrDateFilter === 'function') applyDtrDateFilter();
+      } catch (_) {}
       // Apply aggregated hours to regHours and otHours, rounding to two decimals
       regHours = {};
       otHours = {};
