@@ -14215,4 +14215,240 @@ document.addEventListener('DOMContentLoaded', function(){
   }catch(e){}
 });
 </script>
+<script>
+// Full-featured live-reload helper for development.
+//
+// Capabilities
+// ------------
+// * Prefers WebSocket push updates (configurable endpoint) for near-instant reloads.
+// * Falls back to EventSource/SSE when WebSockets are unavailable.
+// * Falls back again to polling HEAD requests so changes are still detected in simple setups.
+// * Supports CSS hot-swapping without a full-page reload when the server notifies us which
+//   files changed (payload: { type: 'refresh-css', files: ['app.css'] }).
+// * Can be configured globally via window.__LIVE_RELOAD_CONFIG__ before this script loads.
+//
+// Minimal server contract
+// -----------------------
+//   WebSocket/SSE messages should be JSON encoded with a "type" field. Supported types:
+//     { type: 'reload', reason?: 'optional message' }              -> location.reload()
+//     { type: 'refresh-css', files?: ['relative/or/absolute.css'] } -> swap <link rel=stylesheet>
+//
+//   If you don't have a live-reload server, the polling fallback still works when the HTML file
+//   is served via HTTP(S) and responds to HEAD requests with Last-Modified or ETag headers.
+(function(){
+  try {
+    if (!/^https?:/i.test(window.location.protocol)) return; // Only when served over HTTP/S
+
+    var cfg = window.__LIVE_RELOAD_CONFIG__ || {};
+    var logEnabled = !cfg.quiet;
+
+    function log(){
+      if (!logEnabled || !window.console) return;
+      try {
+        var args = Array.prototype.slice.call(arguments);
+        args.unshift('[live-reload]');
+        console.log.apply(console, args);
+      } catch (e) {}
+    }
+
+    function reloadPage(reason){
+      try {
+        if (reason) log('Reloading:', reason);
+        window.location.reload();
+      } catch (e) {
+        log('Reload failed', e);
+      }
+    }
+
+    function refreshCss(files){
+      try {
+        var candidates = Array.prototype.slice.call(document.querySelectorAll('link[rel~="stylesheet"]'));
+        if (!candidates.length) { reloadPage('stylesheet update'); return; }
+
+        var normalized = null;
+        if (Array.isArray(files) && files.length){
+          normalized = files.map(function(file){
+            try {
+              var a = document.createElement('a');
+              a.href = file;
+              return a.href;
+            } catch (err) {
+              return file;
+            }
+          });
+        }
+
+        candidates.forEach(function(link){
+          try {
+            var hrefBase = link.href.split('?')[0];
+            if (normalized && normalized.length) {
+              var match = normalized.some(function(target){
+                return target === link.href || target === hrefBase;
+              });
+              if (!match) return;
+            }
+
+            var clone = link.cloneNode(true);
+            var cacheBust = 'lr=' + Date.now();
+            clone.href = hrefBase + (hrefBase.indexOf('?') >= 0 ? '&' : '?') + cacheBust;
+            clone.onload = function(){
+              try { link.remove(); } catch (err) {}
+            };
+            clone.onerror = function(){
+              try {
+                clone.remove();
+                reloadPage('stylesheet reload failed');
+              } catch (err) {}
+            };
+            link.parentNode.insertBefore(clone, link.nextSibling);
+          } catch (err) {}
+        });
+      } catch (e) {
+        reloadPage('stylesheet refresh error');
+      }
+    }
+
+    var pollUrl = cfg.pollUrl || window.location.href.split('#')[0];
+    var pollIntervalMs = typeof cfg.pollIntervalMs === 'number' ? cfg.pollIntervalMs : 2000;
+    var lastPollSignature = null;
+    var pollTimer = null;
+
+    function stopPolling(){
+      if (pollTimer){
+        try { window.clearTimeout(pollTimer); } catch (e) {}
+        pollTimer = null;
+      }
+    }
+
+    function schedulePoll(){
+      stopPolling();
+      try {
+        pollTimer = window.setTimeout(checkForUpdate, pollIntervalMs);
+      } catch (e) {}
+    }
+
+    function checkForUpdate(){
+      try {
+        if (!window.fetch) { schedulePoll(); return; }
+        fetch(pollUrl, { method: 'HEAD', cache: 'no-store' })
+          .then(function(resp){
+            if (!resp || !resp.ok) { schedulePoll(); return; }
+            var signature = resp.headers.get('last-modified') || resp.headers.get('etag');
+            if (!signature) { schedulePoll(); return; }
+            if (!lastPollSignature) {
+              lastPollSignature = signature;
+              schedulePoll();
+              return;
+            }
+            if (signature !== lastPollSignature) {
+              reloadPage('file change detected via polling');
+            } else {
+              schedulePoll();
+            }
+          })
+          .catch(function(){ schedulePoll(); });
+      } catch (e) {
+        schedulePoll();
+      }
+    }
+
+    function startPollingFallback(){
+      log('Polling for changes every', pollIntervalMs + 'ms');
+      schedulePoll();
+    }
+
+    var retryTimer = null;
+    function scheduleRetry(nextFn){
+      try {
+        if (retryTimer) window.clearTimeout(retryTimer);
+        retryTimer = window.setTimeout(nextFn, cfg.retryDelayMs || 3000);
+      } catch (e) {
+        try { nextFn(); } catch (err) {}
+      }
+    }
+
+    function handleMessage(data){
+      try {
+        if (!data) return;
+        var payload = typeof data === 'string' ? JSON.parse(data) : data;
+        if (!payload || !payload.type) return;
+        if (payload.type === 'reload') {
+          reloadPage(payload.reason || 'server request');
+        } else if (payload.type === 'refresh-css') {
+          refreshCss(payload.files);
+        }
+      } catch (err) {
+        log('Failed to process message', err);
+      }
+    }
+
+    function startEventSource(){
+      if (!window.EventSource) {
+        startPollingFallback();
+        return;
+      }
+
+      var esUrl = cfg.eventSourceUrl;
+      if (!esUrl){
+        var path = cfg.eventSourcePath || '/__live_reload/events';
+        esUrl = window.location.origin + path;
+      }
+
+      log('Connecting to EventSource', esUrl);
+      try {
+        var es = new EventSource(esUrl);
+        es.onmessage = function(evt){ handleMessage(evt && evt.data); };
+        es.onerror = function(){
+          log('EventSource error, falling back to polling');
+          try { es.close(); } catch (e) {}
+          startPollingFallback();
+        };
+      } catch (err) {
+        log('EventSource setup failed, falling back to polling');
+        startPollingFallback();
+      }
+    }
+
+    function startWebSocket(){
+      if (!window.WebSocket) {
+        startEventSource();
+        return;
+      }
+
+      var wsUrl = cfg.websocketUrl;
+      if (!wsUrl){
+        var wsProto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        var wsPath = cfg.websocketPath || '/__live_reload';
+        wsUrl = wsProto + '//' + window.location.host + wsPath;
+      }
+
+      log('Connecting to WebSocket', wsUrl);
+      try {
+        var ws = new WebSocket(wsUrl);
+        ws.onopen = function(){ log('WebSocket connected'); };
+        ws.onmessage = function(evt){ handleMessage(evt && evt.data); };
+        ws.onerror = function(){ log('WebSocket error'); };
+        ws.onclose = function(){
+          log('WebSocket closed, retrying via EventSource');
+          scheduleRetry(startEventSource);
+        };
+      } catch (err) {
+        log('WebSocket setup failed, trying EventSource');
+        startEventSource();
+      }
+    }
+
+    startWebSocket();
+
+    // Safety net: if neither WS nor SSE succeed within ~1s, ensure polling is running.
+    try {
+      window.setTimeout(function(){
+        if (!lastPollSignature && !pollTimer) {
+          startPollingFallback();
+        }
+      }, 1000);
+    } catch (e) {}
+  } catch (e) {}
+})();
+</script>
 </html>
