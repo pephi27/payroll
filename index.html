@@ -9970,27 +9970,14 @@ let otMins = 0;
           if (hasOverrideSeg) { trSeg.style.backgroundColor = '#fff3cd'; }
           const pcSeg = trSeg.cells[2]; if (pcSeg) { pcSeg.innerHTML=''; pcSeg.appendChild(buildProjectDropdownHalf(empId, date, segment, projIdSeg)); }
           const scSeg = trSeg.cells[3]; if (scSeg) { scSeg.innerHTML=''; scSeg.appendChild(buildScheduleDropdownHalf(empId, date, segment, schedIdHalf)); }
-          trSeg.dataset.empId = empId;
-          trSeg.dataset.date = date;
-          trSeg.dataset.half = segment;
-          const timesForHalf = [];
-          if(segment==='AM'){
-            if(amInActual) timesForHalf.push(amInActual);
-            if(!hasBridge && amOutActual) timesForHalf.push(amOutActual);
-            trSeg.dataset.clockIn1 = amInActual || '';
-            trSeg.dataset.clockOut1 = (!hasBridge && amOutActual) ? amOutActual : '';
-          } else if(segment==='PM'){
-            if(!hasBridge && pmInActual) timesForHalf.push(pmInActual);
-            if(pmOutActual) timesForHalf.push(pmOutActual);
-            trSeg.dataset.clockIn2 = (!hasBridge && pmInActual) ? pmInActual : '';
-            trSeg.dataset.clockOut2 = pmOutActual || '';
-          } else {
-            if(otInSeg) timesForHalf.push(otInSeg);
-            if(otOutSeg) timesForHalf.push(otOutSeg);
-            trSeg.dataset.otIn = otInSeg || '';
-            trSeg.dataset.otOut = otOutSeg || '';
-          }
-          trSeg.dataset.times = JSON.stringify(timesForHalf);
+          trSeg.dataset.empId = empId; trSeg.dataset.date = date; trSeg.dataset.half = segment;
+          (function(){
+            const timesForHalf=[];
+            if(segment==='AM'){ if(amInActual) timesForHalf.push(amInActual); if(!hasBridge && amOutActual) timesForHalf.push(amOutActual); }
+            else if(segment==='PM'){ if(!hasBridge && pmInActual) timesForHalf.push(pmInActual); if(pmOutActual) timesForHalf.push(pmOutActual); }
+            else { if(otInSeg) timesForHalf.push(otInSeg); if(otOutSeg) timesForHalf.push(otOutSeg); }
+            trSeg.dataset.times=JSON.stringify(timesForHalf);
+          })();
           tbody.appendChild(trSeg);
           _rowCount++;
           const _regVal=parseFloat(regDecSeg)||0; const _otVal=parseFloat(otDecSeg)||0;
@@ -10075,15 +10062,6 @@ let otMins = 0;
     if(projCell){ projCell.innerHTML = ''; projCell.appendChild(buildProjectDropdown(empId, date, empProjId)); }
     const schedCell = tr.cells[3];
     if(schedCell){ schedCell.innerHTML = ''; schedCell.appendChild(buildScheduleDropdown(empId, date, scheduleIdForEmp)); }
-    tr.dataset.empId = empId;
-    tr.dataset.date = date;
-    tr.dataset.clockIn1 = amInActual || '';
-    tr.dataset.clockOut1 = amOutActual || '';
-    tr.dataset.clockIn2 = pmInActual || '';
-    tr.dataset.clockOut2 = pmOutActual || '';
-    tr.dataset.otIn = otInCalc || '';
-    tr.dataset.otOut = otOutCalc || '';
-    try { tr.dataset.times = JSON.stringify(times); } catch(_) { tr.dataset.times = '[]'; }
     tbody.appendChild(tr);
     _rowCount++;
     // Accumulate totals for unsplit rows
@@ -13425,28 +13403,11 @@ document.addEventListener('DOMContentLoaded', async function () {
   }
 
   function getColIndexes(table){
-    const heads = Array.from(table.querySelectorAll('thead th')).map(th => String((th.textContent || '')).trim());
-    const norm = txt => String(txt || '').replace(/\s+/g, ' ').trim().toLowerCase();
-    const map = {
+    const heads = Array.from(table.querySelectorAll('thead th')).map(th=>th.textContent.trim());
+    return {
       regIdx: heads.findIndex(t => /(^(Total\s+)?Regular\s+Hrs$)/i.test(t)),
-      otIdx:  heads.findIndex(t => /^OT\s*Hrs$/i.test(t)),
-      clockIn1Idx: -1,
-      clockOut1Idx: -1,
-      clockIn2Idx: -1,
-      clockOut2Idx: -1,
-      otInIdx: -1,
-      otOutIdx: -1
+      otIdx:  heads.findIndex(t => /^OT\s*Hrs$/i.test(t))
     };
-    heads.forEach((txt, idx) => {
-      const n = norm(txt);
-      if (n === 'clock in 1' || n === 'am in') map.clockIn1Idx = idx;
-      else if (n === 'clock out 1' || n === 'am out') map.clockOut1Idx = idx;
-      else if (n === 'clock in 2' || n === 'pm in') map.clockIn2Idx = idx;
-      else if (n === 'clock out 2' || n === 'pm out') map.clockOut2Idx = idx;
-      else if (n === 'ot in') map.otInIdx = idx;
-      else if (n === 'ot out') map.otOutIdx = idx;
-    });
-    return map;
   }
 
   // Generate keys for an editor row.
@@ -13503,122 +13464,12 @@ document.addEventListener('DOMContentLoaded', async function () {
     }
   }
 
-  function getTimeFieldsForRow(tr){
-    if (!tr || !tr.dataset) {
-      return ['clockIn1','clockOut1','clockIn2','clockOut2','otIn','otOut'];
-    }
-    const half = tr.dataset.half;
-    if (half === 'AM') return ['clockIn1','clockOut1'];
-    if (half === 'PM') return ['clockIn2','clockOut2'];
-    if (half === 'OT') return ['otIn','otOut'];
-    return ['clockIn1','clockOut1','clockIn2','clockOut2','otIn','otOut'];
-  }
-
-  function revertTimeCellsToDisplay(tr, fields, idxMap){
-    if (!tr) return;
-    fields.forEach(field => {
-      const idxProp = field + 'Idx';
-      const idx = idxMap[idxProp];
-      if (typeof idx !== 'number' || idx < 0) return;
-      const cell = tr.cells[idx];
-      if (!cell) return;
-      const val = (tr.dataset && tr.dataset[field]) ? tr.dataset[field] : '';
-      cell.innerHTML = '';
-      if (val){
-        cell.textContent = __fmt12Clock(val);
-        cell.classList.remove('missing');
-      } else {
-        cell.textContent = '-';
-        cell.classList.add('missing');
-      }
-    });
-  }
-
-  function removeRecordsForTimes(empId, date, times){
-    if (!Array.isArray(times) || !times.length) return;
-    times.forEach(t => {
-      for (let i = storedRecords.length - 1; i >= 0; i--){
-        const rec = storedRecords[i];
-        if (String(rec.empId) === String(empId) && rec.date === date && rec.time === t){
-          storedRecords.splice(i, 1);
-          break;
-        }
-      }
-    });
-  }
-
-  function removeAllRecordsForDay(empId, date){
-    for (let i = storedRecords.length - 1; i >= 0; i--){
-      const rec = storedRecords[i];
-      if (String(rec.empId) === String(empId) && rec.date === date){
-        storedRecords.splice(i, 1);
-      }
-    }
-  }
-
-  function persistStoredRecords(){
-    try { localStorage.setItem(LS_RECORDS, JSON.stringify(storedRecords)); } catch(e){}
-    try {
-      if (typeof saveDtrToCloud === 'function') saveDtrToCloud(storedRecords);
-    } catch(e){
-      console.warn('Failed to save DTR to Supabase', e);
-    }
-  }
-
-  function applyTimeUpdates(tr, fields, idxMap){
-    if (!tr) return { changed: false };
-    const values = {};
-    fields.forEach(field => {
-      const idxProp = field + 'Idx';
-      const idx = idxMap[idxProp];
-      if (typeof idx !== 'number' || idx < 0) return;
-      const cell = tr.cells[idx];
-      if (!cell) return;
-      const input = cell.querySelector('input.edit-time');
-      const val = input && input.value ? input.value : '';
-      values[field] = val;
-    });
-    let existingTimes = [];
-    try { existingTimes = JSON.parse(tr.dataset.times || '[]'); } catch(e){ existingTimes = []; }
-    if (!Array.isArray(existingTimes)) existingTimes = [];
-    const newTimes = fields.map(field => values[field]).filter(Boolean);
-    const sortedExisting = existingTimes.slice().sort();
-    const sortedNew = newTimes.slice().sort();
-    const changed = sortedExisting.length !== sortedNew.length || sortedExisting.some((t, i) => sortedNew[i] !== t);
-    if (!changed){
-      revertTimeCellsToDisplay(tr, fields, idxMap);
-      return { changed: false };
-    }
-    const empId = (tr.dataset && tr.dataset.empId) || (tr.cells[0] ? tr.cells[0].textContent.trim() : '');
-    const date = (tr.dataset && tr.dataset.date) || (tr.cells[4] ? tr.cells[4].textContent.trim() : '');
-    if (!empId || !date){
-      revertTimeCellsToDisplay(tr, fields, idxMap);
-      return { changed: false };
-    }
-    const half = tr.dataset && tr.dataset.half;
-    if (half){
-      removeRecordsForTimes(empId, date, existingTimes);
-    } else {
-      removeAllRecordsForDay(empId, date);
-    }
-    sortedNew.forEach(time => {
-      storedRecords.push({ empId: String(empId), date, time, manual: true });
-    });
-    tr.dataset.times = JSON.stringify(sortedNew);
-    fields.forEach(field => {
-      tr.dataset[field] = values[field] || '';
-    });
-    persistStoredRecords();
-    return { changed: true };
-  }
-
   function addDtrEditorButtons(){
     const table = document.getElementById('resultsTable');
     if(!table) return;
     ensureEditorHeader();
-    const idxMap = getColIndexes(table);
-    const regIdx = idxMap.regIdx;
-    const otIdx = idxMap.otIdx;
+    const {regIdx, otIdx} = getColIndexes(table);
+    if(regIdx < 0 || otIdx < 0) return;
     table.querySelectorAll('tbody tr').forEach(tr => {
       if(tr.querySelector('.dtr-edit-btn')) return;
       const td = document.createElement('td');
@@ -13627,17 +13478,17 @@ document.addEventListener('DOMContentLoaded', async function () {
       btn.textContent = 'Edit';
       btn.className = 'dtr-edit-btn';
       btn.addEventListener('click', () => {
-        const regCell = (regIdx >= 0) ? tr.cells[regIdx] : null;
-        const otCell  = (otIdx >= 0) ? tr.cells[otIdx] : null;
-        const timeFields = getTimeFieldsForRow(tr);
+        const regCell = tr.cells[regIdx];
+        const otCell  = tr.cells[otIdx];
         if(btn.textContent === 'Edit'){
-          const regVal = regCell ? (parseFloat(regCell.textContent) || 0) : 0;
-          const otVal  = otCell  ? (parseFloat(otCell.textContent)  || 0) : 0;
-          if (regCell) regCell.innerHTML = '<input type="number" step="0.01" class="edit-reg" value="'+regVal+'">';
-          if (otCell)  otCell .innerHTML = '<input type="number" step="0.01" class="edit-ot"  value="'+otVal+'">';
+          const regVal = parseFloat(regCell.textContent) || 0;
+          const otVal  = parseFloat(otCell.textContent)  || 0;
+          regCell.innerHTML = '<input type="number" step="0.01" class="edit-reg" value="'+regVal+'">';
+          otCell .innerHTML = '<input type="number" step="0.01" class="edit-ot"  value="'+otVal+'">';
+          // remember original values and previous per-column edit flags
           try {
-            if (regCell) tr.dataset.origReg = String(regVal.toFixed(2));
-            if (otCell)  tr.dataset.origOt  = String(otVal.toFixed(2));
+            tr.dataset.origReg = String(regVal.toFixed(2));
+            tr.dataset.origOt  = String(otVal.toFixed(2));
             const kHalf0 = keyForRow(tr);
             const kBase0 = baseKeyForRow(tr);
             const ov0 = (overridesHours && (overridesHours[kHalf0] || overridesHours[kBase0])) || null;
@@ -13647,66 +13498,41 @@ document.addEventListener('DOMContentLoaded', async function () {
             tr.dataset.hadRegEdited = hadReg ? '1' : '0';
             tr.dataset.hadOtEdited  = hadOt  ? '1' : '0';
           } catch(_){}
-          timeFields.forEach(field => {
-            const idxProp = field + 'Idx';
-            const idx = idxMap[idxProp];
-            if (typeof idx !== 'number' || idx < 0) return;
-            const cell = tr.cells[idx];
-            if (!cell) return;
-            const val = (tr.dataset && tr.dataset[field]) ? tr.dataset[field] : '';
-            const input = document.createElement('input');
-            input.type = 'time';
-            input.className = 'edit-time';
-            input.dataset.field = field;
-            if (val) input.value = val;
-            cell.classList.remove('missing');
-            cell.innerHTML = '';
-            cell.appendChild(input);
-          });
           btn.textContent = 'Save';
         } else {
           const regInput = tr.querySelector('input.edit-reg');
           const otInput  = tr.querySelector('input.edit-ot');
-          const regVal = regInput ? (parseFloat(regInput.value) || 0) : 0;
-          const otVal  = otInput  ? (parseFloat(otInput.value)  || 0) : 0;
+          const regVal = parseFloat(regInput && regInput.value) || 0;
+          const otVal  = parseFloat(otInput  && otInput.value)  || 0;
           const kHalf = keyForRow(tr);
           const kBase = baseKeyForRow(tr);
+          // Determine if values actually changed from original
           const origR = parseFloat(tr.dataset.origReg || 'NaN');
           const origO = parseFloat(tr.dataset.origOt  || 'NaN');
           const hadPrevReg = (tr.dataset.hadRegEdited === '1');
           const hadPrevOt  = (tr.dataset.hadOtEdited  === '1');
-          const changedReg = (regInput && isFinite(origR)) ? Math.abs(regVal - origR) > 1e-9 : false;
-          const changedOt  = (otInput  && isFinite(origO)) ? Math.abs(otVal  - origO) > 1e-9 : false;
+          const changedReg = (isFinite(origR) && Math.abs(regVal - origR) > 1e-9);
+          const changedOt  = (isFinite(origO) && Math.abs(otVal  - origO) > 1e-9);
           const regEdited  = changedReg || hadPrevReg;
           const otEdited   = changedOt  || hadPrevOt;
-          const timeResult = applyTimeUpdates(tr, timeFields, idxMap);
-          let overridesTouched = false;
-          if (timeResult.changed && !changedReg && !changedOt){
-            try { if (overridesHours && Object.prototype.hasOwnProperty.call(overridesHours, kHalf)) { delete overridesHours[kHalf]; overridesTouched = true; } } catch(_){ }
-            try { if (overridesHours && Object.prototype.hasOwnProperty.call(overridesHours, kBase)) { delete overridesHours[kBase]; overridesTouched = true; } } catch(_){ }
-          } else if (regEdited || otEdited){
+          if (regEdited || otEdited){
             const payload = { reg: regVal, ot: otVal, regEdited: !!regEdited, otEdited: !!otEdited };
+            // Write both the half-specific key and the base key for cross-device stability
             overridesHours[kHalf] = payload;
             overridesHours[kBase] = payload;
-            overridesTouched = true;
           } else {
-            try { if (overridesHours && Object.prototype.hasOwnProperty.call(overridesHours, kHalf)) { delete overridesHours[kHalf]; overridesTouched = true; } } catch(_){ }
-            try { if (overridesHours && Object.prototype.hasOwnProperty.call(overridesHours, kBase)) { delete overridesHours[kBase]; overridesTouched = true; } } catch(_){ }
+            // No per-column edits before or now: remove override entries for both keys
+            try { if (Object.prototype.hasOwnProperty.call(overridesHours, kHalf)) delete overridesHours[kHalf]; } catch {}
+            try { if (Object.prototype.hasOwnProperty.call(overridesHours, kBase)) delete overridesHours[kBase]; } catch {}
           }
-          if (overridesTouched){
-            saveOverridesHours();
-            if (typeof saveOverridesHoursRemote === 'function') saveOverridesHoursRemote();
-          }
-          if (timeResult.changed){
-            btn.textContent = 'Edit';
-            try { renderResults(); } catch(e){}
-            return;
-          }
+          saveOverridesHours();
+          if (typeof saveOverridesHoursRemote === 'function') saveOverridesHoursRemote();
+          // Write cells, adding asterisk only to edited columns
           const ovNow = overridesHours && (overridesHours[kHalf] || overridesHours[kBase]);
           const starReg = ovNow ? (Object.prototype.hasOwnProperty.call(ovNow,'regEdited') ? !!ovNow.regEdited : true) : false;
           const starOt  = ovNow ? (Object.prototype.hasOwnProperty.call(ovNow,'otEdited')  ? !!ovNow.otEdited  : true) : false;
-          if (regCell) regCell.textContent = regVal.toFixed(2) + (starReg ? ' *' : '');
-          if (otCell)  otCell.textContent  = otVal.toFixed(2) + (starOt ? ' *' : '');
+          tr.cells[regIdx].textContent = regVal.toFixed(2) + (starReg ? ' *' : '');
+          tr.cells[otIdx ].textContent = otVal .toFixed(2) + (starOt  ? ' *' : '');
           btn.textContent = 'Edit';
           recomputeDtrSummaryFromTable();
         }
