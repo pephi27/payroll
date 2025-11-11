@@ -4659,11 +4659,32 @@ document.addEventListener('DOMContentLoaded', function(){
       const amt = parseFloat((raw || '').toString().replace(/,/g, '')) || 0;
       return (amt / base).toFixed(2);
     };
+    const formatEffectiveValue = (value) => {
+      if (value == null) return '';
+      const num = parseFloat(value);
+      if (!Number.isNaN(num)) return num.toFixed(2);
+      return String(value);
+    };
+    const readDeductionEffective = (el) => {
+      if (!el || !el.dataset) return null;
+      if (Object.prototype.hasOwnProperty.call(el.dataset, 'effectiveValue')) {
+        return el.dataset.effectiveValue;
+      }
+      if (Object.prototype.hasOwnProperty.call(el.dataset, 'effective')) {
+        return el.dataset.effective;
+      }
+      return null;
+    };
     clone.querySelectorAll('input').forEach(inp => {
       const td = inp.parentElement;
       const cls = inp.classList || { contains: () => false };
-      if (cls.contains('loanSSS') || cls.contains('loanPI')) {
-        td.textContent = safeDivide(inp.value || '0');
+      const effective = readDeductionEffective(inp);
+      const isLoan = cls.contains('loanSSS') || cls.contains('loanPI');
+      const isDeductionInput = isLoan || cls.contains('vale') || cls.contains('valeWed');
+      if (isDeductionInput && effective != null) {
+        td.textContent = formatEffectiveValue(effective);
+      } else if (isLoan) {
+        td.textContent = formatEffectiveValue(safeDivide(inp.value || '0'));
       } else {
         const val = (inp.value || inp.textContent || '').toString();
         td.textContent = val;
@@ -4672,9 +4693,15 @@ document.addEventListener('DOMContentLoaded', function(){
     // Locked payroll snapshots render loan cells as plain text (no inputs). Ensure
     // they reflect the per-period share by applying the same divisor used above.
     clone.querySelectorAll('td.loanSSS, td.loanPI').forEach(td => {
-      if (!td || td.querySelector('input')) return;
+      if (!td) return;
+      if (td.querySelector('input')) return;
+      const effective = readDeductionEffective(td);
+      if (effective != null) {
+        td.textContent = formatEffectiveValue(effective);
+        return;
+      }
       const divided = safeDivide(td.textContent || '0');
-      td.textContent = divided;
+      td.textContent = formatEffectiveValue(divided);
     });
     // Insert a column showing adjustment deductions (negative adjustments)
     (function(){
@@ -4814,11 +4841,32 @@ document.addEventListener('DOMContentLoaded', function(){
       return (amt / base).toFixed(2);
     };
 
+    const formatEffectiveValue = (value) => {
+      if (value == null) return '';
+      const num = parseFloat(value);
+      if (!Number.isNaN(num)) return num.toFixed(2);
+      return String(value);
+    };
+    const readDeductionEffective = (el) => {
+      if (!el || !el.dataset) return null;
+      if (Object.prototype.hasOwnProperty.call(el.dataset, 'effectiveValue')) {
+        return el.dataset.effectiveValue;
+      }
+      if (Object.prototype.hasOwnProperty.call(el.dataset, 'effective')) {
+        return el.dataset.effective;
+      }
+      return null;
+    };
     clone.querySelectorAll('input').forEach(inp => {
       const td = inp.parentElement;
       const cls = inp.classList || { contains: () => false };
-      if (cls.contains('loanSSS') || cls.contains('loanPI')) {
-        td.textContent = safeDivide(inp.value || '0');
+      const effective = readDeductionEffective(inp);
+      const isLoan = cls.contains('loanSSS') || cls.contains('loanPI');
+      const isDeductionInput = isLoan || cls.contains('vale') || cls.contains('valeWed');
+      if (isDeductionInput && effective != null) {
+        td.textContent = formatEffectiveValue(effective);
+      } else if (isLoan) {
+        td.textContent = formatEffectiveValue(safeDivide(inp.value || '0'));
       } else {
         const val = (inp.value || inp.textContent || '').toString();
         td.textContent = val;
@@ -4826,9 +4874,15 @@ document.addEventListener('DOMContentLoaded', function(){
     });
 
     clone.querySelectorAll('td.loanSSS, td.loanPI').forEach(td => {
-      if (!td || td.querySelector('input')) return;
+      if (!td) return;
+      if (td.querySelector('input')) return;
+      const effective = readDeductionEffective(td);
+      if (effective != null) {
+        td.textContent = formatEffectiveValue(effective);
+        return;
+      }
       const divided = safeDivide(td.textContent || '0');
-      td.textContent = divided;
+      td.textContent = formatEffectiveValue(divided);
     });
 
     clone.querySelectorAll('td').forEach(function(td){
