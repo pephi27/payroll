@@ -14578,6 +14578,12 @@ document.addEventListener('DOMContentLoaded', function(){
   try {
     if (!/^https?:/i.test(window.location.protocol)) return; // Only when served over HTTP/S
 
+    var host = (window.location && window.location.hostname) || '';
+    var isLoopback = host === 'localhost' || host === '127.0.0.1' || host === '::1' || host === '[::1]';
+    var isPrivateIp = /^10\./.test(host) || /^192\.168\./.test(host) || /^172\.(1[6-9]|2\d|3[0-1])\./.test(host);
+    var isDevLike = isLoopback || isPrivateIp || /\.local(?:domain)?$/i.test(host) || /\.test$/i.test(host);
+    if (!isDevLike) return; // Avoid connecting to live-reload endpoints on public hosts (e.g. GitHub Pages)
+
     var cfg = window.__LIVE_RELOAD_CONFIG__ || {};
     var logEnabled = !cfg.quiet;
 
