@@ -3601,6 +3601,92 @@ function syncPayrollRowFromDeduction(empId){
   try { calculateRow(row); } catch (_) {}
 }
 
+function findDeductionRowById(empId){
+  const table = document.getElementById('deductionsTable');
+  if (!table) return null;
+  const rows = table.querySelectorAll('tbody tr');
+  for (const tr of rows) {
+    const idCell = tr.querySelector('[data-col="id"]');
+    if (idCell && idCell.textContent && idCell.textContent.trim() === empId) {
+      return tr;
+    }
+  }
+  return null;
+}
+
+function updateDeductionRowDisplay(empId){
+  const tr = findDeductionRowById(empId);
+  if (!tr) return;
+  const emp = employeeList.find(e => e.id === empId) || { id: empId };
+  const empKey = emp.id || empId;
+  const stored = (typeof storedEmployees !== 'undefined' && storedEmployees) ? storedEmployees : {};
+  let rate = Number((stored[empKey]?.hourlyRate) ?? (payrollRates?.[empKey] ?? 0));
+  if (!Number.isFinite(rate)) rate = 0;
+  try { if (payrollRates && typeof payrollRates === 'object') payrollRates[empKey] = rate; } catch (_) {}
+  const rH = Number(regHours?.[empKey] ?? 0);
+  const lSSS = roundToCents(loanSSS?.[empKey] ?? 0);
+  const lPI = roundToCents(loanPI?.[empKey] ?? 0);
+  const v = roundToCents(vale?.[empKey] ?? 0);
+  const vW = roundToCents(valeWed?.[empKey] ?? 0);
+  const rawAdjustment = roundToCents(adjustments?.[empKey] ?? 0);
+  const adjParts = splitAdjustmentValue(rawAdjustment);
+  const adjDeduction = adjParts.deduction;
+  const regPay = +(rH * rate).toFixed(2);
+  const monthly = rate * 8 * 24;
+  const piRate = pagibigRateByMonthly(monthly);
+  const phRate = philhealthRateByMonthly(monthly);
+  const flags = (typeof contribFlags !== 'undefined' && contribFlags && contribFlags[empKey]) || {};
+  const div = Number(divisor) || 1;
+  const pagibig = (flags.pagibig === false) ? 0 : +((regPay * piRate).toFixed(2));
+  const philhealth = (flags.philhealth === false) ? 0 : +((regPay * phRate).toFixed(2));
+  const sssFull = (flags.sss === false) ? 0 : sssShareByMonthly(monthly);
+  const sss = (flags.sss === false) ? 0 : +((sssFull / div).toFixed(2));
+  const sssLoan = +(lSSS / div).toFixed(2);
+  const piLoan = +(lPI / div).toFixed(2);
+  const rowRaw = {
+    pagibig,
+    philhealth,
+    sss,
+    loanSSS: sssLoan,
+    loanPI: piLoan,
+    vale: v,
+    adjustments: adjDeduction,
+    valeWed: vW
+  };
+  rowRaw.total = roundToCents(pagibig + philhealth + sss + sssLoan + piLoan + v + vW + adjDeduction);
+  const rowEffective = computeEffectiveDeductionValues(rowRaw);
+  const editableRawValues = {
+    loanSSS: lSSS,
+    loanPI: lPI,
+    vale: v,
+    adjustments: adjDeduction,
+    valeWed: vW
+  };
+  DEDUCTION_COLUMN_KEYS.forEach(function(key){
+    const cell = tr.querySelector(`[data-col="${key}"]`);
+    if (!cell) return;
+    const rawVal = Object.prototype.hasOwnProperty.call(rowRaw, key) ? rowRaw[key] : 0;
+    const effectiveVal = Object.prototype.hasOwnProperty.call(rowEffective, key) ? rowEffective[key] : 0;
+    if (DEDUCTION_EDITABLE_KEYS.has(key)) {
+      const input = cell.querySelector('input.deduction-input');
+      if (input) {
+        let displayValue = Number(editableRawValues[key] || 0);
+        if (!Number.isFinite(displayValue)) displayValue = 0;
+        input.value = formatDeductionInputValue(displayValue);
+        if (key === 'adjustments') {
+          try { input.dataset.adjustmentRaw = rawAdjustment.toFixed(2); } catch (_) {}
+        }
+      }
+    }
+    updateDeductionCellDisplay(cell, rawVal, effectiveVal, isDeductionColumnIncluded(key));
+    try {
+      const cleanRaw = roundToCents(rawVal || 0).toFixed(2);
+      const cleanEffective = roundToCents(effectiveVal || 0).toFixed(2);
+      setRowDeductionDataset(tr, key, cleanRaw, cleanEffective);
+    } catch (_) {}
+  });
+}
+
 document.addEventListener('change', async (event) => {
   const input = event.target;
   if (!input || !input.matches('.deduction-input')) return;
@@ -3654,7 +3740,7 @@ document.addEventListener('change', async (event) => {
       try { renderAdjustmentsFoot(); } catch (_) {}
     }
   }
-  try { renderDeductionsTable(); } catch (err) { console.warn('Failed to re-render deductions', err); }
+  try { updateDeductionRowDisplay(empId); } catch (err) { console.warn('Failed to update deduction row', err); }
   try { (typeof scheduleTotals === 'function' ? scheduleTotals : updateDeductionsGrandTotals)(); } catch (_) {}
 });
 function renderTable(){
