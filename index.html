@@ -4447,38 +4447,88 @@ function renderAdjustmentsTable() {
   });
   // Attach input event listeners to persist changes and recalculate payroll
   // Monetary adjustments
+  const formatAdjustmentInput = (input) => {
+    const empId = input.getAttribute('data-id');
+    if (!empId) return;
+    const stored = adjustments[empId];
+    const num = Number(stored);
+    if (Number.isFinite(num)) {
+      const rounded = roundToCents(num);
+      if (rounded !== 0) {
+        input.value = rounded.toFixed(2);
+        return;
+      }
+      if (num === 0) {
+        input.value = '0.00';
+        return;
+      }
+    }
+    input.value = '';
+  };
   atbody.querySelectorAll('.adjInput').forEach(inp => {
     inp.addEventListener('input', () => {
       const empId = inp.getAttribute('data-id');
-      const n = parseFloat(inp.value);
-      if (!isNaN(n) && n !== 0) {
-        // Round to 2 decimal places and store
-        adjustments[empId] = +(n.toFixed(2));
+      if (!empId) return;
+      const raw = parseFloat(inp.value);
+      if (Number.isFinite(raw)) {
+        const rounded = roundToCents(raw);
+        if (rounded !== 0) {
+          adjustments[empId] = rounded;
+        } else {
+          delete adjustments[empId];
+        }
       } else {
-        // Remove the entry when zero or invalid
         delete adjustments[empId];
       }
       persistCurrentAdjustments();
       calculateAll();
       renderAdjustmentsFoot();
     });
+    inp.addEventListener('change', () => formatAdjustmentInput(inp));
+    inp.addEventListener('blur', () => formatAdjustmentInput(inp));
+    formatAdjustmentInput(inp);
   });
   // Adjustment hours
+  const formatAdjustmentHoursInput = (input) => {
+    const empId = input.getAttribute('data-id');
+    if (!empId) return;
+    const stored = adjHrs[empId];
+    const num = Number(stored);
+    if (Number.isFinite(num)) {
+      const rounded = roundToCents(num);
+      if (rounded !== 0) {
+        input.value = rounded.toFixed(2);
+        return;
+      }
+      if (num === 0) {
+        input.value = '0.00';
+        return;
+      }
+    }
+    input.value = '';
+  };
   atbody.querySelectorAll('.adjHrsInput').forEach(inp => {
     inp.addEventListener('input', () => {
       const empId = inp.getAttribute('data-id');
-      const n = parseFloat(inp.value);
-      if (!isNaN(n) && n !== 0) {
-        // Round to 2 decimal places and store
-        adjHrs[empId] = +(n.toFixed(2));
+      if (!empId) return;
+      const raw = parseFloat(inp.value);
+      if (Number.isFinite(raw)) {
+        const rounded = roundToCents(raw);
+        if (rounded !== 0) {
+          adjHrs[empId] = rounded;
+        } else {
+          delete adjHrs[empId];
+        }
       } else {
-        // Remove the entry when zero or invalid
         delete adjHrs[empId];
       }
       persistCurrentAdjustmentHours();
       calculateAll();
       renderAdjustmentsFoot();
     });
+    inp.addEventListener('change', () => formatAdjustmentHoursInput(inp));
+    inp.addEventListener('blur', () => formatAdjustmentHoursInput(inp));
+    formatAdjustmentHoursInput(inp);
   });
   // Initialize totals for adjustments (amount and hours)
   renderAdjustmentsFoot();
