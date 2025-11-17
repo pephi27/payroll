@@ -9211,6 +9211,11 @@ tabs.tabPayroll.addEventListener('click', ()=>{
   } catch (e) {}
 
   showTab('payroll');
+  // Ensure the DTR grid is rendered so payroll hours can be derived even if the user
+  // hasn't opened the DTR tab in this session.
+  try {
+    if (typeof renderResults === 'function') renderResults();
+  } catch (e) {}
   // When entering the payroll tab, derive hours directly from the DTR results table
   try {
     if (typeof calculatePayrollFromResultsTable === 'function') calculatePayrollFromResultsTable();
