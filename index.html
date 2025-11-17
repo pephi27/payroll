@@ -4474,6 +4474,26 @@ const adjustmentRefresh = (() => {
   };
 })();
 
+function createDebouncedPersistence(persistFn, delay = 150) {
+  let timer = null;
+  const flush = () => {
+    if (timer) {
+      window.clearTimeout(timer);
+      timer = null;
+    }
+    try { persistFn(); } catch (_) {}
+  };
+  return {
+    schedule() {
+      if (timer) window.clearTimeout(timer);
+      timer = window.setTimeout(() => { timer = null; try { persistFn(); } catch (_) {} }, delay);
+    },
+    flush
+  };
+}
+const adjustmentPersist = createDebouncedPersistence(persistCurrentAdjustments);
+const adjustmentHoursPersist = createDebouncedPersistence(persistCurrentAdjustmentHours);
+
 // === Adjustments Tab ===
 // Render the adjustments table listing all employees with an input field for manual adjustment amounts.
 function renderAdjustmentsTable() {
@@ -4532,11 +4552,11 @@ function renderAdjustmentsTable() {
       } else {
         delete adjustments[empId];
       }
-      persistCurrentAdjustments();
+      adjustmentPersist.schedule();
       adjustmentRefresh.schedule();
     });
-    inp.addEventListener('change', () => { formatAdjustmentInput(inp); adjustmentRefresh.flush(); });
-    inp.addEventListener('blur', () => { formatAdjustmentInput(inp); adjustmentRefresh.flush(); });
+    inp.addEventListener('change', () => { formatAdjustmentInput(inp); adjustmentPersist.flush(); adjustmentRefresh.flush(); });
+    inp.addEventListener('blur', () => { formatAdjustmentInput(inp); adjustmentPersist.flush(); adjustmentRefresh.flush(); });
     formatAdjustmentInput(inp);
   });
   // Adjustment hours
@@ -4573,11 +4593,11 @@ function renderAdjustmentsTable() {
       } else {
         delete adjHrs[empId];
       }
-      persistCurrentAdjustmentHours();
+      adjustmentHoursPersist.schedule();
       adjustmentRefresh.schedule();
     });
-    inp.addEventListener('change', () => { formatAdjustmentHoursInput(inp); adjustmentRefresh.flush(); });
-    inp.addEventListener('blur', () => { formatAdjustmentHoursInput(inp); adjustmentRefresh.flush(); });
+    inp.addEventListener('change', () => { formatAdjustmentHoursInput(inp); adjustmentHoursPersist.flush(); adjustmentRefresh.flush(); });
+    inp.addEventListener('blur', () => { formatAdjustmentHoursInput(inp); adjustmentHoursPersist.flush(); adjustmentRefresh.flush(); });
     formatAdjustmentHoursInput(inp);
   });
   // Initialize totals for adjustments (amount and hours)
