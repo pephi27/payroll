@@ -13730,6 +13730,39 @@ document.addEventListener('DOMContentLoaded', async function () {
       const buf = await crypto.subtle.digest('SHA-256', enc);
       return Array.from(new Uint8Array(buf)).map(b=>b.toString(16).padStart(2,'0')).join('');
     }
+    async function buildMetadata(local, db){
+      const meta = { localKeys: Object.keys(local).length, tables: {} };
+      try { meta.localHash = await sha256Hex(JSON.stringify(local)); } catch(e){ meta.localHash = 'n/a'; }
+      const entries = Object.entries(db || {});
+      for (const [name, rows] of entries){
+        const safeRows = Array.isArray(rows) ? rows : [];
+        const entry = { count: safeRows.length };
+        try { entry.hash = await sha256Hex(JSON.stringify(safeRows)); } catch(e){ entry.hash = 'n/a'; }
+        meta.tables[name] = entry;
+      }
+      return meta;
+    }
+    async function validateBundleIntegrity(bundle){
+      const local = isObject(bundle.local) ? bundle.local : {};
+      const db = isObject(bundle.db) ? bundle.db : {};
+      const meta = isObject(bundle.meta) ? bundle.meta : {};
+      if (meta.localHash && meta.localHash !== 'n/a' && meta.localHash !== await sha256Hex(JSON.stringify(local))){
+        throw new Error('Local payload hash mismatch');
+      }
+      for (const [name, rows] of Object.entries(db)){
+        const expected = meta.tables && meta.tables[name] ? meta.tables[name] : null;
+        const safeRows = Array.isArray(rows) ? rows : [];
+        if (expected){
+          if (typeof expected.count === 'number' && expected.count !== safeRows.length){
+            throw new Error(name + ' row count mismatch');
+          }
+          if (expected.hash && expected.hash !== 'n/a' && expected.hash !== await sha256Hex(JSON.stringify(safeRows))){
+            throw new Error(name + ' hash mismatch');
+          }
+        }
+      }
+      return true;
+    }
     async function backupNow(){
       try {
         lockUI(true); clearLog(); setStatus('Running backup...');
@@ -13759,11 +13792,13 @@ document.addEventListener('DOMContentLoaded', async function () {
             db[t] = [];
           }
         }
+        const meta = await buildMetadata(local, db);
         const bundle = {
           schema: 'payrollhub.backup.v1',
           createdAt: new Date().toISOString(),
           local: local,
-          db: db
+          db: db,
+          meta: meta
         };
         const withoutHash = JSON.stringify(bundle);
         const hash = await sha256Hex(withoutHash);
@@ -13843,12 +13878,18 @@ document.addEventListener('DOMContentLoaded', async function () {
         const declared = clone.hash; delete clone.hash;
         const recompute = await sha256Hex(JSON.stringify(clone));
         if (declared && declared !== recompute){ setStatus('Hash mismatch', true); throw new Error('Hash mismatch'); }
+        await validateBundleIntegrity(bundle);
         const local = isObject(bundle.local) ? bundle.local : {};
         const db = isObject(bundle.db) ? bundle.db : {};
         const lsKeys = Object.keys(local);
         const tableNames = Object.keys(db);
         logMsg('Bundle valid - Local keys: ' + lsKeys.length + ', Tables: ' + tableNames.length);
         if (opts && opts.dryRun){ setStatus('Dry run passed âœ“'); logMsg('No writes performed'); alert('Dry run OK - no data written.'); return; }
+        if (!confirm('Restoring this backup will overwrite local data and Supabase tables (' + tableNames.length + ' tables, ' + lsKeys.length + ' local keys). Continue?')){
+          setStatus('Restore cancelled');
+          logMsg('User cancelled restore');
+          return;
+        }
         // Upsert tables
         if (supabase){
           for (const t of tableNames){
