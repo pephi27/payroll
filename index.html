@@ -364,6 +364,12 @@ function safeStringify(v){
 #payrollTable { table-layout: fixed; }
 #payrollTable th, #payrollTable td { white-space: nowrap; }
 
+.toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 8px 0 12px; flex-wrap: wrap; }
+.toolbar .toolbar-left { display: flex; gap: 8px; flex-wrap: wrap; }
+.save-indicator { color: #555; font-size: 0.9em; }
+.save-indicator.saved { color: #2d7a2d; font-weight: 600; }
+.save-indicator.error { color: #a40000; font-weight: 600; }
+
 
 /* === Reports: Stabilize last 4 totals columns to prevent twitch === */
 #r_table, #projectTotalsTable { table-layout: fixed; }
@@ -2615,7 +2621,14 @@ window.addEventListener('load', dashReports);
     <!-- Manual Adjustments Tab -->
     <div class="tab" id="adjustmentsTab">
      <div class="section note">
-      Enter positive adjustments to add to payroll. Enter negative amounts to create deductions&mdash;they will appear automatically in the Deductions tab and will not reduce the gross pay calculation. Adjustments are saved automatically.
+      Enter positive adjustments to add to payroll. Enter negative amounts to create deductions&mdash;they will appear automatically in the Deductions tab and will not reduce the gross pay calculation. Adjustments are saved automatically to this browser; use the copy/restore buttons to move them to another device.
+     </div>
+     <div class="toolbar" id="adjustmentsControls">
+      <div class="toolbar-left">
+       <button type="button" id="copyAdjustmentsBtn">Copy adjustments</button>
+       <button type="button" id="restoreAdjustmentsBtn">Restore adjustments</button>
+      </div>
+      <span class="save-indicator" id="adjustmentSaveStatus" aria-live="polite">Saved locally</span>
      </div>
      <table id="adjustmentsTable">
       <thead>
@@ -4422,6 +4435,44 @@ function calculateAll(){
   renderDeductionsTable();
 }
 
+const adjustmentRefresh = (() => {
+  let timer = null;
+  const statusEl = () => document.getElementById('adjustmentSaveStatus');
+  const run = () => {
+    timer = null;
+    try { renderAdjustmentsFoot(); } catch (_) {}
+    calculateAll();
+    const el = statusEl();
+    if (el) {
+      el.textContent = 'Saved locally';
+      el.classList.remove('error');
+      el.classList.add('saved');
+    }
+  };
+  return {
+    schedule(){
+      try {
+        const el = statusEl();
+        if (el) {
+          el.textContent = 'Updating…';
+          el.classList.remove('error');
+          el.classList.remove('saved');
+        }
+      } catch (_) {}
+      if (timer) window.clearTimeout(timer);
+      timer = window.setTimeout(run, 120);
+    },
+    flush(){
+      if (timer) {
+        window.clearTimeout(timer);
+        run();
+      } else {
+        run();
+      }
+    }
+  };
+})();
+
 // === Adjustments Tab ===
 // Render the adjustments table listing all employees with an input field for manual adjustment amounts.
 function renderAdjustmentsTable() {
@@ -4481,8 +4532,7 @@ function renderAdjustmentsTable() {
         delete adjustments[empId];
       }
       persistCurrentAdjustments();
-      calculateAll();
-      renderAdjustmentsFoot();
+      adjustmentRefresh.schedule();
     });
     inp.addEventListener('change', () => formatAdjustmentInput(inp));
     inp.addEventListener('blur', () => formatAdjustmentInput(inp));
@@ -4523,15 +4573,14 @@ function renderAdjustmentsTable() {
         delete adjHrs[empId];
       }
       persistCurrentAdjustmentHours();
-      calculateAll();
-      renderAdjustmentsFoot();
+      adjustmentRefresh.schedule();
     });
     inp.addEventListener('change', () => formatAdjustmentHoursInput(inp));
     inp.addEventListener('blur', () => formatAdjustmentHoursInput(inp));
     formatAdjustmentHoursInput(inp);
   });
   // Initialize totals for adjustments (amount and hours)
-  renderAdjustmentsFoot();
+  adjustmentRefresh.flush();
 }
 
 // Compute and display the total of all adjustment amounts in the adjustments table footer.
@@ -4556,6 +4605,70 @@ function renderAdjustmentsFoot() {
     hrsCell.textContent = totHrs.toFixed(2);
   }
 }
+
+function adjustmentsBackupPayload(){
+  return {
+    adjustments: isPlainObject(allAdjustments) ? allAdjustments : {},
+    adjustmentHours: isPlainObject(allAdjHrs) ? allAdjHrs : {},
+    currentPeriod: currentPeriodKey
+  };
+}
+
+async function copyAdjustmentsToClipboard(){
+  const payload = JSON.stringify(adjustmentsBackupPayload());
+  try {
+    await navigator.clipboard.writeText(payload);
+    const el = document.getElementById('adjustmentSaveStatus');
+    if (el) {
+      el.textContent = 'Copied to clipboard';
+      el.classList.remove('error');
+      el.classList.add('saved');
+    }
+  } catch (e) {
+    const el = document.getElementById('adjustmentSaveStatus');
+    if (el) {
+      el.textContent = 'Clipboard copy failed';
+      el.classList.remove('saved');
+      el.classList.add('error');
+    }
+  }
+}
+
+async function restoreAdjustmentsFromPrompt(){
+  const text = window.prompt('Paste the adjustments backup JSON to restore it');
+  if (!text) return;
+  try {
+    const parsed = JSON.parse(text);
+    if (isPlainObject(parsed.adjustments)) allAdjustments = parsed.adjustments;
+    if (isPlainObject(parsed.adjustmentHours)) allAdjHrs = parsed.adjustmentHours;
+    adjustments = allAdjustments[currentPeriodKey] || {};
+    adjHrs = allAdjHrs[currentPeriodKey] || {};
+    persistCurrentAdjustments();
+    persistCurrentAdjustmentHours();
+    renderAdjustmentsTable();
+    calculateAll();
+    const el = document.getElementById('adjustmentSaveStatus');
+    if (el) {
+      el.textContent = 'Adjustments restored';
+      el.classList.remove('error');
+      el.classList.add('saved');
+    }
+  } catch (e) {
+    const el = document.getElementById('adjustmentSaveStatus');
+    if (el) {
+      el.textContent = 'Restore failed: invalid data';
+      el.classList.remove('saved');
+      el.classList.add('error');
+    }
+  }
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  const copyBtn = document.getElementById('copyAdjustmentsBtn');
+  if (copyBtn) copyBtn.addEventListener('click', copyAdjustmentsToClipboard);
+  const restoreBtn = document.getElementById('restoreAdjustmentsBtn');
+  if (restoreBtn) restoreBtn.addEventListener('click', restoreAdjustmentsFromPrompt);
+});
 
 // Initialize the dynamic Pagâ€‘IBIG and PhilHealth rate input fields.  This function
 // sets their values from the current global variables and attaches input
