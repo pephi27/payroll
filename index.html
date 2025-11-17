@@ -9211,12 +9211,30 @@ tabs.tabPayroll.addEventListener('click', ()=>{
   } catch (e) {}
 
   showTab('payroll');
+  // Ensure the DTR grid is rendered so payroll hours can be derived even if the user
+  // hasn't opened the DTR tab in this session.
+  try {
+    if (typeof renderResults === 'function') renderResults();
+  } catch (e) {}
   // When entering the payroll tab, derive hours directly from the DTR results table
   try {
     if (typeof calculatePayrollFromResultsTable === 'function') calculatePayrollFromResultsTable();
     else if (typeof calculatePayrollFromRecords === 'function') calculatePayrollFromRecords();
   } catch(e){}
 });
+
+// On initial load, render the DTR grid so dependent tabs (like payroll) have hours
+// available without requiring a prior visit to the DTR tab.
+(function ensureDtrRenderedOnBoot(){
+  const renderDtr = () => {
+    try {
+      if (typeof renderResults === 'function') renderResults();
+    } catch (e) {}
+  };
+
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', renderDtr, { once: true });
+  else renderDtr();
+})();
 
 // Switch to the dashboard tab when clicked. Render payroll history if available.
 if (tabs.tabDashboard) {
