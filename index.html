@@ -8406,6 +8406,10 @@ rows += `<tr class="allowance">
       #panelContributionSummary .controls label{font-size:13px;color:#334155;font-weight:600;display:flex;flex-direction:column;align-items:flex-start;gap:6px}
       #panelContributionSummary .controls label .hint{font-weight:400;font-size:12px;color:#64748b}
       #panelContributionSummary .controls select{padding:6px 10px;border:1px solid #cbd5e1;border-radius:8px;font-size:14px;min-width:220px;background:#fff;color:#0f172a}
+      #panelContributionSummary .controls .actions{display:flex;gap:8px;align-items:center;margin-left:auto}
+      #panelContributionSummary .controls .actions button{padding:8px 12px;border:1px solid #cbd5e1;border-radius:8px;background:#f8fafc;color:#0f172a;font-weight:600;cursor:pointer;transition:background .15s ease,box-shadow .15s ease}
+      #panelContributionSummary .controls .actions button:hover{background:#eef4fb;box-shadow:0 1px 3px rgba(0,0,0,.08)}
+      #panelContributionSummary .controls .actions button:focus{outline:2px solid #a5b4fc;outline-offset:2px}
       #panelContributionSummary .summary-meta{font-size:13px;color:#475569;margin-bottom:10px}
       #panelContributionSummary .empty-state{padding:16px;border:1px dashed #cbd5e1;border-radius:10px;background:#f8fafc;color:#64748b;font-size:14px;text-align:center}
       #panelContributionSummary .table-wrap{overflow-x:auto}
@@ -8423,6 +8427,10 @@ rows += `<tr class="allowance">
           <select id="contribPeriodSelect" multiple size="6" title="Hold Ctrl (Windows) or Command (macOS) to select multiple periods."></select>
           <span class="hint">Hold Ctrl (Windows) or ⌘ (macOS) to select multiple periods.</span>
         </label>
+        <div class="actions">
+          <button id="contribPrintBtn" type="button">Print</button>
+          <button id="contribExcelBtn" type="button">Download Excel</button>
+        </div>
       </div>
       <div id="contribSummaryMeta" class="summary-meta">Choose one or more payroll periods to view contribution totals from payroll history.</div>
       <div id="contribSummaryEmpty" class="empty-state">Select at least one payroll period to view contribution totals.</div>
@@ -8464,6 +8472,8 @@ rows += `<tr class="allowance">
     const EMPTY_ID = 'contribSummaryEmpty';
     const META_ID = 'contribSummaryMeta';
     const TABLE_ID = 'contribSummaryTable';
+    const PRINT_ID = 'contribPrintBtn';
+    const EXCEL_ID = 'contribExcelBtn';
 
     function readHistory(){
       if (Array.isArray(window.payrollHistory)) return window.payrollHistory.slice();
@@ -8852,12 +8862,95 @@ rows += `<tr class="allowance">
       updateMeta(periodDetails, selectedKeys);
     }
 
+    function cloneVisibleTable(){
+      const table = document.getElementById(TABLE_ID);
+      if (!table) return null;
+      const clone = table.cloneNode(true);
+      clone.style.removeProperty('display');
+      return clone;
+    }
+
+    function hasContributionRows(table){
+      if (!table) return false;
+      return Array.from(table.querySelectorAll('tbody tr')).length > 0;
+    }
+
+    function printContributionSummary(){
+      const tableClone = cloneVisibleTable();
+      if (!tableClone || !hasContributionRows(tableClone)){
+        alert('Select at least one payroll period with contribution data before printing.');
+        return;
+      }
+      const metaEl = document.getElementById(META_ID);
+      const metaHtml = metaEl ? metaEl.innerHTML : '';
+      const html = `<!doctype html><html><head><meta charset="utf-8"><title>Contribution Summary</title>`+
+        '<style>body{font-family:Arial,Helvetica,sans-serif;padding:16px;color:#0f172a} h2{margin:0 0 10px 0;text-align:center}' +
+        '#meta{margin-bottom:12px;font-size:13px;color:#475569} table{width:100%;border-collapse:collapse;font-size:12px}' +
+        'th,td{border:1px solid #1f2937;padding:6px 8px;text-align:right;font-variant-numeric:tabular-nums}' +
+        'th:first-child,td:first-child{text-align:left;white-space:nowrap}' +
+        'th:nth-child(2),td:nth-child(2){text-align:left}' +
+        'thead th{background:#eef2ff}' +
+        'tfoot th,tfoot td{font-weight:600;background:#fef3c7}' +
+        '</style></head><body>' +
+        '<h2>Contribution &amp; Loan Summary</h2>' +
+        (metaHtml ? `<div id="meta">${metaHtml}</div>` : '') +
+        tableClone.outerHTML +
+        '</body></html>';
+      const w = window.open('', '', 'width=1024,height=768');
+      if (!w) return;
+      w.document.open();
+      w.document.write(html);
+      w.document.close();
+      w.focus();
+      setTimeout(()=>{ try{ w.print(); }catch(_){} }, 10);
+    }
+
+    function exportContributionExcel(){
+      const table = cloneVisibleTable();
+      if (!table || !hasContributionRows(table)){
+        alert('Select at least one payroll period with contribution data before downloading.');
+        return;
+      }
+      if (typeof XLSX === 'undefined'){
+        alert('Excel library not available');
+        return;
+      }
+      const metaEl = document.getElementById(META_ID);
+      const metaText = metaEl ? metaEl.textContent.trim() : '';
+      const rows = Array.from(table.querySelectorAll('tr')).map(tr =>
+        Array.from(tr.querySelectorAll('th,td')).map(cell => {
+          const text = (cell.textContent || '').trim();
+          const numeric = Number(text.replace(/,/g,''));
+          return (text !== '' && Number.isFinite(numeric)) ? numeric : text;
+        })
+      );
+      const aoa = [['Contribution & Loan Summary']];
+      if (metaText) aoa.push([metaText]);
+      aoa.push([]);
+      rows.forEach(row => aoa.push(row));
+      const ws = XLSX.utils.aoa_to_sheet(aoa);
+      ws['!cols'] = (rows[0] || []).map(() => ({ wch: 16 }));
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, 'Contributions');
+      XLSX.writeFile(wb, 'contribution-summary.xlsx');
+    }
+
     function bind(){
       const select = document.getElementById(PERIOD_SELECT_ID);
       if (select && !select.__wired){
         select.addEventListener('change', render);
         select.addEventListener('input', render);
         select.__wired = true;
+      }
+      const printBtn = document.getElementById(PRINT_ID);
+      if (printBtn && !printBtn.__wired){
+        printBtn.addEventListener('click', printContributionSummary);
+        printBtn.__wired = true;
+      }
+      const excelBtn = document.getElementById(EXCEL_ID);
+      if (excelBtn && !excelBtn.__wired){
+        excelBtn.addEventListener('click', exportContributionExcel);
+        excelBtn.__wired = true;
       }
     }
 
