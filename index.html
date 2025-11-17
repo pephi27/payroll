@@ -1075,6 +1075,92 @@ window.addEventListener('load', dashReports);
             min-height: 100vh;
             color: #333;
         }
+        /* Contribution tab helpers */
+        .contrib-hero {
+            background: linear-gradient(135deg, rgba(102, 126, 234, 0.12), rgba(118, 75, 162, 0.14));
+            border: 1px solid rgba(99, 102, 241, 0.15);
+            border-radius: 16px;
+            padding: 18px 20px;
+            margin-bottom: 18px;
+            display: grid;
+            grid-template-columns: 1.2fr 1fr;
+            gap: 16px;
+            align-items: start;
+        }
+        .contrib-hero h3 {
+            margin: 0 0 6px;
+            font-size: 20px;
+            color: #312e81;
+        }
+        .contrib-hero p {
+            margin: 0 0 8px;
+            color: #1f2937;
+        }
+        .contrib-key-list {
+            margin: 0;
+            padding-left: 18px;
+            color: #374151;
+            display: grid;
+            gap: 4px;
+        }
+        .contrib-pill-stack {
+            display: grid;
+            gap: 8px;
+        }
+        .contrib-pill {
+            border-radius: 12px;
+            padding: 10px 12px;
+            background: #fff;
+            border: 1px solid #e5e7eb;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.04);
+        }
+        .contrib-pill strong { color: #4338ca; display: block; margin-bottom: 4px; }
+        .contrib-pill small { color: #4b5563; line-height: 1.4; display: block; }
+        .table-card {
+            background: #fff;
+            border: 1px solid #e5e7eb;
+            border-radius: 14px;
+            padding: 14px;
+            box-shadow: 0 10px 25px rgba(0, 0, 0, 0.05);
+            margin-bottom: 16px;
+        }
+        .table-card__header {
+            display: flex;
+            justify-content: space-between;
+            gap: 12px;
+            align-items: flex-start;
+            margin-bottom: 10px;
+        }
+        .table-card__title {
+            margin: 0;
+            color: #111827;
+            font-size: 18px;
+        }
+        .table-card__subtitle { margin: 4px 0 0; color: #4b5563; font-size: 13px; line-height: 1.5; }
+        .table-card__tags {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+        }
+        .table-card__tag {
+            background: #eef2ff;
+            color: #4338ca;
+            padding: 4px 10px;
+            border-radius: 999px;
+            font-size: 12px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.03em;
+        }
+        .table-card .controls { margin-top: 6px; flex-wrap: wrap; }
+        .table-card .controls label { margin-top: 6px; }
+        .table-card table { margin-top: 6px; }
+        .contrib-note { margin-top: 10px; color: #374151; }
+        .contrib-note strong { color: #111827; }
+        @media (max-width: 960px) {
+            .contrib-hero { grid-template-columns: 1fr; }
+            .table-card__header { flex-direction: column; }
+        }
         .app-container {
             display: flex;
             min-height: 100vh;
@@ -2441,112 +2527,170 @@ window.addEventListener('load', dashReports);
     </div>
     <!-- Renamed SSS tab to Contributions for clarity -->
     <div class="tab" id="contributionsTab">
-     <div class="controls">
-      <button id="addSssRow">
-       Add Row
-      </button>
-      <button class="primary" id="resetSss">
-       Reset to Defaults (Custom)
-      </button>
-      <button class="danger" id="clearSss">
-       Clear SSS Table
-      </button>
-      <button id="exportSss">
-       Export CSV
-      </button>
-      <label>
-       Import CSV (min,max,employeeShare,employerShare)
-       <br/>
-       <input accept=".csv,text/csv" id="importSss" type="file"/>
-      </label>
+     <div class="contrib-hero">
+      <div>
+       <h3>Government contributions at a glance</h3>
+       <p>Configure the tables below so PayrollPro can match each worker to the correct statutory contribution.</p>
+       <ul class="contrib-key-list">
+        <li>Ranges are matched against <strong>monthly income</strong> from payroll calculations.</li>
+        <li>Each edit saves automatically &mdash; no extra confirmation needed.</li>
+        <li>Use CSV import/export to align with government updates.</li>
+       </ul>
+      </div>
+      <div class="contrib-pill-stack">
+       <div class="contrib-pill">
+        <strong>SSS</strong>
+        <small>Employee and employer peso shares per income bracket.</small>
+       </div>
+       <div class="contrib-pill">
+        <strong>Pag-IBIG</strong>
+        <small>Decimal employee rate applied to regular pay (employer assumed to match).</small>
+       </div>
+       <div class="contrib-pill">
+        <strong>PhilHealth</strong>
+        <small>Decimal employee rate per bracket; applied to monthly income.</small>
+       </div>
+      </div>
      </div>
-     <table id="sssTable">
-      <thead>
-       <tr>
-        <th>
-         Range From (â‚±)
-        </th>
-        <th>
-         Range To (â‚±)
-        </th>
-        <th>
-         Employee Share (â‚±)
-        </th>
-        <th>
-         Employer Share (â‚±)
-        </th>
-        <th>
-         Actions
-        </th>
-       </tr>
-      </thead>
-      <tbody>
-      </tbody>
-     </table>
-     <div class="section note">
-      Monthly Income = Hourly Rate &times; 8 &times; 24. We pick the row where
-      <i>
-       min &le; income &le; max
-      </i>
-      and use the Employee and Employer Shares.
+
+     <div class="table-card">
+      <div class="table-card__header">
+       <div>
+        <p class="table-card__tag">SSS</p>
+        <h4 class="table-card__title">Monthly SSS shares</h4>
+        <p class="table-card__subtitle">Use the peso amounts that apply to each bracket. PayrollPro will pick the row where <em>min &le; income &le; max</em>.</p>
+       </div>
+       <div class="table-card__tags">
+        <span class="table-card__tag">Peso values</span>
+        <span class="table-card__tag">Auto-save</span>
+       </div>
+      </div>
+      <div class="controls">
+       <button id="addSssRow">
+        Add Row
+       </button>
+       <button class="primary" id="resetSss">
+        Reset to Defaults (Custom)
+       </button>
+       <button class="danger" id="clearSss">
+        Clear SSS Table
+       </button>
+       <button id="exportSss">
+        Export CSV
+       </button>
+       <label>
+        Import CSV (min,max,employeeShare,employerShare)
+        <br/>
+        <input accept=".csv,text/csv" id="importSss" type="file"/>
+       </label>
+      </div>
+      <table id="sssTable">
+       <thead>
+        <tr>
+         <th>
+          Range From (â‚±)
+         </th>
+         <th>
+          Range To (â‚±)
+         </th>
+         <th>
+          Employee Share (â‚±)
+         </th>
+         <th>
+          Employer Share (â‚±)
+         </th>
+         <th>
+          Actions
+         </th>
+        </tr>
+       </thead>
+       <tbody>
+       </tbody>
+      </table>
+      <div class="section note contrib-note">
+       <strong>How it is used:</strong> Monthly Income = Hourly Rate &times; 8 &times; 24. The matching bracket supplies the employee and employer shares.
+      </div>
      </div>
-    <!-- Editable Pagâ€‘IBIG and PhilHealth tables (employee rates).  Each table allows
-         defining income ranges and the corresponding employee rate (as a decimal).
-         The rate is applied to regular pay to compute the contribution. -->
-    <h4>Pagâ€‘IBIG Table (Employee Rate)</h4>
-    <div class="controls">
-      <button id="addPagibigRow">
-       Add Row
-      </button>
-      <button class="primary" id="resetPagibig">
-       Reset to Defaults
-      </button>
-      <button class="danger" id="clearPagibig">
-       Clear Pag-IBIG Table
-      </button>
-    </div>
-    <table id="pagibigTable">
-      <thead>
-        <tr>
-          <th>Range From (â‚±)</th>
-          <th>Range To (â‚±)</th>
-          <th>Rate (decimal)</th>
-          <th>Actions</th>
-        </tr>
-      </thead>
-      <tbody>
-      </tbody>
-    </table>
-    <div class="section note">
-      Rate is decimal (e.g. 0.02 = 2% employee share). Employer share is assumed to match the employee share but is not used in calculations.
-    </div>
-    <h4>PhilHealth Table (Employee Rate)</h4>
-    <div class="controls">
-      <button id="addPhilRow">
-       Add Row
-      </button>
-      <button class="primary" id="resetPhil">
-       Reset to Defaults
-      </button>
-      <button class="danger" id="clearPhil">
-       Clear PhilHealth Table
-      </button>
-    </div>
-    <table id="philhealthTable">
-      <thead>
-        <tr>
-          <th>Range From (â‚±)</th>
-          <th>Range To (â‚±)</th>
-          <th>Rate (decimal)</th>
-          <th>Actions</th>
-        </tr>
-      </thead>
-      <tbody>
-      </tbody>
-    </table>
-    <div class="section note">
-      Rate is decimal (e.g. 0.025 = 2.5% employee share). Employer share is assumed to match the employee share but is not used in calculations.
-    </div>
+
+     <div class="table-card">
+      <div class="table-card__header">
+       <div>
+        <p class="table-card__tag">Pag-IBIG</p>
+        <h4 class="table-card__title">Pag-IBIG employee rates</h4>
+        <p class="table-card__subtitle">Enter rates as decimals (0.02 = 2%). Applied to regular pay; employer share is assumed to mirror the employee rate.</p>
+       </div>
+       <div class="table-card__tags">
+        <span class="table-card__tag">Rate table</span>
+        <span class="table-card__tag">Bracketed</span>
+       </div>
+      </div>
+      <div class="controls">
+        <button id="addPagibigRow">
+         Add Row
+        </button>
+        <button class="primary" id="resetPagibig">
+         Reset to Defaults
+        </button>
+        <button class="danger" id="clearPagibig">
+         Clear Pag-IBIG Table
+        </button>
+      </div>
+      <table id="pagibigTable">
+        <thead>
+          <tr>
+            <th>Range From (â‚±)</th>
+            <th>Range To (â‚±)</th>
+            <th>Rate (decimal)</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+        </tbody>
+      </table>
+      <div class="section note contrib-note">
+        Keep ranges continuous so every salary finds a matching rate. Export before major edits so you can restore if needed.
+      </div>
+     </div>
+
+     <div class="table-card">
+      <div class="table-card__header">
+       <div>
+        <p class="table-card__tag">PhilHealth</p>
+        <h4 class="table-card__title">PhilHealth employee rates</h4>
+        <p class="table-card__subtitle">Provide decimal rates per income band. The rate is applied to monthly income to compute the employee share.</p>
+       </div>
+       <div class="table-card__tags">
+        <span class="table-card__tag">Rate table</span>
+        <span class="table-card__tag">Bracketed</span>
+       </div>
+      </div>
+      <div class="controls">
+        <button id="addPhilRow">
+         Add Row
+        </button>
+        <button class="primary" id="resetPhil">
+         Reset to Defaults
+        </button>
+        <button class="danger" id="clearPhil">
+         Clear PhilHealth Table
+        </button>
+      </div>
+      <table id="philhealthTable">
+        <thead>
+          <tr>
+            <th>Range From (â‚±)</th>
+            <th>Range To (â‚±)</th>
+            <th>Rate (decimal)</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+        </tbody>
+      </table>
+      <div class="section note contrib-note">
+        Rates use decimal format (e.g. 0.025 = 2.5% employee share). Ensure the final row captures high earners.
+      </div>
+     </div>
     </div>
     <div class="tab" id="deductionsTab">
      <div id="dedMainSection" class="subtab-panel active">
