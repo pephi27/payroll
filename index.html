@@ -169,7 +169,12 @@ function markHydrated() {
 
 function queueHydrateRerender() {
   markHydrated();
+  try { if (typeof refreshPeriodScopedCachesFromStorage === 'function') refreshPeriodScopedCachesFromStorage(); } catch {}
   const rerender = () => {
+    try {
+      if (typeof renderAdjustmentsTable === 'function') renderAdjustmentsTable();
+      else if (typeof renderAdjustmentsFoot === 'function') renderAdjustmentsFoot();
+    } catch {}
     try { if (typeof window.calculateAll === 'function') window.calculateAll(); } catch {}
     try { if (typeof window.renderResults === 'function') window.renderResults(); } catch {}
   };
@@ -3208,6 +3213,9 @@ try {
     window.addEventListener('kv-hydrated', () => {
       periodPersistenceReady = true;
       refreshPeriodScopedCachesFromStorage();
+      try {
+        if (typeof renderAdjustmentsTable === 'function') renderAdjustmentsTable();
+      } catch (_) {}
     });
   }
 } catch(_){ }
