@@ -10251,8 +10251,10 @@ function __fmt12Clock(hhmm){
   // Respect DTR tab's Date filter when present; fall back to active week.
   const __df = document.getElementById('dtrDateFrom');
   const __dt = document.getElementById('dtrDateTo');
-  const startDate = (__df && __df.value) ? __df.value : (document.getElementById('weekStart').value || null);
-  const endDate   = (__dt && __dt.value) ? __dt.value : (document.getElementById('weekEnd').value || null);
+  const startDateRaw = (__df && __df.value) ? __df.value : (document.getElementById('weekStart').value || null);
+  const endDateRaw   = (__dt && __dt.value) ? __dt.value : (document.getElementById('weekEnd').value || null);
+  const startDate = normalizeDate(startDateRaw) || null;
+  const endDate   = normalizeDate(endDateRaw)   || null;
   currentProjectFilter = document.getElementById('filterProject') ? document.getElementById('filterProject').value : 'all';
   localStorage.setItem(LS_FILTER_PROJECT, currentProjectFilter);
 
@@ -10261,9 +10263,11 @@ function __fmt12Clock(hhmm){
 const groups = {};
   const manualKeys = new Set();
   for(const r of storedRecords){
-    if(startDate && r.date < startDate) continue;
-    if(endDate && r.date > endDate) continue;
-    const key = r.date + '___' + r.empId;
+    const recDate = normalizeDate(r.date);
+    if (!recDate) continue;
+    if(startDate && recDate < startDate) continue;
+    if(endDate && recDate > endDate) continue;
+    const key = recDate + '___' + r.empId;
     if(!groups[key]) groups[key]=[];
     groups[key].push(r.time);
     if (r.manual) manualKeys.add(key);
@@ -12681,12 +12685,44 @@ function loadSaved(){
     if (t) t.value = to;
   }
 
+  function normalizeDate(str){
+    if (!str) return '';
+    const raw = String(str).trim();
+    if (!raw) return '';
+    // Already ISO (yyyy-mm-dd)
+    if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
+    // Handle common non-ISO formats like mm/dd/yyyy or yyyy/mm/dd
+    const parts = raw.replace(/\./g, '/').split(/[\/\-]/).filter(Boolean);
+    if (parts.length === 3) {
+      let y = parts[0], m = parts[1], d = parts[2];
+      if (parts[0].length !== 4) { // assume mm/dd/yyyy
+        y = parts[2].length === 2 ? '20' + parts[2] : parts[2];
+        m = parts[0];
+        d = parts[1];
+      }
+      const yN = Number(y), mN = Number(m), dN = Number(d);
+      if (yN && mN && dN) {
+        const pad = (n) => String(n).padStart(2, '0');
+        const iso = `${yN}-${pad(mN)}-${pad(dN)}`;
+        const dt = new Date(iso + 'T00:00');
+        if (!isNaN(dt.getTime())) return iso;
+      }
+    }
+    const dt = new Date(raw);
+    if (!isNaN(dt.getTime())) {
+      const pad = (n) => String(n).padStart(2, '0');
+      return `${dt.getFullYear()}-${pad(dt.getMonth()+1)}-${pad(dt.getDate())}`;
+    }
+    return '';
+  }
+
   function withinRange(dateStr, from, to){
-    if (!dateStr) return false;
-    const s = dateStr.trim();
+    const s = normalizeDate(dateStr);
     if (!s) return false;
-    if (from && s < from) return false;
-    if (to   && s > to)   return false;
+    const f = normalizeDate(from);
+    const t = normalizeDate(to);
+    if (f && s < f) return false;
+    if (t && s > t) return false;
     return true;
   }
 
@@ -12701,9 +12737,8 @@ function loadSaved(){
     const hasRange = !!(f || t);
 
     Array.from(tbody.rows).forEach(tr=>{
-      // Adjust the index below if your Date column index is different.
-      // Assuming the "Date" column is 4 (0-based), change as necessary.
-      const dateStr = (tr.cells[4]?.textContent || '').trim();
+      // Prefer the dataset date (ISO) and fall back to the cell text for older renders.
+      const dateStr = (tr.dataset && tr.dataset.date) ? tr.dataset.date : (tr.cells[4]?.textContent || '').trim();
       const show = !hasRange || withinRange(dateStr, f, t);
       tr.style.display = show ? '' : 'none';
     });
