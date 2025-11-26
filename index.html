@@ -11119,8 +11119,8 @@ function calculatePayrollFromRecords(){
       try {
         const dtrStart = document.getElementById('filterStart') || document.getElementById('dtrDateFrom');
         const dtrEnd   = document.getElementById('filterEnd')   || document.getElementById('dtrDateTo');
-        if (weekStartEl && dtrStart) dtrStart.value = weekStartEl.value;
-        if (weekEndEl   && dtrEnd)   dtrEnd.value   = weekEndEl.value;
+        if (weekStartEl && dtrStart) setDtrDateRange(weekStartEl.value, undefined, { force: true });
+        if (weekEndEl   && dtrEnd)   setDtrDateRange(undefined, weekEndEl.value, { force: true });
       } catch (err) {}
       // Re-render the DTR results table with updated filters
       if (typeof renderResults === 'function') renderResults();
@@ -11151,8 +11151,7 @@ function calculatePayrollFromRecords(){
       }
       // Restore DTR date range values to what the user had prior to aggregation
       try {
-        if (dtrStartElTmp) dtrStartElTmp.value = origFrom;
-        if (dtrEndElTmp)   dtrEndElTmp.value   = origTo;
+        setDtrDateRange(origFrom, origTo, { force: true });
       } catch(_) {}
       // Ensure the visible DTR table reflects the restored date range.
       try {
@@ -11192,7 +11191,8 @@ function calculatePayrollFromRecords(){
   }
 
 weekStartEl.addEventListener('change', () => {
-  if (dtrStartEl) dtrStartEl.value = weekStartEl.value;
+  const forceSync = (document.activeElement === weekStartEl);
+  setDtrDateRange(weekStartEl.value, undefined, { force: forceSync });
   syncPeriodScopedData();
   try {
     if (typeof calculatePayrollFromResultsTable === 'function') calculatePayrollFromResultsTable();
@@ -11203,7 +11203,8 @@ weekStartEl.addEventListener('change', () => {
   calculateAll();
 });
 weekEndEl.addEventListener('change', () => {
-  if (dtrEndEl) dtrEndEl.value = weekEndEl.value;
+  const forceSync = (document.activeElement === weekEndEl);
+  setDtrDateRange(undefined, weekEndEl.value, { force: forceSync });
   syncPeriodScopedData();
   try {
     if (typeof calculatePayrollFromResultsTable === 'function') calculatePayrollFromResultsTable();
@@ -11580,8 +11581,7 @@ function restoreData(file) {
       if (projectEl) projectEl.value = 'all';
       currentProjectFilter = 'all';
       try { localStorage.setItem(LS_FILTER_PROJECT, currentProjectFilter); } catch(e){}
-      if (fromEl) fromEl.value = '';
-      if (toEl) toEl.value = '';
+      setDtrDateRange('', '', { force: true });
       try {
         localStorage.removeItem(LS_FROM);
         localStorage.removeItem(LS_TO);
@@ -12672,13 +12672,22 @@ h3{margin:0 0 3px 0;font-size:10px;}
 });
 var LS_FROM = (typeof window.LS_FROM !== 'undefined') ? window.LS_FROM : 'dtrDateFrom';
 var LS_TO   = (typeof window.LS_TO   !== 'undefined') ? window.LS_TO   : 'dtrDateTo';
+var dtrDateManuallySet = false;
 function getEl(id){ return document.getElementById(id); }
+function markManualState(from, to){ dtrDateManuallySet = !!(from || to); }
+function setDtrDateRange(from, to, opts){
+  const force = opts && opts.force;
+  if (dtrDateManuallySet && !force) return;
+  const f = getEl('dtrDateFrom');
+  const t = getEl('dtrDateTo');
+  if (f && typeof from !== 'undefined') f.value = from || '';
+  if (t && typeof to !== 'undefined')   t.value = to   || '';
+  markManualState(from, to);
+}
 function loadSaved(){
     const from = localStorage.getItem(LS_FROM) || '';
     const to   = localStorage.getItem(LS_TO) || '';
-    const f = getEl('dtrDateFrom'), t = getEl('dtrDateTo');
-    if (f) f.value = from;
-    if (t) t.value = to;
+    setDtrDateRange(from, to, { force: true });
   }
 
   function withinRange(dateStr, from, to){
@@ -12693,6 +12702,7 @@ function loadSaved(){
   function applyDtrDateFilter(){
     const f = getEl('dtrDateFrom')?.value || '';
     const t = getEl('dtrDateTo')?.value || '';
+    markManualState(f, t);
     try { localStorage.setItem(LS_FROM, f); } catch(e){}
     try { localStorage.setItem(LS_TO, t); } catch(e){}
 
@@ -12749,6 +12759,7 @@ function loadSaved(){
     if (c) c.addEventListener('click', ()=>{
       if (f) f.value = '';
       if (t) t.value = '';
+      markManualState('', '');
       try { localStorage.removeItem(LS_FROM); } catch(e){}
       try { localStorage.removeItem(LS_TO); } catch(e){}
       applyDtrDateFilter();
@@ -13168,10 +13179,13 @@ function updateWeekInputs(snap) {
 
   // DTR date inputs (type=date) must receive ISO; then fire change events
   try {
-    const df = document.getElementById('dtrDateFrom');
-    const dt = document.getElementById('dtrDateTo');
-    if (df) { df.value = startISO || ''; df.dispatchEvent(new Event('change', { bubbles: true })); }
-    if (dt) { dt.value = endISO   || ''; dt.dispatchEvent(new Event('change', { bubbles: true })); }
+    setDtrDateRange(startISO || '', endISO || '', { force: true });
+    try {
+      const df = document.getElementById('dtrDateFrom');
+      const dt = document.getElementById('dtrDateTo');
+      if (df) df.dispatchEvent(new Event('change', { bubbles: true }));
+      if (dt) dt.dispatchEvent(new Event('change', { bubbles: true }));
+    } catch (_) {}
   } catch (_) {}
 
   // Refresh DTR list immediately
