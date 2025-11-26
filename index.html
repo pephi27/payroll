@@ -11022,7 +11022,6 @@ const otInActual = pickEarliest({start: schedule.rng_ot_in_start, end: schedule.
 }
 const dtrStartEl = document.getElementById('filterStart');
 const dtrEndEl = document.getElementById('filterEnd');
-let shouldMirrorPayrollDates = false;
 
 function calculatePayrollFromRecords(){
   try { if (typeof renderResults === 'function') renderResults(); } catch(e){ console.warn('renderResults failed', e); }
@@ -11091,8 +11090,6 @@ function calculatePayrollFromRecords(){
    */
   function calculatePayrollFromResultsTable() {
     try {
-      const mirrorDates = shouldMirrorPayrollDates;
-      shouldMirrorPayrollDates = false;
       // Save current filter/search values
       const searchInput = document.getElementById('dtrSearchName');
       const filterSelect = document.getElementById('filterProject');
@@ -11115,17 +11112,15 @@ function calculatePayrollFromRecords(){
         // Do not permanently persist this temporary change; we will restore later.
         try { localStorage.setItem(LS_FILTER_PROJECT, 'all'); } catch (e) {}
       }
-      // Sync the DTR date range with the payroll period only when explicitly
-      // requested (e.g., after changing the payroll period). This preserves
-      // any ad-hoc DTR filter edits the user makes while still allowing the
-      // payroll inputs to drive the table when needed.
+      // Sync the DTR date range with the payroll period.  Update the
+      // DTR filter inputs if present (filterStart/filterEnd) and let
+      // renderResults() handle the new range.  Some DTR pages use
+      // dtrDateFrom/dtrDateTo instead.
       try {
-        if (mirrorDates) {
-          const dtrStart = document.getElementById('filterStart') || document.getElementById('dtrDateFrom');
-          const dtrEnd   = document.getElementById('filterEnd')   || document.getElementById('dtrDateTo');
-          if (weekStartEl && dtrStart) dtrStart.value = weekStartEl.value;
-          if (weekEndEl   && dtrEnd)   dtrEnd.value   = weekEndEl.value;
-        }
+        const dtrStart = document.getElementById('filterStart') || document.getElementById('dtrDateFrom');
+        const dtrEnd   = document.getElementById('filterEnd')   || document.getElementById('dtrDateTo');
+        if (weekStartEl && dtrStart) dtrStart.value = weekStartEl.value;
+        if (weekEndEl   && dtrEnd)   dtrEnd.value   = weekEndEl.value;
       } catch (err) {}
       // Re-render the DTR results table with updated filters
       if (typeof renderResults === 'function') renderResults();
@@ -11198,7 +11193,6 @@ function calculatePayrollFromRecords(){
 
 weekStartEl.addEventListener('change', () => {
   if (dtrStartEl) dtrStartEl.value = weekStartEl.value;
-  shouldMirrorPayrollDates = true;
   syncPeriodScopedData();
   try {
     if (typeof calculatePayrollFromResultsTable === 'function') calculatePayrollFromResultsTable();
@@ -11210,7 +11204,6 @@ weekStartEl.addEventListener('change', () => {
 });
 weekEndEl.addEventListener('change', () => {
   if (dtrEndEl) dtrEndEl.value = weekEndEl.value;
-  shouldMirrorPayrollDates = true;
   syncPeriodScopedData();
   try {
     if (typeof calculatePayrollFromResultsTable === 'function') calculatePayrollFromResultsTable();
@@ -11246,7 +11239,6 @@ if (dtrEndEl) {
 tabs.tabPayroll.addEventListener('click', () => {
   if (dtrStartEl && !weekStartEl.value) weekStartEl.value = dtrStartEl.value;
   if (dtrEndEl && !weekEndEl.value) weekEndEl.value = dtrEndEl.value;
-  shouldMirrorPayrollDates = true;
   // Compute hours based on the current DTR table rather than recomputing from raw records
   try {
     if (typeof calculatePayrollFromResultsTable === 'function') calculatePayrollFromResultsTable();
