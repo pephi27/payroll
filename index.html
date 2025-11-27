@@ -13155,6 +13155,16 @@ function updateWeekInputs(snap) {
   const startISO = toIsoDate(snap && snap.startDate);
   const endISO   = toIsoDate(snap && snap.endDate);
 
+  // If the user already set a custom DTR date filter (persisted in localStorage),
+  // do not override it when switching payroll periods or when realtime sync
+  // repopulates the dropdowns. Previously, every populateDropdowns() call
+  // would reset the DTR inputs back to the payroll period range, causing the
+  // dates to "jump" while the user was editing them.
+  let hasCustomDtrFilter = false;
+  try {
+    hasCustomDtrFilter = !!(localStorage.getItem(LS_FROM) || localStorage.getItem(LS_TO));
+  } catch (_) {}
+
   const ws = document.getElementById('weekStart');
   const we = document.getElementById('weekEnd');
   if (ws) ws.value = startISO || '';
@@ -13167,12 +13177,14 @@ function updateWeekInputs(snap) {
   } catch (_) {}
 
   // DTR date inputs (type=date) must receive ISO; then fire change events
-  try {
-    const df = document.getElementById('dtrDateFrom');
-    const dt = document.getElementById('dtrDateTo');
-    if (df) { df.value = startISO || ''; df.dispatchEvent(new Event('change', { bubbles: true })); }
-    if (dt) { dt.value = endISO   || ''; dt.dispatchEvent(new Event('change', { bubbles: true })); }
-  } catch (_) {}
+  if (!hasCustomDtrFilter) {
+    try {
+      const df = document.getElementById('dtrDateFrom');
+      const dt = document.getElementById('dtrDateTo');
+      if (df) { df.value = startISO || ''; df.dispatchEvent(new Event('change', { bubbles: true })); }
+      if (dt) { dt.value = endISO   || ''; dt.dispatchEvent(new Event('change', { bubbles: true })); }
+    } catch (_) {}
+  }
 
   // Refresh DTR list immediately
   try { if (typeof renderResults === 'function') { renderResults(); } } catch (e) {}
