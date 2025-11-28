@@ -131,8 +131,6 @@ const KNOWN_KEYS = [
   "payroll_vale",
   "payroll_vale_wed",
   "payroll_hist",
-  "payroll_active",
-  "current_active_week",
   // additional filter & state keys not previously persisted
   "dtr_filter_from",
   "dtr_filter_to",
@@ -177,9 +175,6 @@ function queueHydrateRerender() {
       if (typeof renderAdjustmentsTable === 'function') renderAdjustmentsTable();
       else if (typeof renderAdjustmentsFoot === 'function') renderAdjustmentsFoot();
     } catch {}
-    try { if (typeof renderHistory === 'function') renderHistory(); } catch {}
-    try { if (typeof renderActivePayrolls === 'function') renderActivePayrolls(); } catch {}
-    try { if (typeof refreshActivePeriodDropdowns === 'function') refreshActivePeriodDropdowns(); } catch {}
     try { if (typeof window.calculateAll === 'function') window.calculateAll(); } catch {}
     try { if (typeof window.renderResults === 'function') window.renderResults(); } catch {}
   };
@@ -5877,12 +5872,6 @@ document.addEventListener('DOMContentLoaded', () => {
   window.renderActivePayrolls = function renderActivePayrolls() {
     if (!activeTableBody) return;
     activeTableBody.innerHTML = '';
-    if (!payrollHistory || payrollHistory.length === 0) {
-      const tr = document.createElement('tr');
-      tr.innerHTML = '<td colspan="3" class="muted">No active payrolls on this device. Snapshots are stored per browser, so a new computer starts with an empty list.</td>';
-      activeTableBody.appendChild(tr);
-      return;
-    }
     payrollHistory.forEach((snap, index) => {
       if (snap.locked) return;
       const tr = document.createElement('tr');
@@ -5943,12 +5932,6 @@ document.addEventListener('DOMContentLoaded', () => {
   window.renderHistory = function renderHistory() {
     if (!historyTableBody) return;
     historyTableBody.innerHTML = '';
-    if (!payrollHistory || payrollHistory.length === 0) {
-      const emptyRow = document.createElement('tr');
-      emptyRow.innerHTML = '<td colspan="5" class="muted">No payroll history found on this device. Payroll periods are kept in your browser storage, so first-time visits on a new computer will start empty until you create or restore a snapshot.</td>';
-      historyTableBody.appendChild(emptyRow);
-      return;
-    }
     payrollHistory.forEach((snap, index) => {
       const tr = document.createElement('tr');
       tr.dataset.index = index;
@@ -13255,9 +13238,6 @@ function updateWeekInputs(snap) {
       updateWeekInputs(snap);
     }
   }
-
-  // Expose a safe refresh hook for realtime storage updates.
-  window.refreshActivePeriodDropdowns = populateDropdowns;
 
   function onSelectChange(e) {
     const idx = parseInt(e.target.value, 10);
