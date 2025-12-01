@@ -4615,7 +4615,6 @@ const adjustmentRefresh = (() => {
   const run = () => {
     timer = null;
     try { renderAdjustmentsFoot(); } catch (_) {}
-    calculateAll();
     const el = statusEl();
     if (el) {
       el.textContent = 'Saved locally';
