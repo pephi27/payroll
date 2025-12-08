@@ -2398,7 +2398,7 @@ window.addEventListener('load', dashReports);
        Deductions
       </button>
       <!-- New sub-tab for manual adjustments -->
-      <button class="tab-btn" data-tab="adjustmentsTab">Adjustments <span id="adjLockIndicator" style="display: none; color: #b91c1c; font-weight: bold;">(Locked)</span></button>
+      <button class="tab-btn" data-tab="adjustmentsTab">Adjustments</button>
      </div>
     </header>
     <div class="tab active" id="payrollTab">
@@ -2794,10 +2794,13 @@ window.addEventListener('load', dashReports);
     <!-- Manual Adjustments Tab -->
     <div class="tab" id="adjustmentsTab">
      <div class="section note">
-      Enter positive adjustments to add to payroll. Enter negative amounts to create deductions&mdash;they will appear automatically in the Deductions tab and will not reduce the gross pay calculation. Adjustments are saved automatically.
+      Enter positive adjustments to add to payroll. Enter negative amounts to create deductions&mdash;they will appear automatically in the Deductions tab and will not reduce the gross pay calculation. Adjustments are saved automatically to this browser; use the copy/restore buttons to move them to another device.
      </div>
      <div class="toolbar" id="adjustmentsControls">
-      <div class="toolbar-left"></div>
+      <div class="toolbar-left">
+       <button type="button" id="copyAdjustmentsBtn">Copy adjustments</button>
+       <button type="button" id="restoreAdjustmentsBtn">Restore adjustments</button>
+      </div>
       <span class="save-indicator" id="adjustmentSaveStatus" aria-live="polite">Saved locally</span>
      </div>
      <table id="adjustmentsTable">
@@ -3156,7 +3159,7 @@ let periodPersistenceReady = false;
 try {
   if (typeof window !== 'undefined' && window.__kv_hydrated === true) periodPersistenceReady = true;
 } catch(_){}
-let allAdjustments = loadPeriodScopedMap(LS_ADJ);
+let allAdjustments = JSON.parse(localStorage.getItem(LS_ADJ) || '{}');
 let adjustments = allAdjustments[currentPeriodKey] || {};
 try { window.adjustments = adjustments; } catch(_){ }
 let allAdjHrs = JSON.parse(localStorage.getItem(LS_ADJ_HRS) || '{}');
@@ -4800,8 +4803,68 @@ function renderAdjustmentsFoot() {
   }
 }
 
+function adjustmentsBackupPayload(){
+  return {
+    adjustments: isPlainObject(allAdjustments) ? allAdjustments : {},
+    adjustmentHours: isPlainObject(allAdjHrs) ? allAdjHrs : {},
+    currentPeriod: currentPeriodKey
+  };
+}
+
+async function copyAdjustmentsToClipboard(){
+  const payload = JSON.stringify(adjustmentsBackupPayload());
+  try {
+    await navigator.clipboard.writeText(payload);
+    const el = document.getElementById('adjustmentSaveStatus');
+    if (el) {
+      el.textContent = 'Copied to clipboard';
+      el.classList.remove('error');
+      el.classList.add('saved');
+    }
+  } catch (e) {
+    const el = document.getElementById('adjustmentSaveStatus');
+    if (el) {
+      el.textContent = 'Clipboard copy failed';
+      el.classList.remove('saved');
+      el.classList.add('error');
+    }
+  }
+}
+
+async function restoreAdjustmentsFromPrompt(){
+  const text = window.prompt('Paste the adjustments backup JSON to restore it');
+  if (!text) return;
+  try {
+    const parsed = JSON.parse(text);
+    if (isPlainObject(parsed.adjustments)) allAdjustments = parsed.adjustments;
+    if (isPlainObject(parsed.adjustmentHours)) allAdjHrs = parsed.adjustmentHours;
+    adjustments = allAdjustments[currentPeriodKey] || {};
+    adjHrs = allAdjHrs[currentPeriodKey] || {};
+    persistCurrentAdjustments();
+    persistCurrentAdjustmentHours();
+    renderAdjustmentsTable();
+    calculateAll();
+    const el = document.getElementById('adjustmentSaveStatus');
+    if (el) {
+      el.textContent = 'Adjustments restored';
+      el.classList.remove('error');
+      el.classList.add('saved');
+    }
+  } catch (e) {
+    const el = document.getElementById('adjustmentSaveStatus');
+    if (el) {
+      el.textContent = 'Restore failed: invalid data';
+      el.classList.remove('saved');
+      el.classList.add('error');
+    }
+  }
+}
 
 document.addEventListener('DOMContentLoaded', () => {
+  const copyBtn = document.getElementById('copyAdjustmentsBtn');
+  if (copyBtn) copyBtn.addEventListener('click', copyAdjustmentsToClipboard);
+  const restoreBtn = document.getElementById('restoreAdjustmentsBtn');
+  if (restoreBtn) restoreBtn.addEventListener('click', restoreAdjustmentsFromPrompt);
 });
 
 // Initialize the dynamic Pagâ€‘IBIG and PhilHealth rate input fields.  This function
@@ -15087,11 +15150,6 @@ function setPayrollLockedUI(locked){
         mo.observe(tbl, { childList: true, subtree: true });
         tbl.__lockObs = mo;
       } else if (!locked && tbl.__lockObs){ try { tbl.__lockObs.disconnect(); } catch(e){}; tbl.__lockObs = null; }
-    }
-    // Show/hide the lock indicator on the Adjustments tab
-    const adjLockIndicator = document.getElementById('adjLockIndicator');
-    if (adjLockIndicator) {
-      adjLockIndicator.style.display = locked ? 'inline' : 'none';
     }
   } catch(e){}
 }
