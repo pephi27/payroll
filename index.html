@@ -182,12 +182,19 @@ function queueHydrateRerender() {
     try { if (typeof window.calculateAll === 'function') window.calculateAll(); } catch {}
     try { if (typeof window.renderResults === 'function') window.renderResults(); } catch {}
   };
+  try {
+    if (typeof window.isAdjustmentInputFocused === 'function' && window.isAdjustmentInputFocused()) {
+      window.__adjustmentsHydratePending = true;
+      return;
+    }
+  } catch (_) {}
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', () => { setTimeout(rerender, 0); }, { once: true });
   } else {
     setTimeout(rerender, 0);
   }
 }
+try { window.queueHydrateRerender = queueHydrateRerender; } catch (_) {}
 
 if (!window.__kvSubscribed) {
   try {
@@ -258,8 +265,14 @@ async function cloudUpsert(key, value) {
     const { error } = await supabase
       .from(TABLE)
       .upsert({ key, value: tryParse(value) }, { onConflict: "key" })
-    if (error) console.warn("Supabase upsert error:", error.message)
-  } catch (e) { console.warn("Supabase upsert failed", e) }
+    if (error) {
+      if (error.name === 'AbortError' || String(error.message || '').includes('AbortError')) return
+      console.warn("Supabase upsert error:", error.message)
+    }
+  } catch (e) {
+    if (e && (e.name === 'AbortError' || String(e.message || '').includes('AbortError'))) return
+    console.warn("Supabase upsert failed", e)
+  }
 }
 async function cloudDelete(key) {
   try {
@@ -271,11 +284,26 @@ function tryParse(v) {
   try { return JSON.parse(v) } catch { return v }
 }
 
+const __kvUpsertDebounceMs = 400
+const __kvUpsertQueue = new Map()
+function scheduleCloudUpsert(key, value) {
+  if (!key) return
+  const existing = __kvUpsertQueue.get(key)
+  if (existing && existing.timer) window.clearTimeout(existing.timer)
+  __kvUpsertQueue.set(key, {
+    value,
+    timer: window.setTimeout(async () => {
+      __kvUpsertQueue.delete(key)
+      await cloudUpsert(key, value)
+    }, __kvUpsertDebounceMs)
+  })
+}
+
 // Write-through on any localStorage change
 Storage.prototype.setItem = function(k, v) {
   try { __origSetItem.call(this, k, v) } catch {}
   // Only mirror known keys to reduce noise
-  if (KNOWN_KEYS.includes(k)) cloudUpsert(k, v)
+  if (KNOWN_KEYS.includes(k)) scheduleCloudUpsert(k, v)
 }
 Storage.prototype.removeItem = function(k) {
   try { __origRemoveItem.call(this, k) } catch {}
@@ -4599,6 +4627,7 @@ function calculateAll(){
 let adjustmentsRenderPending = false;
 let adjustmentsFocusCount = 0;
 const isAdjustmentInputFocused = () => adjustmentsFocusCount > 0;
+try { window.isAdjustmentInputFocused = isAdjustmentInputFocused; } catch (_) {}
 const queueAdjustmentsRerender = () => {
   if (isAdjustmentInputFocused()) {
     adjustmentsRenderPending = true;
@@ -4607,6 +4636,7 @@ const queueAdjustmentsRerender = () => {
   adjustmentsRenderPending = false;
   try { renderAdjustmentsTable(); } catch (_) {}
 };
+try { window.queueAdjustmentsRerender = queueAdjustmentsRerender; } catch (_) {}
 const adjustmentRefresh = (() => {
   let timer = null;
   const statusEl = () => document.getElementById('adjustmentSaveStatus');
@@ -4754,6 +4784,12 @@ function renderAdjustmentsTable() {
       adjustmentRefresh.flush();
       setTimeout(() => {
         if (adjustmentsFocusCount === 0 && adjustmentsRenderPending) queueAdjustmentsRerender();
+        if (adjustmentsFocusCount === 0 && window.__adjustmentsHydratePending) {
+          window.__adjustmentsHydratePending = false;
+          try {
+            if (typeof window.queueHydrateRerender === 'function') window.queueHydrateRerender();
+          } catch (_) {}
+        }
       }, 0);
     });
     inp.addEventListener('input', () => {
@@ -4824,6 +4860,12 @@ function renderAdjustmentsTable() {
       adjustmentRefresh.flush();
       setTimeout(() => {
         if (adjustmentsFocusCount === 0 && adjustmentsRenderPending) queueAdjustmentsRerender();
+        if (adjustmentsFocusCount === 0 && window.__adjustmentsHydratePending) {
+          window.__adjustmentsHydratePending = false;
+          try {
+            if (typeof window.queueHydrateRerender === 'function') window.queueHydrateRerender();
+          } catch (_) {}
+        }
       }, 0);
     });
     inp.addEventListener('input', () => {
