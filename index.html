@@ -126,6 +126,7 @@ const KNOWN_KEYS = [
   "payroll_reg_hours",
   "payroll_ot_hours",
   "payroll_ot_multiplier",
+  "settings_payroll",
   "payroll_week_start",
   "payroll_week_end",
   "payroll_deduction_divisor",
@@ -1517,6 +1518,7 @@ window.addEventListener('load', dashReports);
   #tabPayroll .nav-icon::before   { content: "💰"; font-size: 14px; }
   #tabProjectTotals .nav-icon::before { content: "📈"; font-size: 14px; }
   #tabContributionSummary .nav-icon::before { content: "💳"; font-size: 14px; }
+  #tabSettings .nav-icon::before { content: "⚙️"; font-size: 14px; }
   /* Sidebar duplicates */
   #old-tabDashboard .nav-icon::before { content: "📊"; }
   #old-tabMain .nav-icon::before      { content: "🕒"; }
@@ -1526,6 +1528,7 @@ window.addEventListener('load', dashReports);
   #old-tabPayroll .nav-icon::before   { content: "💰"; }
   #old-tabProjectTotals .nav-icon::before { content: "📈"; }
   #old-tabContributionSummary .nav-icon::before { content: "💳"; }
+  #old-tabSettings .nav-icon::before { content: "⚙️"; }
 
   /* Mobile menu icon */
   .mobile-menu-btn span { font-size: 0; }
@@ -1651,6 +1654,7 @@ window.addEventListener('load', dashReports);
               <li class="nav-item"><button class="nav-link tab-btn" id="tabPayroll" data-page="payroll"><span class="nav-icon">ðŸ’°</span> Payroll</button></li>
               <li class="nav-item"><button class="nav-link tab-btn" id="tabProjectTotals" data-page="totals"><span class="nav-icon">ðŸ“ˆ</span> Reports</button></li>
               <li class="nav-item"><button class="nav-link tab-btn" id="tabContributionSummary" data-page="contribSummary"><span class="nav-icon">ðŸ’³</span> Contributions</button></li>
+              <li class="nav-item"><button class="nav-link tab-btn" id="tabSettings" data-page="settings"><span class="nav-icon">⚙️</span> Settings</button></li>
             </ul>
           </nav>
         </div>
@@ -1709,6 +1713,12 @@ window.addEventListener('load', dashReports);
             <button class="nav-link tab-btn" id="old-tabContributionSummary" data-page="contribSummary">
               <span class="nav-icon">ðŸ’³</span>
               Contributions
+            </button>
+          </li>
+          <li class="nav-item">
+            <button class="nav-link tab-btn" id="old-tabSettings" data-page="settings">
+              <span class="nav-icon">⚙️</span>
+              Settings
             </button>
           </li>
         </ul>
@@ -2418,7 +2428,7 @@ window.addEventListener('load', dashReports);
       <label>
        OT Multiplier
        <br/>
-       <input id="otMultiplier" step="0.01" style="width:100px" type="number" value="1.50"/>
+       <input id="otMultiplier" step="0.01" style="width:100px" type="number" value="1.25"/>
       </label>
       <label>
        Divide Deductions By
@@ -2869,6 +2879,207 @@ let bantayProj = {};
 })();
 // LocalStorage key for per-employee contribution flags (Pag-IBIG, PhilHealth, SSS)
 const LS_CONTRIB_FLAGS='payroll_contrib_flags';
+const PAYROLL_SETTINGS_KEY = 'settings_payroll';
+const DEFAULT_PAYROLL_SETTINGS = {
+  overtime: { multiplier: 1.25 },
+  nightDifferential: {
+    enabled: true,
+    start: '22:00',
+    end: '06:00',
+    multiplier: 1.10
+  }
+};
+
+function normalizePayrollTime(value, fallback) {
+  const str = String(value || '').trim();
+  if (/^\d{1,2}:\d{2}$/.test(str)) {
+    const parts = str.split(':');
+    const hh = String(Math.min(23, Math.max(0, parseInt(parts[0], 10) || 0))).padStart(2, '0');
+    const mm = String(Math.min(59, Math.max(0, parseInt(parts[1], 10) || 0))).padStart(2, '0');
+    return `${hh}:${mm}`;
+  }
+  return fallback;
+}
+
+function normalizePayrollSettings(raw) {
+  const legacyOt = parseFloat(localStorage.getItem(LS_OTMULT) || '');
+  const base = {
+    overtime: {
+      multiplier: Number.isFinite(legacyOt) && legacyOt > 0
+        ? legacyOt
+        : DEFAULT_PAYROLL_SETTINGS.overtime.multiplier
+    },
+    nightDifferential: {
+      enabled: DEFAULT_PAYROLL_SETTINGS.nightDifferential.enabled,
+      start: DEFAULT_PAYROLL_SETTINGS.nightDifferential.start,
+      end: DEFAULT_PAYROLL_SETTINGS.nightDifferential.end,
+      multiplier: DEFAULT_PAYROLL_SETTINGS.nightDifferential.multiplier
+    }
+  };
+  if (raw && typeof raw === 'object') {
+    if (raw.overtime && typeof raw.overtime === 'object') {
+      const otMult = parseFloat(raw.overtime.multiplier);
+      if (Number.isFinite(otMult) && otMult > 0) base.overtime.multiplier = otMult;
+    }
+    if (raw.nightDifferential && typeof raw.nightDifferential === 'object') {
+      if (typeof raw.nightDifferential.enabled === 'boolean') {
+        base.nightDifferential.enabled = raw.nightDifferential.enabled;
+      }
+      base.nightDifferential.start = normalizePayrollTime(
+        raw.nightDifferential.start,
+        base.nightDifferential.start
+      );
+      base.nightDifferential.end = normalizePayrollTime(
+        raw.nightDifferential.end,
+        base.nightDifferential.end
+      );
+      const ndMult = parseFloat(raw.nightDifferential.multiplier);
+      if (Number.isFinite(ndMult) && ndMult > 0) {
+        base.nightDifferential.multiplier = ndMult;
+      }
+    }
+  }
+  return base;
+}
+
+let payrollSettings = normalizePayrollSettings(null);
+let otMultiplier = payrollSettings.overtime.multiplier;
+
+function getOvertimeMultiplier() {
+  return Number(payrollSettings?.overtime?.multiplier) || DEFAULT_PAYROLL_SETTINGS.overtime.multiplier;
+}
+
+function getNightDifferentialSettings() {
+  return {
+    enabled: !!(payrollSettings?.nightDifferential?.enabled),
+    start: payrollSettings?.nightDifferential?.start || DEFAULT_PAYROLL_SETTINGS.nightDifferential.start,
+    end: payrollSettings?.nightDifferential?.end || DEFAULT_PAYROLL_SETTINGS.nightDifferential.end,
+    multiplier: Number(payrollSettings?.nightDifferential?.multiplier) || DEFAULT_PAYROLL_SETTINGS.nightDifferential.multiplier
+  };
+}
+
+async function persistPayrollSettings() {
+  const writer = (typeof window !== 'undefined' && typeof window.writeKV === 'function')
+    ? window.writeKV
+    : null;
+  if (!writer) return;
+  try {
+    const result = writer(PAYROLL_SETTINGS_KEY, payrollSettings);
+    if (result && typeof result.then === 'function') {
+      await result;
+    }
+  } catch (err) {
+    console.warn('Persisting payroll settings failed', err);
+  }
+}
+
+function syncPayrollSettingsInputs() {
+  const otInput = document.getElementById('otMultiplier');
+  if (otInput) otInput.value = String(getOvertimeMultiplier());
+  const settingsOt = document.getElementById('settingsOtMultiplier');
+  if (settingsOt) settingsOt.value = String(getOvertimeMultiplier());
+  const nd = getNightDifferentialSettings();
+  const ndEnabled = document.getElementById('settingsNdEnabled');
+  if (ndEnabled) ndEnabled.checked = nd.enabled;
+  const ndStart = document.getElementById('settingsNdStart');
+  if (ndStart) ndStart.value = nd.start;
+  const ndEnd = document.getElementById('settingsNdEnd');
+  if (ndEnd) ndEnd.value = nd.end;
+  const ndMult = document.getElementById('settingsNdMultiplier');
+  if (ndMult) ndMult.value = String(nd.multiplier);
+}
+
+function updatePayrollSettings(partial, options = {}) {
+  const next = {
+    overtime: { ...(payrollSettings.overtime || {}), ...(partial.overtime || {}) },
+    nightDifferential: { ...(payrollSettings.nightDifferential || {}), ...(partial.nightDifferential || {}) }
+  };
+  payrollSettings = normalizePayrollSettings(next);
+  otMultiplier = getOvertimeMultiplier();
+  syncPayrollSettingsInputs();
+  if (options.persist !== false) {
+    persistPayrollSettings();
+  }
+  if (options.recalculate !== false && typeof calculateAll === 'function') {
+    calculateAll();
+  }
+}
+
+async function loadPayrollSettings() {
+  try {
+    const reader = (typeof window !== 'undefined' && typeof window.readKV === 'function')
+      ? window.readKV
+      : null;
+    const stored = reader ? await reader(PAYROLL_SETTINGS_KEY, null) : null;
+    payrollSettings = normalizePayrollSettings(stored);
+    otMultiplier = getOvertimeMultiplier();
+    syncPayrollSettingsInputs();
+    if (typeof calculateAll === 'function') calculateAll();
+  } catch (err) {
+    console.warn('Loading payroll settings failed', err);
+  }
+}
+
+function initPayrollSettingsUI() {
+  const otInput = document.getElementById('otMultiplier');
+  if (otInput && !otInput.__settingsBound) {
+    otInput.addEventListener('input', () => {
+      updatePayrollSettings({ overtime: { multiplier: parseFloat(otInput.value) || 0 } });
+    });
+    otInput.__settingsBound = true;
+  }
+  const settingsOt = document.getElementById('settingsOtMultiplier');
+  if (settingsOt && !settingsOt.__settingsBound) {
+    settingsOt.addEventListener('input', () => {
+      updatePayrollSettings({ overtime: { multiplier: parseFloat(settingsOt.value) || 0 } });
+    });
+    settingsOt.__settingsBound = true;
+  }
+  const ndEnabled = document.getElementById('settingsNdEnabled');
+  if (ndEnabled && !ndEnabled.__settingsBound) {
+    ndEnabled.addEventListener('change', () => {
+      updatePayrollSettings({ nightDifferential: { enabled: ndEnabled.checked } });
+    });
+    ndEnabled.__settingsBound = true;
+  }
+  const ndStart = document.getElementById('settingsNdStart');
+  if (ndStart && !ndStart.__settingsBound) {
+    ndStart.addEventListener('change', () => {
+      updatePayrollSettings({ nightDifferential: { start: ndStart.value } });
+    });
+    ndStart.__settingsBound = true;
+  }
+  const ndEnd = document.getElementById('settingsNdEnd');
+  if (ndEnd && !ndEnd.__settingsBound) {
+    ndEnd.addEventListener('change', () => {
+      updatePayrollSettings({ nightDifferential: { end: ndEnd.value } });
+    });
+    ndEnd.__settingsBound = true;
+  }
+  const ndMult = document.getElementById('settingsNdMultiplier');
+  if (ndMult && !ndMult.__settingsBound) {
+    ndMult.addEventListener('input', () => {
+      updatePayrollSettings({ nightDifferential: { multiplier: parseFloat(ndMult.value) || 0 } });
+    });
+    ndMult.__settingsBound = true;
+  }
+  syncPayrollSettingsInputs();
+}
+
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', () => {
+    initPayrollSettingsUI();
+    loadPayrollSettings();
+  });
+} else {
+  initPayrollSettingsUI();
+  loadPayrollSettings();
+}
+
+try {
+  window.getOvertimeMultiplier = getOvertimeMultiplier;
+  window.getNightDifferentialSettings = getNightDifferentialSettings;
+} catch (_) {}
 
 // Current employee contribution rates (decimal form).  Defaults: 0.02 (2%) for Pagâ€‘IBIG and 0.025 (2.5%) for PhilHealth.
 let pagibigRate = parseFloat(localStorage.getItem(LS_PAGIBIG_RATE) ?? '0.02');
@@ -3005,7 +3216,7 @@ let otHours = JSON.parse(localStorage.getItem(LS_OT_HRS) || '{}');
 // Per-employee contribution deduction flags. Each entry keyed by employee ID holds booleans {pagibig, philhealth, sss}
 let contribFlags = JSON.parse(localStorage.getItem(LS_CONTRIB_FLAGS) || '{}');
 
-let otMultiplier = parseFloat(localStorage.getItem(LS_OTMULT)) || 1.50;
+otMultiplier = getOvertimeMultiplier();
 let weekStartSaved = localStorage.getItem(LS_WEEKSTART) || '';
 let weekEndSaved = localStorage.getItem(LS_WEEKEND) || '';
 let divisor = parseInt(localStorage.getItem(LS_DIVISOR) || '1', 10);
@@ -3025,7 +3236,7 @@ document.querySelectorAll('#panelPayroll .tabs .tab-btn').forEach(btn=>{
     if (panel) panel.classList.add('active');
   });
 });
-otMultiplierEl.value = otMultiplier;
+if (otMultiplierEl) otMultiplierEl.value = String(getOvertimeMultiplier());
 weekStartEl.value = weekStartSaved;
 weekEndEl.value = weekEndSaved;
 divisorEl.value = divisor;
@@ -3311,7 +3522,6 @@ if (divisorDedsEl) {
   });
 }
 
-otMultiplierEl.addEventListener('input', ()=>{ otMultiplier = parseFloat(otMultiplierEl.value)||0; localStorage.setItem(LS_OTMULT, otMultiplier); calculateAll(); });
 weekStartEl.addEventListener('input', ()=> localStorage.setItem(LS_WEEKSTART, weekStartEl.value));
 weekEndEl.addEventListener('input', ()=> localStorage.setItem(LS_WEEKEND, weekEndEl.value));
 divisorEl.addEventListener('change', () => {
@@ -4503,7 +4713,7 @@ function calculateRow(tr){  const readNum = sel => { const el = tr.querySelector
 
   const regPay = +(reg * rate).toFixed(2);
   tr.querySelector('.totalHrs').textContent = totalHrs.toFixed(2);
-  const otPay = +(otTotal * rate * (Number(otMultiplier)||0)).toFixed(2);
+  const otPay = +(otTotal * rate * getOvertimeMultiplier()).toFixed(2);
   const gross = +(regPay + otPay + adjPositive + bVal).toFixed(2);
   // Compute contributions using dynamic tables (employee share).  Determine the
   // appropriate rate based on the monthly income and multiply by regular pay.
@@ -5024,7 +5234,7 @@ function updateContributionNote() {
   // Include Adjustments column before Bantay in payroll CSV export
   const header = ['Week Start','Week End','OT Multiplier','Divisor','ID','Name','Regular Hours','OT Hours','Hourly Rate','Regular Pay','OT Pay','Adjustments','Bantay','Gross Pay','Pag-IBIG','PhilHealth','SSS','SSS Loan','Pag-IBIG Loan','Account','Wed Vale','Total Deductions','Net Pay'];
   const rows=[header];
-  const ws = weekStartEl.value||''; const we = weekEndEl.value||''; const otm = String(otMultiplierEl.value||''); const div = String(divisorEl.value||'1');
+  const ws = weekStartEl.value||''; const we = weekEndEl.value||''; const otm = String(getOvertimeMultiplier()); const div = String(divisorEl.value||'1');
   document.querySelectorAll('#payrollTable tbody tr').forEach(tr=>{
     const tds = tr.querySelectorAll('td');
     const id = tds[0].textContent.trim(); const name = tds[1].textContent.trim();
@@ -7113,7 +7323,7 @@ document.addEventListener('DOMContentLoaded', () => {
             return `<td class="num">${f2(v.rwh)}</td><td class="num">${f2(v.oth)}</td>`;
           }).join('');
 
-          const otMult = toNum(document.querySelector('#otMultiplier')?.value || 1.5);
+          const otMult = getOvertimeMultiplier();
           const gross = (rReg * rate) + (rOT * rate * otMult);
           pReg += rReg; pOT += rOT; pGross += gross;
 
@@ -7242,7 +7452,7 @@ rows += `<tr class="allowance">
             dayCells.push(to2(v.rwh), to2(v.oth));
           });
 
-          const otMult = toNum(document.querySelector('#otMultiplier')?.value || 1.5);
+          const otMult = getOvertimeMultiplier();
           const gross = (rReg * rate) + (rOT * rate * otMult);
           pReg += rReg; pOT += rOT; pGross += gross;
 
@@ -7732,7 +7942,7 @@ rows += `<tr class="allowance">
               dayTotals[i].rwh += v.rwh; dayTotals[i].oth += v.oth;
               dayCells.push(to2(v.rwh), to2(v.oth));
             });
-            const otMult = toNum(document.querySelector('#otMultiplier')?.value || 1.5);
+            const otMult = getOvertimeMultiplier();
             const gross = (rReg * rate) + (rOT * rate * otMult);
             pReg += rReg; pOT += rOT; pGross += gross;
             rows.push([display, to2(rate)].concat(dayCells, [to2(rReg), to2(rOT), to2(rReg+rOT), to2(gross)]));
@@ -7938,7 +8148,7 @@ rows += `<tr class="allowance">
             dayCells.push(to2(v.rwh), to2(v.oth));
           });
 
-          const otMult = toNum(document.querySelector('#otMultiplier')?.value || 1.5);
+          const otMult = getOvertimeMultiplier();
           const gross = (rReg * rate) + (rOT * rate * otMult);
           pReg += rReg; pOT += rOT; pGross += gross;
 
@@ -8341,7 +8551,7 @@ rows += `<tr class="allowance">
         const er = (rec.emp[id] = rec.emp[id] || { name, rwh:0, oth:0 });
         er.rwh += rwh; er.oth += oth;
       });
-      const otMult = num(document.getElementById('otMultiplier')?.value) || 1.5;
+      const otMult = getOvertimeMultiplier();
       const rates = (typeof payrollRates!=='undefined' && payrollRates) ? payrollRates : {};
       const se = (typeof storedEmployees!=='undefined' && storedEmployees) ? storedEmployees : {};
       Object.keys(projMap).forEach(p=>{
@@ -8593,6 +8803,58 @@ rows += `<tr class="allowance">
             </tr>
           </tfoot>
         </table>
+      </div>
+    </div>
+  </section>
+
+  <section class="panel" id="panelSettings">
+    <style>
+      #panelSettings .card{background:#fff;border:1px solid #e5e7eb;border-radius:14px;padding:18px;box-shadow:0 4px 18px rgba(0,0,0,.06)}
+      #panelSettings .settings-grid{display:grid;gap:16px}
+      #panelSettings .settings-section{border:1px solid #e5e7eb;border-radius:12px;padding:14px}
+      #panelSettings .settings-section h4{margin:0 0 10px 0;font-size:15px;color:#0f172a}
+      #panelSettings .settings-row{display:flex;flex-wrap:wrap;gap:12px}
+      #panelSettings label{display:flex;flex-direction:column;font-size:13px;color:#334155;font-weight:600;gap:6px}
+      #panelSettings input[type="number"], #panelSettings input[type="time"]{min-width:140px}
+      #panelSettings .hint{font-size:12px;color:#64748b;font-weight:400}
+      #panelSettings .toggle{flex-direction:row;align-items:center;gap:8px;font-weight:600}
+    </style>
+    <div class="card">
+      <h3 style="margin:0 0 12px 0;">Payroll Settings</h3>
+      <div class="settings-grid">
+        <div class="settings-section">
+          <h4>Overtime</h4>
+          <div class="settings-row">
+            <label>
+              OT Multiplier
+              <input id="settingsOtMultiplier" type="number" step="0.01" min="0" inputmode="decimal">
+              <span class="hint">Used to compute overtime pay.</span>
+            </label>
+          </div>
+        </div>
+        <div class="settings-section">
+          <h4>Night Differential</h4>
+          <div class="settings-row">
+            <label class="toggle">
+              <input id="settingsNdEnabled" type="checkbox">
+              Enabled
+            </label>
+          </div>
+          <div class="settings-row">
+            <label>
+              Start
+              <input id="settingsNdStart" type="time">
+            </label>
+            <label>
+              End
+              <input id="settingsNdEnd" type="time">
+            </label>
+            <label>
+              Multiplier
+              <input id="settingsNdMultiplier" type="number" step="0.01" min="0" inputmode="decimal">
+            </label>
+          </div>
+        </div>
       </div>
     </div>
   </section>
@@ -9113,7 +9375,8 @@ rows += `<tr class="allowance">
         projects: '🚀',
         payroll: '💰',
         totals: '📈',
-        contribSummary: '💳'
+        contribSummary: '💳',
+        settings: '⚙️'
       };
       function setTitleFrom(btn){
         try{
@@ -9501,7 +9764,9 @@ const tabs = {
   tabProjectTotals: document.getElementById('tabProjectTotals'),
   panelProjectTotals: document.getElementById('panelProjectTotals'),
   tabContributionSummary: document.getElementById('tabContributionSummary'),
-  panelContributionSummary: document.getElementById('panelContributionSummary')
+  panelContributionSummary: document.getElementById('panelContributionSummary'),
+  tabSettings: document.getElementById('tabSettings'),
+  panelSettings: document.getElementById('panelSettings')
 };
 function showTab(name){
   Object.values(tabs).forEach(el => el && el.classList && el.classList.remove('active'));
@@ -9530,6 +9795,7 @@ function showTab(name){
   if(name==='payroll'){ tabs.tabPayroll && tabs.tabPayroll.classList.add('active'); tabs.panelPayroll && tabs.panelPayroll.classList.add('active'); }
   if(name==='projectTotals'){ tabs.tabProjectTotals && tabs.tabProjectTotals.classList.add('active'); tabs.panelProjectTotals && tabs.panelProjectTotals.classList.add('active'); }
   if(name==='contribSummary'){ tabs.tabContributionSummary && tabs.tabContributionSummary.classList.add('active'); tabs.panelContributionSummary && tabs.panelContributionSummary.classList.add('active'); }
+  if(name==='settings'){ tabs.tabSettings && tabs.tabSettings.classList.add('active'); tabs.panelSettings && tabs.panelSettings.classList.add('active'); }
 }
 window.__dtrFilterBackup = null;
 // When switching to the main (DTR) tab, render results and then toggle the edit
@@ -11626,6 +11892,8 @@ function restoreData(file) {
     tabs.panelProjectTotals = tabs.panelProjectTotals || document.getElementById('panelProjectTotals');
     tabs.tabContributionSummary = tabs.tabContributionSummary || document.getElementById('tabContributionSummary');
     tabs.panelContributionSummary = tabs.panelContributionSummary || document.getElementById('panelContributionSummary');
+    tabs.tabSettings = tabs.tabSettings || document.getElementById('tabSettings');
+    tabs.panelSettings = tabs.panelSettings || document.getElementById('panelSettings');
   }
 
   // Wrap showTab to support projectTotals
@@ -11690,6 +11958,22 @@ function restoreData(file) {
       try { if (typeof window.renderContributionSummary === 'function') window.renderContributionSummary(); } catch(e){}
     });
     contribSidebar.__wired = true;
+  }
+
+  const settingsBtn = tabs && tabs.tabSettings;
+  if (settingsBtn && !settingsBtn.__wired){
+    settingsBtn.addEventListener('click', function(){
+      showTab('settings');
+    });
+    settingsBtn.__wired = true;
+  }
+
+  const settingsSidebar = document.getElementById('old-tabSettings');
+  if (settingsSidebar && !settingsSidebar.__wired){
+    settingsSidebar.addEventListener('click', function(){
+      showTab('settings');
+    });
+    settingsSidebar.__wired = true;
   }
 
   // Re-render when date range changes while active
@@ -11820,7 +12104,7 @@ function restoreData(file) {
       totals[projId].ot    = Math.round((totals[projId].ot  + otDec )*100)/100;
       totals[projId].total = Math.round((totals[projId].total + regDec + otDec)*100)/100;
       var rate = (emp && typeof emp.hourlyRate==='number') ? emp.hourlyRate : (+emp.hourlyRate||0);
-      var otp = (document.getElementById('otMultiplier')&&parseFloat(document.getElementById('otMultiplier').value)) || 1.5;
+      var otp = getOvertimeMultiplier();
       var grossInc = (regDec*rate) + (otDec*rate*otp);
       totals[projId].gross = Math.round((totals[projId].gross + grossInc)*100)/100;
       if (!totals[projId].employees[empId]) totals[projId].employees[empId] = { id: empId, name: (emp && emp.name) || '', reg: 0, ot: 0, total: 0, gross: 0, perDay: {} };
