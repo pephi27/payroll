@@ -4697,26 +4697,26 @@ function renderAdjustmentsTable() {
     }
     input.value = '';
   };
-  atbody.querySelectorAll('.adjInput').forEach(inp => {
-    inp.addEventListener('input', () => {
-      const empId = inp.getAttribute('data-id');
-      if (!empId) return;
-      const raw = parseFloat(inp.value);
-      if (Number.isFinite(raw)) {
-        const rounded = roundToCents(raw);
-        if (rounded !== 0) {
-          adjustments[empId] = rounded;
-        } else {
-          delete adjustments[empId];
-        }
+  const commitAdjustmentInput = (input) => {
+    const empId = input.getAttribute('data-id');
+    if (!empId) return;
+    const raw = parseFloat(input.value);
+    if (Number.isFinite(raw)) {
+      const rounded = roundToCents(raw);
+      if (rounded !== 0) {
+        adjustments[empId] = rounded;
       } else {
         delete adjustments[empId];
       }
-      adjustmentPersist.schedule();
-      adjustmentRefresh.schedule();
-    });
-    inp.addEventListener('change', () => { formatAdjustmentInput(inp); adjustmentPersist.flush(); adjustmentRefresh.flush(); });
-    inp.addEventListener('blur', () => { formatAdjustmentInput(inp); adjustmentPersist.flush(); adjustmentRefresh.flush(); });
+    } else {
+      delete adjustments[empId];
+    }
+    adjustmentPersist.flush();
+    adjustmentRefresh.flush();
+  };
+  atbody.querySelectorAll('.adjInput').forEach(inp => {
+    inp.addEventListener('change', () => { commitAdjustmentInput(inp); formatAdjustmentInput(inp); });
+    inp.addEventListener('blur', () => { commitAdjustmentInput(inp); formatAdjustmentInput(inp); });
     formatAdjustmentInput(inp);
   });
   // Adjustment hours
@@ -4738,26 +4738,26 @@ function renderAdjustmentsTable() {
     }
     input.value = '';
   };
-  atbody.querySelectorAll('.adjHrsInput').forEach(inp => {
-    inp.addEventListener('input', () => {
-      const empId = inp.getAttribute('data-id');
-      if (!empId) return;
-      const raw = parseFloat(inp.value);
-      if (Number.isFinite(raw)) {
-        const rounded = roundToCents(raw);
-        if (rounded !== 0) {
-          adjHrs[empId] = rounded;
-        } else {
-          delete adjHrs[empId];
-        }
+  const commitAdjustmentHoursInput = (input) => {
+    const empId = input.getAttribute('data-id');
+    if (!empId) return;
+    const raw = parseFloat(input.value);
+    if (Number.isFinite(raw)) {
+      const rounded = roundToCents(raw);
+      if (rounded !== 0) {
+        adjHrs[empId] = rounded;
       } else {
         delete adjHrs[empId];
       }
-      adjustmentHoursPersist.schedule();
-      adjustmentRefresh.schedule();
-    });
-    inp.addEventListener('change', () => { formatAdjustmentHoursInput(inp); adjustmentHoursPersist.flush(); adjustmentRefresh.flush(); });
-    inp.addEventListener('blur', () => { formatAdjustmentHoursInput(inp); adjustmentHoursPersist.flush(); adjustmentRefresh.flush(); });
+    } else {
+      delete adjHrs[empId];
+    }
+    adjustmentHoursPersist.flush();
+    adjustmentRefresh.flush();
+  };
+  atbody.querySelectorAll('.adjHrsInput').forEach(inp => {
+    inp.addEventListener('change', () => { commitAdjustmentHoursInput(inp); formatAdjustmentHoursInput(inp); });
+    inp.addEventListener('blur', () => { commitAdjustmentHoursInput(inp); formatAdjustmentHoursInput(inp); });
     formatAdjustmentHoursInput(inp);
   });
   // Initialize totals for adjustments (amount and hours)
