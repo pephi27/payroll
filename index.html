@@ -40,6 +40,10 @@
 <script>
   // Global KV helpers for classic scripts; Supabase-aware if available.
   (function () {
+    if (!window.__kvUnifiedLogged) {
+      console.log("KV: using unified read/write");
+      window.__kvUnifiedLogged = true;
+    }
     if (!window.readKV) {
       window.readKV = async function readKV(key, defaultValue = null) {
         try {
@@ -244,26 +248,6 @@ if (!window.__kvSubscribed) {
     console.warn('Supabase realtime channel setup failed', err);
   }
 }
-// === Supabase KV helpers (no localStorage) ===
-async function readKV(key){
-  try{
-    const { data, error } = await window.supabase
-      .from(window.SUPABASE_TABLE)
-      .select('value')
-      .eq('key', key)
-      .maybeSingle();
-    if (error || !data) return null;
-    return data.value;
-  }catch(e){ console.warn('readKV failed', e); return null; }
-}
-async function writeKV(key, value){
-  try{
-    await window.supabase
-      .from(window.SUPABASE_TABLE)
-      .upsert({ key, value });
-  }catch(e){ console.warn('writeKV failed', e); }
-}
-
 
 const __origSetItem = Storage.prototype.setItem
 const __origRemoveItem = Storage.prototype.removeItem
@@ -2846,7 +2830,7 @@ const LS_BANTAY_PROJ='payroll_bantay_proj';
 let bantayProj = {};
 ;(async function(){
   try{
-    let v = await readKV(LS_BANTAY_PROJ);
+    let v = await window.readKV(LS_BANTAY_PROJ);
     if (!v) {
       try { v = JSON.parse(localStorage.getItem(LS_BANTAY_PROJ) || '{}'); } catch(_){}
     }
@@ -3134,7 +3118,7 @@ function persistPeriodScopedMap(lsKey, map){
   try { localStorage.setItem(lsKey, JSON.stringify(map)); } catch(e){}
   const writer = (typeof window !== 'undefined' && typeof window.writeKV === 'function')
     ? window.writeKV
-    : (typeof writeKV === 'function' ? writeKV : null);
+    : null;
   if (typeof writer === 'function') {
     try {
       const maybe = writer(lsKey, map);
@@ -3275,7 +3259,7 @@ function syncPeriodScopedData(){
 }
 ;(async function(){
   try{
-    let v = await readKV(LS_BANTAY);
+    let v = await window.readKV(LS_BANTAY);
     if (!v) {
       try { v = JSON.parse(localStorage.getItem(LS_BANTAY) || '{}'); } catch(_){ }
     }
@@ -4066,14 +4050,14 @@ function chooseBantayProject(empId, anchorEl){
       if (!v || v === '__clear__'){
         // Clear assignment
         try { delete bantayProj[empId]; } catch(e){}
-        try { await writeKV(LS_BANTAY_PROJ, bantayProj); } catch(e){}
+        try { await window.writeKV(LS_BANTAY_PROJ, bantayProj); } catch(e){}
         try { if (typeof window.rebuildReports === 'function') window.rebuildReports(); } catch(e){}
         close();
         return;
       }
       if (storedProjects && storedProjects[v]){
         bantayProj[empId] = v;
-        try { await writeKV(LS_BANTAY_PROJ, bantayProj); } catch(e){}
+        try { await window.writeKV(LS_BANTAY_PROJ, bantayProj); } catch(e){}
         try { if (typeof window.rebuildReports === 'function') window.rebuildReports(); } catch(e){}
       }
       close();
@@ -4134,7 +4118,7 @@ function attachRowEvents(){
         bantay[id] = bantayI.value;
         allBantay[currentPeriodKey] = bantay;
         try { localStorage.setItem(LS_BANTAY, JSON.stringify(allBantay)); } catch(_){ }
-        await writeKV(LS_BANTAY, allBantay);
+        await window.writeKV(LS_BANTAY, allBantay);
         calculateRow(row);
         try { if (typeof window.rebuildReports === 'function') window.rebuildReports(); } catch(e){}
         // Auto-open project picker when entering a positive amount and no assignment yet
@@ -4146,7 +4130,7 @@ function attachRowEvents(){
         // Auto-clear assignment when reset to zero or blank
         if (!(val > 0) && bantayProj[id]) {
           try { delete bantayProj[id]; } catch(_){ }
-          try { await writeKV(LS_BANTAY_PROJ, bantayProj); } catch(_){ }
+          try { await window.writeKV(LS_BANTAY_PROJ, bantayProj); } catch(_){ }
           try { if (typeof window.rebuildReports === 'function') window.rebuildReports(); } catch(_){ }
         }
       });
