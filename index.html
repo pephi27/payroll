@@ -3711,6 +3711,12 @@ function persistDeductionColumnInclusions(){
     } else {
       deductionColumnVisibilityByPeriod[periodKeyForStore] = Object.assign({}, cleanCurrent);
     }
+    persistDeductionColumnVisibilityMap();
+  } catch (err) {}
+}
+
+function persistDeductionColumnVisibilityMap(){
+  try {
     const payload = {};
     Object.keys(deductionColumnVisibilityByPeriod).forEach(function(key){
       const clean = sanitizeDeductionVisibilityObject(deductionColumnVisibilityByPeriod[key]);
@@ -3724,6 +3730,15 @@ function persistDeductionColumnInclusions(){
       localStorage.setItem(LS_DEDUCTION_COLUMN_VISIBILITY, JSON.stringify(payload));
     }
   } catch (err) {}
+}
+
+function ensureDeductionDefaultsForPeriod(periodKey){
+  const normalized = normalizeDeductionPeriodKey(periodKey);
+  const existing = sanitizeDeductionVisibilityObject(deductionColumnVisibilityByPeriod[normalized]);
+  if (!existing || Object.keys(existing).length === 0) {
+    deductionColumnVisibilityByPeriod[normalized] = { [DEDUCTION_INCLUDE_ALL_FLAG]: true };
+    persistDeductionColumnVisibilityMap();
+  }
 }
 
 function computeEffectiveDeductionValues(rawValues){
@@ -13665,6 +13680,7 @@ function updateWeekInputs(snap) {
       localHist.push(newSnap);
       localStorage.setItem(PAYROLL_HIST_KEY, JSON.stringify(localHist));
     }
+    try { ensureDeductionDefaultsForPeriod(`${s}_${e}`); } catch {}
     // Refresh UI pieces
     try { if (typeof renderHistory === 'function') renderHistory(); } catch {}
     try { if (typeof renderActivePayrolls === 'function') renderActivePayrolls(); } catch {}
