@@ -4596,6 +4596,17 @@ function calculateAll(){
   renderDeductionsTable();
 }
 
+let adjustmentsRenderPending = false;
+let adjustmentsFocusCount = 0;
+const isAdjustmentInputFocused = () => adjustmentsFocusCount > 0;
+const queueAdjustmentsRerender = () => {
+  if (isAdjustmentInputFocused()) {
+    adjustmentsRenderPending = true;
+    return;
+  }
+  adjustmentsRenderPending = false;
+  try { renderAdjustmentsTable(); } catch (_) {}
+};
 const adjustmentRefresh = (() => {
   let timer = null;
   const statusEl = () => document.getElementById('adjustmentSaveStatus');
@@ -4621,7 +4632,7 @@ const adjustmentRefresh = (() => {
         }
       } catch (_) {}
       if (timer) window.clearTimeout(timer);
-      timer = window.setTimeout(run, 50);
+      timer = window.setTimeout(run, 400);
     },
     flush(){
       if (timer) {
@@ -4657,6 +4668,11 @@ const adjustmentHoursPersist = createDebouncedPersistence(persistCurrentAdjustme
 // === Adjustments Tab ===
 // Render the adjustments table listing all employees with an input field for manual adjustment amounts.
 function renderAdjustmentsTable() {
+  if (isAdjustmentInputFocused()) {
+    adjustmentsRenderPending = true;
+    return;
+  }
+  adjustmentsRenderPending = false;
   syncPeriodScopedData();
   const atbody = document.querySelector('#adjustmentsTable tbody');
   if (!atbody) return;
@@ -4697,6 +4713,21 @@ function renderAdjustmentsTable() {
     }
     input.value = '';
   };
+  const stageAdjustmentInput = (input) => {
+    const empId = input.getAttribute('data-id');
+    if (!empId) return;
+    const raw = parseFloat(input.value);
+    if (Number.isFinite(raw)) {
+      const rounded = roundToCents(raw);
+      if (rounded !== 0) {
+        adjustments[empId] = rounded;
+      } else {
+        delete adjustments[empId];
+      }
+    } else {
+      delete adjustments[empId];
+    }
+  };
   const commitAdjustmentInput = (input) => {
     const empId = input.getAttribute('data-id');
     if (!empId) return;
@@ -4715,8 +4746,22 @@ function renderAdjustmentsTable() {
     adjustmentRefresh.flush();
   };
   atbody.querySelectorAll('.adjInput').forEach(inp => {
+    inp.addEventListener('focus', () => { adjustmentsFocusCount += 1; });
+    inp.addEventListener('blur', () => {
+      adjustmentsFocusCount = Math.max(0, adjustmentsFocusCount - 1);
+      commitAdjustmentInput(inp);
+      formatAdjustmentInput(inp);
+      adjustmentRefresh.flush();
+      setTimeout(() => {
+        if (adjustmentsFocusCount === 0 && adjustmentsRenderPending) queueAdjustmentsRerender();
+      }, 0);
+    });
+    inp.addEventListener('input', () => {
+      stageAdjustmentInput(inp);
+      adjustmentPersist.schedule();
+      adjustmentRefresh.schedule();
+    });
     inp.addEventListener('change', () => { commitAdjustmentInput(inp); formatAdjustmentInput(inp); });
-    inp.addEventListener('blur', () => { commitAdjustmentInput(inp); formatAdjustmentInput(inp); });
     formatAdjustmentInput(inp);
   });
   // Adjustment hours
@@ -4738,6 +4783,21 @@ function renderAdjustmentsTable() {
     }
     input.value = '';
   };
+  const stageAdjustmentHoursInput = (input) => {
+    const empId = input.getAttribute('data-id');
+    if (!empId) return;
+    const raw = parseFloat(input.value);
+    if (Number.isFinite(raw)) {
+      const rounded = roundToCents(raw);
+      if (rounded !== 0) {
+        adjHrs[empId] = rounded;
+      } else {
+        delete adjHrs[empId];
+      }
+    } else {
+      delete adjHrs[empId];
+    }
+  };
   const commitAdjustmentHoursInput = (input) => {
     const empId = input.getAttribute('data-id');
     if (!empId) return;
@@ -4756,8 +4816,22 @@ function renderAdjustmentsTable() {
     adjustmentRefresh.flush();
   };
   atbody.querySelectorAll('.adjHrsInput').forEach(inp => {
+    inp.addEventListener('focus', () => { adjustmentsFocusCount += 1; });
+    inp.addEventListener('blur', () => {
+      adjustmentsFocusCount = Math.max(0, adjustmentsFocusCount - 1);
+      commitAdjustmentHoursInput(inp);
+      formatAdjustmentHoursInput(inp);
+      adjustmentRefresh.flush();
+      setTimeout(() => {
+        if (adjustmentsFocusCount === 0 && adjustmentsRenderPending) queueAdjustmentsRerender();
+      }, 0);
+    });
+    inp.addEventListener('input', () => {
+      stageAdjustmentHoursInput(inp);
+      adjustmentHoursPersist.schedule();
+      adjustmentRefresh.schedule();
+    });
     inp.addEventListener('change', () => { commitAdjustmentHoursInput(inp); formatAdjustmentHoursInput(inp); });
-    inp.addEventListener('blur', () => { commitAdjustmentHoursInput(inp); formatAdjustmentHoursInput(inp); });
     formatAdjustmentHoursInput(inp);
   });
   // Initialize totals for adjustments (amount and hours)
