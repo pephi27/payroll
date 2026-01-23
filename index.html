@@ -3678,6 +3678,9 @@ try {
     }
   }
 } catch (err) { deductionColumnVisibilityByPeriod = {}; }
+if (Object.keys(deductionColumnVisibilityByPeriod).length === 0) {
+  deductionColumnVisibilityByPeriod[DEDUCTION_DEFAULT_PERIOD_KEY] = { [DEDUCTION_INCLUDE_ALL_FLAG]: true };
+}
 
 let deductionColumnInclusions = getStoredDeductionInclusionsForPeriod(activeDeductionPeriodKey());
 
