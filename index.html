@@ -151,6 +151,7 @@ const KNOWN_KEYS = [
   ,"payroll_contrib_flags"
   ,"att_overrides_hours_v1"
   ,"payroll_lock_state"
+  ,"dtr_overrides_v1"
 ]
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY)
@@ -408,6 +409,50 @@ function safeStringify(v){
 
 /* Manual DTR indicator */
 #resultsTable .manual-indicator { color: #ef4444; margin-left: 4px; font-weight: 700; }
+
+/* DTR Punch Editor Modal */
+.dtr-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.55);
+  display: none;
+  align-items: center;
+  justify-content: center;
+  z-index: 1100;
+  padding: 16px;
+}
+.dtr-modal-overlay.is-open { display: flex; }
+.dtr-modal-dialog {
+  background: #fff;
+  border-radius: 10px;
+  box-shadow: 0 10px 30px rgba(15, 23, 42, 0.2);
+  max-width: 520px;
+  width: 100%;
+  padding: 18px 20px;
+}
+.dtr-modal-dialog h3 {
+  margin: 0 0 12px;
+  font-size: 18px;
+}
+.dtr-modal-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+.dtr-modal-grid label {
+  font-size: 12px;
+  color: #475569;
+}
+.dtr-modal-grid select {
+  width: 100%;
+  margin-top: 4px;
+}
+.dtr-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 16px;
+}
 
 </style>
 <!-- === / Supabase KV Sync Adapter === -->
@@ -2082,6 +2127,9 @@ window.addEventListener('load', dashReports);
       <th>Total Hours</th>
       <th>
        Split
+      </th>
+      <th class="punches-header">
+       Punches
       </th>
       <!-- Added explicit Actions column to ensure consistent header structure -->
       <th class="actions-header">
@@ -6797,7 +6845,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!data) return '';
     const filtered = dropColumns(data.headers || [], data.rows || [], (header) => {
       const norm = String(header || '').trim().toLowerCase();
-      return norm === 'actions' || norm === 'split' || norm === 'editor';
+      return norm === 'actions' || norm === 'split' || norm === 'editor' || norm === 'punches';
     });
     const range = formatDateRangeInline(startDate, endDate);
     const subtitle = range ? `<div class="report-subtitle">${escapeHtml(range)}</div>` : '';
@@ -7591,7 +7639,7 @@ rows += `<tr class="allowance">
         const headerRow = clone.tHead.rows[0];
         for (let i = 0; i < headerRow.cells.length; i++){
           const txt = (headerRow.cells[i].textContent || '').trim().toLowerCase();
-          if (txt === 'split' || txt === 'actions' || txt === 'editor'){ dropIdx.push(i); }
+          if (txt === 'split' || txt === 'actions' || txt === 'editor' || txt === 'punches'){ dropIdx.push(i); }
         }
       }
       if (dropIdx.length){
@@ -9473,6 +9521,116 @@ const COMPANY_OPTIONS = ['Edifice', 'Portafolio'];
 
 let overridesSchedules = JSON.parse(localStorage.getItem(LS_OVERRIDES_SCHEDULES) || '{}');
 let overridesProjects = JSON.parse(localStorage.getItem(LS_OVERRIDES_PROJECTS) || '{}');
+const LS_DTR_OVERRIDES = 'dtr_overrides_v1';
+const OVERNIGHT_CUTOFF_HOUR = 6;
+let dtrOverrides = loadDtrOverrides();
+
+function loadDtrOverrides() {
+  try {
+    const raw = localStorage.getItem(LS_DTR_OVERRIDES);
+    const parsed = raw ? JSON.parse(raw) : {};
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch (e) {
+    console.warn('Failed to load DTR overrides', e);
+    return {};
+  }
+}
+function saveDtrOverrides() {
+  try {
+    localStorage.setItem(LS_DTR_OVERRIDES, JSON.stringify(dtrOverrides || {}));
+  } catch (e) {
+    console.warn('Failed to save DTR overrides', e);
+  }
+}
+function normalizeOverrideValue(value) {
+  if (value == null) return null;
+  const cleaned = String(value).trim();
+  return cleaned ? cleaned : null;
+}
+function stripNextDaySuffix(value) {
+  return String(value || '').replace(/\s*\+\s*\d+\s*$/, '');
+}
+function getPunchOptions(empId, dateStr) {
+  const options = [];
+  const seen = new Set();
+  const addOption = (timeValue, isNextDay) => {
+    if (!timeValue) return;
+    const baseTime = padHM(stripNextDaySuffix(timeValue));
+    const value = isNextDay ? `${baseTime}+1` : baseTime;
+    if (seen.has(value)) return;
+    seen.add(value);
+    options.push({
+      value,
+      label: isNextDay ? `${baseTime} (+1)` : baseTime
+    });
+  };
+
+  const matches = (storedRecords || []).filter(r => String(r.empId) === String(empId) && r.date === dateStr);
+  matches.forEach(r => addOption(r.time, false));
+
+  const nextDate = (function(){
+    const dt = new Date(dateStr + 'T00:00');
+    if (isNaN(dt)) return null;
+    dt.setDate(dt.getDate() + 1);
+    return dt.toISOString().slice(0, 10);
+  })();
+  if (nextDate) {
+    (storedRecords || [])
+      .filter(r => String(r.empId) === String(empId) && r.date === nextDate)
+      .forEach(r => {
+        const mins = toMins(padHM(r.time));
+        if (mins !== null && mins <= OVERNIGHT_CUTOFF_HOUR * 60) {
+          addOption(r.time, true);
+        }
+      });
+  }
+
+  options.sort((a, b) => (toMins(a.value) || 0) - (toMins(b.value) || 0));
+  return options;
+}
+function openPunchEditor(rowContext) {
+  const modal = document.getElementById('dtrPunchModal');
+  if (!modal || !rowContext) return;
+  const { empId, date, name } = rowContext;
+  const title = document.getElementById('dtrPunchModalTitle');
+  if (title) title.textContent = `Edit Punches: ${name || empId} — ${date}`;
+  modal.dataset.empId = empId;
+  modal.dataset.date = date;
+  const options = getPunchOptions(empId, date);
+  const overrideKey = `${empId}___${date}`;
+  const overrides = dtrOverrides[overrideKey] || {};
+  const selectMap = {
+    amIn: document.getElementById('dtrPunchAmIn'),
+    amOut: document.getElementById('dtrPunchAmOut'),
+    pmIn: document.getElementById('dtrPunchPmIn'),
+    pmOut: document.getElementById('dtrPunchPmOut'),
+    otIn: document.getElementById('dtrPunchOtIn'),
+    otOut: document.getElementById('dtrPunchOtOut')
+  };
+  Object.keys(selectMap).forEach(key => {
+    const select = selectMap[key];
+    if (!select) return;
+    select.innerHTML = '';
+    const autoOpt = document.createElement('option');
+    autoOpt.value = '';
+    autoOpt.textContent = '(Auto)';
+    select.appendChild(autoOpt);
+    options.forEach(opt => {
+      const optionEl = document.createElement('option');
+      optionEl.value = opt.value;
+      optionEl.textContent = opt.label;
+      select.appendChild(optionEl);
+    });
+    const stored = normalizeOverrideValue(overrides[key]);
+    if (stored) {
+      select.value = stored;
+    } else {
+      select.value = '';
+    }
+  });
+  modal.classList.add('is-open');
+  modal.setAttribute('aria-hidden', 'false');
+}
 // Store per-date split flags for half-day display. When true for an empId+date,
 // the DTR entry is rendered as two separate rows (AM and PM) rather than a
 // single combined row. The split state is persisted in localStorage under
@@ -10485,8 +10643,22 @@ function __inRange(d){
     r.readAsText(file);
   });
 });
-function padHM(hm){ if(!hm) return ''; const [h,m]=hm.split(':').map(x=>String(Number(x)).padStart(2,'0')); return h.padStart(2,'0')+':'+m.padStart(2,'0'); }
-function toMins(hm){ if(!hm) return null; const [h,m]=hm.split(':').map(Number); return h*60+m; }
+function padHM(hm){
+  if(!hm) return '';
+  const [h,m]=String(hm).split(':').map(x=>String(Number(x)).padStart(2,'0'));
+  return h.padStart(2,'0')+':'+m.padStart(2,'0');
+}
+function toMins(hm){
+  if(!hm) return null;
+  const str = String(hm).trim();
+  const match = str.match(/^(\d{1,2})\s*:\s*(\d{2})(?:\s*\+\s*(\d+))?$/);
+  if(!match) return null;
+  const h = Number(match[1]);
+  const m = Number(match[2]);
+  const dayOffset = match[3] ? Number(match[3]) : 0;
+  if(!isFinite(h) || !isFinite(m) || !isFinite(dayOffset)) return null;
+  return (h * 60) + m + (dayOffset * 24 * 60);
+}
 function minsToDecimal(mins){ return (mins/60).toFixed(2); }
 
 function buildScheduleDropdown(empId, date, currentScheduleId){
@@ -10582,15 +10754,18 @@ function renderResults(){
 // 12-hour clock formatter for display only (keeps underlying logic 24h)
 function __fmt12Clock(hhmm){
   if(!hhmm || typeof hhmm !== 'string') return hhmm || '';
-  const m = hhmm.match(/^\s*(\d{1,2})\s*:\s*(\d{2})\s*$/);
+  const nextDayMatch = hhmm.match(/\+\s*(\d+)\s*$/);
+  const nextDaySuffix = nextDayMatch ? ` (+${nextDayMatch[1]})` : '';
+  const base = hhmm.replace(/\s*\+\s*\d+\s*$/, '');
+  const m = base.match(/^\s*(\d{1,2})\s*:\s*(\d{2})\s*$/);
   if(!m) return hhmm;
   let h = parseInt(m[1],10), mm = m[2];
-  let suffix = 'AM';
-  if(h === 0){ h = 12; suffix = 'AM'; }
-  else if(h === 12){ suffix = 'PM'; }
-  else if(h > 12){ h = h - 12; suffix = 'PM'; }
-  else { suffix = 'AM'; }
-  return h + ':' + mm + ' ' + suffix;
+  let meridiem = 'AM';
+  if(h === 0){ h = 12; meridiem = 'AM'; }
+  else if(h === 12){ meridiem = 'PM'; }
+  else if(h > 12){ h = h - 12; meridiem = 'PM'; }
+  else { meridiem = 'AM'; }
+  return h + ':' + mm + ' ' + meridiem + nextDaySuffix;
 }
 
 
@@ -10675,8 +10850,28 @@ if(!_passes) continue;
       otOut:{ start: schedule.rng_ot_out_start || DEFAULT_RANGES.rng_ot_out_start, end: schedule.rng_ot_out_end || DEFAULT_RANGES.rng_ot_out_end }
     };
 
-    const amInActual = pickEarliest(rangesForEmp.amIn), amOutActual = pickLatest(rangesForEmp.amOut);
-    const pmInActual = pickEarliest(rangesForEmp.pmIn), pmOutActual = pickLatest(rangesForEmp.pmOut);
+    const overridePunches = dtrOverrides && Object.prototype.hasOwnProperty.call(dtrOverrides, overrideKey)
+      ? dtrOverrides[overrideKey]
+      : null;
+    let amInActual = null;
+    let amOutActual = null;
+    let pmInActual = null;
+    let pmOutActual = null;
+    let otInActual = null;
+    let otOutActual = null;
+    if (overridePunches) {
+      amInActual = normalizeOverrideValue(overridePunches.amIn);
+      amOutActual = normalizeOverrideValue(overridePunches.amOut);
+      pmInActual = normalizeOverrideValue(overridePunches.pmIn);
+      pmOutActual = normalizeOverrideValue(overridePunches.pmOut);
+      otInActual = normalizeOverrideValue(overridePunches.otIn);
+      otOutActual = normalizeOverrideValue(overridePunches.otOut);
+    } else {
+      amInActual = pickEarliest(rangesForEmp.amIn);
+      amOutActual = pickLatest(rangesForEmp.amOut);
+      pmInActual = pickEarliest(rangesForEmp.pmIn);
+      pmOutActual = pickLatest(rangesForEmp.pmOut);
+    }
 
     let pmOutRefMins = pmOutActual ? toMins(pmOutActual) : toMins(schedule.sch_pm_end);
 
@@ -10700,31 +10895,33 @@ if(!_passes) continue;
         pmOutRefMins = toMins(satEnd);
       }
     } catch(e){ console.warn('Saturday OT local patch error', e); }
-const otCandidates = times.filter(t => {
-      const mins = toMins(t);
-      return mins > pmOutRefMins && mins >= toMins(rangesForEmp.otIn.start) && mins <= toMins(rangesForEmp.otIn.end);
-    });
-    // --- Patched OT In/Out picking (DTR) ---
-const otInCandidates = times.filter(t => {
-  const m = toMins(t);
-  return m > pmOutRefMins && m >= toMins(__isSaturday ? __satEnd : rangesForEmp.otIn.start) && m <= toMins(__isSaturday ? '23:59' : rangesForEmp.otIn.end);
-});
-const otInActual = otInCandidates.length ? otInCandidates[0] : null;
+    if (!overridePunches) {
+      const otCandidates = times.filter(t => {
+        const mins = toMins(t);
+        return mins > pmOutRefMins && mins >= toMins(rangesForEmp.otIn.start) && mins <= toMins(rangesForEmp.otIn.end);
+      });
+      // --- Patched OT In/Out picking (DTR) ---
+      const otInCandidates = times.filter(t => {
+        const m = toMins(t);
+        return m > pmOutRefMins && m >= toMins(__isSaturday ? __satEnd : rangesForEmp.otIn.start) && m <= toMins(__isSaturday ? '23:59' : rangesForEmp.otIn.end);
+      });
+      otInActual = otInCandidates.length ? otInCandidates[0] : null;
 
-const otOutCandidates = times
-  .filter(t => {
-    const m = toMins(t);
-    return m > pmOutRefMins && m >= toMins(__isSaturday ? __satEnd : rangesForEmp.otOut.start) && m <= toMins(__isSaturday ? '23:59' : rangesForEmp.otOut.end);
-  })
-  .filter(t => !otInActual || toMins(t) >= toMins(otInActual));
-const otOutActual = otOutCandidates.length ? otOutCandidates[otOutCandidates.length - 1] : null;
-// --- end patch ---
+      const otOutCandidates = times
+        .filter(t => {
+          const m = toMins(t);
+          return m > pmOutRefMins && m >= toMins(__isSaturday ? __satEnd : rangesForEmp.otOut.start) && m <= toMins(__isSaturday ? '23:59' : rangesForEmp.otOut.end);
+        })
+        .filter(t => !otInActual || toMins(t) >= toMins(otInActual));
+      otOutActual = otOutCandidates.length ? otOutCandidates[otOutCandidates.length - 1] : null;
+      // --- end patch ---
+    }
 
 // Saturday fallback: if only a single OUT exists beyond the Saturday end, treat OT as (satEnd -> lastOut)
 let otInCalc = otInActual;
 let otOutCalc = otOutActual;
 try {
-  if (__isSaturday && __satEnd) {
+  if (!overridePunches && __isSaturday && __satEnd) {
     const lastOut = pmOutActual || amOutActual || null;
     const lastOutM = lastOut ? toMins(lastOut) : null;
     const satEndM = toMins(__satEnd);
@@ -10785,14 +10982,21 @@ try {
     const totalRegularDecimal = minsToDecimal(totalMins);
 let otMins = 0;
     if(otInCalc && otOutCalc){
-      const otStartClamp = Math.max(toMins(otInCalc), toMins(__isSaturday ? (__satEnd || rangesForEmp.otIn.start) : rangesForEmp.otIn.start));
-      const otEndClamp   = Math.min(toMins(otOutCalc), toMins(__isSaturday ? '23:59' : (rangesForEmp.otOut.end || rangesForEmp.otIn.end)));
+      const nextDayOffset = /\+\s*\d+\s*$/.test(String(otOutCalc || '')) ? 24 * 60 : 0;
+      const otStartClamp = Math.max(
+        toMins(otInCalc),
+        toMins(__isSaturday ? (__satEnd || rangesForEmp.otIn.start) : rangesForEmp.otIn.start) + nextDayOffset
+      );
+      const otEndClamp = Math.min(
+        toMins(otOutCalc),
+        toMins(__isSaturday ? '23:59' : (rangesForEmp.otOut.end || rangesForEmp.otIn.end)) + nextDayOffset
+      );
       if(otEndClamp > otStartClamp) otMins = otEndClamp - otStartClamp;
     }
     
     // Saturday definitive OT computation: last OUT beyond Saturday end is OT
     try {
-      if (__isSaturday && __satEnd) {
+      if (!overridePunches && __isSaturday && __satEnd) {
         const lastOut = (pmOutActual || amOutActual || null);
         if (lastOut) {
           const satEndM = toMins(__satEnd);
@@ -10813,7 +11017,7 @@ let otMins = 0;
     // the scheduled PM end as overtime. Only the final clockâ€‘out time
     // is considered to avoid counting intermediate segments.
     try {
-      if (!__isSaturday) {
+      if (!overridePunches && !__isSaturday) {
         // Determine the reference end time for regular work (PM shift end)
         const pmRef = pmOutActual ? toMins(pmOutActual) : toMins(schedule.sch_pm_end || (typeof DEFAULT_SCHEDULE !== 'undefined' ? DEFAULT_SCHEDULE.sch_pm_end : '17:00'));
         // Determine if explicit OT was applied (OT IN after PM end)
@@ -10895,7 +11099,18 @@ let otMins = 0;
         let regMinsSeg=0, otMinsSeg=0, otInSeg=null, otOutSeg=null;
         if(segment==='AM'){ regMinsSeg = hasBridge ? clampSegHalf(amInActual, middayStart, schedHalf.sch_am_start || DEFAULT_SCHEDULE.sch_am_start, schedHalf.sch_am_end || DEFAULT_SCHEDULE.sch_am_end, schedHalf) : clampSegHalf(amInActual, amOutActual, schedHalf.sch_am_start || DEFAULT_SCHEDULE.sch_am_start, schedHalf.sch_am_end || DEFAULT_SCHEDULE.sch_am_end, schedHalf); }
         else if(segment==='PM'){ regMinsSeg = hasBridge ? clampSegHalf(middayEnd, pmOutActual, schedHalf.sch_pm_start || DEFAULT_SCHEDULE.sch_pm_start, schedHalf.sch_pm_end || DEFAULT_SCHEDULE.sch_pm_end, schedHalf) : clampSegHalf(pmInActual, pmOutActual, schedHalf.sch_pm_start || DEFAULT_SCHEDULE.sch_pm_start, schedHalf.sch_pm_end || DEFAULT_SCHEDULE.sch_pm_end, schedHalf); }
-        else { const otRes=computeOtHalf(schedHalf); otMinsSeg=otRes.mins; otInSeg=otRes.otIn; otOutSeg=otRes.otOut; }
+        else {
+          if (overridePunches) {
+            otMinsSeg = otMins;
+            otInSeg = otInCalc;
+            otOutSeg = otOutCalc;
+          } else {
+            const otRes = computeOtHalf(schedHalf);
+            otMinsSeg = otRes.mins;
+            otInSeg = otRes.otIn;
+            otOutSeg = otRes.otOut;
+          }
+        }
         const regDecSeg = minsToDecimal(regMinsSeg);
         const otDecSeg = segment==='OT'? minsToDecimal(otMinsSeg):'0.00';
         let projIdSeg = (overridesProjects && Object.prototype.hasOwnProperty.call(overridesProjects, halfKey)) ? overridesProjects[halfKey] : empProjId;
@@ -10929,6 +11144,7 @@ let otMins = 0;
           htmlSeg += '<td>' + formatHours(otDecSeg) + '</td>';
           htmlSeg += '<td>' + formatHours(String((parseFloat(regDecSeg)||0)+(parseFloat(otDecSeg)||0))) + '</td>';
           htmlSeg += '<td><button type="button" class="btn-unsplit" data-key="' + splitKey + '" onclick="unsplitRecord(this.dataset.key)">Unsplit</button></td>';
+          htmlSeg += '<td class="punches-cell"><button type="button" class="dtr-punch-btn">✏ Edit Punches</button></td>';
           // Ensure Actions column always has a Delete button for split rows
           htmlSeg += '<td class="actions-cell"><button type="button" class="dtr-del-btn">Delete</button></td>';
           trSeg.innerHTML = htmlSeg;
@@ -11031,6 +11247,7 @@ let otMins = 0;
       '<td>'+formatHours(totalRegularDecimal)+'</td><td>'+formatHours(otDecimal)+'</td><td>'+formatHours(__tot)+'</td>' +
       // Use a named handler with a data-key attribute instead of an inline IIFE.
       '<td><button type="button" class="btn-split" data-key="' + empId + '___' + date + '" onclick="splitRecord(this.dataset.key)">Split</button></td>' +
+      '<td class="punches-cell"><button type="button" class="dtr-punch-btn">✏ Edit Punches</button></td>' +
       // Ensure Actions column always has a Delete button for unsplit rows
       '<td class="actions-cell"><button type="button" class="dtr-del-btn">Delete</button></td>';
     if(overridesSchedules[overrideKey] || overridesProjects[overrideKeyProj] !== undefined){
@@ -11202,7 +11419,16 @@ function computeHoursForDateRange(startDate, endDate) {
     grouped[dayKey].push(r.time);
   }
 
-  const toMins = hm => { const [h,m] = hm.split(':').map(Number); return h*60+m; };
+  const toMins = hm => {
+    if(!hm) return null;
+    const match = String(hm).trim().match(/^(\d{1,2})\s*:\s*(\d{2})(?:\s*\+\s*(\d+))?$/);
+    if(!match) return null;
+    const h = Number(match[1]);
+    const m = Number(match[2]);
+    const dayOffset = match[3] ? Number(match[3]) : 0;
+    if(!isFinite(h) || !isFinite(m) || !isFinite(dayOffset)) return null;
+    return h*60+m+(dayOffset*24*60);
+  };
   const minsToDec = mins => mins / 60;
 
   for (const key in grouped) {
@@ -11220,10 +11446,28 @@ function computeHoursForDateRange(startDate, endDate) {
     const pickEarliest = (win) => times.find(t => t >= win.start && t <= win.end) || null;
     const pickLatest = (win) => { const arr = times.filter(t => t >= win.start && t <= win.end); return arr.length ? arr[arr.length-1] : null; };
 
-    const amInActual = pickEarliest({start: schedule.rng_am_in_start, end: schedule.rng_am_in_end});
-    const amOutActual = pickLatest({start: schedule.rng_am_out_start, end: schedule.rng_am_out_end});
-    const pmInActual = pickEarliest({start: schedule.rng_pm_in_start, end: schedule.rng_pm_in_end});
-    const pmOutActual = pickLatest({start: schedule.rng_pm_out_start, end: schedule.rng_pm_out_end});
+    const overridePunches = dtrOverrides && Object.prototype.hasOwnProperty.call(dtrOverrides, overrideKey)
+      ? dtrOverrides[overrideKey]
+      : null;
+    let amInActual = null;
+    let amOutActual = null;
+    let pmInActual = null;
+    let pmOutActual = null;
+    let otInActual = null;
+    let otOutActual = null;
+    if (overridePunches) {
+      amInActual = normalizeOverrideValue(overridePunches.amIn);
+      amOutActual = normalizeOverrideValue(overridePunches.amOut);
+      pmInActual = normalizeOverrideValue(overridePunches.pmIn);
+      pmOutActual = normalizeOverrideValue(overridePunches.pmOut);
+      otInActual = normalizeOverrideValue(overridePunches.otIn);
+      otOutActual = normalizeOverrideValue(overridePunches.otOut);
+    } else {
+      amInActual = pickEarliest({start: schedule.rng_am_in_start, end: schedule.rng_am_in_end});
+      amOutActual = pickLatest({start: schedule.rng_am_out_start, end: schedule.rng_am_out_end});
+      pmInActual = pickEarliest({start: schedule.rng_pm_in_start, end: schedule.rng_pm_in_end});
+      pmOutActual = pickLatest({start: schedule.rng_pm_out_start, end: schedule.rng_pm_out_end});
+    }
 
     let pmOutRefMins = pmOutActual ? toMins(pmOutActual) : toMins(schedule.sch_pm_end);
 
@@ -11247,8 +11491,10 @@ function computeHoursForDateRange(startDate, endDate) {
         pmOutRefMins = toMins(satEnd);
       }
     } catch(e){ console.warn('Saturday OT local patch error', e); }
-const otInActual = pickEarliest({start: schedule.rng_ot_in_start, end: schedule.rng_ot_in_end});
-    const otOutActual = pickLatest({start: schedule.rng_ot_out_start, end: schedule.rng_ot_out_end});
+    if (!overridePunches) {
+      otInActual = pickEarliest({start: schedule.rng_ot_in_start, end: schedule.rng_ot_in_end});
+      otOutActual = pickLatest({start: schedule.rng_ot_out_start, end: schedule.rng_ot_out_end});
+    }
 
     let regMins = 0;
     const grace = Number(schedule.sch_grace) || 0;
@@ -11319,7 +11565,14 @@ const otInActual = pickEarliest({start: schedule.rng_ot_in_start, end: schedule.
      *      presumed to be normal work/breaks and do not contribute to OT.
      */
     let dayOTMins = 0;
-    if (__isSaturday) {
+    if (overridePunches) {
+      if (otInActual && otOutActual) {
+        let otInM = toMins(otInActual);
+        let otOutM = toMins(otOutActual);
+        if (otOutM < otInM) otOutM += 1440;
+        dayOTMins = Math.max(0, otOutM - otInM);
+      }
+    } else if (__isSaturday) {
       // Saturday override: sum minutes worked after the Saturday end for
       // every recorded segment.  Each segment contributes its own OT
       // minutes without regard to explicit OT punches.
@@ -11647,8 +11900,54 @@ function restoreData(file) {
   </div>
 </div>
 
+<!-- DTR Punch Editor Modal -->
+<div id="dtrPunchModal" class="dtr-modal-overlay" role="presentation" aria-hidden="true">
+  <div class="dtr-modal-dialog" role="dialog" aria-modal="true" aria-labelledby="dtrPunchModalTitle">
+    <h3 id="dtrPunchModalTitle">Edit Punches</h3>
+    <div class="dtr-modal-grid">
+      <label>Clock In 1
+        <select id="dtrPunchAmIn"></select>
+      </label>
+      <label>Clock Out 1
+        <select id="dtrPunchAmOut"></select>
+      </label>
+      <label>Clock In 2
+        <select id="dtrPunchPmIn"></select>
+      </label>
+      <label>Clock Out 2
+        <select id="dtrPunchPmOut"></select>
+      </label>
+      <label>OT In
+        <select id="dtrPunchOtIn"></select>
+      </label>
+      <label>OT Out
+        <select id="dtrPunchOtOut"></select>
+      </label>
+    </div>
+    <div class="dtr-modal-actions">
+      <button id="dtrPunchCancel">Cancel</button>
+      <button id="dtrPunchClear">Clear Overrides</button>
+      <button id="dtrPunchSave" class="primary">Save</button>
+    </div>
+  </div>
+</div>
+
 <script>
 (function(){
+  function closePunchModal(){
+    const modal = document.getElementById('dtrPunchModal');
+    if (!modal) return;
+    modal.classList.remove('is-open');
+    modal.setAttribute('aria-hidden', 'true');
+  }
+  function syncPayrollAfterOverride(){
+    try { if (typeof renderResults === 'function') renderResults(); } catch (e) {}
+    try {
+      if (typeof calculatePayrollFromResultsTable === 'function') calculatePayrollFromResultsTable();
+      else if (typeof calculatePayrollFromRecords === 'function') calculatePayrollFromRecords();
+    } catch (e) {}
+    try { if (typeof calculateAll === 'function') calculateAll(); } catch (e) {}
+  }
   function openManualModal(){
     const modal = document.getElementById('manualDtrModal');
     const empSelect = document.getElementById('manualEmpSelect');
@@ -11697,6 +11996,81 @@ function restoreData(file) {
       closeManualModal();
       if(typeof renderResults === 'function') renderResults();
     });
+  }
+  function wirePunchEditor(){
+    const modal = document.getElementById('dtrPunchModal');
+    if (!modal || modal.__wired) return;
+    modal.__wired = true;
+
+    const cancelBtn = document.getElementById('dtrPunchCancel');
+    const clearBtn = document.getElementById('dtrPunchClear');
+    const saveBtn = document.getElementById('dtrPunchSave');
+
+    if (cancelBtn) cancelBtn.addEventListener('click', closePunchModal);
+    if (clearBtn) clearBtn.addEventListener('click', function(){
+      const empId = modal.dataset.empId;
+      const date = modal.dataset.date;
+      if (!empId || !date) return closePunchModal();
+      const key = `${empId}___${date}`;
+      if (dtrOverrides && Object.prototype.hasOwnProperty.call(dtrOverrides, key)) {
+        delete dtrOverrides[key];
+        saveDtrOverrides();
+      }
+      closePunchModal();
+      syncPayrollAfterOverride();
+    });
+    if (saveBtn) saveBtn.addEventListener('click', function(){
+      const empId = modal.dataset.empId;
+      const date = modal.dataset.date;
+      if (!empId || !date) return closePunchModal();
+      const key = `${empId}___${date}`;
+      const getVal = (id) => {
+        const el = document.getElementById(id);
+        return el ? normalizeOverrideValue(el.value) : null;
+      };
+      const nextValues = {
+        amIn: getVal('dtrPunchAmIn'),
+        amOut: getVal('dtrPunchAmOut'),
+        pmIn: getVal('dtrPunchPmIn'),
+        pmOut: getVal('dtrPunchPmOut'),
+        otIn: getVal('dtrPunchOtIn'),
+        otOut: getVal('dtrPunchOtOut')
+      };
+      const hasAny = Object.values(nextValues).some(Boolean);
+      if (hasAny) {
+        dtrOverrides[key] = nextValues;
+      } else if (dtrOverrides && Object.prototype.hasOwnProperty.call(dtrOverrides, key)) {
+        delete dtrOverrides[key];
+      }
+      saveDtrOverrides();
+      closePunchModal();
+      syncPayrollAfterOverride();
+    });
+
+    modal.addEventListener('click', function(ev){
+      if (ev.target === modal) closePunchModal();
+    });
+    document.addEventListener('keydown', function(ev){
+      if (ev.key === 'Escape' && modal.classList.contains('is-open')) {
+        closePunchModal();
+      }
+    });
+  }
+  function ensurePunchesHeader(){
+    const table = document.getElementById('resultsTable');
+    if(!table) return;
+    const theadRow = table.querySelector('thead tr');
+    if(theadRow && !theadRow.querySelector('.punches-header')){
+      const th = document.createElement('th');
+      th.textContent = 'Punches';
+      th.classList.add('punches-header');
+      const actionsHeader = theadRow.querySelector('.actions-header');
+      if (actionsHeader) {
+        theadRow.insertBefore(th, actionsHeader);
+      } else {
+        theadRow.appendChild(th);
+      }
+    }
   }
   function ensureActionsHeader(){
     const table = document.getElementById('resultsTable');
@@ -11759,15 +12133,50 @@ function restoreData(file) {
     });
     table.__dtrDelBound = true;
   }
+  function setupDtrPunchDelegation(){
+    const table = document.getElementById('resultsTable');
+    if (!table || table.__dtrPunchBound) return;
+    table.__dtrPunchBound = true;
+    table.addEventListener('click', function(ev){
+      const btn = ev.target && ev.target.closest ? ev.target.closest('.dtr-punch-btn') : null;
+      if (!btn) return;
+      const tr = btn.closest('tr');
+      if (!tr) return;
+      const empId = tr.dataset.empId || (tr.cells[0] ? tr.cells[0].textContent.trim() : '');
+      const date = tr.dataset.date || (tr.cells[4] ? tr.cells[4].textContent.trim() : '');
+      if (!empId || !date) return;
+      const emp = storedEmployees && storedEmployees[empId];
+      const name = emp && emp.name ? emp.name : (tr.cells[1] ? tr.cells[1].textContent.trim() : '');
+      openPunchEditor({ empId, date, name });
+    });
+  }
   function addDtrDeleteButtons(){
     const table = document.getElementById('resultsTable');
     if(!table) return;
+    ensurePunchesHeader();
     ensureActionsHeader();
     const rows = table.querySelectorAll('tbody tr');
     rows.forEach(tr => {
-      if(tr.querySelector('.dtr-del-btn')) return;
-      const td = document.createElement('td');
-      td.className = 'actions-cell';
+      const hasPunch = !!tr.querySelector('.dtr-punch-btn');
+      const hasDelete = !!tr.querySelector('.dtr-del-btn');
+      if (!hasPunch) {
+        const punchTd = document.createElement('td');
+        punchTd.className = 'punches-cell';
+        const editBtn = document.createElement('button');
+        editBtn.textContent = '✏ Edit Punches';
+        editBtn.className = 'dtr-punch-btn';
+        punchTd.appendChild(editBtn);
+        const actionsCell = tr.querySelector('.actions-cell');
+        if (actionsCell) {
+          tr.insertBefore(punchTd, actionsCell);
+        } else {
+          tr.appendChild(punchTd);
+        }
+      }
+      if (hasDelete) return;
+
+      const actionTd = document.createElement('td');
+      actionTd.className = 'actions-cell';
       const btn = document.createElement('button');
       btn.textContent = 'Delete';
       btn.className = 'dtr-del-btn';
@@ -11835,8 +12244,8 @@ function restoreData(file) {
           renderResults();
         } catch(e){ console.error('DTR delete failed', e); }
       });
-      td.appendChild(btn);
-      tr.appendChild(td);
+      actionTd.appendChild(btn);
+      tr.appendChild(actionTd);
     });
   }
   function patchRenderResults(){
@@ -11846,6 +12255,8 @@ function restoreData(file) {
       const res = original.apply(this, arguments);
       try { addDtrDeleteButtons(); } catch(e){}
       try { setupDtrDeleteDelegation(); } catch(e){}
+      try { setupDtrPunchDelegation(); } catch(e){}
+      try { wirePunchEditor(); } catch(e){}
       // After rendering results, always check whether the selected payroll period is
       // locked and toggle editing accordingly. This ensures that dynamic
       // controls inserted by renderResults() respect the current lock state.
@@ -11861,7 +12272,9 @@ function restoreData(file) {
   }
   function init(){
     wireManualDTR();
+    wirePunchEditor();
     setupDtrDeleteDelegation();
+    setupDtrPunchDelegation();
     if(!patchRenderResults()){
       const iv = setInterval(() => {
         if(patchRenderResults()) clearInterval(iv);
@@ -12345,11 +12758,11 @@ document.addEventListener('DOMContentLoaded', function(){
       });
       // Clone table
       var clone = table.cloneNode(true);
-      // Remove columns labelled 'Split', 'Actions', or 'Editor'
+      // Remove columns labelled 'Split', 'Actions', 'Editor', or 'Punches'
       var dropIdx = [];
       clone.querySelectorAll('thead th').forEach(function(th, idx){
         var t = (th.textContent || '').trim().toLowerCase();
-        if(t === 'split' || t === 'actions' || t === 'editor') dropIdx.push(idx);
+        if(t === 'split' || t === 'actions' || t === 'editor' || t === 'punches') dropIdx.push(idx);
       });
       if(dropIdx.length){
         // Remove header cells
