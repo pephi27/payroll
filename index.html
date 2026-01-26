@@ -14457,22 +14457,12 @@ document.addEventListener('DOMContentLoaded', async function () {
       }
       if (typeof hideRemoteDtrAlert === 'function') hideRemoteDtrAlert();
     } else {
-      // No remote data: keep any local dataset intact and only warn if local is empty.
-      let hasLocal = false;
-      try {
-        const localRaw = localStorage.getItem(LS_RECORDS);
-        if (localRaw) {
-          const parsed = JSON.parse(localRaw);
-          hasLocal = Array.isArray(parsed) && parsed.length > 0;
-        }
-      } catch (e) {}
+      // No remote data: clear any existing local dataset and inform the user. window. try { localStorage.removeItem(LS_RECORDS); } catch (e) {}
       if (typeof renderResults === 'function') {
         try { renderResults(); } catch (e) {}
       }
-      if (!hasLocal && typeof showRemoteDtrAlert === 'function') {
+      if (typeof showRemoteDtrAlert === 'function') {
         showRemoteDtrAlert('No remote DTR data found. Import a .DAT/.TXT file to populate cloud data.');
-      } else if (hasLocal && typeof hideRemoteDtrAlert === 'function') {
-        hideRemoteDtrAlert();
       }
     }
   } catch (e) {
