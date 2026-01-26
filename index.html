@@ -161,6 +161,7 @@ const KNOWN_KEYS = [
   ,"payroll_lock_state"
   ,"dtr_overrides_v1"
   ,"incomeTypeOptions"
+  ,"deductionTypeOptions"
 ]
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY)
@@ -402,6 +403,12 @@ function safeStringify(v){
 #additionalIncomeTable .incomeTypeSelect { min-width: 140px; }
 #additionalIncomeTable .incomeCustomLabel { min-width: 160px; flex: 1; }
 /* === END Additional Income === */
+
+/* === Other Deductions: type selector layout === */
+#otherDeductionsTable .otherDeductionTypeField { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+#otherDeductionsTable .otherDeductionTypeSelect { min-width: 160px; }
+#otherDeductionsTable .otherDeductionCustomLabel { min-width: 160px; flex: 1; }
+/* === END Other Deductions === */
 
 /* === PERF: faster layout for payroll table === */
 #payrollTable { table-layout: fixed; }
@@ -2908,6 +2915,9 @@ const LS_ADDITIONAL_INCOME_TOTAL='payroll_additional_income_total';
 // LocalStorage key for Additional Income dropdown types
 const LS_INCOME_TYPE_OPTIONS='incomeTypeOptions';
 const DEFAULT_INCOME_TYPE_OPTIONS = ['Allowance','Bantay','Incentive','Bonus','Meal','Transport'];
+// LocalStorage key for Other Deduction dropdown types
+const LS_DEDUCTION_TYPE_OPTIONS='deductionTypeOptions';
+const DEFAULT_DEDUCTION_TYPE_OPTIONS = ['Lacking','Cash Advance','Penalty','Uniform','Tools','Late/Undertime','Absences','Loan Payment'];
 // Supabase-only key for per-employee Bantayâ†’Project assignment map
 const LS_BANTAY_PROJ='payroll_bantay_proj';
 let bantayProj = {};
@@ -3066,6 +3076,7 @@ async function loadPayrollSettings() {
 }
 
 let incomeTypeOptions = normalizeIncomeTypeOptions(DEFAULT_INCOME_TYPE_OPTIONS);
+let deductionTypeOptions = normalizeDeductionTypeOptions(DEFAULT_DEDUCTION_TYPE_OPTIONS);
 
 function normalizeIncomeTypeOptions(raw){
   const base = Array.isArray(raw) ? raw : [];
@@ -3083,9 +3094,30 @@ function normalizeIncomeTypeOptions(raw){
   return cleaned;
 }
 
+function normalizeDeductionTypeOptions(raw){
+  const base = Array.isArray(raw) ? raw : [];
+  const seen = new Set();
+  const cleaned = [];
+  base.forEach(item => {
+    const value = String(item || '').trim();
+    if (!value) return;
+    const key = value.toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    cleaned.push(value);
+  });
+  if (!cleaned.length) return DEFAULT_DEDUCTION_TYPE_OPTIONS.slice();
+  return cleaned;
+}
+
 function getIncomeTypeOptions(){
   if (Array.isArray(incomeTypeOptions) && incomeTypeOptions.length) return incomeTypeOptions.slice();
   return DEFAULT_INCOME_TYPE_OPTIONS.slice();
+}
+
+function getDeductionTypeOptions(){
+  if (Array.isArray(deductionTypeOptions) && deductionTypeOptions.length) return deductionTypeOptions.slice();
+  return DEFAULT_DEDUCTION_TYPE_OPTIONS.slice();
 }
 
 async function persistIncomeTypeOptions(next){
@@ -3098,6 +3130,20 @@ async function persistIncomeTypeOptions(next){
       if (result && typeof result.then === 'function') await result;
     } catch (err) {
       console.warn('Persisting income type options failed', err);
+    }
+  }
+}
+
+async function persistDeductionTypeOptions(next){
+  const normalized = normalizeDeductionTypeOptions(next);
+  deductionTypeOptions = normalized;
+  try { localStorage.setItem(LS_DEDUCTION_TYPE_OPTIONS, JSON.stringify(normalized)); } catch (_) {}
+  if (typeof window !== 'undefined' && typeof window.writeKV === 'function') {
+    try {
+      const result = window.writeKV(LS_DEDUCTION_TYPE_OPTIONS, normalized);
+      if (result && typeof result.then === 'function') await result;
+    } catch (err) {
+      console.warn('Persisting deduction type options failed', err);
     }
   }
 }
@@ -3123,6 +3169,27 @@ async function loadIncomeTypeOptions(){
   }
 }
 
+async function loadDeductionTypeOptions(){
+  try {
+    let stored = null;
+    if (typeof window !== 'undefined' && typeof window.readKV === 'function') {
+      stored = await window.readKV(LS_DEDUCTION_TYPE_OPTIONS, null);
+    }
+    if (stored == null) {
+      try { stored = JSON.parse(localStorage.getItem(LS_DEDUCTION_TYPE_OPTIONS) || 'null'); } catch(_) { stored = null; }
+    }
+    deductionTypeOptions = normalizeDeductionTypeOptions(stored);
+    try { localStorage.setItem(LS_DEDUCTION_TYPE_OPTIONS, JSON.stringify(deductionTypeOptions)); } catch(_) {}
+    renderDeductionTypeOptionsUI();
+    try {
+      if (typeof queueOtherDeductionsRerender === 'function') queueOtherDeductionsRerender();
+      else if (typeof renderOtherDeductionsTable === 'function') renderOtherDeductionsTable();
+    } catch (_) {}
+  } catch (err) {
+    console.warn('Loading deduction type options failed', err);
+  }
+}
+
 function renderIncomeTypeOptionsUI(){
   const listEl = document.getElementById('settingsIncomeTypeList');
   if (!listEl) return;
@@ -3145,6 +3212,36 @@ function renderIncomeTypeOptionsUI(){
       try {
         if (typeof queueAdditionalIncomeRerender === 'function') queueAdditionalIncomeRerender();
         else if (typeof renderAdditionalIncomeTable === 'function') renderAdditionalIncomeTable();
+      } catch (_) {}
+    });
+    row.appendChild(label);
+    row.appendChild(removeBtn);
+    listEl.appendChild(row);
+  });
+}
+
+function renderDeductionTypeOptionsUI(){
+  const listEl = document.getElementById('settingsDeductionTypeList');
+  if (!listEl) return;
+  const options = getDeductionTypeOptions();
+  listEl.innerHTML = '';
+  options.forEach(option => {
+    const row = document.createElement('div');
+    row.className = 'deduction-type-item';
+    const label = document.createElement('span');
+    label.textContent = option;
+    const removeBtn = document.createElement('button');
+    removeBtn.type = 'button';
+    removeBtn.className = 'deduction-type-remove';
+    removeBtn.textContent = '✕';
+    removeBtn.setAttribute('aria-label', `Remove ${option}`);
+    removeBtn.addEventListener('click', async () => {
+      const next = getDeductionTypeOptions().filter(item => item !== option);
+      await persistDeductionTypeOptions(next);
+      renderDeductionTypeOptionsUI();
+      try {
+        if (typeof queueOtherDeductionsRerender === 'function') queueOtherDeductionsRerender();
+        else if (typeof renderOtherDeductionsTable === 'function') renderOtherDeductionsTable();
       } catch (_) {}
     });
     row.appendChild(label);
@@ -3189,6 +3286,44 @@ function initIncomeTypeSettingsUI(){
     input.__incomeTypeBound = true;
   }
   renderIncomeTypeOptionsUI();
+}
+
+function initDeductionTypeSettingsUI(){
+  const input = document.getElementById('settingsDeductionTypeInput');
+  const addBtn = document.getElementById('settingsDeductionTypeAdd');
+  const addType = async () => {
+    if (!input) return;
+    const value = String(input.value || '').trim();
+    if (!value) return;
+    const options = getDeductionTypeOptions();
+    const exists = options.some(option => option.toLowerCase() === value.toLowerCase());
+    if (exists) {
+      input.value = '';
+      return;
+    }
+    const next = options.concat(value);
+    await persistDeductionTypeOptions(next);
+    input.value = '';
+    renderDeductionTypeOptionsUI();
+    try {
+      if (typeof queueOtherDeductionsRerender === 'function') queueOtherDeductionsRerender();
+      else if (typeof renderOtherDeductionsTable === 'function') renderOtherDeductionsTable();
+    } catch (_) {}
+  };
+  if (addBtn && !addBtn.__deductionTypeBound) {
+    addBtn.addEventListener('click', addType);
+    addBtn.__deductionTypeBound = true;
+  }
+  if (input && !input.__deductionTypeBound) {
+    input.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') {
+        event.preventDefault();
+        addType();
+      }
+    });
+    input.__deductionTypeBound = true;
+  }
+  renderDeductionTypeOptionsUI();
 }
 
 function initPayrollSettingsUI() {
@@ -3241,14 +3376,18 @@ if (document.readyState === 'loading') {
   document.addEventListener('DOMContentLoaded', () => {
     initPayrollSettingsUI();
     initIncomeTypeSettingsUI();
+    initDeductionTypeSettingsUI();
     loadPayrollSettings();
     loadIncomeTypeOptions();
+    loadDeductionTypeOptions();
   });
 } else {
   initPayrollSettingsUI();
   initIncomeTypeSettingsUI();
+  initDeductionTypeSettingsUI();
   loadPayrollSettings();
   loadIncomeTypeOptions();
+  loadDeductionTypeOptions();
 }
 
 try {
@@ -3932,14 +4071,57 @@ function updateAdditionalIncomeTotalForEmployee(empId){
 }
 
 const DEFAULT_OTHER_DEDUCTION_LABEL = 'Other Deduction';
+const CUSTOM_DEDUCTION_TYPE_VALUE = 'Custom';
+const CUSTOM_DEDUCTION_TYPE_SELECT_VALUE = '__custom__';
+
+function matchDeductionTypeOption(value){
+  const target = String(value || '').trim();
+  if (!target) return '';
+  const options = getDeductionTypeOptions();
+  const lower = target.toLowerCase();
+  for (const option of options) {
+    if (String(option).toLowerCase() === lower) return option;
+  }
+  return '';
+}
+
+function resolveOtherDeductionLabel(typeValue, labelValue){
+  const rawLabel = String(labelValue || '').trim();
+  if (rawLabel) return rawLabel;
+  const matched = matchDeductionTypeOption(typeValue);
+  if (matched) return matched;
+  return DEFAULT_OTHER_DEDUCTION_LABEL;
+}
 
 function sanitizeOtherDeductionLabel(value){
-  const label = String(value || '').trim();
-  return label ? label : DEFAULT_OTHER_DEDUCTION_LABEL;
+  return resolveOtherDeductionLabel(CUSTOM_DEDUCTION_TYPE_VALUE, value);
+}
+
+function normalizeOtherDeductionItem(item){
+  const rawLabel = String(item && item.label != null ? item.label : '').trim();
+  const rawType = String(item && item.type != null ? item.type : '').trim();
+  const hasType = !!(item && Object.prototype.hasOwnProperty.call(item, 'type'));
+  const typeMatch = matchDeductionTypeOption(rawType);
+  const labelMatch = matchDeductionTypeOption(rawLabel);
+  let type = '';
+  if (hasType) {
+    if (typeMatch) type = typeMatch;
+    else if (rawType === CUSTOM_DEDUCTION_TYPE_VALUE || rawType === CUSTOM_DEDUCTION_TYPE_SELECT_VALUE) type = CUSTOM_DEDUCTION_TYPE_VALUE;
+    else if (labelMatch) type = labelMatch;
+    else type = CUSTOM_DEDUCTION_TYPE_VALUE;
+  } else {
+    type = labelMatch || CUSTOM_DEDUCTION_TYPE_VALUE;
+  }
+  const label = resolveOtherDeductionLabel(type, rawLabel);
+  return {
+    type: type || CUSTOM_DEDUCTION_TYPE_VALUE,
+    label,
+    amount: sanitizeOtherDeductionAmount(item && item.amount)
+  };
 }
 
 function getOtherDeductionLabel(item){
-  return sanitizeOtherDeductionLabel(item && item.label);
+  return normalizeOtherDeductionItem(item).label;
 }
 
 function sanitizeOtherDeductionAmount(value){
@@ -3950,10 +4132,7 @@ function sanitizeOtherDeductionAmount(value){
 
 function normalizeOtherDeductionItems(items){
   if (!Array.isArray(items)) return [];
-  return items.map(item => ({
-    label: sanitizeOtherDeductionLabel(item && item.label),
-    amount: sanitizeOtherDeductionAmount(item && item.amount)
-  }));
+  return items.map(item => normalizeOtherDeductionItem(item));
 }
 
 function computeOtherDeductionsTotal(items){
@@ -4011,10 +4190,7 @@ function updateOtherDeductionsTotalForEmployee(empId){
 function getOtherDeductionsDetailsForEmployee(empId){
   if (!empId) return [];
   const items = otherDeductionsDetails && otherDeductionsDetails[empId];
-  return Array.isArray(items) ? items.map(item => ({
-    label: sanitizeOtherDeductionLabel(item && item.label),
-    amount: sanitizeOtherDeductionAmount(item && item.amount)
-  })) : [];
+  return Array.isArray(items) ? items.map(item => normalizeOtherDeductionItem(item)) : [];
 }
 
 function migrateLegacyAdjustmentsToOtherDeductions(){
@@ -5654,18 +5830,32 @@ function renderOtherDeductionsTable(){
   rebuildOtherDeductionsTotals();
   const tbody = document.querySelector('#otherDeductionsTable tbody');
   if (!tbody) return;
+  const deductionOptions = getDeductionTypeOptions();
+  const defaultType = deductionOptions[0] || CUSTOM_DEDUCTION_TYPE_VALUE;
+  const handleBlur = () => {
+    otherDeductionsFocusCount = Math.max(0, otherDeductionsFocusCount - 1);
+    setTimeout(() => {
+      if (otherDeductionsFocusCount === 0 && otherDeductionsRenderPending) queueOtherDeductionsRerender();
+      if (otherDeductionsFocusCount === 0 && window.__otherDeductionsHydratePending) {
+        window.__otherDeductionsHydratePending = false;
+        try {
+          if (typeof window.queueHydrateRerender === 'function') window.queueHydrateRerender();
+        } catch (_) {}
+      }
+    }, 0);
+  };
   tbody.innerHTML = '';
   employeeList.forEach(emp => {
     const empId = emp.id;
     const items = Array.isArray(otherDeductionsDetails[empId]) ? otherDeductionsDetails[empId] : [];
-    const renderItems = items.length ? items : [{ label: '', amount: '', __placeholder: true }];
+    const renderItems = items.length ? items : [{ type: defaultType, label: '', amount: '', __placeholder: true }];
     renderItems.forEach((item, idx) => {
       const tr = document.createElement('tr');
       tr.dataset.empId = empId;
       tr.dataset.index = String(idx);
       tr.innerHTML = `
         <td class="wrap"></td>
-        <td><input type="text" class="otherDeductionLabel" data-emp="${empId}" data-index="${idx}" placeholder="${DEFAULT_OTHER_DEDUCTION_LABEL}"></td>
+        <td class="otherDeductionTypeCell"></td>
         <td><input type="number" min="0" step="0.01" class="otherDeductionAmount" data-emp="${empId}" data-index="${idx}"></td>
         <td><button type="button" class="removeOtherDeductionBtn" data-emp="${empId}" data-index="${idx}">Remove</button></td>
       `;
@@ -5685,7 +5875,11 @@ function renderOtherDeductionsTable(){
         addBtn.textContent = 'Add item';
         addBtn.addEventListener('click', () => {
           if (!Array.isArray(otherDeductionsDetails[empId])) otherDeductionsDetails[empId] = [];
-          otherDeductionsDetails[empId].push({ label: '', amount: 0 });
+          otherDeductionsDetails[empId].push({
+            type: defaultType,
+            label: resolveOtherDeductionLabel(defaultType, ''),
+            amount: 0
+          });
           updateOtherDeductionsTotalForEmployee(empId);
           otherDeductionsPersist.flush();
           otherDeductionsRefresh.flush();
@@ -5698,54 +5892,123 @@ function renderOtherDeductionsTable(){
       } else {
         empCell.innerHTML = '&nbsp;';
       }
-      const labelInput = tr.querySelector('.otherDeductionLabel');
+      const typeCell = tr.querySelector('.otherDeductionTypeCell');
       const amountInput = tr.querySelector('.otherDeductionAmount');
       const removeBtn = tr.querySelector('.removeOtherDeductionBtn');
       const isPlaceholder = !!item.__placeholder;
-      const labelValue = isPlaceholder ? '' : (item && item.label != null ? String(item.label) : '');
-      const amountValue = isPlaceholder ? '' : sanitizeOtherDeductionAmount(item && item.amount);
-      if (labelInput) labelInput.value = labelValue;
+      const normalizedItem = isPlaceholder
+        ? { type: defaultType, label: '', amount: '', __placeholder: true }
+        : normalizeOtherDeductionItem(item);
+      const typeMatch = matchDeductionTypeOption(normalizedItem.type);
+      const labelMatch = matchDeductionTypeOption(normalizedItem.label);
+      const selectedType = typeMatch
+        || (normalizedItem.type === CUSTOM_DEDUCTION_TYPE_VALUE ? CUSTOM_DEDUCTION_TYPE_SELECT_VALUE : (labelMatch || CUSTOM_DEDUCTION_TYPE_SELECT_VALUE));
+      const amountValue = isPlaceholder ? '' : sanitizeOtherDeductionAmount(normalizedItem.amount);
+      let typeSelect = null;
+      let customInput = null;
+      if (typeCell) {
+        const field = document.createElement('div');
+        field.className = 'otherDeductionTypeField';
+        typeSelect = document.createElement('select');
+        typeSelect.className = 'otherDeductionTypeSelect';
+        typeSelect.dataset.emp = empId;
+        typeSelect.dataset.index = String(idx);
+        deductionOptions.forEach(option => {
+          const opt = document.createElement('option');
+          opt.value = option;
+          opt.textContent = option;
+          typeSelect.appendChild(opt);
+        });
+        const customOption = document.createElement('option');
+        customOption.value = CUSTOM_DEDUCTION_TYPE_SELECT_VALUE;
+        customOption.textContent = 'Custom...';
+        typeSelect.appendChild(customOption);
+        customInput = document.createElement('input');
+        customInput.type = 'text';
+        customInput.className = 'otherDeductionCustomLabel';
+        customInput.placeholder = 'Custom label';
+        customInput.dataset.emp = empId;
+        customInput.dataset.index = String(idx);
+        field.appendChild(typeSelect);
+        field.appendChild(customInput);
+        typeCell.appendChild(field);
+      }
+      const setCustomVisibility = (show) => {
+        if (!customInput) return;
+        customInput.style.display = show ? '' : 'none';
+      };
+      if (typeSelect) {
+        typeSelect.value = selectedType;
+      }
+      if (customInput) {
+        customInput.value = selectedType === CUSTOM_DEDUCTION_TYPE_SELECT_VALUE ? (normalizedItem.label || '') : '';
+        setCustomVisibility(selectedType === CUSTOM_DEDUCTION_TYPE_SELECT_VALUE);
+      }
       if (amountInput && amountValue !== '') {
         amountInput.value = Number(amountValue).toFixed(2);
       }
       if (removeBtn && isPlaceholder) {
         removeBtn.disabled = true;
       }
-      if (labelInput) {
-        labelInput.addEventListener('focus', () => { otherDeductionsFocusCount += 1; });
-        labelInput.addEventListener('input', () => {
+      if (typeSelect) {
+        typeSelect.addEventListener('focus', () => { otherDeductionsFocusCount += 1; });
+        typeSelect.addEventListener('change', () => {
           if (!Array.isArray(otherDeductionsDetails[empId])) otherDeductionsDetails[empId] = [];
           if (!otherDeductionsDetails[empId][idx]) {
-            otherDeductionsDetails[empId][idx] = { label: '', amount: 0 };
+            otherDeductionsDetails[empId][idx] = {
+              type: defaultType,
+              label: resolveOtherDeductionLabel(defaultType, ''),
+              amount: 0
+            };
           }
-          otherDeductionsDetails[empId][idx].label = labelInput.value;
+          const selection = typeSelect.value;
+          const isCustom = selection === CUSTOM_DEDUCTION_TYPE_SELECT_VALUE;
+          setCustomVisibility(isCustom);
+          if (customInput && !isCustom) customInput.value = '';
+          if (isCustom) {
+            const label = resolveOtherDeductionLabel(CUSTOM_DEDUCTION_TYPE_VALUE, customInput ? customInput.value : '');
+            otherDeductionsDetails[empId][idx].type = CUSTOM_DEDUCTION_TYPE_VALUE;
+            otherDeductionsDetails[empId][idx].label = label;
+            if (customInput) customInput.value = label;
+          } else {
+            const normalized = matchDeductionTypeOption(selection) || selection;
+            otherDeductionsDetails[empId][idx].type = normalized;
+            otherDeductionsDetails[empId][idx].label = resolveOtherDeductionLabel(normalized, '');
+          }
           updateOtherDeductionsTotalForEmployee(empId);
           otherDeductionsPersist.schedule();
           otherDeductionsRefresh.schedule();
           updatePayrollRowForEmployee(empId);
         });
-        labelInput.addEventListener('blur', () => {
-          otherDeductionsFocusCount = Math.max(0, otherDeductionsFocusCount - 1);
+        typeSelect.addEventListener('blur', handleBlur);
+      }
+      if (customInput) {
+        customInput.addEventListener('focus', () => { otherDeductionsFocusCount += 1; });
+        customInput.addEventListener('input', () => {
+          if (!typeSelect || typeSelect.value !== CUSTOM_DEDUCTION_TYPE_SELECT_VALUE) return;
           if (!Array.isArray(otherDeductionsDetails[empId])) otherDeductionsDetails[empId] = [];
           if (!otherDeductionsDetails[empId][idx]) {
-            otherDeductionsDetails[empId][idx] = { label: '', amount: 0 };
+            otherDeductionsDetails[empId][idx] = { type: CUSTOM_DEDUCTION_TYPE_VALUE, label: '', amount: 0 };
           }
-          const label = sanitizeOtherDeductionLabel(labelInput.value);
+          otherDeductionsDetails[empId][idx].type = CUSTOM_DEDUCTION_TYPE_VALUE;
+          otherDeductionsDetails[empId][idx].label = customInput.value;
+          otherDeductionsPersist.schedule();
+          otherDeductionsRefresh.schedule();
+          updatePayrollRowForEmployee(empId);
+        });
+        customInput.addEventListener('blur', () => {
+          if (!Array.isArray(otherDeductionsDetails[empId])) otherDeductionsDetails[empId] = [];
+          if (!otherDeductionsDetails[empId][idx]) {
+            otherDeductionsDetails[empId][idx] = { type: CUSTOM_DEDUCTION_TYPE_VALUE, label: '', amount: 0 };
+          }
+          const label = resolveOtherDeductionLabel(CUSTOM_DEDUCTION_TYPE_VALUE, customInput.value);
+          otherDeductionsDetails[empId][idx].type = CUSTOM_DEDUCTION_TYPE_VALUE;
           otherDeductionsDetails[empId][idx].label = label;
-          labelInput.value = label;
-          updateOtherDeductionsTotalForEmployee(empId);
+          customInput.value = label;
           otherDeductionsPersist.flush();
           otherDeductionsRefresh.flush();
           updatePayrollRowForEmployee(empId);
-          setTimeout(() => {
-            if (otherDeductionsFocusCount === 0 && otherDeductionsRenderPending) queueOtherDeductionsRerender();
-            if (otherDeductionsFocusCount === 0 && window.__otherDeductionsHydratePending) {
-              window.__otherDeductionsHydratePending = false;
-              try {
-                if (typeof window.queueHydrateRerender === 'function') window.queueHydrateRerender();
-              } catch (_) {}
-            }
-          }, 0);
+          handleBlur();
         });
       }
       if (amountInput) {
@@ -5753,7 +6016,11 @@ function renderOtherDeductionsTable(){
         amountInput.addEventListener('input', () => {
           if (!Array.isArray(otherDeductionsDetails[empId])) otherDeductionsDetails[empId] = [];
           if (!otherDeductionsDetails[empId][idx]) {
-            otherDeductionsDetails[empId][idx] = { label: '', amount: 0 };
+            otherDeductionsDetails[empId][idx] = {
+              type: defaultType,
+              label: resolveOtherDeductionLabel(defaultType, ''),
+              amount: 0
+            };
           }
           const raw = parseFloat(amountInput.value);
           const amount = Number.isFinite(raw) ? sanitizeOtherDeductionAmount(raw) : 0;
@@ -5764,10 +6031,13 @@ function renderOtherDeductionsTable(){
           updatePayrollRowForEmployee(empId);
         });
         amountInput.addEventListener('blur', () => {
-          otherDeductionsFocusCount = Math.max(0, otherDeductionsFocusCount - 1);
           if (!Array.isArray(otherDeductionsDetails[empId])) otherDeductionsDetails[empId] = [];
           if (!otherDeductionsDetails[empId][idx]) {
-            otherDeductionsDetails[empId][idx] = { label: '', amount: 0 };
+            otherDeductionsDetails[empId][idx] = {
+              type: defaultType,
+              label: resolveOtherDeductionLabel(defaultType, ''),
+              amount: 0
+            };
           }
           const raw = parseFloat(amountInput.value);
           const amount = Number.isFinite(raw) ? sanitizeOtherDeductionAmount(raw) : 0;
@@ -5777,15 +6047,7 @@ function renderOtherDeductionsTable(){
           otherDeductionsPersist.flush();
           otherDeductionsRefresh.flush();
           updatePayrollRowForEmployee(empId);
-          setTimeout(() => {
-            if (otherDeductionsFocusCount === 0 && otherDeductionsRenderPending) queueOtherDeductionsRerender();
-            if (otherDeductionsFocusCount === 0 && window.__otherDeductionsHydratePending) {
-              window.__otherDeductionsHydratePending = false;
-              try {
-                if (typeof window.queueHydrateRerender === 'function') window.queueHydrateRerender();
-              } catch (_) {}
-            }
-          }, 0);
+          handleBlur();
         });
       }
       if (removeBtn) {
@@ -6812,7 +7074,11 @@ document.addEventListener('DOMContentLoaded', () => {
       if (typeof valeWed === 'object' && valeWed) valeWed[empId] = Number(data.valeWed) || 0;
       if (typeof otherDeductionsDetails === 'object' && otherDeductionsDetails) {
         if (otherDeductionsSnapshot > 0) {
-          otherDeductionsDetails[empId] = [{ label: DEFAULT_OTHER_DEDUCTION_LABEL, amount: otherDeductionsSnapshot }];
+          otherDeductionsDetails[empId] = [{
+            type: CUSTOM_DEDUCTION_TYPE_VALUE,
+            label: DEFAULT_OTHER_DEDUCTION_LABEL,
+            amount: otherDeductionsSnapshot
+          }];
         } else {
           delete otherDeductionsDetails[empId];
         }
@@ -9725,6 +9991,9 @@ rows += `<tr class="allowance">
       #panelSettings .income-type-list{display:flex;flex-direction:column;gap:8px;margin-top:6px}
       #panelSettings .income-type-item{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:6px 10px;border:1px solid #e2e8f0;border-radius:10px;background:#f8fafc}
       #panelSettings .income-type-remove{border:1px solid #fecaca;background:#fee2e2;color:#b91c1c;border-radius:8px;padding:2px 8px;cursor:pointer;font-weight:600}
+      #panelSettings .deduction-type-list{display:flex;flex-direction:column;gap:8px;margin-top:6px}
+      #panelSettings .deduction-type-item{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:6px 10px;border:1px solid #e2e8f0;border-radius:10px;background:#f8fafc}
+      #panelSettings .deduction-type-remove{border:1px solid #fecaca;background:#fee2e2;color:#b91c1c;border-radius:8px;padding:2px 8px;cursor:pointer;font-weight:600}
     </style>
     <div class="card">
       <h3 style="margin:0 0 12px 0;">Payroll Settings</h3>
@@ -9775,6 +10044,20 @@ rows += `<tr class="allowance">
             </label>
           </div>
           <div id="settingsIncomeTypeList" class="income-type-list" aria-live="polite"></div>
+        </div>
+        <div class="settings-section">
+          <h4>Other Deduction Types</h4>
+          <div class="settings-row">
+            <label style="width:100%;">
+              Add a type
+              <div class="settings-inline">
+                <input id="settingsDeductionTypeInput" type="text" placeholder="e.g., Cash Advance">
+                <button type="button" id="settingsDeductionTypeAdd">Add Type</button>
+              </div>
+              <span class="hint">Types appear in the Other Deductions dropdown.</span>
+            </label>
+          </div>
+          <div id="settingsDeductionTypeList" class="deduction-type-list" aria-live="polite"></div>
         </div>
       </div>
     </div>
@@ -14416,7 +14699,7 @@ document.addEventListener('click', function(e) {
   if ((otherDeductionsItems && otherDeductionsItems.length) || otherDeductionsTotal > 0) {
     otherDeductionsRows += '<tr><th colspan="2">Other Deductions</th></tr>';
     (otherDeductionsItems || []).forEach(function(item){
-      var label = sanitizeOtherDeductionLabel(item && item.label);
+      var label = getOtherDeductionLabel(item);
       var amount = parseAmount(item && item.amount);
       if (amount > 0) {
         otherDeductionsRows += `<tr><td>${label}</td><td class="right">${amount.toFixed(2)}</td></tr>`;
