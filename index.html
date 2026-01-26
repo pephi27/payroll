@@ -195,10 +195,16 @@ function queueHydrateRerender() {
     try { if (typeof window.renderResults === 'function') window.renderResults(); } catch {}
   };
   try {
+    let shouldDefer = false;
     if (typeof window.isAdjustmentInputFocused === 'function' && window.isAdjustmentInputFocused()) {
       window.__adjustmentsHydratePending = true;
-      return;
+      shouldDefer = true;
     }
+    if (typeof window.isAdditionalIncomeInputFocused === 'function' && window.isAdditionalIncomeInputFocused()) {
+      window.__additionalIncomeHydratePending = true;
+      shouldDefer = true;
+    }
+    if (shouldDefer) return;
   } catch (_) {}
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', () => { setTimeout(rerender, 0); }, { once: true });
@@ -5121,6 +5127,18 @@ const adjustmentHoursPersist = createDebouncedPersistence(persistCurrentAdjustme
 const additionalIncomePersist = createDebouncedPersistence(persistCurrentAdditionalIncome, 200);
 
 // === Additional Income Tab ===
+let additionalIncomeRenderPending = false;
+let additionalIncomeFocusCount = 0;
+const isAdditionalIncomeInputFocused = () => additionalIncomeFocusCount > 0;
+try { window.isAdditionalIncomeInputFocused = isAdditionalIncomeInputFocused; } catch (_) {}
+const queueAdditionalIncomeRerender = () => {
+  if (isAdditionalIncomeInputFocused()) {
+    additionalIncomeRenderPending = true;
+    return;
+  }
+  additionalIncomeRenderPending = false;
+  try { renderAdditionalIncomeTable(); } catch (_) {}
+};
 function updatePayrollRowForEmployee(empId){
   if (!empId) return;
   const rows = document.querySelectorAll('#payrollTable tbody tr');
@@ -5146,6 +5164,11 @@ function getAdditionalIncomeDetailsForEmployee(empId){
 }
 
 function renderAdditionalIncomeTable(){
+  if (isAdditionalIncomeInputFocused()) {
+    additionalIncomeRenderPending = true;
+    return;
+  }
+  additionalIncomeRenderPending = false;
   syncPeriodScopedData();
   ensureAdditionalIncomeDetailsMap();
   rebuildAdditionalIncomeTotals();
@@ -5208,6 +5231,7 @@ function renderAdditionalIncomeTable(){
         removeBtn.disabled = true;
       }
       if (labelInput) {
+        labelInput.addEventListener('focus', () => { additionalIncomeFocusCount += 1; });
         labelInput.addEventListener('input', () => {
           if (!Array.isArray(additionalIncomeDetails[empId])) additionalIncomeDetails[empId] = [];
           if (!additionalIncomeDetails[empId][idx]) {
@@ -5219,6 +5243,7 @@ function renderAdditionalIncomeTable(){
           updatePayrollRowForEmployee(empId);
         });
         labelInput.addEventListener('blur', () => {
+          additionalIncomeFocusCount = Math.max(0, additionalIncomeFocusCount - 1);
           if (!Array.isArray(additionalIncomeDetails[empId])) additionalIncomeDetails[empId] = [];
           if (!additionalIncomeDetails[empId][idx]) {
             additionalIncomeDetails[empId][idx] = { label: '', amount: 0 };
@@ -5229,9 +5254,19 @@ function renderAdditionalIncomeTable(){
           updateAdditionalIncomeTotalForEmployee(empId);
           additionalIncomePersist.flush();
           updatePayrollRowForEmployee(empId);
+          setTimeout(() => {
+            if (additionalIncomeFocusCount === 0 && additionalIncomeRenderPending) queueAdditionalIncomeRerender();
+            if (additionalIncomeFocusCount === 0 && window.__additionalIncomeHydratePending) {
+              window.__additionalIncomeHydratePending = false;
+              try {
+                if (typeof window.queueHydrateRerender === 'function') window.queueHydrateRerender();
+              } catch (_) {}
+            }
+          }, 0);
         });
       }
       if (amountInput) {
+        amountInput.addEventListener('focus', () => { additionalIncomeFocusCount += 1; });
         amountInput.addEventListener('input', () => {
           if (!Array.isArray(additionalIncomeDetails[empId])) additionalIncomeDetails[empId] = [];
           if (!additionalIncomeDetails[empId][idx]) {
@@ -5245,6 +5280,7 @@ function renderAdditionalIncomeTable(){
           updatePayrollRowForEmployee(empId);
         });
         amountInput.addEventListener('blur', () => {
+          additionalIncomeFocusCount = Math.max(0, additionalIncomeFocusCount - 1);
           if (!Array.isArray(additionalIncomeDetails[empId])) additionalIncomeDetails[empId] = [];
           if (!additionalIncomeDetails[empId][idx]) {
             additionalIncomeDetails[empId][idx] = { label: '', amount: 0 };
@@ -5256,6 +5292,15 @@ function renderAdditionalIncomeTable(){
           updateAdditionalIncomeTotalForEmployee(empId);
           additionalIncomePersist.flush();
           updatePayrollRowForEmployee(empId);
+          setTimeout(() => {
+            if (additionalIncomeFocusCount === 0 && additionalIncomeRenderPending) queueAdditionalIncomeRerender();
+            if (additionalIncomeFocusCount === 0 && window.__additionalIncomeHydratePending) {
+              window.__additionalIncomeHydratePending = false;
+              try {
+                if (typeof window.queueHydrateRerender === 'function') window.queueHydrateRerender();
+              } catch (_) {}
+            }
+          }, 0);
         });
       }
       if (removeBtn) {
