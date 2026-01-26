@@ -15731,7 +15731,15 @@ document.addEventListener('DOMContentLoaded', async function () {
     var tbl = document.getElementById('resultsTable');
     if (!tbl || !tbl.tBodies || !tbl.tBodies[0]) return;
     var tbody = tbl.tBodies[0];
-    var run = function(){ try{ rebuildDtrFooter(); }catch(e){} };
+    var scheduled = false;
+    var run = function(){
+      if (scheduled) return;
+      scheduled = true;
+      (window.requestAnimationFrame || setTimeout)(function(){
+        scheduled = false;
+        try{ rebuildDtrFooter(); }catch(e){}
+      }, 0);
+    };
     ['input','change','keyup'].forEach(function(evt){ tbody.addEventListener(evt, run, true); });
     var obs = new MutationObserver(function(){ run(); });
     obs.observe(tbody, { childList:true, subtree:true, characterData:true });
