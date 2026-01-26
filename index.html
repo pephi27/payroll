@@ -632,7 +632,10 @@ function safePrint(win){
   function buildPayslip(data, periodText){
     if (!data) return '';
     var period = (periodText || '').trim();
-    var periodLine = period ? `<p class="meta"><strong>Period:</strong> ${period}</p>` : '';
+    var payslipNo = data.payslipNo || data.id || '';
+    var generatedOn = new Date();
+    var generatedText = generatedOn.toLocaleDateString();
+    var referenceLine = `<p class="reference"><strong>Payslip No:</strong> ${payslipNo || '-'} <span class="reference-sep">/</span> <strong>Period:</strong> ${period || '-'} <span class="reference-sep">/</span> <strong>Generated:</strong> ${generatedText}</p>`;
     var dedRows = '';
     function addDed(label, value){
       if (toNum(value) > 0){ dedRows += `<tr><td>${label}</td><td>${fmt(value)}</td></tr>`; }
@@ -652,18 +655,6 @@ function safePrint(win){
         return sum + toNum(item && item.amount);
       }, 0);
     }
-    var additionalIncomeRows = '';
-    if (additionalIncomeItems.length || additionalIncomeTotal > 0) {
-      additionalIncomeRows += `<tr><th colspan="2">Additional Income</th></tr>`;
-      additionalIncomeItems.forEach(function(item){
-        var label = sanitizeAdditionalIncomeLabel(item && item.label);
-        var amount = toNum(item && item.amount);
-        if (amount > 0) {
-          additionalIncomeRows += `<tr><td>${label}</td><td>${fmt(amount)}</td></tr>`;
-        }
-      });
-      additionalIncomeRows += `<tr><td><strong>Additional Income Subtotal</strong></td><td>${fmt(additionalIncomeTotal)}</td></tr>`;
-    }
     var otherDeductionsItems = Array.isArray(data.otherDeductionsDetails) ? data.otherDeductionsDetails : [];
     var otherDeductionsTotal = toNum(data.otherDeductionsTotal);
     if (!(otherDeductionsTotal > 0)) {
@@ -671,18 +662,51 @@ function safePrint(win){
         return sum + toNum(item && item.amount);
       }, 0);
     }
-    var otherDeductionsRows = '';
-    if (otherDeductionsItems.length || otherDeductionsTotal > 0) {
-      otherDeductionsRows += `<tr><th colspan="2">Other Deductions</th></tr>`;
-      otherDeductionsItems.forEach(function(item){
-        var label = sanitizeOtherDeductionLabel(item && item.label);
+    function buildAdjustmentColumn(config){
+      var items = Array.isArray(config.items) ? config.items : [];
+      var sanitizedItems = items.map(function(item){
+        var label = config.sanitize(item && item.label);
         var amount = toNum(item && item.amount);
-        if (amount > 0) {
-          otherDeductionsRows += `<tr><td>${label}</td><td>${fmt(amount)}</td></tr>`;
-        }
+        return { label: label, amount: amount };
+      }).filter(function(item){
+        return item.amount > 0;
       });
-      otherDeductionsRows += `<tr><td><strong>Other Deductions Subtotal</strong></td><td>${fmt(otherDeductionsTotal)}</td></tr>`;
+      var maxItems = 6;
+      var visibleItems = sanitizedItems.slice(0, maxItems);
+      var overflowCount = sanitizedItems.length - visibleItems.length;
+      var listItems = visibleItems.map(function(item){
+        return `<li class="adjustments-item">${item.label}: ${fmt(item.amount)}</li>`;
+      });
+      if (overflowCount > 0) {
+        listItems.push(`<li class="adjustments-item adjustments-more">+${overflowCount} more...</li>`);
+      }
+      if (!listItems.length) {
+        listItems.push('<li class="adjustments-item adjustments-empty">None</li>');
+      }
+      var subtotal = toNum(config.total);
+      if (!(subtotal > 0)) {
+        subtotal = sanitizedItems.reduce(function(sum, item){ return sum + item.amount; }, 0);
+      }
+      return `<div class="adjustments-col">
+        <div class="adjustments-title">${config.title}</div>
+        <ul class="adjustments-list">${listItems.join('')}</ul>
+        <div class="adjustments-subtotal">Subtotal: ${fmt(subtotal)}</div>
+      </div>`;
     }
+    var adjustmentsSummary = `<div class="adjustments-summary">
+      ${buildAdjustmentColumn({
+        title: 'Additional Income',
+        items: additionalIncomeItems,
+        total: additionalIncomeTotal,
+        sanitize: sanitizeAdditionalIncomeLabel
+      })}
+      ${buildAdjustmentColumn({
+        title: 'Other Deductions',
+        items: otherDeductionsItems,
+        total: otherDeductionsTotal,
+        sanitize: sanitizeOtherDeductionLabel
+      })}
+    </div>`;
     var totalRow = toNum(data.totalDeductions) > 0 ? `<tr><td>Total Deductions</td><td>${fmt(data.totalDeductions)}</td></tr>` : '';
     var rateRaw = (data.rate != null ? String(data.rate).trim() : '');
     var rateDisplay = rateRaw ? fmt(data.rate) : '-';
@@ -690,16 +714,15 @@ function safePrint(win){
       <h3>Payslip</h3>
       <p class="meta"><strong>Employee ID:</strong> ${data.id || ''}</p>
       <p class="meta"><strong>Name:</strong> ${data.name || ''}</p>
-      ${periodLine}
+      ${referenceLine}
+      ${adjustmentsSummary}
       <table>
         <tr><th>Description</th><th>Amount</th></tr>
         <tr><td>Total Hours</td><td>${dash(data.totalHours)}</td></tr>
         <tr><td>Hourly Rate</td><td>${rateDisplay}</td></tr>
         ${bantayRow}
-        ${additionalIncomeRows}
         <tr><td>Gross Amount</td><td>${dash(data.gross)}</td></tr>
         ${dedRows}
-        ${otherDeductionsRows}
         ${totalRow}
         <tr><th>Net Pay</th><th>${dash(data.net)}</th></tr>
       </table>
@@ -716,7 +739,17 @@ th,td{border:1px solid #e2e8f0;padding:1px;text-align:left;}
 th{background:#f1f5f9;}
 .page-break{page-break-after:always;break-after:page;}
 h3{margin:0 0 3px 0;font-size:10px;}
-.payslip .meta{margin:0 0 2px 0;font-size:8px;line-height:1.15;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}`;
+.payslip .meta{margin:0 0 1px 0;font-size:8px;line-height:1.15;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.payslip .reference{margin:0 0 2px 0;font-size:7.5px;line-height:1.1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.payslip .reference-sep{padding:0 2px;color:#94a3b8;}
+.adjustments-summary{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:3px;margin:0 0 3px 0;}
+.adjustments-col{border:1px solid #e2e8f0;padding:2px;border-radius:2px;}
+.adjustments-title{font-size:8px;font-weight:700;margin:0 0 1px 0;}
+.adjustments-list{list-style:none;margin:0;padding:0;font-size:10px;line-height:1.1;}
+.adjustments-item{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.adjustments-more{color:#475569;}
+.adjustments-empty{color:#94a3b8;}
+.adjustments-subtotal{margin-top:1px;font-size:8px;font-weight:600;}`;
 
   window.collectPayslipRowData = collectRowData;
   window.buildCompactPayslip = buildPayslip;
@@ -749,7 +782,17 @@ th,td{border:1px solid #e2e8f0;padding:1px;text-align:left;}
 th{background:#f1f5f9;}
 .page-break{page-break-after:always;break-after:page;}
 h3{margin:0 0 3px 0;font-size:10px;}
-.payslip .meta{margin:0 0 2px 0;font-size:8px;line-height:1.15;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}`;
+.payslip .meta{margin:0 0 1px 0;font-size:8px;line-height:1.15;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.payslip .reference{margin:0 0 2px 0;font-size:7.5px;line-height:1.1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.payslip .reference-sep{padding:0 2px;color:#94a3b8;}
+.adjustments-summary{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:3px;margin:0 0 3px 0;}
+.adjustments-col{border:1px solid #e2e8f0;padding:2px;border-radius:2px;}
+.adjustments-title{font-size:8px;font-weight:700;margin:0 0 1px 0;}
+.adjustments-list{list-style:none;margin:0;padding:0;font-size:10px;line-height:1.1;}
+.adjustments-item{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.adjustments-more{color:#475569;}
+.adjustments-empty{color:#94a3b8;}
+.adjustments-subtotal{margin-top:1px;font-size:8px;font-weight:600;}`;
     }
     var html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>All Payslips</title>
 <style>${styles}</style></head><body><div class="payslip-grid">`;
@@ -14103,7 +14146,17 @@ th,td{border:1px solid #e2e8f0;padding:1px;text-align:left;}
 th{background:#f1f5f9;}
 .page-break{page-break-after:always;break-after:page;}
 h3{margin:0 0 3px 0;font-size:10px;}
-.payslip .meta{margin:0 0 2px 0;font-size:8px;line-height:1.15;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}`;
+.payslip .meta{margin:0 0 1px 0;font-size:8px;line-height:1.15;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.payslip .reference{margin:0 0 2px 0;font-size:7.5px;line-height:1.1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.payslip .reference-sep{padding:0 2px;color:#94a3b8;}
+.adjustments-summary{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:3px;margin:0 0 3px 0;}
+.adjustments-col{border:1px solid #e2e8f0;padding:2px;border-radius:2px;}
+.adjustments-title{font-size:8px;font-weight:700;margin:0 0 1px 0;}
+.adjustments-list{list-style:none;margin:0;padding:0;font-size:10px;line-height:1.1;}
+.adjustments-item{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.adjustments-more{color:#475569;}
+.adjustments-empty{color:#94a3b8;}
+.adjustments-subtotal{margin-top:1px;font-size:8px;font-weight:600;}`;
       }
       html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Payslip - ${name}</title><style>${stylesSingle}</style></head><body><div class="payslip-grid single">${slip}</div></body></html>`;
     }
