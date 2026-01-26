@@ -67,6 +67,11 @@
       };
     }
     if (!window.writeKV) {
+      const isAbortError = (err) => {
+        if (!err) return false;
+        const message = err.message || err.details || String(err);
+        return err.name === 'AbortError' || /aborterror|signal is aborted/i.test(message);
+      };
       window.writeKV = async function writeKV(key, value) {
         try {
           if (window.supabase && window.SUPABASE_TABLE) {
@@ -74,13 +79,13 @@
               .from(window.SUPABASE_TABLE)
               .upsert({ key, value }, { onConflict: 'key' });
             try { localStorage.setItem(key, JSON.stringify(value)); } catch {}
-            if (error) console.warn('writeKV error', error);
+            if (error && !isAbortError(error)) console.warn('writeKV error', error);
           } else {
             try { localStorage.setItem(key, JSON.stringify(value)); } catch {}
           }
           return true;
         } catch (e) {
-          console.warn('writeKV failed', e);
+          if (!isAbortError(e)) console.warn('writeKV failed', e);
           try { localStorage.setItem(key, JSON.stringify(value)); } catch {}
           return false;
         }
