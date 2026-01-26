@@ -160,6 +160,7 @@ const KNOWN_KEYS = [
   ,"att_overrides_hours_v1"
   ,"payroll_lock_state"
   ,"dtr_overrides_v1"
+  ,"incomeTypeOptions"
 ]
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY)
@@ -395,6 +396,12 @@ function safeStringify(v){
 #payrollTable th:nth-child(10), #payrollTable td:nth-child(10) { width: 100px; min-width: 100px; } /* Additional Income */
 #payrollTable th:nth-child(11), #payrollTable td:nth-child(11) { width: 100px; min-width: 100px; } /* Bantay */
 /* === END PATCH === */
+
+/* === Additional Income: type selector layout === */
+#additionalIncomeTable .incomeTypeField { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+#additionalIncomeTable .incomeTypeSelect { min-width: 140px; }
+#additionalIncomeTable .incomeCustomLabel { min-width: 160px; flex: 1; }
+/* === END Additional Income === */
 
 /* === PERF: faster layout for payroll table === */
 #payrollTable { table-layout: fixed; }
@@ -672,9 +679,9 @@ function safePrint(win){
       if (!num) return raw ? fmt(raw) : '-';
       return fmt(num);
     }
-    function buildItemLines(items, sanitize, maxItems){
+    function buildItemLines(items, getLabel, maxItems){
       var sanitizedItems = (Array.isArray(items) ? items : []).map(function(item){
-        var label = sanitize(item && item.label);
+        var label = getLabel(item);
         var amount = toNum(item && item.amount);
         return { label: label, amount: amount };
       }).filter(function(item){
@@ -690,8 +697,8 @@ function safePrint(win){
       }
       return lines.join('');
     }
-    var additionalItemsHtml = buildItemLines(additionalIncomeItems, sanitizeAdditionalIncomeLabel, 3);
-    var otherDeductionsItemsHtml = buildItemLines(otherDeductionsItems, sanitizeOtherDeductionLabel, 3);
+    var additionalItemsHtml = buildItemLines(additionalIncomeItems, getAdditionalIncomeLabel, 3);
+    var otherDeductionsItemsHtml = buildItemLines(otherDeductionsItems, getOtherDeductionLabel, 3);
     var nightDiff = toNum(data.bantay);
     var additionalBlock = '';
     if (additionalIncomeItems.length || additionalIncomeTotal > 0) {
@@ -2827,7 +2834,7 @@ window.addEventListener('load', dashReports);
       <thead>
        <tr>
         <th>Employee</th>
-        <th>Description</th>
+        <th>Type</th>
         <th>Amount</th>
         <th>Actions</th>
        </tr>
@@ -2898,6 +2905,9 @@ const LS_BANTAY='payroll_bantay';
 // LocalStorage keys for per-employee additional income details and totals
 const LS_ADDITIONAL_INCOME_DETAILS='payroll_additional_income_details';
 const LS_ADDITIONAL_INCOME_TOTAL='payroll_additional_income_total';
+// LocalStorage key for Additional Income dropdown types
+const LS_INCOME_TYPE_OPTIONS='incomeTypeOptions';
+const DEFAULT_INCOME_TYPE_OPTIONS = ['Allowance','Bantay','Incentive','Bonus','Meal','Transport'];
 // Supabase-only key for per-employee Bantayâ†’Project assignment map
 const LS_BANTAY_PROJ='payroll_bantay_proj';
 let bantayProj = {};
@@ -3055,6 +3065,132 @@ async function loadPayrollSettings() {
   }
 }
 
+let incomeTypeOptions = normalizeIncomeTypeOptions(DEFAULT_INCOME_TYPE_OPTIONS);
+
+function normalizeIncomeTypeOptions(raw){
+  const base = Array.isArray(raw) ? raw : [];
+  const seen = new Set();
+  const cleaned = [];
+  base.forEach(item => {
+    const value = String(item || '').trim();
+    if (!value) return;
+    const key = value.toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    cleaned.push(value);
+  });
+  if (!cleaned.length) return DEFAULT_INCOME_TYPE_OPTIONS.slice();
+  return cleaned;
+}
+
+function getIncomeTypeOptions(){
+  if (Array.isArray(incomeTypeOptions) && incomeTypeOptions.length) return incomeTypeOptions.slice();
+  return DEFAULT_INCOME_TYPE_OPTIONS.slice();
+}
+
+async function persistIncomeTypeOptions(next){
+  const normalized = normalizeIncomeTypeOptions(next);
+  incomeTypeOptions = normalized;
+  try { localStorage.setItem(LS_INCOME_TYPE_OPTIONS, JSON.stringify(normalized)); } catch (_) {}
+  if (typeof window !== 'undefined' && typeof window.writeKV === 'function') {
+    try {
+      const result = window.writeKV(LS_INCOME_TYPE_OPTIONS, normalized);
+      if (result && typeof result.then === 'function') await result;
+    } catch (err) {
+      console.warn('Persisting income type options failed', err);
+    }
+  }
+}
+
+async function loadIncomeTypeOptions(){
+  try {
+    let stored = null;
+    if (typeof window !== 'undefined' && typeof window.readKV === 'function') {
+      stored = await window.readKV(LS_INCOME_TYPE_OPTIONS, null);
+    }
+    if (stored == null) {
+      try { stored = JSON.parse(localStorage.getItem(LS_INCOME_TYPE_OPTIONS) || 'null'); } catch(_) { stored = null; }
+    }
+    incomeTypeOptions = normalizeIncomeTypeOptions(stored);
+    try { localStorage.setItem(LS_INCOME_TYPE_OPTIONS, JSON.stringify(incomeTypeOptions)); } catch(_) {}
+    renderIncomeTypeOptionsUI();
+    try {
+      if (typeof queueAdditionalIncomeRerender === 'function') queueAdditionalIncomeRerender();
+      else if (typeof renderAdditionalIncomeTable === 'function') renderAdditionalIncomeTable();
+    } catch (_) {}
+  } catch (err) {
+    console.warn('Loading income type options failed', err);
+  }
+}
+
+function renderIncomeTypeOptionsUI(){
+  const listEl = document.getElementById('settingsIncomeTypeList');
+  if (!listEl) return;
+  const options = getIncomeTypeOptions();
+  listEl.innerHTML = '';
+  options.forEach(option => {
+    const row = document.createElement('div');
+    row.className = 'income-type-item';
+    const label = document.createElement('span');
+    label.textContent = option;
+    const removeBtn = document.createElement('button');
+    removeBtn.type = 'button';
+    removeBtn.className = 'income-type-remove';
+    removeBtn.textContent = '✕';
+    removeBtn.setAttribute('aria-label', `Remove ${option}`);
+    removeBtn.addEventListener('click', async () => {
+      const next = getIncomeTypeOptions().filter(item => item !== option);
+      await persistIncomeTypeOptions(next);
+      renderIncomeTypeOptionsUI();
+      try {
+        if (typeof queueAdditionalIncomeRerender === 'function') queueAdditionalIncomeRerender();
+        else if (typeof renderAdditionalIncomeTable === 'function') renderAdditionalIncomeTable();
+      } catch (_) {}
+    });
+    row.appendChild(label);
+    row.appendChild(removeBtn);
+    listEl.appendChild(row);
+  });
+}
+
+function initIncomeTypeSettingsUI(){
+  const input = document.getElementById('settingsIncomeTypeInput');
+  const addBtn = document.getElementById('settingsIncomeTypeAdd');
+  const addType = async () => {
+    if (!input) return;
+    const value = String(input.value || '').trim();
+    if (!value) return;
+    const options = getIncomeTypeOptions();
+    const exists = options.some(option => option.toLowerCase() === value.toLowerCase());
+    if (exists) {
+      input.value = '';
+      return;
+    }
+    const next = options.concat(value);
+    await persistIncomeTypeOptions(next);
+    input.value = '';
+    renderIncomeTypeOptionsUI();
+    try {
+      if (typeof queueAdditionalIncomeRerender === 'function') queueAdditionalIncomeRerender();
+      else if (typeof renderAdditionalIncomeTable === 'function') renderAdditionalIncomeTable();
+    } catch (_) {}
+  };
+  if (addBtn && !addBtn.__incomeTypeBound) {
+    addBtn.addEventListener('click', addType);
+    addBtn.__incomeTypeBound = true;
+  }
+  if (input && !input.__incomeTypeBound) {
+    input.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') {
+        event.preventDefault();
+        addType();
+      }
+    });
+    input.__incomeTypeBound = true;
+  }
+  renderIncomeTypeOptionsUI();
+}
+
 function initPayrollSettingsUI() {
   const otInput = document.getElementById('otMultiplier');
   if (otInput && !otInput.__settingsBound) {
@@ -3104,11 +3240,15 @@ function initPayrollSettingsUI() {
 if (document.readyState === 'loading') {
   document.addEventListener('DOMContentLoaded', () => {
     initPayrollSettingsUI();
+    initIncomeTypeSettingsUI();
     loadPayrollSettings();
+    loadIncomeTypeOptions();
   });
 } else {
   initPayrollSettingsUI();
+  initIncomeTypeSettingsUI();
   loadPayrollSettings();
+  loadIncomeTypeOptions();
 }
 
 try {
@@ -3675,6 +3815,7 @@ function formatDeductionInputValue(value){
 }
 
 const DEFAULT_ADDITIONAL_INCOME_LABEL = 'Additional Income';
+const CUSTOM_INCOME_TYPE_VALUE = '__custom__';
 
 function sanitizeAdditionalIncomeLabel(value){
   const label = String(value || '').trim();
@@ -3687,12 +3828,55 @@ function sanitizeAdditionalIncomeAmount(value){
   return roundToCents(Math.max(0, num));
 }
 
+function matchIncomeTypeOption(value){
+  const target = String(value || '').trim();
+  if (!target) return '';
+  const options = getIncomeTypeOptions();
+  const lower = target.toLowerCase();
+  for (const option of options) {
+    if (String(option).toLowerCase() === lower) return option;
+  }
+  return '';
+}
+
+function resolveAdditionalIncomeLabel(typeValue, labelValue){
+  const rawLabel = String(labelValue || '').trim();
+  if (rawLabel) return rawLabel;
+  const matched = matchIncomeTypeOption(typeValue);
+  if (matched) return matched;
+  return DEFAULT_ADDITIONAL_INCOME_LABEL;
+}
+
+function normalizeAdditionalIncomeItem(item){
+  const rawLabel = String(item && item.label != null ? item.label : '').trim();
+  const rawType = String(item && item.type != null ? item.type : '').trim();
+  const hasType = !!(item && Object.prototype.hasOwnProperty.call(item, 'type'));
+  const typeMatch = matchIncomeTypeOption(rawType);
+  const labelMatch = matchIncomeTypeOption(rawLabel);
+  let type = '';
+  if (hasType) {
+    if (typeMatch) type = typeMatch;
+    else if (rawType === CUSTOM_INCOME_TYPE_VALUE) type = CUSTOM_INCOME_TYPE_VALUE;
+    else if (labelMatch) type = labelMatch;
+    else type = CUSTOM_INCOME_TYPE_VALUE;
+  } else {
+    type = labelMatch || CUSTOM_INCOME_TYPE_VALUE;
+  }
+  const label = resolveAdditionalIncomeLabel(type, rawLabel);
+  return {
+    type: type || CUSTOM_INCOME_TYPE_VALUE,
+    label,
+    amount: sanitizeAdditionalIncomeAmount(item && item.amount)
+  };
+}
+
+function getAdditionalIncomeLabel(item){
+  return normalizeAdditionalIncomeItem(item).label;
+}
+
 function normalizeAdditionalIncomeItems(items){
   if (!Array.isArray(items)) return [];
-  return items.map(item => ({
-    label: sanitizeAdditionalIncomeLabel(item && item.label),
-    amount: sanitizeAdditionalIncomeAmount(item && item.amount)
-  }));
+  return items.map(item => normalizeAdditionalIncomeItem(item));
 }
 
 function computeAdditionalIncomeTotal(items){
@@ -3752,6 +3936,10 @@ const DEFAULT_OTHER_DEDUCTION_LABEL = 'Other Deduction';
 function sanitizeOtherDeductionLabel(value){
   const label = String(value || '').trim();
   return label ? label : DEFAULT_OTHER_DEDUCTION_LABEL;
+}
+
+function getOtherDeductionLabel(item){
+  return sanitizeOtherDeductionLabel(item && item.label);
 }
 
 function sanitizeOtherDeductionAmount(value){
@@ -5214,10 +5402,7 @@ function updatePayrollRowForEmployee(empId){
 function getAdditionalIncomeDetailsForEmployee(empId){
   if (!empId) return [];
   const items = additionalIncomeDetails && additionalIncomeDetails[empId];
-  return Array.isArray(items) ? items.map(item => ({
-    label: sanitizeAdditionalIncomeLabel(item && item.label),
-    amount: sanitizeAdditionalIncomeAmount(item && item.amount)
-  })) : [];
+  return Array.isArray(items) ? normalizeAdditionalIncomeItems(items) : [];
 }
 
 function renderAdditionalIncomeTable(){
@@ -5231,6 +5416,20 @@ function renderAdditionalIncomeTable(){
   rebuildAdditionalIncomeTotals();
   const atbody = document.querySelector('#additionalIncomeTable tbody');
   if (!atbody) return;
+  const incomeOptions = getIncomeTypeOptions();
+  const defaultType = incomeOptions[0] || CUSTOM_INCOME_TYPE_VALUE;
+  const handleBlur = () => {
+    additionalIncomeFocusCount = Math.max(0, additionalIncomeFocusCount - 1);
+    setTimeout(() => {
+      if (additionalIncomeFocusCount === 0 && additionalIncomeRenderPending) queueAdditionalIncomeRerender();
+      if (additionalIncomeFocusCount === 0 && window.__additionalIncomeHydratePending) {
+        window.__additionalIncomeHydratePending = false;
+        try {
+          if (typeof window.queueHydrateRerender === 'function') window.queueHydrateRerender();
+        } catch (_) {}
+      }
+    }, 0);
+  };
   atbody.innerHTML = '';
   employeeList.forEach(emp => {
     const empId = emp.id;
@@ -5242,7 +5441,7 @@ function renderAdditionalIncomeTable(){
       tr.dataset.index = String(idx);
       tr.innerHTML = `
         <td class="wrap"></td>
-        <td><input type="text" class="incomeLabel" data-emp="${empId}" data-index="${idx}" placeholder="${DEFAULT_ADDITIONAL_INCOME_LABEL}"></td>
+        <td class="incomeTypeCell"></td>
         <td><input type="number" min="0" step="0.01" class="incomeAmount" data-emp="${empId}" data-index="${idx}"></td>
         <td><button type="button" class="removeIncomeItemBtn" data-emp="${empId}" data-index="${idx}">Remove</button></td>
       `;
@@ -5262,7 +5461,11 @@ function renderAdditionalIncomeTable(){
         addBtn.textContent = 'Add item';
         addBtn.addEventListener('click', () => {
           if (!Array.isArray(additionalIncomeDetails[empId])) additionalIncomeDetails[empId] = [];
-          additionalIncomeDetails[empId].push({ label: '', amount: 0 });
+          additionalIncomeDetails[empId].push({
+            type: defaultType,
+            label: resolveAdditionalIncomeLabel(defaultType, ''),
+            amount: 0
+          });
           updateAdditionalIncomeTotalForEmployee(empId);
           additionalIncomePersist.flush();
           renderAdditionalIncomeTable();
@@ -5274,52 +5477,116 @@ function renderAdditionalIncomeTable(){
       } else {
         empCell.innerHTML = '&nbsp;';
       }
-      const labelInput = tr.querySelector('.incomeLabel');
+      const typeCell = tr.querySelector('.incomeTypeCell');
       const amountInput = tr.querySelector('.incomeAmount');
       const removeBtn = tr.querySelector('.removeIncomeItemBtn');
       const isPlaceholder = !!item.__placeholder;
-      const labelValue = isPlaceholder ? '' : (item && item.label != null ? String(item.label) : '');
-      const amountValue = isPlaceholder ? '' : sanitizeAdditionalIncomeAmount(item && item.amount);
-      if (labelInput) labelInput.value = labelValue;
+      const normalizedItem = isPlaceholder
+        ? { type: defaultType, label: '', amount: '', __placeholder: true }
+        : normalizeAdditionalIncomeItem(item);
+      const typeMatch = matchIncomeTypeOption(normalizedItem.type);
+      const labelMatch = matchIncomeTypeOption(normalizedItem.label);
+      const selectedType = typeMatch
+        || (normalizedItem.type === CUSTOM_INCOME_TYPE_VALUE ? CUSTOM_INCOME_TYPE_VALUE : (labelMatch || CUSTOM_INCOME_TYPE_VALUE));
+      const amountValue = isPlaceholder ? '' : sanitizeAdditionalIncomeAmount(normalizedItem.amount);
+      let typeSelect = null;
+      let customInput = null;
+      if (typeCell) {
+        const field = document.createElement('div');
+        field.className = 'incomeTypeField';
+        typeSelect = document.createElement('select');
+        typeSelect.className = 'incomeTypeSelect';
+        typeSelect.dataset.emp = empId;
+        typeSelect.dataset.index = String(idx);
+        incomeOptions.forEach(option => {
+          const opt = document.createElement('option');
+          opt.value = option;
+          opt.textContent = option;
+          typeSelect.appendChild(opt);
+        });
+        const customOption = document.createElement('option');
+        customOption.value = CUSTOM_INCOME_TYPE_VALUE;
+        customOption.textContent = 'Custom...';
+        typeSelect.appendChild(customOption);
+        customInput = document.createElement('input');
+        customInput.type = 'text';
+        customInput.className = 'incomeCustomLabel';
+        customInput.placeholder = 'Custom label';
+        customInput.dataset.emp = empId;
+        customInput.dataset.index = String(idx);
+        field.appendChild(typeSelect);
+        field.appendChild(customInput);
+        typeCell.appendChild(field);
+      }
+      const setCustomVisibility = (show) => {
+        if (!customInput) return;
+        customInput.style.display = show ? '' : 'none';
+      };
+      if (typeSelect) {
+        typeSelect.value = selectedType;
+      }
+      if (customInput) {
+        customInput.value = selectedType === CUSTOM_INCOME_TYPE_VALUE ? (normalizedItem.label || '') : '';
+        setCustomVisibility(selectedType === CUSTOM_INCOME_TYPE_VALUE);
+      }
       if (amountInput && amountValue !== '') {
         amountInput.value = Number(amountValue).toFixed(2);
       }
       if (removeBtn && isPlaceholder) {
         removeBtn.disabled = true;
       }
-      if (labelInput) {
-        labelInput.addEventListener('focus', () => { additionalIncomeFocusCount += 1; });
-        labelInput.addEventListener('input', () => {
+      if (typeSelect) {
+        typeSelect.addEventListener('focus', () => { additionalIncomeFocusCount += 1; });
+        typeSelect.addEventListener('change', () => {
           if (!Array.isArray(additionalIncomeDetails[empId])) additionalIncomeDetails[empId] = [];
           if (!additionalIncomeDetails[empId][idx]) {
-            additionalIncomeDetails[empId][idx] = { label: '', amount: 0 };
+            additionalIncomeDetails[empId][idx] = { type: defaultType, label: resolveAdditionalIncomeLabel(defaultType, ''), amount: 0 };
           }
-          additionalIncomeDetails[empId][idx].label = labelInput.value;
+          const selection = typeSelect.value;
+          const isCustom = selection === CUSTOM_INCOME_TYPE_VALUE;
+          setCustomVisibility(isCustom);
+          if (customInput && !isCustom) customInput.value = '';
+          if (isCustom) {
+            const label = resolveAdditionalIncomeLabel(CUSTOM_INCOME_TYPE_VALUE, customInput ? customInput.value : '');
+            additionalIncomeDetails[empId][idx].type = CUSTOM_INCOME_TYPE_VALUE;
+            additionalIncomeDetails[empId][idx].label = label;
+            if (customInput) customInput.value = label;
+          } else {
+            const normalized = matchIncomeTypeOption(selection) || selection;
+            additionalIncomeDetails[empId][idx].type = normalized;
+            additionalIncomeDetails[empId][idx].label = resolveAdditionalIncomeLabel(normalized, '');
+          }
           updateAdditionalIncomeTotalForEmployee(empId);
           additionalIncomePersist.schedule();
           updatePayrollRowForEmployee(empId);
         });
-        labelInput.addEventListener('blur', () => {
-          additionalIncomeFocusCount = Math.max(0, additionalIncomeFocusCount - 1);
+        typeSelect.addEventListener('blur', handleBlur);
+      }
+      if (customInput) {
+        customInput.addEventListener('focus', () => { additionalIncomeFocusCount += 1; });
+        customInput.addEventListener('input', () => {
+          if (!typeSelect || typeSelect.value !== CUSTOM_INCOME_TYPE_VALUE) return;
           if (!Array.isArray(additionalIncomeDetails[empId])) additionalIncomeDetails[empId] = [];
           if (!additionalIncomeDetails[empId][idx]) {
-            additionalIncomeDetails[empId][idx] = { label: '', amount: 0 };
+            additionalIncomeDetails[empId][idx] = { type: CUSTOM_INCOME_TYPE_VALUE, label: '', amount: 0 };
           }
-          const label = sanitizeAdditionalIncomeLabel(labelInput.value);
+          additionalIncomeDetails[empId][idx].type = CUSTOM_INCOME_TYPE_VALUE;
+          additionalIncomeDetails[empId][idx].label = customInput.value;
+          additionalIncomePersist.schedule();
+          updatePayrollRowForEmployee(empId);
+        });
+        customInput.addEventListener('blur', () => {
+          if (!Array.isArray(additionalIncomeDetails[empId])) additionalIncomeDetails[empId] = [];
+          if (!additionalIncomeDetails[empId][idx]) {
+            additionalIncomeDetails[empId][idx] = { type: CUSTOM_INCOME_TYPE_VALUE, label: '', amount: 0 };
+          }
+          const label = resolveAdditionalIncomeLabel(CUSTOM_INCOME_TYPE_VALUE, customInput.value);
+          additionalIncomeDetails[empId][idx].type = CUSTOM_INCOME_TYPE_VALUE;
           additionalIncomeDetails[empId][idx].label = label;
-          labelInput.value = label;
-          updateAdditionalIncomeTotalForEmployee(empId);
+          customInput.value = label;
           additionalIncomePersist.flush();
           updatePayrollRowForEmployee(empId);
-          setTimeout(() => {
-            if (additionalIncomeFocusCount === 0 && additionalIncomeRenderPending) queueAdditionalIncomeRerender();
-            if (additionalIncomeFocusCount === 0 && window.__additionalIncomeHydratePending) {
-              window.__additionalIncomeHydratePending = false;
-              try {
-                if (typeof window.queueHydrateRerender === 'function') window.queueHydrateRerender();
-              } catch (_) {}
-            }
-          }, 0);
+          handleBlur();
         });
       }
       if (amountInput) {
@@ -5327,7 +5594,11 @@ function renderAdditionalIncomeTable(){
         amountInput.addEventListener('input', () => {
           if (!Array.isArray(additionalIncomeDetails[empId])) additionalIncomeDetails[empId] = [];
           if (!additionalIncomeDetails[empId][idx]) {
-            additionalIncomeDetails[empId][idx] = { label: '', amount: 0 };
+            additionalIncomeDetails[empId][idx] = {
+              type: defaultType,
+              label: resolveAdditionalIncomeLabel(defaultType, ''),
+              amount: 0
+            };
           }
           const raw = parseFloat(amountInput.value);
           const amount = Number.isFinite(raw) ? sanitizeAdditionalIncomeAmount(raw) : 0;
@@ -5337,10 +5608,13 @@ function renderAdditionalIncomeTable(){
           updatePayrollRowForEmployee(empId);
         });
         amountInput.addEventListener('blur', () => {
-          additionalIncomeFocusCount = Math.max(0, additionalIncomeFocusCount - 1);
           if (!Array.isArray(additionalIncomeDetails[empId])) additionalIncomeDetails[empId] = [];
           if (!additionalIncomeDetails[empId][idx]) {
-            additionalIncomeDetails[empId][idx] = { label: '', amount: 0 };
+            additionalIncomeDetails[empId][idx] = {
+              type: defaultType,
+              label: resolveAdditionalIncomeLabel(defaultType, ''),
+              amount: 0
+            };
           }
           const raw = parseFloat(amountInput.value);
           const amount = Number.isFinite(raw) ? sanitizeAdditionalIncomeAmount(raw) : 0;
@@ -5349,15 +5623,7 @@ function renderAdditionalIncomeTable(){
           updateAdditionalIncomeTotalForEmployee(empId);
           additionalIncomePersist.flush();
           updatePayrollRowForEmployee(empId);
-          setTimeout(() => {
-            if (additionalIncomeFocusCount === 0 && additionalIncomeRenderPending) queueAdditionalIncomeRerender();
-            if (additionalIncomeFocusCount === 0 && window.__additionalIncomeHydratePending) {
-              window.__additionalIncomeHydratePending = false;
-              try {
-                if (typeof window.queueHydrateRerender === 'function') window.queueHydrateRerender();
-              } catch (_) {}
-            }
-          }, 0);
+          handleBlur();
         });
       }
       if (removeBtn) {
@@ -9453,8 +9719,12 @@ rows += `<tr class="allowance">
       #panelSettings .settings-row{display:flex;flex-wrap:wrap;gap:12px}
       #panelSettings label{display:flex;flex-direction:column;font-size:13px;color:#334155;font-weight:600;gap:6px}
       #panelSettings input[type="number"], #panelSettings input[type="time"]{min-width:140px}
+      #panelSettings .settings-inline{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
       #panelSettings .hint{font-size:12px;color:#64748b;font-weight:400}
       #panelSettings .toggle{flex-direction:row;align-items:center;gap:8px;font-weight:600}
+      #panelSettings .income-type-list{display:flex;flex-direction:column;gap:8px;margin-top:6px}
+      #panelSettings .income-type-item{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:6px 10px;border:1px solid #e2e8f0;border-radius:10px;background:#f8fafc}
+      #panelSettings .income-type-remove{border:1px solid #fecaca;background:#fee2e2;color:#b91c1c;border-radius:8px;padding:2px 8px;cursor:pointer;font-weight:600}
     </style>
     <div class="card">
       <h3 style="margin:0 0 12px 0;">Payroll Settings</h3>
@@ -9491,6 +9761,20 @@ rows += `<tr class="allowance">
               <input id="settingsNdMultiplier" type="number" step="0.01" min="0" inputmode="decimal">
             </label>
           </div>
+        </div>
+        <div class="settings-section">
+          <h4>Additional Income Types</h4>
+          <div class="settings-row">
+            <label style="width:100%;">
+              Add a type
+              <div class="settings-inline">
+                <input id="settingsIncomeTypeInput" type="text" placeholder="e.g., Allowance">
+                <button type="button" id="settingsIncomeTypeAdd">Add Type</button>
+              </div>
+              <span class="hint">Types appear in the Additional Income dropdown.</span>
+            </label>
+          </div>
+          <div id="settingsIncomeTypeList" class="income-type-list" aria-live="polite"></div>
         </div>
       </div>
     </div>
@@ -14145,7 +14429,7 @@ document.addEventListener('click', function(e) {
   if ((additionalIncomeItems && additionalIncomeItems.length) || additionalIncomeTotal > 0) {
     additionalIncomeRows += '<tr><th colspan="2">Additional Income</th></tr>';
     (additionalIncomeItems || []).forEach(function(item){
-      var label = sanitizeAdditionalIncomeLabel(item && item.label);
+      var label = getAdditionalIncomeLabel(item);
       var amount = parseAmount(item && item.amount);
       if (amount > 0) {
         additionalIncomeRows += `<tr><td>${label}</td><td class="right">${amount.toFixed(2)}</td></tr>`;
