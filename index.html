@@ -632,32 +632,37 @@ function safePrint(win){
   function buildPayslip(data, periodText){
     if (!data) return '';
     var period = (periodText || '').trim();
-    var periodParts = period.split(/\s+to\s+|\s+–\s+|\s+-\s+/);
-    var periodStart = (periodParts[0] || '').trim();
-    var periodEnd = (periodParts[1] || '').trim();
-    var generatedOn = new Date();
-    var generatedText = generatedOn.toLocaleDateString();
-    var payDateText = (data.payDate || periodEnd || generatedText || '').toString();
-    var companyName = '';
-    if (data.company) {
-      companyName = data.company;
-    } else {
-      try {
-        var empMap = (typeof storedEmployees !== 'undefined' && storedEmployees) ? storedEmployees : (window.storedEmployees || {});
-        companyName = (empMap && data.id && empMap[data.id] && empMap[data.id].company) ? empMap[data.id].company : '';
-      } catch (e) {
-        companyName = '';
-      }
+    var periodLine = period ? `<p class="meta"><strong>Period:</strong> ${period}</p>` : '';
+    var dedRows = '';
+    function addDed(label, value){
+      if (toNum(value) > 0){ dedRows += `<tr><td>${label}</td><td>${fmt(value)}</td></tr>`; }
     }
-    if (!companyName) {
-      companyName = (typeof COMPANY_OPTIONS !== 'undefined' && Array.isArray(COMPANY_OPTIONS) && COMPANY_OPTIONS[0]) ? COMPANY_OPTIONS[0] : 'PayrollPro';
-    }
+    addDed('Pag-IBIG', data.pagibig);
+    addDed('PhilHealth', data.philhealth);
+    addDed('SSS', data.sss);
+    addDed('SSS Loan', data.sssLoan);
+    addDed('Pag-IBIG Loan', data.piLoan);
+    addDed('Account', data.vale);
+    addDed('Wed Vale', data.valeWed);
+    var bantayRow = toNum(data.bantay) !== 0 ? `<tr><td>Bantay</td><td>${fmt(data.bantay)}</td></tr>` : '';
     var additionalIncomeItems = Array.isArray(data.additionalIncomeDetails) ? data.additionalIncomeDetails : [];
     var additionalIncomeTotal = toNum(data.additionalIncomeTotal);
     if (!(additionalIncomeTotal > 0)) {
       additionalIncomeTotal = additionalIncomeItems.reduce(function(sum, item){
         return sum + toNum(item && item.amount);
       }, 0);
+    }
+    var additionalIncomeRows = '';
+    if (additionalIncomeItems.length || additionalIncomeTotal > 0) {
+      additionalIncomeRows += `<tr><th colspan="2">Additional Income</th></tr>`;
+      additionalIncomeItems.forEach(function(item){
+        var label = sanitizeAdditionalIncomeLabel(item && item.label);
+        var amount = toNum(item && item.amount);
+        if (amount > 0) {
+          additionalIncomeRows += `<tr><td>${label}</td><td>${fmt(amount)}</td></tr>`;
+        }
+      });
+      additionalIncomeRows += `<tr><td><strong>Additional Income Subtotal</strong></td><td>${fmt(additionalIncomeTotal)}</td></tr>`;
     }
     var otherDeductionsItems = Array.isArray(data.otherDeductionsDetails) ? data.otherDeductionsDetails : [];
     var otherDeductionsTotal = toNum(data.otherDeductionsTotal);
@@ -666,88 +671,38 @@ function safePrint(win){
         return sum + toNum(item && item.amount);
       }, 0);
     }
-    function formatMoney(value){
-      var raw = (value == null ? '' : String(value)).trim();
-      var num = toNum(value);
-      if (!num) return raw ? fmt(raw) : '-';
-      return fmt(num);
-    }
-    function buildItemLines(items, sanitize, maxItems){
-      var sanitizedItems = (Array.isArray(items) ? items : []).map(function(item){
-        var label = sanitize(item && item.label);
-        var amount = toNum(item && item.amount);
-        return { label: label, amount: amount };
-      }).filter(function(item){
-        return item.amount > 0;
-      });
-      var visibleItems = sanitizedItems.slice(0, maxItems);
-      var overflowCount = sanitizedItems.length - visibleItems.length;
-      var lines = visibleItems.map(function(item){
-        return `<div class="detail-row item-line"><span>${item.label}</span><span>${fmt(item.amount)}</span></div>`;
-      });
-      if (overflowCount > 0) {
-        lines.push(`<div class="detail-row item-line detail-more"><span>+${overflowCount} more</span><span></span></div>`);
-      }
-      return lines.join('');
-    }
-    var additionalItemsHtml = buildItemLines(additionalIncomeItems, sanitizeAdditionalIncomeLabel, 3);
-    var otherDeductionsItemsHtml = buildItemLines(otherDeductionsItems, sanitizeOtherDeductionLabel, 3);
-    var nightDiff = toNum(data.bantay);
-    var additionalBlock = '';
-    if (additionalIncomeItems.length || additionalIncomeTotal > 0) {
-      additionalBlock = `
-        <div class="detail-row"><span>Additional Income</span><span>${formatMoney(additionalIncomeTotal)}</span></div>
-        ${additionalItemsHtml}`;
-    }
-    var otherDeductionBlock = '';
+    var otherDeductionsRows = '';
     if (otherDeductionsItems.length || otherDeductionsTotal > 0) {
-      otherDeductionBlock = `
-        <div class="detail-row"><span>Other Deductions</span><span>${formatMoney(otherDeductionsTotal)}</span></div>
-        ${otherDeductionsItemsHtml}`;
+      otherDeductionsRows += `<tr><th colspan="2">Other Deductions</th></tr>`;
+      otherDeductionsItems.forEach(function(item){
+        var label = sanitizeOtherDeductionLabel(item && item.label);
+        var amount = toNum(item && item.amount);
+        if (amount > 0) {
+          otherDeductionsRows += `<tr><td>${label}</td><td>${fmt(amount)}</td></tr>`;
+        }
+      });
+      otherDeductionsRows += `<tr><td><strong>Other Deductions Subtotal</strong></td><td>${fmt(otherDeductionsTotal)}</td></tr>`;
     }
+    var totalRow = toNum(data.totalDeductions) > 0 ? `<tr><td>Total Deductions</td><td>${fmt(data.totalDeductions)}</td></tr>` : '';
+    var rateRaw = (data.rate != null ? String(data.rate).trim() : '');
+    var rateDisplay = rateRaw ? fmt(data.rate) : '-';
     return `<div class="payslip">
-      <div class="payslip-header">
-        <div class="company-name">${companyName}</div>
-        <div class="header-lines">
-          <div class="meta-line"><span class="meta-label">EMPLOYEE:</span> ${data.name || ''} <span class="meta-muted">(ID: ${data.id || ''})</span></div>
-          <div class="meta-line"><span class="meta-label">PAY PERIOD:</span> ${periodStart || '-'} – ${periodEnd || '-'}</div>
-          <div class="meta-line"><span class="meta-label">PAY DATE:</span> ${payDateText || '-'}</div>
-        </div>
-      </div>
-      <div class="summary-row">
-        <div class="summary-box">
-          <div class="summary-label">GROSS PAY</div>
-          <div class="summary-value">${formatMoney(data.gross)}</div>
-        </div>
-        <div class="summary-box">
-          <div class="summary-label">TOTAL DEDUCTIONS</div>
-          <div class="summary-value">${formatMoney(data.totalDeductions)}</div>
-        </div>
-        <div class="summary-box summary-net">
-          <div class="summary-label">NET PAY</div>
-          <div class="summary-value">${formatMoney(data.net)}</div>
-        </div>
-      </div>
-      <div class="details-grid">
-        <div class="details-col">
-          <div class="details-title">EARNINGS</div>
-          <div class="detail-row"><span>Basic Pay</span><span>${formatMoney(data.regPay)}</span></div>
-          <div class="detail-row"><span>Overtime Pay</span><span>${formatMoney(data.otPay)}</span></div>
-          ${nightDiff > 0 ? `<div class="detail-row"><span>Night Differential</span><span>${formatMoney(nightDiff)}</span></div>` : ''}
-          ${additionalBlock}
-        </div>
-        <div class="details-col">
-          <div class="details-title">DEDUCTIONS</div>
-          <div class="detail-row"><span>SSS</span><span>${formatMoney(data.sss)}</span></div>
-          <div class="detail-row"><span>PhilHealth</span><span>${formatMoney(data.philhealth)}</span></div>
-          <div class="detail-row"><span>Pag-IBIG</span><span>${formatMoney(data.pagibig)}</span></div>
-          ${otherDeductionBlock}
-        </div>
-      </div>
-      <div class="payslip-footer">
-        <div>If you have questions about this payslip, contact HR/Accounting.</div>
-        <div>Computer-generated payslip.</div>
-      </div>
+      <h3>Payslip</h3>
+      <p class="meta"><strong>Employee ID:</strong> ${data.id || ''}</p>
+      <p class="meta"><strong>Name:</strong> ${data.name || ''}</p>
+      ${periodLine}
+      <table>
+        <tr><th>Description</th><th>Amount</th></tr>
+        <tr><td>Total Hours</td><td>${dash(data.totalHours)}</td></tr>
+        <tr><td>Hourly Rate</td><td>${rateDisplay}</td></tr>
+        ${bantayRow}
+        ${additionalIncomeRows}
+        <tr><td>Gross Amount</td><td>${dash(data.gross)}</td></tr>
+        ${dedRows}
+        ${otherDeductionsRows}
+        ${totalRow}
+        <tr><th>Net Pay</th><th>${dash(data.net)}</th></tr>
+      </table>
     </div>`;
   }
   var styles = `@page { size: letter portrait; margin: 0.25in; }
@@ -756,25 +711,12 @@ body{font-family:Arial,Helvetica,sans-serif;margin:0;padding:0 0.1in;}
 .payslip-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:0.03in;}
 .payslip-grid.single{grid-template-columns:repeat(1,1fr);max-width:3in;margin:0 auto;}
 .payslip{box-sizing:border-box;padding:0.06in;border:1px solid #475569;height:2.6in;overflow:hidden;border-radius:3px;background:#fff;box-shadow:0 0 0 1px rgba(15,23,42,0.2);}
+table{border-collapse:collapse;width:100%;font-size:8.5px;}
+th,td{border:1px solid #e2e8f0;padding:1px;text-align:left;}
+th{background:#f1f5f9;}
 .page-break{page-break-after:always;break-after:page;}
-.payslip-header{display:flex;flex-direction:column;gap:2px;margin-bottom:4px;}
-.company-name{font-size:10px;font-weight:700;}
-.header-lines{font-size:7.8px;line-height:1.2;}
-.meta-line{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
-.meta-label{font-weight:700;}
-.meta-muted{color:#475569;}
-.summary-row{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:3px;margin:2px 0 4px;}
-.summary-box{border:1px solid #e2e8f0;border-radius:2px;padding:3px 2px;text-align:center;background:#f8fafc;}
-.summary-label{font-size:7px;font-weight:700;letter-spacing:0.02em;color:#475569;}
-.summary-value{font-size:10px;font-weight:700;line-height:1.1;}
-.summary-net .summary-value{font-size:11px;font-weight:800;color:#0f172a;}
-.details-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:4px;}
-.details-title{font-size:7.5px;font-weight:700;margin:0 0 2px;}
-.detail-row{display:flex;justify-content:space-between;gap:4px;font-size:8px;line-height:1.2;padding:1px 0;}
-.detail-row span:last-child{font-variant-numeric:tabular-nums;}
-.item-line{font-size:7.3px;color:#475569;padding:0;}
-.detail-more{font-style:italic;}
-.payslip-footer{margin-top:3px;font-size:7px;line-height:1.2;color:#475569;}`;
+h3{margin:0 0 3px 0;font-size:10px;}
+.payslip .meta{margin:0 0 2px 0;font-size:8px;line-height:1.15;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}`;
 
   window.collectPayslipRowData = collectRowData;
   window.buildCompactPayslip = buildPayslip;
@@ -802,25 +744,12 @@ body{font-family:Arial,Helvetica,sans-serif;margin:0;padding:0 0.1in;}
 .payslip-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:0.03in;}
 .payslip-grid.single{grid-template-columns:repeat(1,1fr);max-width:3in;margin:0 auto;}
 .payslip{box-sizing:border-box;padding:0.06in;border:1px solid #475569;height:2.6in;overflow:hidden;border-radius:3px;background:#fff;box-shadow:0 0 0 1px rgba(15,23,42,0.2);}
+table{border-collapse:collapse;width:100%;font-size:8.5px;}
+th,td{border:1px solid #e2e8f0;padding:1px;text-align:left;}
+th{background:#f1f5f9;}
 .page-break{page-break-after:always;break-after:page;}
-.payslip-header{display:flex;flex-direction:column;gap:2px;margin-bottom:4px;}
-.company-name{font-size:10px;font-weight:700;}
-.header-lines{font-size:7.8px;line-height:1.2;}
-.meta-line{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
-.meta-label{font-weight:700;}
-.meta-muted{color:#475569;}
-.summary-row{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:3px;margin:2px 0 4px;}
-.summary-box{border:1px solid #e2e8f0;border-radius:2px;padding:3px 2px;text-align:center;background:#f8fafc;}
-.summary-label{font-size:7px;font-weight:700;letter-spacing:0.02em;color:#475569;}
-.summary-value{font-size:10px;font-weight:700;line-height:1.1;}
-.summary-net .summary-value{font-size:11px;font-weight:800;color:#0f172a;}
-.details-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:4px;}
-.details-title{font-size:7.5px;font-weight:700;margin:0 0 2px;}
-.detail-row{display:flex;justify-content:space-between;gap:4px;font-size:8px;line-height:1.2;padding:1px 0;}
-.detail-row span:last-child{font-variant-numeric:tabular-nums;}
-.item-line{font-size:7.3px;color:#475569;padding:0;}
-.detail-more{font-style:italic;}
-.payslip-footer{margin-top:3px;font-size:7px;line-height:1.2;color:#475569;}`;
+h3{margin:0 0 3px 0;font-size:10px;}
+.payslip .meta{margin:0 0 2px 0;font-size:8px;line-height:1.15;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}`;
     }
     var html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>All Payslips</title>
 <style>${styles}</style></head><body><div class="payslip-grid">`;
@@ -14169,25 +14098,12 @@ body{font-family:Arial,Helvetica,sans-serif;margin:0;padding:0 0.1in;}
 .payslip-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:0.03in;}
 .payslip-grid.single{grid-template-columns:repeat(1,1fr);max-width:3in;margin:0 auto;}
 .payslip{box-sizing:border-box;padding:0.06in;border:1px solid #475569;height:2.6in;overflow:hidden;border-radius:3px;background:#fff;box-shadow:0 0 0 1px rgba(15,23,42,0.2);}
+table{border-collapse:collapse;width:100%;font-size:8.5px;}
+th,td{border:1px solid #e2e8f0;padding:1px;text-align:left;}
+th{background:#f1f5f9;}
 .page-break{page-break-after:always;break-after:page;}
-.payslip-header{display:flex;flex-direction:column;gap:2px;margin-bottom:4px;}
-.company-name{font-size:10px;font-weight:700;}
-.header-lines{font-size:7.8px;line-height:1.2;}
-.meta-line{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
-.meta-label{font-weight:700;}
-.meta-muted{color:#475569;}
-.summary-row{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:3px;margin:2px 0 4px;}
-.summary-box{border:1px solid #e2e8f0;border-radius:2px;padding:3px 2px;text-align:center;background:#f8fafc;}
-.summary-label{font-size:7px;font-weight:700;letter-spacing:0.02em;color:#475569;}
-.summary-value{font-size:10px;font-weight:700;line-height:1.1;}
-.summary-net .summary-value{font-size:11px;font-weight:800;color:#0f172a;}
-.details-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:4px;}
-.details-title{font-size:7.5px;font-weight:700;margin:0 0 2px;}
-.detail-row{display:flex;justify-content:space-between;gap:4px;font-size:8px;line-height:1.2;padding:1px 0;}
-.detail-row span:last-child{font-variant-numeric:tabular-nums;}
-.item-line{font-size:7.3px;color:#475569;padding:0;}
-.detail-more{font-style:italic;}
-.payslip-footer{margin-top:3px;font-size:7px;line-height:1.2;color:#475569;}`;
+h3{margin:0 0 3px 0;font-size:10px;}
+.payslip .meta{margin:0 0 2px 0;font-size:8px;line-height:1.15;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}`;
       }
       html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Payslip - ${name}</title><style>${stylesSingle}</style></head><body><div class="payslip-grid single">${slip}</div></body></html>`;
     }
