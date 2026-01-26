@@ -155,7 +155,6 @@ const KNOWN_KEYS = [
   ,"payroll_additional_income_details"
   ,"payroll_additional_income_total"
   ,"payroll_bantay"
-  ,"payroll_bantay_proj"
   ,"payroll_contrib_flags"
   ,"att_overrides_hours_v1"
   ,"payroll_lock_state"
@@ -392,9 +391,8 @@ function safeStringify(v){
     opacity: 0.6;
   }
 
-/* === PATCH: Additional Income & Bantay column widths === */
+/* === PATCH: Additional Income column width === */
 #payrollTable th:nth-child(10), #payrollTable td:nth-child(10) { width: 100px; min-width: 100px; } /* Additional Income */
-#payrollTable th:nth-child(11), #payrollTable td:nth-child(11) { width: 100px; min-width: 100px; } /* Bantay */
 /* === END PATCH === */
 
 /* === Additional Income: type selector layout === */
@@ -568,7 +566,6 @@ function safePrint(win){
       piLoan: readCell(row, '.loanPI', 'value'),
       vale: readCell(row, '.vale', 'value'),
       valeWed: readCell(row, '.valeWed', 'value') || readCell(row, '.valeWed'),
-      bantay: readCell(row, '.bantay', 'value'),
       additionalIncomeTotal: readCell(row, '.adjAmt'),
       totalDeductions: readCell(row, '.totalDed'),
       net: readCell(row, '.netPay')
@@ -699,7 +696,6 @@ function safePrint(win){
     }
     var additionalItemsHtml = buildItemLines(additionalIncomeItems, getAdditionalIncomeLabel, 3);
     var otherDeductionsItemsHtml = buildItemLines(otherDeductionsItems, getOtherDeductionLabel, 3);
-    var nightDiff = toNum(data.bantay);
     var additionalBlock = '';
     if (additionalIncomeItems.length || additionalIncomeTotal > 0) {
       additionalBlock = `
@@ -1044,9 +1040,10 @@ window.addEventListener('load', dashReports);
   <style>
 
   /* Hide individual deduction columns in Payroll table (show only Total Deductions).
-     After adding the Adjustment column before Bantay, the indices shift by one.
-     Hide Pag‑IBIG to Wed Vale columns (cols 13–19) for thead and tbody.
-     The tfoot row has a collapsed first cell; hide cols 12–18 instead. */
+     Hide Pag‑IBIG to Wed Vale columns (cols 12–18) for thead and tbody.
+     The tfoot row has a collapsed first cell; hide cols 11–17 instead. */
+  #payrollTab #payrollTable thead th:nth-child(12),
+  #payrollTab #payrollTable tbody td:nth-child(12),
   #payrollTab #payrollTable thead th:nth-child(13),
   #payrollTab #payrollTable tbody td:nth-child(13),
   #payrollTab #payrollTable thead th:nth-child(14),
@@ -1058,16 +1055,14 @@ window.addEventListener('load', dashReports);
   #payrollTab #payrollTable thead th:nth-child(17),
   #payrollTab #payrollTable tbody td:nth-child(17),
   #payrollTab #payrollTable thead th:nth-child(18),
-  #payrollTab #payrollTable tbody td:nth-child(18),
-  #payrollTab #payrollTable thead th:nth-child(19),
-  #payrollTab #payrollTable tbody td:nth-child(19) { display: none; }
+  #payrollTab #payrollTable tbody td:nth-child(18) { display: none; }
+  #payrollTab #payrollTable tfoot td:nth-child(11),
   #payrollTab #payrollTable tfoot td:nth-child(12),
   #payrollTab #payrollTable tfoot td:nth-child(13),
   #payrollTab #payrollTable tfoot td:nth-child(14),
   #payrollTab #payrollTable tfoot td:nth-child(15),
   #payrollTab #payrollTable tfoot td:nth-child(16),
-  #payrollTab #payrollTable tfoot td:nth-child(17),
-  #payrollTab #payrollTable tfoot td:nth-child(18) { display: none; }
+  #payrollTab #payrollTable tfoot td:nth-child(17) { display: none; }
 /* === PATCH: column widths for Hourly Rate, Regular Hours, OT Hours === */
 #payrollTable th, #payrollTable td { white-space: nowrap; }
 #payrollTable th:nth-child(3), #payrollTable td:nth-child(3) { width: 110px; min-width: 110px; } /* Hourly Rate */
@@ -2679,9 +2674,6 @@ window.addEventListener('load', dashReports);
          Additional Income
         </th>
         <th>
-         Bantay
-        </th>
-        <th>
          Gross Pay
         </th>
         <th>
@@ -2732,7 +2724,6 @@ window.addEventListener('load', dashReports);
       <td class="num" data-col="regPay">0.00</td>
       <td class="num" data-col="otPay">0.00</td>
       <td class="num" data-col="adjAmt">0.00</td>
-      <td class="num" data-col="bantay">0.00</td>
       <td class="num" data-col="grossPay">0.00</td>
     <td class="num" data-col="pagibig">0.00</td>
     <td class="num" data-col="philhealth">0.00</td>
@@ -2908,20 +2899,6 @@ const LS_ADDITIONAL_INCOME_TOTAL='payroll_additional_income_total';
 // LocalStorage key for Additional Income dropdown types
 const LS_INCOME_TYPE_OPTIONS='incomeTypeOptions';
 const DEFAULT_INCOME_TYPE_OPTIONS = ['Allowance','Bantay','Incentive','Bonus','Meal','Transport'];
-// Supabase-only key for per-employee Bantayâ†’Project assignment map
-const LS_BANTAY_PROJ='payroll_bantay_proj';
-let bantayProj = {};
-;(async function(){
-  try{
-    let v = await window.readKV(LS_BANTAY_PROJ);
-    if (!v) {
-      try { v = JSON.parse(localStorage.getItem(LS_BANTAY_PROJ) || '{}'); } catch(_){}
-    }
-    if (v && typeof v==='object') bantayProj = v;
-    try { localStorage.setItem(LS_BANTAY_PROJ, JSON.stringify(bantayProj)); } catch(_){ }
-    try { if (typeof window.rebuildReports === 'function') window.rebuildReports(); } catch(_){ }
-  }catch(e){}
-})();
 // LocalStorage key for per-employee contribution flags (Pag-IBIG, PhilHealth, SSS)
 const LS_CONTRIB_FLAGS='payroll_contrib_flags';
 const PAYROLL_SETTINGS_KEY = 'settings_payroll';
@@ -3632,9 +3609,14 @@ function refreshPeriodScopedCachesFromStorage(){
   additionalIncomeDetails = ensurePeriodData(allAdditionalIncomeDetails, currentPeriodKey);
   additionalIncomeTotal = ensurePeriodData(allAdditionalIncomeTotals, currentPeriodKey);
   ensureAdditionalIncomeDetailsMap();
-  rebuildAdditionalIncomeTotals();
+  const migratedBantay = migrateBantayToAdditionalIncome();
+  if (!migratedBantay) rebuildAdditionalIncomeTotals();
   ensureOtherDeductionsDetailsMap();
   rebuildOtherDeductionsTotals();
+  if (migratedBantay) {
+    try { if (typeof renderAdditionalIncomeTable === 'function') renderAdditionalIncomeTable(); } catch (_) {}
+    try { if (typeof calculateAll === 'function') calculateAll(); } catch (_) {}
+  }
   try {
     window.loanSSS = loanSSS;
     window.loanPI = loanPI;
@@ -3709,17 +3691,21 @@ function syncPeriodScopedData(){
   bantay = allBantay[pk] || {};
   additionalIncomeDetails = ensurePeriodData(allAdditionalIncomeDetails, pk, null, { allowDefault: false });
   additionalIncomeTotal = ensurePeriodData(allAdditionalIncomeTotals, pk, null, { allowDefault: false });
+  currentPeriodKey = pk;
   ensureAdditionalIncomeDetailsMap();
-  rebuildAdditionalIncomeTotals();
+  const migratedBantay = migrateBantayToAdditionalIncome();
+  if (!migratedBantay) rebuildAdditionalIncomeTotals();
   ensureOtherDeductionsDetailsMap();
   rebuildOtherDeductionsTotals();
-  currentPeriodKey = pk;
   try { refreshCurrentDeductionColumnInclusions(); } catch(_){ }
   try { applyDeductionColumnState(); } catch(_){ }
   saveCurrentPeriodDeductions();
   try { if (typeof renderAdditionalIncomeTable === 'function') renderAdditionalIncomeTable(); } catch (_) {}
   try { if (typeof renderOtherDeductionsTable === 'function') renderOtherDeductionsTable(); } catch (_) {}
   try { if (typeof renderAdjustmentHoursTable === 'function') renderAdjustmentHoursTable(); } catch (_) {}
+  if (migratedBantay) {
+    try { if (typeof calculateAll === 'function') calculateAll(); } catch (_) {}
+  }
   return true;
 }
 ;(async function(){
@@ -3733,6 +3719,11 @@ function syncPeriodScopedData(){
       bantay = allBantay[currentPeriodKey] || {};
     }
     try { localStorage.setItem(LS_BANTAY, JSON.stringify(allBantay)); } catch(_){ }
+    const migratedBantay = migrateBantayToAdditionalIncome();
+    if (migratedBantay) {
+      try { if (typeof renderAdditionalIncomeTable === 'function') renderAdditionalIncomeTable(); } catch (_) {}
+      try { if (typeof calculateAll === 'function') calculateAll(); } catch (_) {}
+    }
     try{ if (typeof renderSssTable==='function') renderSssTable(); }catch(_){ }
     try { if (typeof window.rebuildReports === 'function') window.rebuildReports(); } catch(_){ }
   }catch(e){}
@@ -3906,6 +3897,41 @@ function rebuildAdditionalIncomeTotals(){
       additionalIncomeTotal[empId] = total;
     }
   });
+}
+
+function migrateBantayToAdditionalIncome(){
+  if (!isPlainObject(bantay)) return false;
+  let changed = false;
+  ensureAdditionalIncomeDetailsMap();
+  Object.keys(bantay).forEach(empId => {
+    const bantayVal = Number((bantay && bantay[empId]) || 0);
+    if (!Number.isFinite(bantayVal) || bantayVal <= 0) return;
+    const items = Array.isArray(additionalIncomeDetails[empId])
+      ? additionalIncomeDetails[empId].slice()
+      : [];
+    items.push({
+      type: 'Bantay',
+      label: 'Bantay',
+      amount: roundToCents(bantayVal)
+    });
+    additionalIncomeDetails[empId] = normalizeAdditionalIncomeItems(items);
+    delete bantay[empId];
+    changed = true;
+  });
+  if (!changed) return false;
+  rebuildAdditionalIncomeTotals();
+  try { persistCurrentAdditionalIncome(); } catch (err) { console.warn('Persisting migrated Bantay income failed', err); }
+  try {
+    allBantay[currentPeriodKey] = bantay;
+    updatePeriodLatest(allBantay, currentPeriodKey, bantay);
+    localStorage.setItem(LS_BANTAY, JSON.stringify(allBantay));
+  } catch (_) {}
+  try {
+    if (typeof window !== 'undefined' && typeof window.writeKV === 'function') {
+      window.writeKV(LS_BANTAY, allBantay);
+    }
+  } catch (_) {}
+  return true;
 }
 
 function getAdditionalIncomeTotal(empId){
@@ -4614,8 +4640,6 @@ function renderTable(){
       const lPI = Number(loanPI[emp.id] ?? 0);
       const v = Number(vale[emp.id] ?? 0);
       const vW = Number(valeWed[emp.id] ?? 0);
-      // Load stored Bantay allowance for this employee or default to empty string
-      const bVal = bantay[emp.id] ?? '';
       tr.innerHTML = `
         <td>${emp.id}</td>
         <td class="wrap">${emp.name}</td>
@@ -4626,7 +4650,6 @@ function renderTable(){
         <td class="adjHrs num">${aH ? aH.toFixed(2) : '0.00'}</td><td class="totalHrs num">0.00</td><td class="regPay num">0.00</td>
         <td class="otPay num">0.00</td>
         <td class="adjAmt num">0.00</td>
-        <td><input class="cell bantay" name="payroll_bantay_${emp.id}" type="number" step="0.01" value="${bVal}"></td>
         <td class="grossPay num">0.00</td>
         <td class="pagibig num">0.00</td>
         <td class="philhealth num">0.00</td>
@@ -4649,113 +4672,6 @@ function renderTable(){
     window.__suspendTotals = false;
     try { (window.scheduleTotals || window.updatePayrollGrandTotals || function(){})(); } catch(e){}
     try { (window.scheduleTotals || window.updateDeductionsGrandTotals || function(){})(); } catch(e){}
-  }
-}
-
-
-
-// Quick project picker for Bantay assignment (Supabase-backed) â€“ compact dropdown
-// Shows only project names, auto-saves on selection, then closes.
-function chooseBantayProject(empId, anchorEl){
-  try{
-    // Remove any existing picker first
-    const old = document.getElementById('bantayProjPicker');
-    if (old) old.remove();
-
-    // Build overlay container
-    const box = document.createElement('div');
-    box.id = 'bantayProjPicker';
-    box.style.position = 'absolute';
-    box.style.zIndex = '99999';
-    box.style.background = '#ffffff';
-    box.style.border = '1px solid #e5e7eb';
-    box.style.borderRadius = '8px';
-    box.style.boxShadow = '0 8px 24px rgba(0,0,0,0.12)';
-    box.style.padding = '6px';
-    box.style.display = 'flex';
-    box.style.gap = '6px';
-    box.style.alignItems = 'center';
-
-    // Position near the input
-    const rect = (anchorEl && anchorEl.getBoundingClientRect) ? anchorEl.getBoundingClientRect() : {left:100, top:100, width:0, height:0};
-    const scrollX = window.scrollX || document.documentElement.scrollLeft || 0;
-    const scrollY = window.scrollY || document.documentElement.scrollTop || 0;
-    box.style.left = (rect.left + scrollX) + 'px';
-    box.style.top  = (rect.top  + scrollY + rect.height + 6) + 'px';
-
-    // Build <select> with project options (compact)
-    const sel = document.createElement('select');
-    sel.id = 'bantayProjectSelect';
-    sel.name = 'bantay_project_select';
-    sel.style.minWidth = '160px';
-    sel.style.padding = '4px';
-    sel.style.border = '1px solid #d1d5db';
-    sel.style.borderRadius = '6px';
-
-    // Placeholder + clear option
-    const opt0 = document.createElement('option');
-    opt0.value = '';
-    opt0.textContent = 'Select project';
-    sel.appendChild(opt0);
-    const optClear = document.createElement('option');
-    optClear.value = '__clear__';
-    optClear.textContent = '— Clear assignment —';
-    sel.appendChild(optClear);
-
-    // storedProjects: { [pid]: {name, ...} }
-    const entries = Object.entries(storedProjects || {}).sort((a,b)=>{
-      const A = (a[1]?.name || a[0]).toUpperCase();
-      const B = (b[1]?.name || b[0]).toUpperCase();
-      return A.localeCompare(B);
-    });
-    entries.forEach(([pid, proj])=>{
-      const o = document.createElement('option');
-      o.value = pid;
-      o.textContent = (proj?.name || pid);
-      sel.appendChild(o);
-    });
-
-    // Set current value if any (default to project id key)
-    try { sel.value = (bantayProj && bantayProj[empId]) || ''; } catch(e){}
-
-    box.appendChild(sel);
-    document.body.appendChild(box);
-
-    const close = ()=>{ try{ box.remove(); }catch(e){} };
-
-    // Auto-save on selection and close; refresh report if available
-    sel.addEventListener('change', async ()=>{
-      const v = sel.value;
-      bantayProj = bantayProj || {};
-      if (!v || v === '__clear__'){
-        // Clear assignment
-        try { delete bantayProj[empId]; } catch(e){}
-        try { await window.writeKV(LS_BANTAY_PROJ, bantayProj); } catch(e){}
-        try { if (typeof window.rebuildReports === 'function') window.rebuildReports(); } catch(e){}
-        close();
-        return;
-      }
-      if (storedProjects && storedProjects[v]){
-        bantayProj[empId] = v;
-        try { await window.writeKV(LS_BANTAY_PROJ, bantayProj); } catch(e){}
-        try { if (typeof window.rebuildReports === 'function') window.rebuildReports(); } catch(e){}
-      }
-      close();
-    });
-
-    // Close on outside click
-    setTimeout(()=>{
-      const handler = (e)=>{
-        if (!box.contains(e.target)) {
-          document.removeEventListener('mousedown', handler, true);
-          close();
-        }
-      };
-      document.addEventListener('mousedown', handler, true);
-    }, 0);
-
-  }catch(e){
-    console.warn('chooseBantayProject failed', e);
   }
 }
 function attachRowEvents(){
@@ -4791,39 +4707,6 @@ function attachRowEvents(){
       });
     });
 
-    // Add event listener for Bantay allowance input. Store to cloud and recalc net pay.
-    const bantayI = row.querySelector('.bantay');
-      if (bantayI) {
-        bantayI.addEventListener('input', async () => {
-        bantay[id] = bantayI.value;
-        allBantay[currentPeriodKey] = bantay;
-        try { localStorage.setItem(LS_BANTAY, JSON.stringify(allBantay)); } catch(_){ }
-        await window.writeKV(LS_BANTAY, allBantay);
-        calculateRow(row);
-        try { if (typeof window.rebuildReports === 'function') window.rebuildReports(); } catch(e){}
-        // Auto-open project picker when entering a positive amount and no assignment yet
-        const val = parseFloat(bantayI.value) || 0;
-        const hasPicker = !!document.getElementById('bantayProjPicker');
-        if (val > 0 && !bantayProj[id] && !hasPicker) {
-          chooseBantayProject(id, bantayI);
-        }
-        // Auto-clear assignment when reset to zero or blank
-        if (!(val > 0) && bantayProj[id]) {
-          try { delete bantayProj[id]; } catch(_){ }
-          try { await window.writeKV(LS_BANTAY_PROJ, bantayProj); } catch(_){ }
-          try { if (typeof window.rebuildReports === 'function') window.rebuildReports(); } catch(_){ }
-        }
-      });
-      // Also prompt on change if user typed and then blurs
-      bantayI.addEventListener('change', () => {
-        const val = parseFloat(bantayI.value) || 0;
-        if (val > 0) chooseBantayProject(id, bantayI);
-        try { if (typeof window.rebuildReports === 'function') window.rebuildReports(); } catch(e){}
-      });
-      // Allow quick reassign on dblclick
-      bantayI.title = 'Double-click to assign Bantay to a project';
-      bantayI.addEventListener('dblclick', () => chooseBantayProject(id, bantayI));
-    }
   });
 }
 function renderSssTable(){
@@ -5170,13 +5053,11 @@ function calculateRow(tr){  const readNum = sel => { const el = tr.querySelector
 
   const otherDeductionsAmount = roundToCents(getOtherDeductionsTotal(id));
   const additionalIncome = getAdditionalIncomeTotal(id);
-  // Bantay allowance (treated as positive allowance).  Parse numeric value from bantay input.
-  const bVal = parseFloat((tr.querySelector('.bantay')?.value || '').trim()) || 0;
 
   const regPay = +(reg * rate).toFixed(2);
   tr.querySelector('.totalHrs').textContent = totalHrs.toFixed(2);
   const otPay = +(otTotal * rate * getOvertimeMultiplier()).toFixed(2);
-  const gross = +(regPay + otPay + additionalIncome + bVal).toFixed(2);
+  const gross = +(regPay + otPay + additionalIncome).toFixed(2);
   // Compute contributions using dynamic tables (employee share).  Determine the
   // appropriate rate based on the monthly income and multiply by regular pay.
   const monthly = rate * 8 * 24;
@@ -5185,7 +5066,7 @@ function calculateRow(tr){  const readNum = sel => { const el = tr.querySelector
   // Check per-employee contribution deduction flags; default to true if not set
   const flags = contribFlags[id] || {};
   const div = Number(divisor) || 1;
-  const hasCompensation = (reg > 0) || (otTotal > 0) || (additionalIncome > 0) || (bVal > 0);
+  const hasCompensation = (reg > 0) || (otTotal > 0) || (additionalIncome > 0);
   const pagibig = (hasCompensation && flags.pagibig !== false ? +((regPay * piRate)).toFixed(2) : 0);
   const philhealth = (hasCompensation && flags.philhealth !== false ? +((regPay * phRate)).toFixed(2) : 0);
   const sssFull = hasCompensation ? sssShareByMonthly(monthly) : 0;
@@ -6028,8 +5909,8 @@ function updateContributionNote() {
     'SSS = (Employee Share by Monthly Income) &divide; Divisor. SSS Loan and Pag-IBIG Loan are divided by the Divisor. Vales are manual (not divided).';
 }
   document.getElementById('downloadPayrollCSV').addEventListener('click', ()=>{
-  // Include Additional Income column before Bantay in payroll CSV export
-  const header = ['Week Start','Week End','OT Multiplier','Divisor','ID','Name','Regular Hours','OT Hours','Hourly Rate','Regular Pay','OT Pay','Additional Income','Bantay','Gross Pay','Pag-IBIG','PhilHealth','SSS','SSS Loan','Pag-IBIG Loan','Account','Wed Vale','Total Deductions','Net Pay'];
+  // Include Additional Income column in payroll CSV export
+  const header = ['Week Start','Week End','OT Multiplier','Divisor','ID','Name','Regular Hours','OT Hours','Hourly Rate','Regular Pay','OT Pay','Additional Income','Gross Pay','Pag-IBIG','PhilHealth','SSS','SSS Loan','Pag-IBIG Loan','Account','Wed Vale','Total Deductions','Net Pay'];
   const rows=[header];
   const ws = weekStartEl.value||''; const we = weekEndEl.value||''; const otm = String(getOvertimeMultiplier()); const div = String(divisorEl.value||'1');
   document.querySelectorAll('#payrollTable tbody tr').forEach(tr=>{
@@ -6039,7 +5920,6 @@ function updateContributionNote() {
     const regPay = tr.querySelector('.regPay').textContent.trim();
     const otPay = tr.querySelector('.otPay').textContent.trim();
     const adj   = tr.querySelector('.adjAmt') ? tr.querySelector('.adjAmt').textContent.trim() : '';
-    const bantayVal = tr.querySelector('.bantay').value;
     const grossPay = tr.querySelector('.grossPay').textContent.trim();
     const pagibig = tr.querySelector('.pagibig').textContent.trim();
     const philhealth = tr.querySelector('.philhealth').textContent.trim();
@@ -6048,7 +5928,7 @@ function updateContributionNote() {
     const v = tr.querySelector('.vale').value; const vW = tr.querySelector('.valeWed').value;
     const total = tr.querySelector('.totalDed').textContent.trim();
     const net   = tr.querySelector('.netPay').textContent.trim();
-    rows.push([ws,we,otm,div,id,name,regI.value,otI.value,rateI.value,regPay,otPay,adj,bantayVal,grossPay,pagibig,philhealth,sss,lSSS,lPI,v,vW,total,net]);
+    rows.push([ws,we,otm,div,id,name,regI.value,otI.value,rateI.value,regPay,otPay,adj,grossPay,pagibig,philhealth,sss,lSSS,lPI,v,vW,total,net]);
   });
   const csv = rows.map(r=>r.map(s=>{
     s = String(s ?? '');
@@ -6675,7 +6555,6 @@ document.addEventListener('DOMContentLoaded', () => {
       const rate = formatInputValue(row?.rate, 2);
       const regHrs = formatInputValue(row?.regHrs, 2);
       const otHrs = formatInputValue(row?.otHrs, 2);
-      const bantayVal = formatInputValue(row?.bantay, 2);
       const loanSSSVal = formatInputValue(row?.loanSSS, 2);
       const loanPIVal = formatInputValue(row?.loanPI, 2);
       const valeVal = formatInputValue(row?.vale, 2);
@@ -6693,7 +6572,6 @@ document.addEventListener('DOMContentLoaded', () => {
         <td class="regPay num">0.00</td>
         <td class="otPay num">0.00</td>
         <td class="adjAmt num">0.00</td>
-        <td><input class="cell bantay" name="payroll_bantay_${empId}" type="number" step="0.01" value="${bantayVal}"></td>
         <td class="grossPay num">0.00</td>
         <td class="pagibig num">0.00</td>
         <td class="philhealth num">0.00</td>
@@ -6777,7 +6655,6 @@ document.addEventListener('DOMContentLoaded', () => {
       applyText('.regPay', data.regPay);
       applyText('.otPay', data.otPay);
       applyText('.adjAmt', data.adjAmt);
-      applyInput('.bantay', data.bantay);
       applyText('.grossPay', data.grossPay);
       applyText('.pagibig', data.pagibig);
       applyText('.philhealth', data.philhealth);
@@ -6802,7 +6679,6 @@ document.addEventListener('DOMContentLoaded', () => {
       if (typeof regHours === 'object' && regHours) regHours[empId] = Number(data.regHrs) || 0;
       if (typeof otHours === 'object' && otHours) otHours[empId] = Number(data.otHrs) || 0;
       if (typeof adjHrs === 'object' && adjHrs) adjHrs[empId] = Number(data.adjHrs) || 0;
-      if (typeof bantay === 'object' && bantay) bantay[empId] = Number(data.bantay) || 0;
       if (typeof additionalIncomeTotal === 'object' && additionalIncomeTotal) {
         additionalIncomeTotal[empId] = Number(data.adjAmt) || 0;
       }
@@ -7218,8 +7094,8 @@ document.addEventListener('DOMContentLoaded', () => {
     }
       // Column index fallbacks aligned with current payrollTable structure
       // 0:ID, 1:Name, 2:Rate, 3:RegHrs, 4:OTHrs, 5:AdjHrs, 6:TotalHrs, 7:RegPay, 8:OTPay, 9:Additional Income,
-      // 10:Bantay, 11:Gross, 12:Pag-IBIG, 13:PhilHealth, 14:SSS, 15:SSS Loan, 16:Pag-IBIG Loan,
-      // 17:Vale, 18:Wed Vale, 19:Total Ded, 20:Net Pay, 21:Payslip
+      // 10:Gross, 11:Pag-IBIG, 12:PhilHealth, 13:SSS, 14:SSS Loan, 15:Pag-IBIG Loan,
+      // 16:Vale, 17:Wed Vale, 18:Total Ded, 19:Net Pay, 20:Payslip
       data.rate = readNum('.rate', 2);
       data.regHrs = readNum('.regHrs', 3);
       data.otHrs = readNum('.otHrs', 4);
@@ -7228,17 +7104,16 @@ document.addEventListener('DOMContentLoaded', () => {
       data.regPay = readNum('.regPay', 7);
       data.otPay = readNum('.otPay', 8);
       data.adjAmt = readNum('.adjAmt', 9);
-      data.bantay = readNum('.bantay', 10);
-      data.grossPay = readNum('.grossPay', 11);
-      data.pagibig = readNum('.pagibig', 12);
-      data.philhealth = readNum('.philhealth', 13);
-      data.sss = readNum('.sss', 14);
-      data.loanSSS = readNum('.loanSSS', 15);
-      data.loanPI = readNum('.loanPI', 16);
-      data.vale = readNum('.vale', 17);
-      data.valeWed = readNum('.valeWed', 18);
-      data.totalDed = readNum('.totalDed', 19);
-      data.netPay = readNum('.netPay', 20);
+      data.grossPay = readNum('.grossPay', 10);
+      data.pagibig = readNum('.pagibig', 11);
+      data.philhealth = readNum('.philhealth', 12);
+      data.sss = readNum('.sss', 13);
+      data.loanSSS = readNum('.loanSSS', 14);
+      data.loanPI = readNum('.loanPI', 15);
+      data.vale = readNum('.vale', 16);
+      data.valeWed = readNum('.valeWed', 17);
+      data.totalDed = readNum('.totalDed', 18);
+      data.netPay = readNum('.netPay', 19);
       try {
         let otherDeductionTotal = row && row.dataset ? row.dataset.otherDeductionsTotal : null;
         if (otherDeductionTotal != null && otherDeductionTotal !== '') {
@@ -7651,7 +7526,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function buildPayrollSectionFromSnapshot(snap) {
     const headers = ['ID','Name','Hourly Rate','Regular Hours','OT Hours','Adjustment Hrs','Total Hours','Regular Pay','OT Pay','Additional Income','Bantay','Gross Pay','Pag-IBIG','PhilHealth','SSS','SSS Loan','Pag-IBIG Loan','Account','Wed Vale','Total Deductions','Net Pay','Other Deductions'];
-    const numericCols = headers.map((_, idx) => idx).filter(idx => idx > 1);
     const rows = Array.isArray(snap?.rows) ? snap.rows.map((row) => {
       return [
         row.id || '',
@@ -7678,6 +7552,10 @@ document.addEventListener('DOMContentLoaded', () => {
         formatNumber(typeof row.otherDeductionsTotal !== 'undefined' ? row.otherDeductionsTotal : row.adjustmentDeduction)
       ];
     }) : [];
+    const bantayHasValues = rows.some((row) => {
+      const val = row && row[10];
+      return Number(val) > 0;
+    });
     const totals = snap?.totals || {};
     const footer = headers.map((label, idx) => {
       if (idx === 0) return 'Totals';
@@ -7690,9 +7568,22 @@ document.addEventListener('DOMContentLoaded', () => {
       }
       return formatNumber(val);
     });
+    let finalHeaders = headers;
+    let finalRows = rows;
+    let finalFooter = footer;
+    if (!bantayHasValues) {
+      const dropped = dropColumns(headers, rows, (header) => String(header).trim().toLowerCase() === 'bantay');
+      finalHeaders = dropped.headers;
+      finalRows = dropped.rows;
+      const bantayIndex = headers.findIndex(h => String(h).trim().toLowerCase() === 'bantay');
+      if (bantayIndex >= 0) {
+        finalFooter = footer.filter((_, idx) => idx !== bantayIndex);
+      }
+    }
+    const numericCols = finalHeaders.map((_, idx) => idx).filter(idx => idx > 1);
     const range = formatDateRangeInline(snap?.startDate, snap?.endDate);
     const subtitle = range ? `<div class="report-subtitle">${escapeHtml(range)}</div>` : '';
-    const table = buildTableHtml(headers, rows, { numericCols, footerRow: footer });
+    const table = buildTableHtml(finalHeaders, finalRows, { numericCols, footerRow: finalFooter });
     return `<section class="report-block"><h2>Payroll Report</h2>${subtitle}${table}</section>`;
   }
 
@@ -8162,23 +8053,6 @@ document.addEventListener('DOMContentLoaded', () => {
       const [from, to] = getPayrollRange();
       const dates = eachDate(new Date(from).setHours(0,0,0,0), new Date(to).setHours(0,0,0,0));
       const data = collect(from, to) || {};
-      // Ensure projects that only have Bantay allowance (no DTR rows) appear as their own blocks
-      try {
-        const bp = (typeof bantayProj !== 'undefined' && bantayProj) || {};
-        const b  = (typeof bantay !== 'undefined' && bantay) || {};
-        const sp = (typeof storedProjects !== 'undefined' && storedProjects) || {};
-        const allowByProjName = {};
-        Object.keys(b).forEach(empId => {
-          const amt = parseFloat((b[empId]) || 0) || 0;
-          if (amt <= 0) return;
-          const assigned = bp[empId];
-          if (!assigned) return;
-          const projName = (sp[assigned] && sp[assigned].name) ? sp[assigned].name : assigned;
-          if (!isRealProject(projName)) return;
-          allowByProjName[projName] = (allowByProjName[projName] || 0) + amt;
-        });
-        Object.keys(allowByProjName).forEach(pn => { if (!data[pn]) data[pn] = {}; });
-      } catch (e) { /* ignore */ }
       __report = { data, from, to, dates };
 
       const totalCols = 2 + (dates.length*2) + 4;
@@ -8240,29 +8114,6 @@ document.addEventListener('DOMContentLoaded', () => {
             <td class="num">${f2(gross)}</td>
           </tr>`;
         });
-
-// Compute per-project Bantay allowance (Supabase-backed)
-const allow = Object.keys(bantay || {}).reduce((sum, empId) => {
-  const assigned = (bantayProj || {})[empId];
-  if (!assigned) return sum;
-  const matchesById   = (assigned === proj);
-  const matchesByName = ((storedProjects && storedProjects[assigned]?.name) === proj);
-  return (matchesById || matchesByName) ? sum + (parseFloat(bantay[empId]) || 0) : sum;
-}, 0);
-
-// Render Allowance row (amount in Gross column)
-rows += `<tr class="allowance">
-  <td class="left">Allowance</td>
-  <td class="num">-</td>
-  ${dates.map(()=>`<td class="num">-</td><td class="num">-</td>`).join('')}
-  <td class="num">-</td>
-  <td class="num">-</td>
-  <td class="num">-</td>
-  <td class="num">${f2(allow)}</td>
-</tr>`;
-
-  // Include allowance in project gross
-  pGross += allow;
 
   rows += `<tr class="totals">
             <td class="left">Project Total</td>
@@ -8361,23 +8212,6 @@ rows += `<tr class="allowance">
 
           rows.push([proj, display, to2(rate)].concat(dayCells, [to2(rReg), to2(rOT), to2(rReg + rOT), to2(gross)]));
         });
-
-        // Add per-project Allowance row (amount placed in GROSS column)
-        try {
-          const allow = Object.keys(bantay || {}).reduce((sum, empId) => {
-            const assigned = (bantayProj || {})[empId];
-            if (!assigned) return sum;
-            const matchesById   = (assigned === proj);
-            const matchesByName = ((typeof storedProjects !== 'undefined' && storedProjects && storedProjects[assigned]?.name) === proj);
-            const amt = parseFloat((bantay && bantay[empId]) || 0) || 0;
-            return (matchesById || matchesByName) ? (sum + amt) : sum;
-          }, 0);
-          // Push a CSV row for Allowance with zero hours and gross = allowance
-          const zeroCells = new Array(dates.length*2).fill('0.00');
-          rows.push([proj, 'Allowance', ''].concat(zeroCells, ['0.00','0.00','0.00', to2(allow)]));
-          // Include allowance in project gross before rolling into grand totals
-          pGross += allow;
-        } catch (e) { /* no-op if allowance data missing */ }
 
         gReg += pReg; gOT += pOT; gGross += pGross;
         dayTotals.forEach((dt,i)=>{ gDayTotals[i].rwh += dt.rwh; gDayTotals[i].oth += dt.oth; });
@@ -8523,7 +8357,7 @@ rows += `<tr class="allowance">
       const title = (startDate && endDate) ? `Payroll Report (${startDate} to ${endDate})` : 'Payroll Report';
       const header = [
         'ID','Name','Hourly Rate','Regular Hours','OT Hours','Adjustment Hrs','Total Hours',
-        'Regular Pay','OT Pay','Additional Income','Bantay','Gross Pay',
+        'Regular Pay','OT Pay','Additional Income','Gross Pay',
         'Pag-IBIG','PhilHealth','SSS','SSS Loan','Pag-IBIG Loan','Account','Wed Vale',
         'Total Deductions','Net Pay'
       ];
@@ -8593,7 +8427,7 @@ rows += `<tr class="allowance">
           const aoa = [[title], [''], header.slice()];
           const totals = {
             regHrs:0, otHrs:0, adjHrs:0, totalHrs:0,
-            regPay:0, otPay:0, adjAmt:0, bantay:0, grossPay:0,
+            regPay:0, otPay:0, adjAmt:0, grossPay:0,
             pagibig:0, philhealth:0, sss:0,
             loanSSS:0, loanPI:0, vale:0, valeWed:0,
             totalDed:0, netPay:0
@@ -8608,7 +8442,6 @@ rows += `<tr class="allowance">
             const regPayNum = toNum(row.regPay);
             const otPayNum = toNum(row.otPay);
             const adjAmtNum = toNum(row.adjAmt);
-            const bantayNum = toNum(row.bantay);
             const grossNum = toNum(row.grossPay);
             const pagibigNum = toNum(row.pagibig);
             const philhealthNum = toNum(row.philhealth);
@@ -8627,7 +8460,6 @@ rows += `<tr class="allowance">
             totals.regPay += regPayNum;
             totals.otPay += otPayNum;
             totals.adjAmt += adjAmtNum;
-            totals.bantay += bantayNum;
             totals.grossPay += grossNum;
             totals.pagibig += pagibigNum;
             totals.philhealth += philhealthNum;
@@ -8650,7 +8482,6 @@ rows += `<tr class="allowance">
               fmt(regPayNum),
               fmt(otPayNum),
               fmt(adjAmtNum),
-              fmt(bantayNum),
               fmt(grossNum),
               fmt(pagibigNum),
               fmt(philhealthNum),
@@ -8674,7 +8505,6 @@ rows += `<tr class="allowance">
               regPay: 'regPay',
               otPay: 'otPay',
               adjAmt: 'adjAmt',
-              bantay: 'bantay',
               grossPay: 'grossPay',
               pagibig: 'pagibig',
               philhealth: 'philhealth',
@@ -8708,7 +8538,6 @@ rows += `<tr class="allowance">
               fmt(totals.regPay),
               fmt(totals.otPay),
               fmt(totals.adjAmt),
-              fmt(totals.bantay),
               fmt(totals.grossPay),
               fmt(totals.pagibig),
               fmt(totals.philhealth),
@@ -8851,23 +8680,6 @@ rows += `<tr class="allowance">
             rows.push([display, to2(rate)].concat(dayCells, [to2(rReg), to2(rOT), to2(rReg+rOT), to2(gross)]));
             summaryRows.push([proj, display, to2(rate)].concat(dayCells, [to2(rReg), to2(rOT), to2(rReg+rOT), to2(gross)]));
           });
-          // Allowance-only row from on-screen report logic
-          try{
-            const allow = Object.keys(bantay || {}).reduce((sum, empId) => {
-              const assigned = (bantayProj || {})[empId];
-              if (!assigned) return sum;
-              const matchesById   = (assigned === proj);
-              const matchesByName = ((typeof storedProjects !== 'undefined' && storedProjects && storedProjects[assigned]?.name) === proj);
-              const amt = parseFloat((bantay && bantay[empId]) || 0) || 0;
-              return (matchesById || matchesByName) ? (sum + amt) : sum;
-            }, 0);
-            if (allow && allow > 0){
-              const zeros = new Array(dates.length*2).fill('0.00');
-              rows.push(['Allowance',''].concat(zeros, ['0.00','0.00','0.00', to2(allow)]));
-              summaryRows.push([proj, 'Allowance',''].concat(zeros, ['0.00','0.00','0.00', to2(allow)]));
-              pGross += allow;
-            }
-          }catch(e){}
           gReg += pReg; gOT += pOT; gGross += pGross;
           dayTotals.forEach((dt,i)=>{ gDayTotals[i].rwh += dt.rwh; gDayTotals[i].oth += dt.oth; });
           const dayTotalsCells = dayTotals.flatMap(dt=>[to2(dt.rwh), to2(dt.oth)]);
@@ -9094,7 +8906,7 @@ rows += `<tr class="allowance">
       const mo = new MutationObserver(()=> { buildTable(); try{ renderMasterReport(); }catch(e){} });
       mo.observe(dtr, { childList:true, subtree:true });
     }
-    // Expose a global rebuild hook so other tabs (e.g., Payroll bantay edits)
+    // Expose a global rebuild hook so other tabs can refresh the report without a full page reload.
     // can refresh the report without a full page reload.
     try { window.rebuildReports = function(){ try{ buildTable(); }catch(e){} try{ renderMasterReport(); }catch(e){} }; } catch(e){}
     if (document.readyState === 'loading'){
@@ -9465,17 +9277,6 @@ rows += `<tr class="allowance">
           hrs += (e.rwh + e.oth);
           gross += (e.rwh * rate) + (e.oth * rate * otMult);
         });
-        try{
-          const allow = Object.keys((window.bantay||{})).reduce((sum, empId)=>{
-            const assigned = (window.bantayProj||{})[empId]; if(!assigned) return sum;
-            const sp = (typeof storedProjects!=='undefined' && storedProjects) ? storedProjects : {};
-            const matchesById = (assigned === p);
-            const matchesByName = (sp[assigned]?.name === p);
-            const amt = num((window.bantay||{})[empId]);
-            return (matchesById || matchesByName) ? (sum + amt) : sum;
-          }, 0);
-          gross += allow;
-        }catch(_){ }
         const meta = rec.meta || resolveProjectDetails('', p);
         const displayName = meta.name || p;
         const company = meta.company || '';
@@ -13980,7 +13781,7 @@ document.addEventListener('DOMContentLoaded', function(){
     var tb = document.querySelector('#payrollTable tbody');
     var foot = document.querySelector('#payrollTotalsFoot');
     if (!tb || !foot) return;
-      var t = {regHrs:0, otHrs:0, adjHrs:0, totalHrs:0, rate:0, regPay:0, otPay:0, adjAmt:0, bantay:0, grossPay:0, pagibig:0, philhealth:0, sss:0, loanSSS:0, loanPI:0, vale:0, valeWed:0, totalDed:0, netPay:0};
+      var t = {regHrs:0, otHrs:0, adjHrs:0, totalHrs:0, rate:0, regPay:0, otPay:0, adjAmt:0, grossPay:0, pagibig:0, philhealth:0, sss:0, loanSSS:0, loanPI:0, vale:0, valeWed:0, totalDed:0, netPay:0};
     var div = Number(divisor) || 1;
     tb.querySelectorAll('tr').forEach(function(tr){
       t.regHrs   += _parse(_val(tr.querySelector('.regHrs')));
@@ -13993,8 +13794,6 @@ document.addEventListener('DOMContentLoaded', function(){
         t.regPay   += _parse(tr.querySelector('.regPay')?.textContent);
         t.otPay    += _parse(tr.querySelector('.otPay')?.textContent);
         t.adjAmt   += _parse(tr.querySelector('.adjAmt')?.textContent);
-        // Sum Bantay allowance from the bantay input
-        t.bantay  += _parse(_val(tr.querySelector('.bantay')));
         t.grossPay += _parse(tr.querySelector('.grossPay')?.textContent);
         const dedPagibig = readRowDeductionDataset(tr, 'pagibig', 'effective');
         const dedPhilhealth = readRowDeductionDataset(tr, 'philhealth', 'effective');
@@ -14385,7 +14184,6 @@ document.addEventListener('click', function(e) {
   var piLoan    = rowData ? rowData.piLoan : perLoanShare(inputVal('.loanPI'));
   var valeAmt   = rowData ? rowData.vale : inputVal('.vale');
   var wedValeAmt= rowData ? rowData.valeWed : inputVal('.valeWed');
-  var bantayVal = rowData ? rowData.bantay : inputVal('.bantay');
   var otherDeductionsTotal = rowData ? Number(rowData.otherDeductionsTotal || 0) : datasetNumber('otherDeductionsTotal');
   if (!(otherDeductionsTotal > 0)){
     try {
@@ -14397,7 +14195,6 @@ document.addEventListener('click', function(e) {
   var otherDeductionsStr = otherDeductionsTotal > 0 ? otherDeductionsTotal.toFixed(2) : '0.00';
   var totalDed  = rowData ? rowData.totalDeductions : cellText('.totalDed');
   var net       = rowData ? rowData.net : cellText('.netPay');
-  var bantayRowLegacy = parseAmount(bantayVal) !== 0 ? `<tr><td>Bantay</td><td class="right">${bantayVal}</td></tr>` : '';
   var additionalIncomeItems = rowData ? rowData.additionalIncomeDetails : (typeof getAdditionalIncomeDetailsForEmployee === 'function' ? getAdditionalIncomeDetailsForEmployee(id) : []);
   var additionalIncomeTotal = rowData ? Number(rowData.additionalIncomeTotal || 0) : datasetNumber('additionalIncomeTotal');
   if (!(additionalIncomeTotal > 0)) {
@@ -14507,7 +14304,6 @@ body{font-family:Arial,Helvetica,sans-serif;margin:0;padding:0 0.1in;}
       <tr><th colspan="2">Earnings</th></tr>
       <tr><td>Regular Pay</td><td class="right">${regPay}</td></tr>
       <tr><td>OT Pay</td><td class="right">${otPay}</td></tr>
-      ${bantayRowLegacy}
     </table>
   </div>
 
