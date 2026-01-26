@@ -2514,6 +2514,10 @@ window.addEventListener('load', dashReports);
       <button class="tab-btn active" data-tab="payrollTab">
        Payroll
       </button>
+      <!-- Renamed SSS sub-tab to Contributions to include additional government contributions -->
+      <button class="tab-btn" data-tab="contributionsTab">
+       Contributions
+      </button>
       <button class="tab-btn" data-tab="deductionsTab">
        Deductions
       </button>
@@ -2675,6 +2679,173 @@ window.addEventListener('load', dashReports);
        att_employees_v2
       </code>
       (id&rarr;{name}). If none found, shows a sample row.
+     </div>
+    </div>
+    <!-- Renamed SSS tab to Contributions for clarity -->
+    <div class="tab" id="contributionsTab">
+     <div class="contrib-hero">
+      <div>
+       <h3>Government contributions at a glance</h3>
+       <p>Configure the tables below so PayrollPro can match each worker to the correct statutory contribution.</p>
+       <ul class="contrib-key-list">
+        <li>Ranges are matched against <strong>monthly income</strong> from payroll calculations.</li>
+        <li>Each edit saves automatically &mdash; no extra confirmation needed.</li>
+        <li>Use CSV import/export to align with government updates.</li>
+       </ul>
+      </div>
+      <div class="contrib-pill-stack">
+       <div class="contrib-pill">
+        <strong>SSS</strong>
+        <small>Employee and employer peso shares per income bracket.</small>
+       </div>
+       <div class="contrib-pill">
+        <strong>Pag-IBIG</strong>
+        <small>Decimal employee rate applied to regular pay (employer assumed to match).</small>
+       </div>
+       <div class="contrib-pill">
+        <strong>PhilHealth</strong>
+        <small>Decimal employee rate per bracket; applied to monthly income.</small>
+       </div>
+      </div>
+     </div>
+
+     <div class="table-card">
+      <div class="table-card__header">
+       <div>
+        <p class="table-card__tag">SSS</p>
+        <h4 class="table-card__title">Monthly SSS shares</h4>
+        <p class="table-card__subtitle">Use the peso amounts that apply to each bracket. PayrollPro will pick the row where <em>min &le; income &le; max</em>.</p>
+       </div>
+       <div class="table-card__tags">
+        <span class="table-card__tag">Peso values</span>
+        <span class="table-card__tag">Auto-save</span>
+       </div>
+      </div>
+      <div class="controls">
+       <button id="addSssRow">
+        Add Row
+       </button>
+       <button class="primary" id="resetSss">
+        Reset to Defaults (Custom)
+       </button>
+       <button class="danger" id="clearSss">
+        Clear SSS Table
+       </button>
+       <button id="exportSss">
+        Export CSV
+       </button>
+       <label>
+        Import CSV (min,max,employeeShare,employerShare)
+        <br/>
+        <input accept=".csv,text/csv" id="importSss" type="file"/>
+       </label>
+      </div>
+      <table id="sssTable">
+       <thead>
+        <tr>
+         <th>
+          Range From (â‚±)
+         </th>
+         <th>
+          Range To (â‚±)
+         </th>
+         <th>
+          Employee Share (â‚±)
+         </th>
+         <th>
+          Employer Share (â‚±)
+         </th>
+         <th>
+          Actions
+         </th>
+        </tr>
+       </thead>
+       <tbody>
+       </tbody>
+      </table>
+      <div class="section note contrib-note">
+       <strong>How it is used:</strong> Monthly Income = Hourly Rate &times; 8 &times; 24. The matching bracket supplies the employee and employer shares.
+      </div>
+     </div>
+
+     <div class="table-card">
+      <div class="table-card__header">
+       <div>
+        <p class="table-card__tag">Pag-IBIG</p>
+        <h4 class="table-card__title">Pag-IBIG employee rates</h4>
+        <p class="table-card__subtitle">Enter rates as decimals (0.02 = 2%). Applied to regular pay; employer share is assumed to mirror the employee rate.</p>
+       </div>
+       <div class="table-card__tags">
+        <span class="table-card__tag">Rate table</span>
+        <span class="table-card__tag">Bracketed</span>
+       </div>
+      </div>
+      <div class="controls">
+        <button id="addPagibigRow">
+         Add Row
+        </button>
+        <button class="primary" id="resetPagibig">
+         Reset to Defaults
+        </button>
+        <button class="danger" id="clearPagibig">
+         Clear Pag-IBIG Table
+        </button>
+      </div>
+      <table id="pagibigTable">
+        <thead>
+          <tr>
+            <th>Range From (â‚±)</th>
+            <th>Range To (â‚±)</th>
+            <th>Rate (decimal)</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+        </tbody>
+      </table>
+      <div class="section note contrib-note">
+        Keep ranges continuous so every salary finds a matching rate. Export before major edits so you can restore if needed.
+      </div>
+     </div>
+
+     <div class="table-card">
+      <div class="table-card__header">
+       <div>
+        <p class="table-card__tag">PhilHealth</p>
+        <h4 class="table-card__title">PhilHealth employee rates</h4>
+        <p class="table-card__subtitle">Provide decimal rates per income band. The rate is applied to monthly income to compute the employee share.</p>
+       </div>
+       <div class="table-card__tags">
+        <span class="table-card__tag">Rate table</span>
+        <span class="table-card__tag">Bracketed</span>
+       </div>
+      </div>
+      <div class="controls">
+        <button id="addPhilRow">
+         Add Row
+        </button>
+        <button class="primary" id="resetPhil">
+         Reset to Defaults
+        </button>
+        <button class="danger" id="clearPhil">
+         Clear PhilHealth Table
+        </button>
+      </div>
+      <table id="philhealthTable">
+        <thead>
+          <tr>
+            <th>Range From (â‚±)</th>
+            <th>Range To (â‚±)</th>
+            <th>Rate (decimal)</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+        </tbody>
+      </table>
+      <div class="section note contrib-note">
+        Rates use decimal format (e.g. 0.025 = 2.5% employee share). Ensure the final row captures high earners.
+      </div>
      </div>
     </div>
     <div class="tab" id="deductionsTab">
@@ -3196,15 +3367,6 @@ document.querySelectorAll('#panelPayroll .tabs .tab-btn').forEach(btn=>{
     document.querySelectorAll('#panelPayroll .tab').forEach(t=>t.classList.remove('active'));
     btn.classList.add('active');
     const panel = document.querySelector('#panelPayroll #' + btn.dataset.tab);
-    if (panel) panel.classList.add('active');
-  });
-});
-document.querySelectorAll('#panelSettings .tabs .tab-btn').forEach(btn=>{
-  btn.addEventListener('click', ()=>{
-    document.querySelectorAll('#panelSettings .tabs .tab-btn').forEach(b=>b.classList.remove('active'));
-    document.querySelectorAll('#panelSettings .tab').forEach(t=>t.classList.remove('active'));
-    btn.classList.add('active');
-    const panel = document.querySelector('#panelSettings #' + btn.dataset.tab);
     if (panel) panel.classList.add('active');
   });
 });
@@ -9354,9 +9516,6 @@ rows += `<tr class="allowance">
   <section class="panel" id="panelSettings">
     <style>
       #panelSettings .card{background:#fff;border:1px solid #e5e7eb;border-radius:14px;padding:18px;box-shadow:0 4px 18px rgba(0,0,0,.06)}
-      #panelSettings .tabs{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px}
-      #panelSettings .tab{display:none}
-      #panelSettings .tab.active{display:block}
       #panelSettings .settings-grid{display:grid;gap:16px}
       #panelSettings .settings-section{border:1px solid #e5e7eb;border-radius:12px;padding:14px}
       #panelSettings .settings-section h4{margin:0 0 10px 0;font-size:15px;color:#0f172a}
@@ -9366,213 +9525,41 @@ rows += `<tr class="allowance">
       #panelSettings .hint{font-size:12px;color:#64748b;font-weight:400}
       #panelSettings .toggle{flex-direction:row;align-items:center;gap:8px;font-weight:600}
     </style>
-    <div class="tabs">
-      <button class="tab-btn active" data-tab="settingsMainTab">Settings</button>
-      <button class="tab-btn" data-tab="contributionsTab">Contributions</button>
-    </div>
-    <div class="tab active" id="settingsMainTab">
-      <div class="card">
-        <h3 style="margin:0 0 12px 0;">Payroll Settings</h3>
-        <div class="settings-grid">
-          <div class="settings-section">
-            <h4>Overtime</h4>
-            <div class="settings-row">
-              <label>
-                OT Multiplier
-                <input id="settingsOtMultiplier" type="number" step="0.01" min="0" inputmode="decimal">
-                <span class="hint">Used to compute overtime pay.</span>
-              </label>
-            </div>
-          </div>
-          <div class="settings-section">
-            <h4>Night Differential</h4>
-            <div class="settings-row">
-              <label class="toggle">
-                <input id="settingsNdEnabled" type="checkbox">
-                Enabled
-              </label>
-            </div>
-            <div class="settings-row">
-              <label>
-                Start
-                <input id="settingsNdStart" type="time">
-              </label>
-              <label>
-                End
-                <input id="settingsNdEnd" type="time">
-              </label>
-              <label>
-                Multiplier
-                <input id="settingsNdMultiplier" type="number" step="0.01" min="0" inputmode="decimal">
-              </label>
-            </div>
+    <div class="card">
+      <h3 style="margin:0 0 12px 0;">Payroll Settings</h3>
+      <div class="settings-grid">
+        <div class="settings-section">
+          <h4>Overtime</h4>
+          <div class="settings-row">
+            <label>
+              OT Multiplier
+              <input id="settingsOtMultiplier" type="number" step="0.01" min="0" inputmode="decimal">
+              <span class="hint">Used to compute overtime pay.</span>
+            </label>
           </div>
         </div>
-      </div>
-    </div>
-    <div class="tab" id="contributionsTab">
-      <div class="contrib-hero">
-        <div>
-          <h3>Government contributions at a glance</h3>
-          <p>Configure the tables below so PayrollPro can match each worker to the correct statutory contribution.</p>
-          <ul class="contrib-key-list">
-            <li>Ranges are matched against <strong>monthly income</strong> from payroll calculations.</li>
-            <li>Each edit saves automatically &mdash; no extra confirmation needed.</li>
-            <li>Use CSV import/export to align with government updates.</li>
-          </ul>
-        </div>
-        <div class="contrib-pill-stack">
-          <div class="contrib-pill">
-            <strong>SSS</strong>
-            <small>Employee and employer peso shares per income bracket.</small>
+        <div class="settings-section">
+          <h4>Night Differential</h4>
+          <div class="settings-row">
+            <label class="toggle">
+              <input id="settingsNdEnabled" type="checkbox">
+              Enabled
+            </label>
           </div>
-          <div class="contrib-pill">
-            <strong>Pag-IBIG</strong>
-            <small>Decimal employee rate applied to regular pay (employer assumed to match).</small>
+          <div class="settings-row">
+            <label>
+              Start
+              <input id="settingsNdStart" type="time">
+            </label>
+            <label>
+              End
+              <input id="settingsNdEnd" type="time">
+            </label>
+            <label>
+              Multiplier
+              <input id="settingsNdMultiplier" type="number" step="0.01" min="0" inputmode="decimal">
+            </label>
           </div>
-          <div class="contrib-pill">
-            <strong>PhilHealth</strong>
-            <small>Decimal employee rate per bracket; applied to monthly income.</small>
-          </div>
-        </div>
-      </div>
-
-      <div class="table-card">
-        <div class="table-card__header">
-          <div>
-            <p class="table-card__tag">SSS</p>
-            <h4 class="table-card__title">Monthly SSS shares</h4>
-            <p class="table-card__subtitle">Use the peso amounts that apply to each bracket. PayrollPro will pick the row where <em>min &le; income &le; max</em>.</p>
-          </div>
-          <div class="table-card__tags">
-            <span class="table-card__tag">Peso values</span>
-            <span class="table-card__tag">Auto-save</span>
-          </div>
-        </div>
-        <div class="controls">
-          <button id="addSssRow">
-            Add Row
-          </button>
-          <button class="primary" id="resetSss">
-            Reset to Defaults (Custom)
-          </button>
-          <button class="danger" id="clearSss">
-            Clear SSS Table
-          </button>
-          <button id="exportSss">
-            Export CSV
-          </button>
-          <label>
-            Import CSV (min,max,employeeShare,employerShare)
-            <br/>
-            <input accept=".csv,text/csv" id="importSss" type="file"/>
-          </label>
-        </div>
-        <table id="sssTable">
-          <thead>
-            <tr>
-              <th>
-                Range From (â‚±)
-              </th>
-              <th>
-                Range To (â‚±)
-              </th>
-              <th>
-                Employee Share (â‚±)
-              </th>
-              <th>
-                Employer Share (â‚±)
-              </th>
-              <th>
-                Actions
-              </th>
-            </tr>
-          </thead>
-          <tbody>
-          </tbody>
-        </table>
-        <div class="section note contrib-note">
-          <strong>How it is used:</strong> Monthly Income = Hourly Rate &times; 8 &times; 24. The matching bracket supplies the employee and employer shares.
-        </div>
-      </div>
-
-      <div class="table-card">
-        <div class="table-card__header">
-          <div>
-            <p class="table-card__tag">Pag-IBIG</p>
-            <h4 class="table-card__title">Pag-IBIG employee rates</h4>
-            <p class="table-card__subtitle">Enter rates as decimals (0.02 = 2%). Applied to regular pay; employer share is assumed to mirror the employee rate.</p>
-          </div>
-          <div class="table-card__tags">
-            <span class="table-card__tag">Rate table</span>
-            <span class="table-card__tag">Bracketed</span>
-          </div>
-        </div>
-        <div class="controls">
-          <button id="addPagibigRow">
-            Add Row
-          </button>
-          <button class="primary" id="resetPagibig">
-            Reset to Defaults
-          </button>
-          <button class="danger" id="clearPagibig">
-            Clear Pag-IBIG Table
-          </button>
-        </div>
-        <table id="pagibigTable">
-          <thead>
-            <tr>
-              <th>Range From (â‚±)</th>
-              <th>Range To (â‚±)</th>
-              <th>Rate (decimal)</th>
-              <th>Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-          </tbody>
-        </table>
-        <div class="section note contrib-note">
-          Keep ranges continuous so every salary finds a matching rate. Export before major edits so you can restore if needed.
-        </div>
-      </div>
-
-      <div class="table-card">
-        <div class="table-card__header">
-          <div>
-            <p class="table-card__tag">PhilHealth</p>
-            <h4 class="table-card__title">PhilHealth employee rates</h4>
-            <p class="table-card__subtitle">Provide decimal rates per income band. The rate is applied to monthly income to compute the employee share.</p>
-          </div>
-          <div class="table-card__tags">
-            <span class="table-card__tag">Rate table</span>
-            <span class="table-card__tag">Bracketed</span>
-          </div>
-        </div>
-        <div class="controls">
-          <button id="addPhilRow">
-            Add Row
-          </button>
-          <button class="primary" id="resetPhil">
-            Reset to Defaults
-          </button>
-          <button class="danger" id="clearPhil">
-            Clear PhilHealth Table
-          </button>
-        </div>
-        <table id="philhealthTable">
-          <thead>
-            <tr>
-              <th>Range From (â‚±)</th>
-              <th>Range To (â‚±)</th>
-              <th>Rate (decimal)</th>
-              <th>Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-          </tbody>
-        </table>
-        <div class="section note contrib-note">
-          Rates use decimal format (e.g. 0.025 = 2.5% employee share). Ensure the final row captures high earners.
         </div>
       </div>
     </div>
@@ -13059,10 +13046,6 @@ function restoreData(file) {
   const settingsBtn = tabs && tabs.tabSettings;
   if (settingsBtn && !settingsBtn.__wired){
     settingsBtn.addEventListener('click', function(){
-      try {
-        const defaultBtn = document.querySelector('#panelSettings .tabs .tab-btn[data-tab="settingsMainTab"]');
-        if (defaultBtn) defaultBtn.click();
-      } catch (e) {}
       showTab('settings');
     });
     settingsBtn.__wired = true;
@@ -13071,10 +13054,6 @@ function restoreData(file) {
   const settingsSidebar = document.getElementById('old-tabSettings');
   if (settingsSidebar && !settingsSidebar.__wired){
     settingsSidebar.addEventListener('click', function(){
-      try {
-        const defaultBtn = document.querySelector('#panelSettings .tabs .tab-btn[data-tab="settingsMainTab"]');
-        if (defaultBtn) defaultBtn.click();
-      } catch (e) {}
       showTab('settings');
     });
     settingsSidebar.__wired = true;
