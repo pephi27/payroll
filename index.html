@@ -2813,15 +2813,15 @@ window.addEventListener('load', dashReports);
       </label>
       <div class="column-toggle-controls" id="deductionColumnToggles">
        <span>Include in deductions:</span>
-       <label><input type="checkbox" data-col="pagibig" checked/> Pag-IBIG</label>
-       <label><input type="checkbox" data-col="philhealth" checked/> PhilHealth</label>
-       <label><input type="checkbox" data-col="sss" checked/> SSS</label>
-       <label><input type="checkbox" data-col="loanSSS" checked/> SSS Loan</label>
-       <label><input type="checkbox" data-col="loanPI" checked/> Pag-IBIG Loan</label>
-       <label><input type="checkbox" data-col="vale" checked/> Account</label>
-       <label><input type="checkbox" data-col="adjustments" checked/> Adjustments</label>
-       <label><input type="checkbox" data-col="valeWed" checked/> Wed Vale</label>
-       <label><input type="checkbox" data-col="total" checked/> Total Deductions</label>
+      <label><input type="checkbox" name="deductions_include_pagibig" data-col="pagibig" checked/> Pag-IBIG</label>
+      <label><input type="checkbox" name="deductions_include_philhealth" data-col="philhealth" checked/> PhilHealth</label>
+      <label><input type="checkbox" name="deductions_include_sss" data-col="sss" checked/> SSS</label>
+      <label><input type="checkbox" name="deductions_include_loan_sss" data-col="loanSSS" checked/> SSS Loan</label>
+      <label><input type="checkbox" name="deductions_include_loan_pagibig" data-col="loanPI" checked/> Pag-IBIG Loan</label>
+      <label><input type="checkbox" name="deductions_include_vale" data-col="vale" checked/> Account</label>
+      <label><input type="checkbox" name="deductions_include_adjustments" data-col="adjustments" checked/> Adjustments</label>
+      <label><input type="checkbox" name="deductions_include_vale_wed" data-col="valeWed" checked/> Wed Vale</label>
+      <label><input type="checkbox" name="deductions_include_total" data-col="total" checked/> Total Deductions</label>
       </div>
      </div>
      <div class="section note">
@@ -4233,21 +4233,21 @@ function renderTable(){
         <td>${emp.id}</td>
         <td class="wrap">${emp.name}</td>
         
-        <td><input class="cell rate" title="Non-editable in Payroll" type="number" step="0.01" value="${rate}" disabled></td>
-        <td><input class="cell regHrs" title="Non-editable in Payroll" type="number" step="0.01" value="${rH}" disabled></td>
-        <td><input class="cell otHrs" title="Non-editable in Payroll" type="number" step="0.01" value="${oH}" disabled></td>
+        <td><input class="cell rate" name="payroll_rate_${emp.id}" title="Non-editable in Payroll" type="number" step="0.01" value="${rate}" disabled></td>
+        <td><input class="cell regHrs" name="payroll_reg_hours_${emp.id}" title="Non-editable in Payroll" type="number" step="0.01" value="${rH}" disabled></td>
+        <td><input class="cell otHrs" name="payroll_ot_hours_${emp.id}" title="Non-editable in Payroll" type="number" step="0.01" value="${oH}" disabled></td>
         <td class="adjHrs num">${aH ? aH.toFixed(2) : '0.00'}</td><td class="totalHrs num">0.00</td><td class="regPay num">0.00</td>
         <td class="otPay num">0.00</td>
         <td class="adjAmt num">0.00</td>
-        <td><input class="cell bantay" type="number" step="0.01" value="${bVal}"></td>
+        <td><input class="cell bantay" name="payroll_bantay_${emp.id}" type="number" step="0.01" value="${bVal}"></td>
         <td class="grossPay num">0.00</td>
         <td class="pagibig num">0.00</td>
         <td class="philhealth num">0.00</td>
         <td class="sss num">0.00</td>
-        <td><input class="cell loanSSS" type="number" step="0.01" value="${lSSS}"></td>
-        <td><input class="cell loanPI" type="number" step="0.01" value="${lPI}"></td>
-        <td><input class="cell vale" type="number" step="0.01" value="${v}"></td>
-        <td><input class="cell valeWed" type="number" step="0.01" value="${vW}"></td>
+        <td><input class="cell loanSSS" name="payroll_loan_sss_${emp.id}" type="number" step="0.01" value="${lSSS}"></td>
+        <td><input class="cell loanPI" name="payroll_loan_pagibig_${emp.id}" type="number" step="0.01" value="${lPI}"></td>
+        <td><input class="cell vale" name="payroll_vale_${emp.id}" type="number" step="0.01" value="${v}"></td>
+        <td><input class="cell valeWed" name="payroll_vale_wed_${emp.id}" type="number" step="0.01" value="${vW}"></td>
         <td class="totalDed num">0.00</td>
         <td class="netPay num">0.00</td>
         <td><button type="button" class="payslipBtn">Payslip</button></td>`;
@@ -4298,6 +4298,8 @@ function chooseBantayProject(empId, anchorEl){
 
     // Build <select> with project options (compact)
     const sel = document.createElement('select');
+    sel.id = 'bantayProjectSelect';
+    sel.name = 'bantay_project_select';
     sel.style.minWidth = '160px';
     sel.style.padding = '4px';
     sel.style.border = '1px solid #d1d5db';
@@ -4444,10 +4446,10 @@ function renderSssTable(){
   rows.forEach((r, i)=>{
     const tr = document.createElement('tr');
     tr.innerHTML = `
-      <td><input type="number" step="0.01" class="cell sssMin" value="${r.min}"></td>
-      <td><input type="number" step="0.01" class="cell sssMax" value="${r.max}"></td>
-      <td><input type="number" step="0.01" class="cell sssEmp" value="${r.employee}"></td>
-      <td><input type="number" step="0.01" class="cell sssEr" value="${r.employer}"></td>
+      <td><input type="number" step="0.01" class="cell sssMin" name="sss_min_${i}" value="${r.min}"></td>
+      <td><input type="number" step="0.01" class="cell sssMax" name="sss_max_${i}" value="${r.max}"></td>
+      <td><input type="number" step="0.01" class="cell sssEmp" name="sss_employee_${i}" value="${r.employee}"></td>
+      <td><input type="number" step="0.01" class="cell sssEr" name="sss_employer_${i}" value="${r.employer}"></td>
       <td><button class="delRow">Delete</button></td>`;
     tbodyS.appendChild(tr);
     const minI = tr.querySelector('.sssMin');
@@ -4554,9 +4556,9 @@ function renderPagibigTable(){
   rows.forEach((r, idx) => {
     const tr = document.createElement('tr');
     tr.innerHTML = `
-      <td><input type="number" step="0.01" class="cell pagibigMin" value="${r.min}"></td>
-      <td><input type="number" step="0.01" class="cell pagibigMax" value="${r.max}"></td>
-      <td><input type="number" step="0.0001" class="cell pagibigRate" value="${r.rate}"></td>
+      <td><input type="number" step="0.01" class="cell pagibigMin" name="pagibig_min_${idx}" value="${r.min}"></td>
+      <td><input type="number" step="0.01" class="cell pagibigMax" name="pagibig_max_${idx}" value="${r.max}"></td>
+      <td><input type="number" step="0.0001" class="cell pagibigRate" name="pagibig_rate_${idx}" value="${r.rate}"></td>
       <td><button class="delPagibigRow">Delete</button></td>`;
     tbodyP.appendChild(tr);
     const minI = tr.querySelector('.pagibigMin');
@@ -4605,9 +4607,9 @@ function renderPhilhealthTable(){
   rows.forEach((r, idx) => {
     const tr = document.createElement('tr');
     tr.innerHTML = `
-      <td><input type="number" step="0.01" class="cell philMin" value="${r.min}"></td>
-      <td><input type="number" step="0.01" class="cell philMax" value="${r.max}"></td>
-      <td><input type="number" step="0.0001" class="cell philRate" value="${r.rate}"></td>
+      <td><input type="number" step="0.01" class="cell philMin" name="philhealth_min_${idx}" value="${r.min}"></td>
+      <td><input type="number" step="0.01" class="cell philMax" name="philhealth_max_${idx}" value="${r.max}"></td>
+      <td><input type="number" step="0.0001" class="cell philRate" name="philhealth_rate_${idx}" value="${r.rate}"></td>
       <td><button class="delPhilRow">Delete</button></td>`;
     tbodyPh.appendChild(tr);
     const minI = tr.querySelector('.philMin');
@@ -15128,8 +15130,8 @@ document.addEventListener('DOMContentLoaded', async function () {
         if(btn.textContent === 'Edit'){
           const regVal = regCell ? (parseFloat(regCell.textContent) || 0) : 0;
           const otVal  = otCell  ? (parseFloat(otCell.textContent)  || 0) : 0;
-          if (regCell) regCell.innerHTML = '<input type="number" step="0.01" class="edit-reg" value="'+regVal+'">';
-          if (otCell)  otCell .innerHTML = '<input type="number" step="0.01" class="edit-ot"  value="'+otVal+'">';
+          if (regCell) regCell.innerHTML = '<input type="number" step="0.01" class="edit-reg" name="dtr_edit_reg" value="'+regVal+'">';
+          if (otCell)  otCell .innerHTML = '<input type="number" step="0.01" class="edit-ot"  name="dtr_edit_ot" value="'+otVal+'">';
           try {
             if (regCell) tr.dataset.origReg = String(regVal.toFixed(2));
             if (otCell)  tr.dataset.origOt  = String(otVal.toFixed(2));
