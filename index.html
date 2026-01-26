@@ -6238,7 +6238,9 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!activeTableBody) return;
     activeTableBody.innerHTML = '';
     payrollHistory.forEach((snap, index) => {
-      if (snap.locked) return;
+      const lockEntry = getLockEntry(snap.startDate, snap.endDate);
+      const isLocked = !!(snap.locked || (lockEntry && lockEntry.locked));
+      if (isLocked) return;
       const tr = document.createElement('tr');
       const startText = formatDisplayDate(snap.startDate);
       const endText = formatDisplayDate(snap.endDate);
@@ -6304,6 +6306,7 @@ document.addEventListener('DOMContentLoaded', () => {
       const startText = formatDisplayDate(snap.startDate);
       const endText = formatDisplayDate(snap.endDate);
       const lockEntry = getLockEntry(snap.startDate, snap.endDate);
+      const isLocked = !!(snap.locked || (lockEntry && lockEntry.locked));
       const netSource = (lockEntry && lockEntry.totals && lockEntry.totals.netPay) || (snap.totals && snap.totals.netPay) || '';
       const netText = (() => {
         if (!netSource && netSource !== 0) return '';
@@ -6316,7 +6319,7 @@ document.addEventListener('DOMContentLoaded', () => {
       // Build row HTML; note small hash display for brevity
       // Build the actions column depending on lock status.
       const actions = [];
-      if (snap.locked) {
+      if (isLocked) {
         // For locked snapshots, show a disabled delete button to indicate it cannot be removed
         actions.push(`<button type="button" class="deleteSnapshot" data-index="${index}" disabled>Delete</button>`);
       } else {
@@ -7065,7 +7068,9 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     if (actionBtn.classList.contains('deleteSnapshot')) {
       // Delete a snapshot from history if it is not locked
-      if (snap.locked) return; // Skip deletion for locked snapshots
+      const lockEntry = getLockEntry(snap.startDate, snap.endDate);
+      const isLocked = !!(snap.locked || (lockEntry && lockEntry.locked));
+      if (isLocked) return; // Skip deletion for locked snapshots
       const confirmDel = confirm('Are you sure you want to delete this payroll record? This cannot be undone.');
       if (!confirmDel) return;
       payrollHistory.splice(idx, 1);
