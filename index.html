@@ -5903,8 +5903,71 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!snapshot || !Array.isArray(snapshot.rows)) return false;
     const table = document.getElementById('payrollTable');
     if (!table) return false;
-    const bodyRows = table.querySelectorAll('tbody tr');
-    if (!bodyRows || !bodyRows.length) return false;
+    const tbody = table.querySelector('tbody');
+    if (!tbody) return false;
+    const bodyRows = Array.from(tbody.querySelectorAll('tr'));
+    const existingIds = new Set();
+    bodyRows.forEach(tr => {
+      const idCell = tr.cells && tr.cells[0];
+      const empId = idCell ? (idCell.textContent || '').trim() : '';
+      if (empId) existingIds.add(empId);
+    });
+    const formatInputValue = (value, decimals = 2) => {
+      const num = Number(value);
+      if (!Number.isFinite(num)) return value == null ? '' : String(value);
+      if (decimals == null) return String(num);
+      return num.toFixed(decimals);
+    };
+    const buildSnapshotRow = (row) => {
+      const empId = row && row.id != null ? String(row.id).trim() : '';
+      const name = row && row.name != null ? String(row.name) : '';
+      const rate = formatInputValue(row?.rate, 2);
+      const regHrs = formatInputValue(row?.regHrs, 2);
+      const otHrs = formatInputValue(row?.otHrs, 2);
+      const bantayVal = formatInputValue(row?.bantay, 2);
+      const loanSSSVal = formatInputValue(row?.loanSSS, 2);
+      const loanPIVal = formatInputValue(row?.loanPI, 2);
+      const valeVal = formatInputValue(row?.vale, 2);
+      const valeWedVal = formatInputValue(row?.valeWed, 2);
+      const tr = document.createElement('tr');
+      tr.dataset.snapshotRow = 'true';
+      tr.innerHTML = `
+        <td>${empId}</td>
+        <td class="wrap">${name}</td>
+        <td><input class="cell rate" name="payroll_rate_${empId}" type="number" step="0.01" value="${rate}" disabled></td>
+        <td><input class="cell regHrs" name="payroll_reg_hours_${empId}" type="number" step="0.01" value="${regHrs}" disabled></td>
+        <td><input class="cell otHrs" name="payroll_ot_hours_${empId}" type="number" step="0.01" value="${otHrs}" disabled></td>
+        <td class="adjHrs num">0.00</td>
+        <td class="totalHrs num">0.00</td>
+        <td class="regPay num">0.00</td>
+        <td class="otPay num">0.00</td>
+        <td class="adjAmt num">0.00</td>
+        <td><input class="cell bantay" name="payroll_bantay_${empId}" type="number" step="0.01" value="${bantayVal}"></td>
+        <td class="grossPay num">0.00</td>
+        <td class="pagibig num">0.00</td>
+        <td class="philhealth num">0.00</td>
+        <td class="sss num">0.00</td>
+        <td><input class="cell loanSSS" name="payroll_loan_sss_${empId}" type="number" step="0.01" value="${loanSSSVal}"></td>
+        <td><input class="cell loanPI" name="payroll_loan_pagibig_${empId}" type="number" step="0.01" value="${loanPIVal}"></td>
+        <td><input class="cell vale" name="payroll_vale_${empId}" type="number" step="0.01" value="${valeVal}"></td>
+        <td><input class="cell valeWed" name="payroll_vale_wed_${empId}" type="number" step="0.01" value="${valeWedVal}"></td>
+        <td class="totalDed num">0.00</td>
+        <td class="netPay num">0.00</td>
+        <td><button type="button" class="payslipBtn">Payslip</button></td>`;
+      return tr;
+    };
+    snapshot.rows.forEach(row => {
+      if (!row) return;
+      const key = row.id != null ? String(row.id).trim() : '';
+      if (!key || existingIds.has(key)) return;
+      const newRow = buildSnapshotRow(row);
+      if (newRow) {
+        tbody.appendChild(newRow);
+        existingIds.add(key);
+      }
+    });
+    const updatedRows = table.querySelectorAll('tbody tr');
+    if (!updatedRows || !updatedRows.length) return false;
     const byId = new Map();
     snapshot.rows.forEach(row => {
       if (!row) return;
@@ -5912,7 +5975,7 @@ document.addEventListener('DOMContentLoaded', () => {
       if (key) byId.set(key, row);
     });
 
-    bodyRows.forEach(tr => {
+    updatedRows.forEach(tr => {
       const idCell = tr.cells && tr.cells[0];
       if (!idCell) return;
       const empId = (idCell.textContent || '').trim();
@@ -6110,6 +6173,17 @@ document.addEventListener('DOMContentLoaded', () => {
       enablePayrollInputs();
       updateLockStatusDisplay(null);
       clearSnapshotOverride();
+      const table = document.getElementById('payrollTable');
+      if (table) {
+        const snapshotRows = table.querySelectorAll('tbody tr[data-snapshot-row="true"]');
+        if (snapshotRows.length) {
+          snapshotRows.forEach(row => row.remove());
+          try {
+            if (typeof scheduleTotals === 'function') scheduleTotals();
+            else if (typeof updatePayrollGrandTotals === 'function') updatePayrollGrandTotals();
+          } catch (err) {}
+        }
+      }
       if (dashLockButton) dashLockButton.disabled = false;
       if (dashUnlockButton) dashUnlockButton.disabled = true;
     }
