@@ -151,6 +151,8 @@ const KNOWN_KEYS = [
   ,"payroll_pagibig_table"
   ,"payroll_philhealth_table"
   ,"payroll_adjustment_hours"
+  ,"payroll_additional_income_details"
+  ,"payroll_additional_income_total"
   ,"payroll_bantay"
   ,"payroll_bantay_proj"
   ,"payroll_contrib_flags"
@@ -185,6 +187,9 @@ function queueHydrateRerender() {
     try {
       if (typeof renderAdjustmentsTable === 'function') renderAdjustmentsTable();
       else if (typeof renderAdjustmentsFoot === 'function') renderAdjustmentsFoot();
+    } catch {}
+    try {
+      if (typeof renderAdditionalIncomeTable === 'function') renderAdditionalIncomeTable();
     } catch {}
     try { if (typeof window.calculateAll === 'function') window.calculateAll(); } catch {}
     try { if (typeof window.renderResults === 'function') window.renderResults(); } catch {}
@@ -379,8 +384,8 @@ function safeStringify(v){
     opacity: 0.6;
   }
 
-/* === PATCH: Adjustments & Bantay column widths === */
-#payrollTable th:nth-child(10), #payrollTable td:nth-child(10) { width: 100px; min-width: 100px; } /* Adjustments */
+/* === PATCH: Additional Income & Bantay column widths === */
+#payrollTable th:nth-child(10), #payrollTable td:nth-child(10) { width: 100px; min-width: 100px; } /* Additional Income */
 #payrollTable th:nth-child(11), #payrollTable td:nth-child(11) { width: 100px; min-width: 100px; } /* Bantay */
 /* === END PATCH === */
 
@@ -550,7 +555,7 @@ function safePrint(win){
       vale: readCell(row, '.vale', 'value'),
       valeWed: readCell(row, '.valeWed', 'value') || readCell(row, '.valeWed'),
       bantay: readCell(row, '.bantay', 'value'),
-      adjustments: readCell(row, '.adjAmt'),
+      additionalIncomeTotal: readCell(row, '.adjAmt'),
       totalDeductions: readCell(row, '.totalDed'),
       net: readCell(row, '.netPay')
     };
@@ -599,9 +604,13 @@ function safePrint(win){
     data.adjustmentRaw = adjRawDataset;
     data.adjustmentPositive = adjPosDataset;
     data.adjustmentDeductions = adjDedDataset;
-    if (!data.adjustments || toNum(data.adjustments) === 0){
-      data.adjustments = adjPosDataset > 0 ? adjPosDataset.toFixed(2) : data.adjustments;
-    }
+    const additionalFromDataset = row && row.dataset ? toNum(row.dataset.additionalIncomeTotal) : 0;
+    data.additionalIncomeTotal = additionalFromDataset > 0
+      ? additionalFromDataset.toFixed(2)
+      : (data.additionalIncomeTotal || '');
+    data.additionalIncomeDetails = (typeof getAdditionalIncomeDetailsForEmployee === 'function' && data.id)
+      ? getAdditionalIncomeDetailsForEmployee(data.id)
+      : [];
     if (!data.totalHours){
       var r = toNum(data.regHours);
       var o = toNum(data.otHours);
@@ -634,7 +643,25 @@ function safePrint(win){
     addDed('Wed Vale', data.valeWed);
     addDed('Adjustments', data.adjustmentDeductions);
     var bantayRow = toNum(data.bantay) !== 0 ? `<tr><td>Bantay</td><td>${fmt(data.bantay)}</td></tr>` : '';
-    var adjRow = toNum(data.adjustmentPositive) !== 0 ? `<tr><td>Adjustments</td><td>${fmt(data.adjustmentPositive)}</td></tr>` : '';
+    var additionalIncomeItems = Array.isArray(data.additionalIncomeDetails) ? data.additionalIncomeDetails : [];
+    var additionalIncomeTotal = toNum(data.additionalIncomeTotal);
+    if (!(additionalIncomeTotal > 0)) {
+      additionalIncomeTotal = additionalIncomeItems.reduce(function(sum, item){
+        return sum + toNum(item && item.amount);
+      }, 0);
+    }
+    var additionalIncomeRows = '';
+    if (additionalIncomeItems.length || additionalIncomeTotal > 0) {
+      additionalIncomeRows += `<tr><th colspan="2">Additional Income</th></tr>`;
+      additionalIncomeItems.forEach(function(item){
+        var label = sanitizeAdditionalIncomeLabel(item && item.label);
+        var amount = toNum(item && item.amount);
+        if (amount > 0) {
+          additionalIncomeRows += `<tr><td>${label}</td><td>${fmt(amount)}</td></tr>`;
+        }
+      });
+      additionalIncomeRows += `<tr><td><strong>Additional Income Subtotal</strong></td><td>${fmt(additionalIncomeTotal)}</td></tr>`;
+    }
     var totalRow = toNum(data.totalDeductions) > 0 ? `<tr><td>Total Deductions</td><td>${fmt(data.totalDeductions)}</td></tr>` : '';
     var rateRaw = (data.rate != null ? String(data.rate).trim() : '');
     var rateDisplay = rateRaw ? fmt(data.rate) : '-';
@@ -648,7 +675,7 @@ function safePrint(win){
         <tr><td>Total Hours</td><td>${dash(data.totalHours)}</td></tr>
         <tr><td>Hourly Rate</td><td>${rateDisplay}</td></tr>
         ${bantayRow}
-        ${adjRow}
+        ${additionalIncomeRows}
         <tr><td>Gross Amount</td><td>${dash(data.gross)}</td></tr>
         ${dedRows}
         ${totalRow}
@@ -2472,6 +2499,9 @@ window.addEventListener('load', dashReports);
       <button class="tab-btn" data-tab="deductionsTab">
        Deductions
       </button>
+      <button class="tab-btn" data-tab="additionalIncomeTab">
+       Additional Income
+      </button>
       <!-- New sub-tab for manual adjustments -->
       <button class="tab-btn" data-tab="adjustmentsTab">Adjustments</button>
      </div>
@@ -2549,7 +2579,7 @@ window.addEventListener('load', dashReports);
          OT Pay
         </th>
         <th>
-         Adjustments
+         Additional Income
         </th>
         <th>
          Bantay
@@ -2866,10 +2896,27 @@ window.addEventListener('load', dashReports);
      </div><!-- close dedMainSection -->
     </div>
 
+    <div class="tab" id="additionalIncomeTab">
+     <div class="section note">
+      Track extra pay items per employee (e.g., Allowance, Bantay, Incentive). Amounts are added to gross pay and cannot be negative.
+     </div>
+     <table id="additionalIncomeTable">
+      <thead>
+       <tr>
+        <th>Employee</th>
+        <th>Description</th>
+        <th>Amount</th>
+        <th>Actions</th>
+       </tr>
+      </thead>
+      <tbody></tbody>
+     </table>
+    </div>
+
     <!-- Manual Adjustments Tab -->
     <div class="tab" id="adjustmentsTab">
      <div class="section note">
-      Enter positive adjustments to add to payroll. Enter negative amounts to create deductions&mdash;they will appear automatically in the Deductions tab and will not reduce the gross pay calculation. Adjustments are saved automatically to this browser; use the copy/restore buttons to move them to another device.
+      Enter adjustment deductions here (use negative values). Additional Income entries should be added in the Additional Income tab.
      </div>
      <div class="toolbar" id="adjustmentsControls">
       <div class="toolbar-left">
@@ -2916,6 +2963,9 @@ const LS_PAGIBIG_TABLE='payroll_pagibig_table';
 const LS_PHILHEALTH_TABLE='payroll_philhealth_table';
 // LocalStorage key for per-employee Bantay allowance
 const LS_BANTAY='payroll_bantay';
+// LocalStorage keys for per-employee additional income details and totals
+const LS_ADDITIONAL_INCOME_DETAILS='payroll_additional_income_details';
+const LS_ADDITIONAL_INCOME_TOTAL='payroll_additional_income_total';
 // Supabase-only key for per-employee Bantayâ†’Project assignment map
 const LS_BANTAY_PROJ='payroll_bantay_proj';
 let bantayProj = {};
@@ -3442,6 +3492,10 @@ let allAdjHrs = JSON.parse(localStorage.getItem(LS_ADJ_HRS) || '{}');
 let adjHrs = allAdjHrs[currentPeriodKey] || {};
 let allBantay = JSON.parse(localStorage.getItem(LS_BANTAY) || '{}');
 let bantay = allBantay[currentPeriodKey] || {};
+let allAdditionalIncomeDetails = loadPeriodScopedMap(LS_ADDITIONAL_INCOME_DETAILS);
+let allAdditionalIncomeTotals = loadPeriodScopedMap(LS_ADDITIONAL_INCOME_TOTAL);
+let additionalIncomeDetails = ensurePeriodData(allAdditionalIncomeDetails, currentPeriodKey);
+let additionalIncomeTotal = ensurePeriodData(allAdditionalIncomeTotals, currentPeriodKey);
 
 function persistCurrentAdjustments(){
   if (!isPlainObject(allAdjustments)) allAdjustments = {};
@@ -3460,6 +3514,22 @@ function persistCurrentAdjustmentHours(){
   persistPeriodScopedMap(LS_ADJ_HRS, allAdjHrs);
 }
 
+function persistCurrentAdditionalIncome(){
+  if (!isPlainObject(allAdditionalIncomeDetails)) allAdditionalIncomeDetails = {};
+  if (!isPlainObject(allAdditionalIncomeTotals)) allAdditionalIncomeTotals = {};
+  if (!isPlainObject(additionalIncomeDetails)) additionalIncomeDetails = {};
+  if (!isPlainObject(additionalIncomeTotal)) additionalIncomeTotal = {};
+  allAdditionalIncomeDetails[currentPeriodKey] = additionalIncomeDetails;
+  allAdditionalIncomeTotals[currentPeriodKey] = additionalIncomeTotal;
+  updatePeriodLatest(allAdditionalIncomeDetails, currentPeriodKey, additionalIncomeDetails);
+  updatePeriodLatest(allAdditionalIncomeTotals, currentPeriodKey, additionalIncomeTotal);
+  const tasks = [
+    persistPeriodScopedMap(LS_ADDITIONAL_INCOME_DETAILS, allAdditionalIncomeDetails),
+    persistPeriodScopedMap(LS_ADDITIONAL_INCOME_TOTAL, allAdditionalIncomeTotals)
+  ];
+  return Promise.all(tasks).catch(err => { console.warn('Additional income persist failed', err); });
+}
+
 function refreshPeriodScopedCachesFromStorage(){
   allLoanSSS = loadPeriodScopedMap(LS_LOAN_SSS);
   allLoanPI = loadPeriodScopedMap(LS_LOAN_PI);
@@ -3475,6 +3545,12 @@ function refreshPeriodScopedCachesFromStorage(){
   adjHrs = allAdjHrs[currentPeriodKey] || {};
   allBantay = JSON.parse(localStorage.getItem(LS_BANTAY) || '{}');
   bantay = allBantay[currentPeriodKey] || {};
+  allAdditionalIncomeDetails = loadPeriodScopedMap(LS_ADDITIONAL_INCOME_DETAILS);
+  allAdditionalIncomeTotals = loadPeriodScopedMap(LS_ADDITIONAL_INCOME_TOTAL);
+  additionalIncomeDetails = ensurePeriodData(allAdditionalIncomeDetails, currentPeriodKey);
+  additionalIncomeTotal = ensurePeriodData(allAdditionalIncomeTotals, currentPeriodKey);
+  ensureAdditionalIncomeDetailsMap();
+  rebuildAdditionalIncomeTotals();
   try {
     window.loanSSS = loanSSS;
     window.loanPI = loanPI;
@@ -3491,6 +3567,9 @@ try {
       refreshPeriodScopedCachesFromStorage();
       try {
         if (typeof renderAdjustmentsTable === 'function') renderAdjustmentsTable();
+      } catch (_) {}
+      try {
+        if (typeof renderAdditionalIncomeTable === 'function') renderAdditionalIncomeTable();
       } catch (_) {}
     });
   }
@@ -3529,6 +3608,7 @@ function syncPeriodScopedData(){
   if (pk === currentPeriodKey) return false;
   const prevKey = currentPeriodKey;
   saveCurrentPeriodDeductions();
+  try { persistCurrentAdditionalIncome(); } catch (_) {}
   const direction = comparePeriodKeys(pk, prevKey);
   const carryForward = direction >= 0;
   const tplSSS = carryForward ? findCarryTemplate(allLoanSSS, pk, prevKey) : null;
@@ -3543,10 +3623,15 @@ function syncPeriodScopedData(){
   try { window.adjustments = adjustments; } catch(_){ }
   adjHrs = allAdjHrs[pk] || {};
   bantay = allBantay[pk] || {};
+  additionalIncomeDetails = ensurePeriodData(allAdditionalIncomeDetails, pk, null, { allowDefault: false });
+  additionalIncomeTotal = ensurePeriodData(allAdditionalIncomeTotals, pk, null, { allowDefault: false });
+  ensureAdditionalIncomeDetailsMap();
+  rebuildAdditionalIncomeTotals();
   currentPeriodKey = pk;
   try { refreshCurrentDeductionColumnInclusions(); } catch(_){ }
   try { applyDeductionColumnState(); } catch(_){ }
   saveCurrentPeriodDeductions();
+  try { if (typeof renderAdditionalIncomeTable === 'function') renderAdditionalIncomeTable(); } catch (_) {}
   return true;
 }
 ;(async function(){
@@ -3646,6 +3731,79 @@ function splitAdjustmentValue(value){
   const positive = rounded > 0 ? +rounded.toFixed(2) : 0;
   const deduction = rounded < 0 ? +(-rounded).toFixed(2) : 0;
   return { raw: rounded, positive, deduction };
+}
+
+const DEFAULT_ADDITIONAL_INCOME_LABEL = 'Additional Income';
+
+function sanitizeAdditionalIncomeLabel(value){
+  const label = String(value || '').trim();
+  return label ? label : DEFAULT_ADDITIONAL_INCOME_LABEL;
+}
+
+function sanitizeAdditionalIncomeAmount(value){
+  const num = Number(value);
+  if (!Number.isFinite(num)) return 0;
+  return roundToCents(Math.max(0, num));
+}
+
+function normalizeAdditionalIncomeItems(items){
+  if (!Array.isArray(items)) return [];
+  return items.map(item => ({
+    label: sanitizeAdditionalIncomeLabel(item && item.label),
+    amount: sanitizeAdditionalIncomeAmount(item && item.amount)
+  }));
+}
+
+function computeAdditionalIncomeTotal(items){
+  if (!Array.isArray(items)) return 0;
+  const total = items.reduce((sum, item) => sum + sanitizeAdditionalIncomeAmount(item && item.amount), 0);
+  return roundToCents(total);
+}
+
+function ensureAdditionalIncomeDetailsMap(){
+  if (!isPlainObject(additionalIncomeDetails)) additionalIncomeDetails = {};
+  Object.keys(additionalIncomeDetails).forEach(empId => {
+    const normalized = normalizeAdditionalIncomeItems(additionalIncomeDetails[empId]);
+    if (normalized.length) {
+      additionalIncomeDetails[empId] = normalized;
+    } else {
+      delete additionalIncomeDetails[empId];
+    }
+  });
+}
+
+function rebuildAdditionalIncomeTotals(){
+  if (!isPlainObject(additionalIncomeTotal)) additionalIncomeTotal = {};
+  additionalIncomeTotal = {};
+  Object.keys(additionalIncomeDetails || {}).forEach(empId => {
+    const total = computeAdditionalIncomeTotal(additionalIncomeDetails[empId]);
+    if (total || (additionalIncomeDetails[empId] && additionalIncomeDetails[empId].length)) {
+      additionalIncomeTotal[empId] = total;
+    }
+  });
+}
+
+function getAdditionalIncomeTotal(empId){
+  if (additionalIncomeTotal && Object.prototype.hasOwnProperty.call(additionalIncomeTotal, empId)) {
+    return Number(additionalIncomeTotal[empId]) || 0;
+  }
+  const total = computeAdditionalIncomeTotal(additionalIncomeDetails ? additionalIncomeDetails[empId] : []);
+  if (total) {
+    if (!additionalIncomeTotal || typeof additionalIncomeTotal !== 'object') additionalIncomeTotal = {};
+    additionalIncomeTotal[empId] = total;
+  }
+  return total;
+}
+
+function updateAdditionalIncomeTotalForEmployee(empId){
+  const total = computeAdditionalIncomeTotal(additionalIncomeDetails ? additionalIncomeDetails[empId] : []);
+  if (!additionalIncomeTotal || typeof additionalIncomeTotal !== 'object') additionalIncomeTotal = {};
+  if (total || (additionalIncomeDetails && additionalIncomeDetails[empId] && additionalIncomeDetails[empId].length)) {
+    additionalIncomeTotal[empId] = total;
+  } else {
+    delete additionalIncomeTotal[empId];
+  }
+  return total;
 }
 
 const DEDUCTION_COLUMN_KEYS = ['pagibig','philhealth','sss','loanSSS','loanPI','vale','adjustments','valeWed','total'];
@@ -4761,15 +4919,15 @@ function calculateRow(tr){  const readNum = sel => { const el = tr.querySelector
   // Adjustment amount for this employee (may be positive or negative)
   const adjParts = splitAdjustmentValue(adjustments[id]);
   const adjRaw = adjParts.raw;
-  const adjPositive = adjParts.positive;
   const adjDeduction = adjParts.deduction;
+  const additionalIncome = getAdditionalIncomeTotal(id);
   // Bantay allowance (treated as positive allowance).  Parse numeric value from bantay input.
   const bVal = parseFloat((tr.querySelector('.bantay')?.value || '').trim()) || 0;
 
   const regPay = +(reg * rate).toFixed(2);
   tr.querySelector('.totalHrs').textContent = totalHrs.toFixed(2);
   const otPay = +(otTotal * rate * getOvertimeMultiplier()).toFixed(2);
-  const gross = +(regPay + otPay + adjPositive + bVal).toFixed(2);
+  const gross = +(regPay + otPay + additionalIncome + bVal).toFixed(2);
   // Compute contributions using dynamic tables (employee share).  Determine the
   // appropriate rate based on the monthly income and multiply by regular pay.
   const monthly = rate * 8 * 24;
@@ -4778,7 +4936,7 @@ function calculateRow(tr){  const readNum = sel => { const el = tr.querySelector
   // Check per-employee contribution deduction flags; default to true if not set
   const flags = contribFlags[id] || {};
   const div = Number(divisor) || 1;
-  const hasCompensation = (reg > 0) || (otTotal > 0) || (adjPositive > 0) || (bVal > 0);
+  const hasCompensation = (reg > 0) || (otTotal > 0) || (additionalIncome > 0) || (bVal > 0);
   const pagibig = (hasCompensation && flags.pagibig !== false ? +((regPay * piRate)).toFixed(2) : 0);
   const philhealth = (hasCompensation && flags.philhealth !== false ? +((regPay * phRate)).toFixed(2) : 0);
   const sssFull = hasCompensation ? sssShareByMonthly(monthly) : 0;
@@ -4862,21 +5020,22 @@ function calculateRow(tr){  const readNum = sel => { const el = tr.querySelector
   applyDeductionInput('.loanPI', 'loanPI');
   applyDeductionInput('.vale', 'vale');
   applyDeductionInput('.valeWed', 'valeWed');
-  // Adjustments column is displayed as positive earnings; track deduction component separately.
+  // Adjustments column is displayed as additional income; track deduction component separately.
   setRowDeductionDataset(
     tr,
     'adjustments',
     roundToCents(deductionRaw.adjustments || 0).toFixed(2),
     roundToCents(deductionEffective.adjustments || 0).toFixed(2)
   );
-  // Populate adjustment cell (if exists) and net pay
+  // Populate additional income cell (if exists) and net pay
   if (tr.querySelector('.adjAmt')) {
-    w('.adjAmt', adjPositive);
+    w('.adjAmt', additionalIncome);
   }
   try {
     tr.dataset.adjustmentRaw = adjRaw ? adjRaw.toFixed(2) : '0.00';
-    tr.dataset.adjustmentPositive = adjPositive ? adjPositive.toFixed(2) : '0.00';
+    tr.dataset.adjustmentPositive = '0.00';
     tr.dataset.adjustmentDeduction = adjDeduction ? adjDeduction.toFixed(2) : '0.00';
+    tr.dataset.additionalIncomeTotal = additionalIncome ? additionalIncome.toFixed(2) : '0.00';
   } catch (_) {}
   // Update the displayed adjustment hours cell if present
   const adjHrsCell = tr.querySelector('.adjHrs'); if (adjHrsCell) { adjHrsCell.textContent = (adjHours===0 ? '-' : adjHours.toFixed(2)); }
@@ -4959,6 +5118,161 @@ function createDebouncedPersistence(persistFn, delay = 150) {
 }
 const adjustmentPersist = createDebouncedPersistence(persistCurrentAdjustments);
 const adjustmentHoursPersist = createDebouncedPersistence(persistCurrentAdjustmentHours);
+const additionalIncomePersist = createDebouncedPersistence(persistCurrentAdditionalIncome, 200);
+
+// === Additional Income Tab ===
+function updatePayrollRowForEmployee(empId){
+  if (!empId) return;
+  const rows = document.querySelectorAll('#payrollTable tbody tr');
+  if (!rows || !rows.length) return;
+  for (const tr of rows) {
+    const idCell = tr.cells && tr.cells[0];
+    const rowId = idCell ? (idCell.textContent || '').trim() : '';
+    if (rowId === empId) {
+      calculateRow(tr);
+      break;
+    }
+  }
+  try { if (typeof scheduleTotals === 'function') scheduleTotals(); } catch (_) {}
+}
+
+function getAdditionalIncomeDetailsForEmployee(empId){
+  if (!empId) return [];
+  const items = additionalIncomeDetails && additionalIncomeDetails[empId];
+  return Array.isArray(items) ? items.map(item => ({
+    label: sanitizeAdditionalIncomeLabel(item && item.label),
+    amount: sanitizeAdditionalIncomeAmount(item && item.amount)
+  })) : [];
+}
+
+function renderAdditionalIncomeTable(){
+  syncPeriodScopedData();
+  ensureAdditionalIncomeDetailsMap();
+  rebuildAdditionalIncomeTotals();
+  const atbody = document.querySelector('#additionalIncomeTable tbody');
+  if (!atbody) return;
+  atbody.innerHTML = '';
+  employeeList.forEach(emp => {
+    const empId = emp.id;
+    const items = Array.isArray(additionalIncomeDetails[empId]) ? additionalIncomeDetails[empId] : [];
+    const renderItems = items.length ? items : [{ label: '', amount: '', __placeholder: true }];
+    renderItems.forEach((item, idx) => {
+      const tr = document.createElement('tr');
+      tr.dataset.empId = empId;
+      tr.dataset.index = String(idx);
+      tr.innerHTML = `
+        <td class="wrap"></td>
+        <td><input type="text" class="incomeLabel" data-emp="${empId}" data-index="${idx}" placeholder="${DEFAULT_ADDITIONAL_INCOME_LABEL}"></td>
+        <td><input type="number" min="0" step="0.01" class="incomeAmount" data-emp="${empId}" data-index="${idx}"></td>
+        <td><button type="button" class="removeIncomeItemBtn" data-emp="${empId}" data-index="${idx}">Remove</button></td>
+      `;
+      const empCell = tr.querySelector('td');
+      if (idx === 0) {
+        const wrapper = document.createElement('div');
+        wrapper.style.display = 'flex';
+        wrapper.style.flexDirection = 'column';
+        wrapper.style.alignItems = 'flex-start';
+        wrapper.style.gap = '6px';
+        const nameEl = document.createElement('span');
+        nameEl.textContent = emp.name;
+        const addBtn = document.createElement('button');
+        addBtn.type = 'button';
+        addBtn.className = 'addIncomeItemBtn';
+        addBtn.dataset.emp = empId;
+        addBtn.textContent = 'Add item';
+        addBtn.addEventListener('click', () => {
+          if (!Array.isArray(additionalIncomeDetails[empId])) additionalIncomeDetails[empId] = [];
+          additionalIncomeDetails[empId].push({ label: '', amount: 0 });
+          updateAdditionalIncomeTotalForEmployee(empId);
+          additionalIncomePersist.flush();
+          renderAdditionalIncomeTable();
+          updatePayrollRowForEmployee(empId);
+        });
+        wrapper.appendChild(nameEl);
+        wrapper.appendChild(addBtn);
+        empCell.appendChild(wrapper);
+      } else {
+        empCell.innerHTML = '&nbsp;';
+      }
+      const labelInput = tr.querySelector('.incomeLabel');
+      const amountInput = tr.querySelector('.incomeAmount');
+      const removeBtn = tr.querySelector('.removeIncomeItemBtn');
+      const isPlaceholder = !!item.__placeholder;
+      const labelValue = isPlaceholder ? '' : (item && item.label != null ? String(item.label) : '');
+      const amountValue = isPlaceholder ? '' : sanitizeAdditionalIncomeAmount(item && item.amount);
+      if (labelInput) labelInput.value = labelValue;
+      if (amountInput && amountValue !== '') {
+        amountInput.value = Number(amountValue).toFixed(2);
+      }
+      if (removeBtn && isPlaceholder) {
+        removeBtn.disabled = true;
+      }
+      if (labelInput) {
+        labelInput.addEventListener('input', () => {
+          if (!Array.isArray(additionalIncomeDetails[empId])) additionalIncomeDetails[empId] = [];
+          if (!additionalIncomeDetails[empId][idx]) {
+            additionalIncomeDetails[empId][idx] = { label: '', amount: 0 };
+          }
+          additionalIncomeDetails[empId][idx].label = labelInput.value;
+          updateAdditionalIncomeTotalForEmployee(empId);
+          additionalIncomePersist.schedule();
+          updatePayrollRowForEmployee(empId);
+        });
+        labelInput.addEventListener('blur', () => {
+          if (!Array.isArray(additionalIncomeDetails[empId])) additionalIncomeDetails[empId] = [];
+          if (!additionalIncomeDetails[empId][idx]) {
+            additionalIncomeDetails[empId][idx] = { label: '', amount: 0 };
+          }
+          const label = sanitizeAdditionalIncomeLabel(labelInput.value);
+          additionalIncomeDetails[empId][idx].label = label;
+          labelInput.value = label;
+          updateAdditionalIncomeTotalForEmployee(empId);
+          additionalIncomePersist.flush();
+          updatePayrollRowForEmployee(empId);
+        });
+      }
+      if (amountInput) {
+        amountInput.addEventListener('input', () => {
+          if (!Array.isArray(additionalIncomeDetails[empId])) additionalIncomeDetails[empId] = [];
+          if (!additionalIncomeDetails[empId][idx]) {
+            additionalIncomeDetails[empId][idx] = { label: '', amount: 0 };
+          }
+          const raw = parseFloat(amountInput.value);
+          const amount = Number.isFinite(raw) ? sanitizeAdditionalIncomeAmount(raw) : 0;
+          additionalIncomeDetails[empId][idx].amount = amount;
+          updateAdditionalIncomeTotalForEmployee(empId);
+          additionalIncomePersist.schedule();
+          updatePayrollRowForEmployee(empId);
+        });
+        amountInput.addEventListener('blur', () => {
+          if (!Array.isArray(additionalIncomeDetails[empId])) additionalIncomeDetails[empId] = [];
+          if (!additionalIncomeDetails[empId][idx]) {
+            additionalIncomeDetails[empId][idx] = { label: '', amount: 0 };
+          }
+          const raw = parseFloat(amountInput.value);
+          const amount = Number.isFinite(raw) ? sanitizeAdditionalIncomeAmount(raw) : 0;
+          additionalIncomeDetails[empId][idx].amount = amount;
+          amountInput.value = amount ? amount.toFixed(2) : '';
+          updateAdditionalIncomeTotalForEmployee(empId);
+          additionalIncomePersist.flush();
+          updatePayrollRowForEmployee(empId);
+        });
+      }
+      if (removeBtn) {
+        removeBtn.addEventListener('click', () => {
+          if (!Array.isArray(additionalIncomeDetails[empId])) additionalIncomeDetails[empId] = [];
+          additionalIncomeDetails[empId].splice(idx, 1);
+          if (!additionalIncomeDetails[empId].length) delete additionalIncomeDetails[empId];
+          updateAdditionalIncomeTotalForEmployee(empId);
+          additionalIncomePersist.flush();
+          renderAdditionalIncomeTable();
+          updatePayrollRowForEmployee(empId);
+        });
+      }
+      atbody.appendChild(tr);
+    });
+  });
+}
 
 // === Adjustments Tab ===
 // Render the adjustments table listing all employees with an input field for manual adjustment amounts.
@@ -5286,8 +5600,8 @@ function updateContributionNote() {
     'SSS = (Employee Share by Monthly Income) &divide; Divisor. SSS Loan and Pag-IBIG Loan are divided by the Divisor. Vales are manual (not divided).';
 }
   document.getElementById('downloadPayrollCSV').addEventListener('click', ()=>{
-  // Include Adjustments column before Bantay in payroll CSV export
-  const header = ['Week Start','Week End','OT Multiplier','Divisor','ID','Name','Regular Hours','OT Hours','Hourly Rate','Regular Pay','OT Pay','Adjustments','Bantay','Gross Pay','Pag-IBIG','PhilHealth','SSS','SSS Loan','Pag-IBIG Loan','Account','Wed Vale','Total Deductions','Net Pay'];
+  // Include Additional Income column before Bantay in payroll CSV export
+  const header = ['Week Start','Week End','OT Multiplier','Divisor','ID','Name','Regular Hours','OT Hours','Hourly Rate','Regular Pay','OT Pay','Additional Income','Bantay','Gross Pay','Pag-IBIG','PhilHealth','SSS','SSS Loan','Pag-IBIG Loan','Account','Wed Vale','Total Deductions','Net Pay'];
   const rows=[header];
   const ws = weekStartEl.value||''; const we = weekEndEl.value||''; const otm = String(getOvertimeMultiplier()); const div = String(divisorEl.value||'1');
   document.querySelectorAll('#payrollTable tbody tr').forEach(tr=>{
@@ -5319,6 +5633,7 @@ function updateContributionNote() {
 renderTable();
 renderSssTable();
 renderAdjustmentsTable();
+renderAdditionalIncomeTable();
 // Render new contribution tables and update the note
 renderPagibigTable();
 renderPhilhealthTable();
@@ -6038,13 +6353,14 @@ document.addEventListener('DOMContentLoaded', () => {
       applyText('.totalDed', data.totalDed);
       applyText('.netPay', data.netPay);
 
-      const adjPositive = Number(data.adjAmt) || 0;
+      const additionalIncome = Number(data.adjAmt) || 0;
       const adjDeduction = Number(data.adjustmentDeduction) || 0;
-      const adjRaw = adjPositive - adjDeduction;
+      const adjRaw = -adjDeduction;
       try {
         tr.dataset.adjustmentRaw = adjRaw.toFixed(2);
-        tr.dataset.adjustmentPositive = adjPositive.toFixed(2);
+        tr.dataset.adjustmentPositive = '0.00';
         tr.dataset.adjustmentDeduction = adjDeduction.toFixed(2);
+        tr.dataset.additionalIncomeTotal = additionalIncome.toFixed(2);
       } catch (err) {}
 
       if (typeof payrollRates === 'object' && payrollRates) payrollRates[empId] = Number(data.rate) || 0;
@@ -6052,6 +6368,9 @@ document.addEventListener('DOMContentLoaded', () => {
       if (typeof otHours === 'object' && otHours) otHours[empId] = Number(data.otHrs) || 0;
       if (typeof adjHrs === 'object' && adjHrs) adjHrs[empId] = Number(data.adjHrs) || 0;
       if (typeof bantay === 'object' && bantay) bantay[empId] = Number(data.bantay) || 0;
+      if (typeof additionalIncomeTotal === 'object' && additionalIncomeTotal) {
+        additionalIncomeTotal[empId] = Number(data.adjAmt) || 0;
+      }
       if (typeof loanSSS === 'object' && loanSSS) loanSSS[empId] = Number(data.loanSSS) || 0;
       if (typeof loanPI === 'object' && loanPI) loanPI[empId] = Number(data.loanPI) || 0;
       if (typeof vale === 'object' && vale) vale[empId] = Number(data.vale) || 0;
@@ -6450,7 +6769,7 @@ document.addEventListener('DOMContentLoaded', () => {
         return isNaN(num2) ? 0 : num2;
     }
       // Column index fallbacks aligned with current payrollTable structure
-      // 0:ID, 1:Name, 2:Rate, 3:RegHrs, 4:OTHrs, 5:AdjHrs, 6:TotalHrs, 7:RegPay, 8:OTPay, 9:Adjustments,
+      // 0:ID, 1:Name, 2:Rate, 3:RegHrs, 4:OTHrs, 5:AdjHrs, 6:TotalHrs, 7:RegPay, 8:OTPay, 9:Additional Income,
       // 10:Bantay, 11:Gross, 12:Pag-IBIG, 13:PhilHealth, 14:SSS, 15:SSS Loan, 16:Pag-IBIG Loan,
       // 17:Vale, 18:Wed Vale, 19:Total Ded, 20:Net Pay, 21:Payslip
       data.rate = readNum('.rate', 2);
@@ -6879,7 +7198,7 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   function buildPayrollSectionFromSnapshot(snap) {
-    const headers = ['ID','Name','Hourly Rate','Regular Hours','OT Hours','Adjustment Hrs','Total Hours','Regular Pay','OT Pay','Adjustments','Bantay','Gross Pay','Pag-IBIG','PhilHealth','SSS','SSS Loan','Pag-IBIG Loan','Account','Wed Vale','Total Deductions','Net Pay','Adj Deduction'];
+    const headers = ['ID','Name','Hourly Rate','Regular Hours','OT Hours','Adjustment Hrs','Total Hours','Regular Pay','OT Pay','Additional Income','Bantay','Gross Pay','Pag-IBIG','PhilHealth','SSS','SSS Loan','Pag-IBIG Loan','Account','Wed Vale','Total Deductions','Net Pay','Adj Deduction'];
     const numericCols = headers.map((_, idx) => idx).filter(idx => idx > 1);
     const rows = Array.isArray(snap?.rows) ? snap.rows.map((row) => {
       return [
@@ -7749,7 +8068,7 @@ rows += `<tr class="allowance">
       const title = (startDate && endDate) ? `Payroll Report (${startDate} to ${endDate})` : 'Payroll Report';
       const header = [
         'ID','Name','Hourly Rate','Regular Hours','OT Hours','Adjustment Hrs','Total Hours',
-        'Regular Pay','OT Pay','Adjustments','Bantay','Gross Pay',
+        'Regular Pay','OT Pay','Additional Income','Bantay','Gross Pay',
         'Pag-IBIG','PhilHealth','SSS','SSS Loan','Pag-IBIG Loan','Account','Wed Vale',
         'Total Deductions','Net Pay'
       ];
@@ -13423,11 +13742,7 @@ document.addEventListener('click', function(e) {
   var valeAmt   = rowData ? rowData.vale : inputVal('.vale');
   var wedValeAmt= rowData ? rowData.valeWed : inputVal('.valeWed');
   var bantayVal = rowData ? rowData.bantay : inputVal('.bantay');
-  var adjPositiveNum = rowData ? Number(rowData.adjustmentPositive || 0) : datasetNumber('adjustmentPositive');
   var adjDeductNum = rowData ? Number(rowData.adjustmentDeductions || 0) : datasetNumber('adjustmentDeduction');
-  if (!(adjPositiveNum > 0)){
-    adjPositiveNum = parseAmount(cellText('.adjAmt'));
-  }
   if (!(adjDeductNum > 0)){
     try {
       var rawAdjMap = 0;
@@ -13437,16 +13752,32 @@ document.addEventListener('click', function(e) {
         rawAdjMap = Number(window.adjustments[id] ?? 0) || 0;
       }
       var splitAdj = splitAdjustmentValue(rawAdjMap);
-      if (!(adjPositiveNum > 0)) adjPositiveNum = splitAdj.positive;
       adjDeductNum = splitAdj.deduction;
     } catch (err) { adjDeductNum = adjDeductNum || 0; }
   }
-  var adjAmt    = adjPositiveNum > 0 ? adjPositiveNum.toFixed(2) : '0.00';
   var adjDeductionStr = adjDeductNum > 0 ? adjDeductNum.toFixed(2) : '0.00';
   var totalDed  = rowData ? rowData.totalDeductions : cellText('.totalDed');
   var net       = rowData ? rowData.net : cellText('.netPay');
   var bantayRowLegacy = parseAmount(bantayVal) !== 0 ? `<tr><td>Bantay</td><td class="right">${bantayVal}</td></tr>` : '';
-  var adjPositiveRowLegacy = adjPositiveNum > 0 ? `<tr><td>Adjustments</td><td class="right">${adjAmt}</td></tr>` : '';
+  var additionalIncomeItems = rowData ? rowData.additionalIncomeDetails : (typeof getAdditionalIncomeDetailsForEmployee === 'function' ? getAdditionalIncomeDetailsForEmployee(id) : []);
+  var additionalIncomeTotal = rowData ? Number(rowData.additionalIncomeTotal || 0) : datasetNumber('additionalIncomeTotal');
+  if (!(additionalIncomeTotal > 0)) {
+    additionalIncomeTotal = (additionalIncomeItems || []).reduce(function(sum, item){
+      return sum + parseAmount(item && item.amount);
+    }, 0);
+  }
+  var additionalIncomeRows = '';
+  if ((additionalIncomeItems && additionalIncomeItems.length) || additionalIncomeTotal > 0) {
+    additionalIncomeRows += '<tr><th colspan="2">Additional Income</th></tr>';
+    (additionalIncomeItems || []).forEach(function(item){
+      var label = sanitizeAdditionalIncomeLabel(item && item.label);
+      var amount = parseAmount(item && item.amount);
+      if (amount > 0) {
+        additionalIncomeRows += `<tr><td>${label}</td><td class="right">${amount.toFixed(2)}</td></tr>`;
+      }
+    });
+    additionalIncomeRows += `<tr><th>Additional Income Subtotal</th><th class="right">${additionalIncomeTotal.toFixed(2)}</th></tr>`;
+  }
 
   var ws = (document.getElementById('weekStart') || {}).value || '';
   var we = (document.getElementById('weekEnd')   || {}).value || '';
@@ -13505,9 +13836,10 @@ h3{margin:0 0 3px 0;font-size:10px;}
       <tr><td>Regular Pay</td><td class="right">${regPay}</td></tr>
       <tr><td>OT Pay</td><td class="right">${otPay}</td></tr>
       ${bantayRowLegacy}
-      ${adjPositiveRowLegacy}
     </table>
   </div>
+
+  ${additionalIncomeRows ? `<div class="section"><table>${additionalIncomeRows}</table></div>` : ''}
 
   <div class="section">
     <table>
