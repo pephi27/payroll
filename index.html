@@ -132,6 +132,7 @@ const KNOWN_KEYS = [
   "payroll_ot_hours",
   "payroll_ot_multiplier",
   "settings_payroll",
+  "settings_contributions",
   "payroll_week_start",
   "payroll_week_end",
   "payroll_deduction_divisor",
@@ -2498,10 +2499,6 @@ window.addEventListener('load', dashReports);
       <button class="tab-btn active" data-tab="payrollTab">
        Payroll
       </button>
-      <!-- Renamed SSS sub-tab to Contributions to include additional government contributions -->
-      <button class="tab-btn" data-tab="contributionsTab">
-       Contributions
-      </button>
       <button class="tab-btn" data-tab="deductionsTab">
        Deductions
       </button>
@@ -2663,173 +2660,6 @@ window.addEventListener('load', dashReports);
        att_employees_v2
       </code>
       (id&rarr;{name}). If none found, shows a sample row.
-     </div>
-    </div>
-    <!-- Renamed SSS tab to Contributions for clarity -->
-    <div class="tab" id="contributionsTab">
-     <div class="contrib-hero">
-      <div>
-       <h3>Government contributions at a glance</h3>
-       <p>Configure the tables below so PayrollPro can match each worker to the correct statutory contribution.</p>
-       <ul class="contrib-key-list">
-        <li>Ranges are matched against <strong>monthly income</strong> from payroll calculations.</li>
-        <li>Each edit saves automatically &mdash; no extra confirmation needed.</li>
-        <li>Use CSV import/export to align with government updates.</li>
-       </ul>
-      </div>
-      <div class="contrib-pill-stack">
-       <div class="contrib-pill">
-        <strong>SSS</strong>
-        <small>Employee and employer peso shares per income bracket.</small>
-       </div>
-       <div class="contrib-pill">
-        <strong>Pag-IBIG</strong>
-        <small>Decimal employee rate applied to regular pay (employer assumed to match).</small>
-       </div>
-       <div class="contrib-pill">
-        <strong>PhilHealth</strong>
-        <small>Decimal employee rate per bracket; applied to monthly income.</small>
-       </div>
-      </div>
-     </div>
-
-     <div class="table-card">
-      <div class="table-card__header">
-       <div>
-        <p class="table-card__tag">SSS</p>
-        <h4 class="table-card__title">Monthly SSS shares</h4>
-        <p class="table-card__subtitle">Use the peso amounts that apply to each bracket. PayrollPro will pick the row where <em>min &le; income &le; max</em>.</p>
-       </div>
-       <div class="table-card__tags">
-        <span class="table-card__tag">Peso values</span>
-        <span class="table-card__tag">Auto-save</span>
-       </div>
-      </div>
-      <div class="controls">
-       <button id="addSssRow">
-        Add Row
-       </button>
-       <button class="primary" id="resetSss">
-        Reset to Defaults (Custom)
-       </button>
-       <button class="danger" id="clearSss">
-        Clear SSS Table
-       </button>
-       <button id="exportSss">
-        Export CSV
-       </button>
-       <label>
-        Import CSV (min,max,employeeShare,employerShare)
-        <br/>
-        <input accept=".csv,text/csv" id="importSss" type="file"/>
-       </label>
-      </div>
-      <table id="sssTable">
-       <thead>
-        <tr>
-         <th>
-          Range From (â‚±)
-         </th>
-         <th>
-          Range To (â‚±)
-         </th>
-         <th>
-          Employee Share (â‚±)
-         </th>
-         <th>
-          Employer Share (â‚±)
-         </th>
-         <th>
-          Actions
-         </th>
-        </tr>
-       </thead>
-       <tbody>
-       </tbody>
-      </table>
-      <div class="section note contrib-note">
-       <strong>How it is used:</strong> Monthly Income = Hourly Rate &times; 8 &times; 24. The matching bracket supplies the employee and employer shares.
-      </div>
-     </div>
-
-     <div class="table-card">
-      <div class="table-card__header">
-       <div>
-        <p class="table-card__tag">Pag-IBIG</p>
-        <h4 class="table-card__title">Pag-IBIG employee rates</h4>
-        <p class="table-card__subtitle">Enter rates as decimals (0.02 = 2%). Applied to regular pay; employer share is assumed to mirror the employee rate.</p>
-       </div>
-       <div class="table-card__tags">
-        <span class="table-card__tag">Rate table</span>
-        <span class="table-card__tag">Bracketed</span>
-       </div>
-      </div>
-      <div class="controls">
-        <button id="addPagibigRow">
-         Add Row
-        </button>
-        <button class="primary" id="resetPagibig">
-         Reset to Defaults
-        </button>
-        <button class="danger" id="clearPagibig">
-         Clear Pag-IBIG Table
-        </button>
-      </div>
-      <table id="pagibigTable">
-        <thead>
-          <tr>
-            <th>Range From (â‚±)</th>
-            <th>Range To (â‚±)</th>
-            <th>Rate (decimal)</th>
-            <th>Actions</th>
-          </tr>
-        </thead>
-        <tbody>
-        </tbody>
-      </table>
-      <div class="section note contrib-note">
-        Keep ranges continuous so every salary finds a matching rate. Export before major edits so you can restore if needed.
-      </div>
-     </div>
-
-     <div class="table-card">
-      <div class="table-card__header">
-       <div>
-        <p class="table-card__tag">PhilHealth</p>
-        <h4 class="table-card__title">PhilHealth employee rates</h4>
-        <p class="table-card__subtitle">Provide decimal rates per income band. The rate is applied to monthly income to compute the employee share.</p>
-       </div>
-       <div class="table-card__tags">
-        <span class="table-card__tag">Rate table</span>
-        <span class="table-card__tag">Bracketed</span>
-       </div>
-      </div>
-      <div class="controls">
-        <button id="addPhilRow">
-         Add Row
-        </button>
-        <button class="primary" id="resetPhil">
-         Reset to Defaults
-        </button>
-        <button class="danger" id="clearPhil">
-         Clear PhilHealth Table
-        </button>
-      </div>
-      <table id="philhealthTable">
-        <thead>
-          <tr>
-            <th>Range From (â‚±)</th>
-            <th>Range To (â‚±)</th>
-            <th>Rate (decimal)</th>
-            <th>Actions</th>
-          </tr>
-        </thead>
-        <tbody>
-        </tbody>
-      </table>
-      <div class="section note contrib-note">
-        Rates use decimal format (e.g. 0.025 = 2.5% employee share). Ensure the final row captures high earners.
-      </div>
      </div>
     </div>
     <div class="tab" id="deductionsTab">
@@ -3175,12 +3005,34 @@ function initPayrollSettingsUI() {
   syncPayrollSettingsInputs();
 }
 
+function initSettingsTabUI(){
+  const panel = document.getElementById('panelSettings');
+  if (!panel) return;
+  const buttons = panel.querySelectorAll('.settings-tab-btn');
+  const tabs = panel.querySelectorAll('.settings-tab-content');
+  if (!buttons.length || !tabs.length) return;
+  buttons.forEach(btn => {
+    if (btn.__settingsTabBound) return;
+    btn.addEventListener('click', () => {
+      const target = btn.getAttribute('data-settings-tab');
+      buttons.forEach(b => b.classList.remove('active'));
+      tabs.forEach(tab => tab.classList.remove('active'));
+      btn.classList.add('active');
+      const next = document.getElementById(`settingsTab${target.charAt(0).toUpperCase()}${target.slice(1)}`);
+      if (next) next.classList.add('active');
+    });
+    btn.__settingsTabBound = true;
+  });
+}
+
 if (document.readyState === 'loading') {
   document.addEventListener('DOMContentLoaded', () => {
+    initSettingsTabUI();
     initPayrollSettingsUI();
     loadPayrollSettings();
   });
 } else {
+  initSettingsTabUI();
   initPayrollSettingsUI();
   loadPayrollSettings();
 }
@@ -3190,11 +3042,7 @@ try {
   window.getNightDifferentialSettings = getNightDifferentialSettings;
 } catch (_) {}
 
-// Current employee contribution rates (decimal form).  Defaults: 0.02 (2%) for Pagâ€‘IBIG and 0.025 (2.5%) for PhilHealth.
-let pagibigRate = parseFloat(localStorage.getItem(LS_PAGIBIG_RATE) ?? '0.02');
-if (isNaN(pagibigRate)) pagibigRate = 0.02;
-let philhealthRate = parseFloat(localStorage.getItem(LS_PHILHEALTH_RATE) ?? '0.025');
-if (isNaN(philhealthRate)) philhealthRate = 0.025;
+const CONTRIBUTION_SETTINGS_KEY = 'settings_contributions';
 const SSS_SEED_2025 = [
   [1, 5249.99, 250, 250],
   [5250, 5749.99, 275, 275],
@@ -3259,31 +3107,6 @@ const SSS_SEED_2025 = [
   [34750, 100000000, 1750, 1750]
 ];
 
-function ensureSeededSSS() {
-  try {
-    const cur = JSON.parse(localStorage.getItem(LS_SSS_TABLE) || '[]');
-    if (!Array.isArray(cur) || cur.length === 0) {
-      const mapped = SSS_SEED_2025.map(r=>({min:r[0], max:r[1], employee:r[2], employer: (typeof r[3] !== 'undefined' ? r[3] : r[2])}));
-      localStorage.setItem(LS_SSS_TABLE, JSON.stringify(mapped));
-    } else {
-      const normalized = cur.map(row => {
-        const min = Number(row && typeof row.min !== 'undefined' ? row.min : 0) || 0;
-        const max = Number(row && typeof row.max !== 'undefined' ? row.max : 0) || 0;
-        const employee = Number(row && typeof row.employee !== 'undefined' ? row.employee : 0) || 0;
-        const employerRaw = Number(row && typeof row.employer !== 'undefined' ? row.employer : employee);
-        const employer = Number.isFinite(employerRaw) ? employerRaw : employee;
-        return { min, max, employee, employer };
-      });
-      localStorage.setItem(LS_SSS_TABLE, JSON.stringify(normalized));
-    }
-  } catch (e) {
-    const mapped = SSS_SEED_2025.map(r=>({min:r[0], max:r[1], employee:r[2], employer: (typeof r[3] !== 'undefined' ? r[3] : r[2])}));
-    localStorage.setItem(LS_SSS_TABLE, JSON.stringify(mapped));
-  }
-}
-ensureSeededSSS();
-// Seed the Pagâ€‘IBIG and PhilHealth tables with default rates if empty.  These tables
-// define income ranges and the corresponding employee contribution rate (decimal).
 const PAGIBIG_SEED = [
   [0, 100000000, 0.02]
 ];
@@ -3291,33 +3114,247 @@ const PHILHEALTH_SEED = [
   [0, 100000000, 0.025]
 ];
 
-function ensureSeededPagibig() {
+const DEFAULT_CONTRIBUTION_SETTINGS = {
+  sss: {
+    mode: 'bracket',
+    employeeShare: 0,
+    employerShare: 0,
+    cap: 0,
+    table: SSS_SEED_2025.map(r=>({min:r[0], max:r[1], employee:r[2], employer: (typeof r[3] !== 'undefined' ? r[3] : r[2])}))
+  },
+  pagibig: {
+    mode: 'bracket',
+    employeeShare: 0.02,
+    employerShare: 0.02,
+    cap: 0,
+    table: PAGIBIG_SEED.map(r => ({min: r[0], max: r[1], rate: r[2]}))
+  },
+  philhealth: {
+    mode: 'bracket',
+    employeeShare: 0.025,
+    employerShare: 0.025,
+    cap: 0,
+    table: PHILHEALTH_SEED.map(r => ({min: r[0], max: r[1], rate: r[2]}))
+  }
+};
+
+function normalizeContributionNumber(value, fallback = 0){
+  const num = parseFloat(value);
+  return Number.isFinite(num) ? num : fallback;
+}
+
+function normalizeContributionMode(value, fallback){
+  const mode = String(value || '').toLowerCase();
+  if (['fixed','percentage','bracket'].includes(mode)) return mode;
+  return fallback;
+}
+
+function normalizeSssTable(rows){
+  const input = Array.isArray(rows) ? rows : [];
+  return input.map(r => {
+    const min = normalizeContributionNumber(r && r.min, 0);
+    const max = normalizeContributionNumber(r && r.max, 0);
+    const employee = normalizeContributionNumber(r && r.employee, 0);
+    const employerRaw = normalizeContributionNumber(r && r.employer, employee);
+    const employer = Number.isFinite(employerRaw) ? employerRaw : employee;
+    return { min, max, employee, employer };
+  }).sort((a,b) => a.min - b.min);
+}
+
+function normalizeRateTable(rows){
+  const input = Array.isArray(rows) ? rows : [];
+  return input.map(r => ({
+    min: normalizeContributionNumber(r && r.min, 0),
+    max: normalizeContributionNumber(r && r.max, 0),
+    rate: normalizeContributionNumber(r && r.rate, 0)
+  })).sort((a,b) => a.min - b.min);
+}
+
+function readLegacyTable(key){
   try {
-    const cur = JSON.parse(localStorage.getItem(LS_PAGIBIG_TABLE) || '[]');
-    if (!Array.isArray(cur) || cur.length === 0) {
-      const mapped = PAGIBIG_SEED.map(r => ({min: r[0], max: r[1], rate: r[2]}));
-      localStorage.setItem(LS_PAGIBIG_TABLE, JSON.stringify(mapped));
-    }
-  } catch (e) {
-    const mapped = PAGIBIG_SEED.map(r => ({min: r[0], max: r[1], rate: r[2]}));
-    localStorage.setItem(LS_PAGIBIG_TABLE, JSON.stringify(mapped));
+    const raw = JSON.parse(localStorage.getItem(key) || '[]');
+    return Array.isArray(raw) ? raw : [];
+  } catch (_) {
+    return [];
   }
 }
 
-function ensureSeededPhilhealth() {
-  try {
-    const cur = JSON.parse(localStorage.getItem(LS_PHILHEALTH_TABLE) || '[]');
-    if (!Array.isArray(cur) || cur.length === 0) {
-      const mapped = PHILHEALTH_SEED.map(r => ({min: r[0], max: r[1], rate: r[2]}));
-      localStorage.setItem(LS_PHILHEALTH_TABLE, JSON.stringify(mapped));
+function buildLegacyContributionSettings(){
+  const legacyPagibigRate = normalizeContributionNumber(localStorage.getItem(LS_PAGIBIG_RATE), DEFAULT_CONTRIBUTION_SETTINGS.pagibig.employeeShare);
+  const legacyPhilRate = normalizeContributionNumber(localStorage.getItem(LS_PHILHEALTH_RATE), DEFAULT_CONTRIBUTION_SETTINGS.philhealth.employeeShare);
+  return {
+    sss: {
+      table: normalizeSssTable(readLegacyTable(LS_SSS_TABLE))
+    },
+    pagibig: {
+      employeeShare: legacyPagibigRate,
+      employerShare: legacyPagibigRate,
+      table: normalizeRateTable(readLegacyTable(LS_PAGIBIG_TABLE))
+    },
+    philhealth: {
+      employeeShare: legacyPhilRate,
+      employerShare: legacyPhilRate,
+      table: normalizeRateTable(readLegacyTable(LS_PHILHEALTH_TABLE))
     }
-  } catch (e) {
-    const mapped = PHILHEALTH_SEED.map(r => ({min: r[0], max: r[1], rate: r[2]}));
-    localStorage.setItem(LS_PHILHEALTH_TABLE, JSON.stringify(mapped));
+  };
+}
+
+function normalizeContributionSettings(raw){
+  const legacy = buildLegacyContributionSettings();
+  const base = JSON.parse(JSON.stringify(DEFAULT_CONTRIBUTION_SETTINGS));
+  const source = (raw && typeof raw === 'object') ? raw : {};
+  const mergeType = (key, normalizeTable, fallback) => {
+    const rawConfig = source[key] && typeof source[key] === 'object' ? source[key] : {};
+    const legacyConfig = legacy[key] && typeof legacy[key] === 'object' ? legacy[key] : {};
+    const defaults = fallback;
+    return {
+      mode: normalizeContributionMode(rawConfig.mode, defaults.mode),
+      employeeShare: normalizeContributionNumber(rawConfig.employeeShare ?? legacyConfig.employeeShare, defaults.employeeShare),
+      employerShare: normalizeContributionNumber(rawConfig.employerShare ?? legacyConfig.employerShare, defaults.employerShare),
+      cap: normalizeContributionNumber(rawConfig.cap, defaults.cap),
+      table: normalizeTable(rawConfig.table && rawConfig.table.length ? rawConfig.table : legacyConfig.table && legacyConfig.table.length ? legacyConfig.table : defaults.table)
+    };
+  };
+  return {
+    sss: mergeType('sss', normalizeSssTable, base.sss),
+    pagibig: mergeType('pagibig', normalizeRateTable, base.pagibig),
+    philhealth: mergeType('philhealth', normalizeRateTable, base.philhealth)
+  };
+}
+
+let contributionSettings = normalizeContributionSettings(null);
+
+async function persistContributionSettings() {
+  const writer = (typeof window !== 'undefined' && typeof window.writeKV === 'function')
+    ? window.writeKV
+    : null;
+  if (!writer) return;
+  try {
+    const result = writer(CONTRIBUTION_SETTINGS_KEY, contributionSettings);
+    if (result && typeof result.then === 'function') {
+      await result;
+    }
+  } catch (err) {
+    console.warn('Persisting contribution settings failed', err);
   }
 }
-ensureSeededPagibig();
-ensureSeededPhilhealth();
+
+function syncContributionSettingsInputs(){
+  const map = [
+    { key: 'sss', modeId: 'sssRuleMode', employeeId: 'sssEmployeeShare', employerId: 'sssEmployerShare', capId: 'sssCap' },
+    { key: 'pagibig', modeId: 'pagibigRuleMode', employeeId: 'pagibigEmployeeShare', employerId: 'pagibigEmployerShare', capId: 'pagibigCap' },
+    { key: 'philhealth', modeId: 'philhealthRuleMode', employeeId: 'philhealthEmployeeShare', employerId: 'philhealthEmployerShare', capId: 'philhealthCap' }
+  ];
+  map.forEach(item => {
+    const config = contributionSettings[item.key] || {};
+    const modeEl = document.getElementById(item.modeId);
+    if (modeEl) modeEl.value = config.mode || 'bracket';
+    const empEl = document.getElementById(item.employeeId);
+    if (empEl) empEl.value = String(Number(config.employeeShare ?? 0));
+    const erEl = document.getElementById(item.employerId);
+    if (erEl) erEl.value = String(Number(config.employerShare ?? 0));
+    const capEl = document.getElementById(item.capId);
+    if (capEl) capEl.value = String(Number(config.cap ?? 0));
+    const tableCard = document.querySelector(`[data-contrib-table="${item.key}"]`);
+    if (tableCard) tableCard.style.display = (config.mode === 'bracket') ? 'block' : 'none';
+  });
+}
+
+function updateContributionSettings(partial, options = {}){
+  const next = {
+    sss: { ...(contributionSettings.sss || {}), ...(partial.sss || {}) },
+    pagibig: { ...(contributionSettings.pagibig || {}), ...(partial.pagibig || {}) },
+    philhealth: { ...(contributionSettings.philhealth || {}), ...(partial.philhealth || {}) }
+  };
+  contributionSettings = normalizeContributionSettings(next);
+  syncContributionSettingsInputs();
+  if (options.persist !== false) {
+    persistContributionSettings();
+  }
+  if (options.recalculate !== false && typeof calculateAll === 'function') {
+    calculateAll();
+  }
+}
+
+async function loadContributionSettings(){
+  try {
+    const reader = (typeof window !== 'undefined' && typeof window.readKV === 'function')
+      ? window.readKV
+      : null;
+    const stored = reader ? await reader(CONTRIBUTION_SETTINGS_KEY, null) : null;
+    contributionSettings = normalizeContributionSettings(stored);
+    syncContributionSettingsInputs();
+    if (typeof renderSssTable === 'function') renderSssTable();
+    if (typeof renderPagibigTable === 'function') renderPagibigTable();
+    if (typeof renderPhilhealthTable === 'function') renderPhilhealthTable();
+    if (typeof calculateAll === 'function') calculateAll();
+  } catch (err) {
+    console.warn('Loading contribution settings failed', err);
+  }
+}
+
+function initContributionSettingsUI(){
+  const bindings = [
+    { key: 'sss', modeId: 'sssRuleMode', employeeId: 'sssEmployeeShare', employerId: 'sssEmployerShare', capId: 'sssCap' },
+    { key: 'pagibig', modeId: 'pagibigRuleMode', employeeId: 'pagibigEmployeeShare', employerId: 'pagibigEmployerShare', capId: 'pagibigCap' },
+    { key: 'philhealth', modeId: 'philhealthRuleMode', employeeId: 'philhealthEmployeeShare', employerId: 'philhealthEmployerShare', capId: 'philhealthCap' }
+  ];
+  bindings.forEach(item => {
+    const modeEl = document.getElementById(item.modeId);
+    if (modeEl && !modeEl.__bound) {
+      modeEl.addEventListener('change', () => {
+        updateContributionSettings({ [item.key]: { mode: modeEl.value } });
+      });
+      modeEl.__bound = true;
+    }
+    const empEl = document.getElementById(item.employeeId);
+    if (empEl && !empEl.__bound) {
+      empEl.addEventListener('input', () => {
+        updateContributionSettings({ [item.key]: { employeeShare: normalizeContributionNumber(empEl.value, 0) } });
+      });
+      empEl.__bound = true;
+    }
+    const erEl = document.getElementById(item.employerId);
+    if (erEl && !erEl.__bound) {
+      erEl.addEventListener('input', () => {
+        updateContributionSettings({ [item.key]: { employerShare: normalizeContributionNumber(erEl.value, 0) } });
+      });
+      erEl.__bound = true;
+    }
+    const capEl = document.getElementById(item.capId);
+    if (capEl && !capEl.__bound) {
+      capEl.addEventListener('input', () => {
+        updateContributionSettings({ [item.key]: { cap: normalizeContributionNumber(capEl.value, 0) } });
+      });
+      capEl.__bound = true;
+    }
+  });
+  const resetBtn = document.getElementById('resetContributionSettings');
+  if (resetBtn && !resetBtn.__bound) {
+    resetBtn.addEventListener('click', () => {
+      if (!confirm('Reset contribution settings to defaults?')) return;
+      contributionSettings = normalizeContributionSettings(DEFAULT_CONTRIBUTION_SETTINGS);
+      persistContributionSettings();
+      syncContributionSettingsInputs();
+      if (typeof renderSssTable === 'function') renderSssTable();
+      if (typeof renderPagibigTable === 'function') renderPagibigTable();
+      if (typeof renderPhilhealthTable === 'function') renderPhilhealthTable();
+      if (typeof calculateAll === 'function') calculateAll();
+    });
+    resetBtn.__bound = true;
+  }
+  syncContributionSettingsInputs();
+}
+
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', () => {
+    initContributionSettingsUI();
+    loadContributionSettings();
+  });
+} else {
+  initContributionSettingsUI();
+  loadContributionSettings();
+}
 let payrollRates = JSON.parse(localStorage.getItem(LS_RATES) || '{}');
 let regHours = JSON.parse(localStorage.getItem(LS_REG_HRS) || '{}');
 let otHours = JSON.parse(localStorage.getItem(LS_OT_HRS) || '{}');
@@ -3686,30 +3723,12 @@ function loadEmployees() {
 }
 const employeeList = loadEmployees();
 function getSssTable(){
-  let arr = [];
-  try { arr = JSON.parse(localStorage.getItem(LS_SSS_TABLE) || '[]'); }
-  catch(e){ arr = []; }
-  if (!Array.isArray(arr)) arr = [];
-  arr = arr.map(r=>{
-    const min = Number(r && typeof r.min !== 'undefined' ? r.min : 0) || 0;
-    const max = Number(r && typeof r.max !== 'undefined' ? r.max : 0) || 0;
-    const employee = Number(r && typeof r.employee !== 'undefined' ? r.employee : 0) || 0;
-    const employerRaw = Number(r && typeof r.employer !== 'undefined' ? r.employer : employee);
-    const employer = Number.isFinite(employerRaw) ? employerRaw : employee;
-    return {min, max, employee, employer};
-  }).sort((a,b)=> a.min - b.min);
-  return arr;
+  const table = contributionSettings?.sss?.table || DEFAULT_CONTRIBUTION_SETTINGS.sss.table;
+  return normalizeSssTable(table);
 }
 function setSssTable(rows){
-  const clean = Array.isArray(rows) ? rows.map(r => {
-    const min = Number(r && typeof r.min !== 'undefined' ? r.min : 0) || 0;
-    const max = Number(r && typeof r.max !== 'undefined' ? r.max : 0) || 0;
-    const employee = Number(r && typeof r.employee !== 'undefined' ? r.employee : 0) || 0;
-    const employerRaw = Number(r && typeof r.employer !== 'undefined' ? r.employer : employee);
-    const employer = Number.isFinite(employerRaw) ? employerRaw : employee;
-    return { min, max, employee, employer };
-  }) : [];
-  localStorage.setItem(LS_SSS_TABLE, JSON.stringify(clean));
+  const clean = normalizeSssTable(rows);
+  updateContributionSettings({ sss: { table: clean } }, { recalculate: false });
 }
 
 function formatDeductionDisplay(value){
@@ -4094,13 +4113,14 @@ function renderDeductionsTable(){
     // Use dynamic contribution tables for Pag-IBIG and PhilHealth.  Determine the
     // applicable rate based on monthly income and multiply by regular pay.
     const monthly = rate * 8 * 24;
-    const piRate = pagibigRateByMonthly(monthly);
-    const phRate = philhealthRateByMonthly(monthly);
+    const piAmounts = computeContributionAmounts('pagibig', monthly, regPay);
+    const phAmounts = computeContributionAmounts('philhealth', monthly, regPay);
+    const sssAmounts = computeContributionAmounts('sss', monthly, regPay);
     const flags = (typeof contribFlags !== 'undefined' && contribFlags[emp.id]) || {};
     const div = Number(divisor) || 1;
-    const pagibig = (flags.pagibig === false) ? 0 : +((regPay * piRate).toFixed(2));
-    const philhealth = (flags.philhealth === false) ? 0 : +((regPay * phRate).toFixed(2));
-    const sssFull = (flags.sss === false) ? 0 : sssShareByMonthly(monthly);
+    const pagibig = (flags.pagibig === false) ? 0 : piAmounts.employee;
+    const philhealth = (flags.philhealth === false) ? 0 : phAmounts.employee;
+    const sssFull = (flags.sss === false) ? 0 : sssAmounts.employee;
     const sss = (flags.sss === false) ? 0 : +((sssFull / div).toFixed(2));
     const sssLoan = +(lSSS / div).toFixed(2);
     const piLoan = +(lPI / div).toFixed(2);
@@ -4262,13 +4282,14 @@ function updateDeductionRowDisplay(empId){
   const adjDeduction = adjParts.deduction;
   const regPay = +(rH * rate).toFixed(2);
   const monthly = rate * 8 * 24;
-  const piRate = pagibigRateByMonthly(monthly);
-  const phRate = philhealthRateByMonthly(monthly);
+  const piAmounts = computeContributionAmounts('pagibig', monthly, regPay);
+  const phAmounts = computeContributionAmounts('philhealth', monthly, regPay);
+  const sssAmounts = computeContributionAmounts('sss', monthly, regPay);
   const flags = (typeof contribFlags !== 'undefined' && contribFlags && contribFlags[empKey]) || {};
   const div = Number(divisor) || 1;
-  const pagibig = (flags.pagibig === false) ? 0 : +((regPay * piRate).toFixed(2));
-  const philhealth = (flags.philhealth === false) ? 0 : +((regPay * phRate).toFixed(2));
-  const sssFull = (flags.sss === false) ? 0 : sssShareByMonthly(monthly);
+  const pagibig = (flags.pagibig === false) ? 0 : piAmounts.employee;
+  const philhealth = (flags.philhealth === false) ? 0 : phAmounts.employee;
+  const sssFull = (flags.sss === false) ? 0 : sssAmounts.employee;
   const sss = (flags.sss === false) ? 0 : +((sssFull / div).toFixed(2));
   const sssLoan = +(lSSS / div).toFixed(2);
   const piLoan = +(lPI / div).toFixed(2);
@@ -4698,19 +4719,12 @@ document.getElementById('importSss').addEventListener('change', ev=>{
 // setting the table in localStorage, rendering the table in the UI, and applying
 // the employee share rate based on income ranges.
 function getPagibigTable(){
-  let arr = [];
-  try {
-    arr = JSON.parse(localStorage.getItem(LS_PAGIBIG_TABLE) || '[]');
-  } catch(e) { arr = []; }
-  if (!Array.isArray(arr)) arr = [];
-  return arr.map(r => ({
-    min: Number(r.min) || 0,
-    max: Number(r.max) || 0,
-    rate: Number(r.rate) || 0
-  })).sort((a,b) => a.min - b.min);
+  const table = contributionSettings?.pagibig?.table || DEFAULT_CONTRIBUTION_SETTINGS.pagibig.table;
+  return normalizeRateTable(table);
 }
 function setPagibigTable(rows){
-  localStorage.setItem(LS_PAGIBIG_TABLE, JSON.stringify(rows));
+  const clean = normalizeRateTable(rows);
+  updateContributionSettings({ pagibig: { table: clean } }, { recalculate: false });
 }
 function renderPagibigTable(){
   const tbodyP = document.querySelector('#pagibigTable tbody');
@@ -4749,19 +4763,12 @@ function renderPagibigTable(){
   });
 }
 function getPhilhealthTable(){
-  let arr = [];
-  try {
-    arr = JSON.parse(localStorage.getItem(LS_PHILHEALTH_TABLE) || '[]');
-  } catch(e) { arr = []; }
-  if (!Array.isArray(arr)) arr = [];
-  return arr.map(r => ({
-    min: Number(r.min) || 0,
-    max: Number(r.max) || 0,
-    rate: Number(r.rate) || 0
-  })).sort((a,b) => a.min - b.min);
+  const table = contributionSettings?.philhealth?.table || DEFAULT_CONTRIBUTION_SETTINGS.philhealth.table;
+  return normalizeRateTable(table);
 }
 function setPhilhealthTable(rows){
-  localStorage.setItem(LS_PHILHEALTH_TABLE, JSON.stringify(rows));
+  const clean = normalizeRateTable(rows);
+  updateContributionSettings({ philhealth: { table: clean } }, { recalculate: false });
 }
 function renderPhilhealthTable(){
   const tbodyPh = document.querySelector('#philhealthTable tbody');
@@ -4848,59 +4855,73 @@ document.addEventListener('click', (e) => {
   }
 });
 // === End Pagâ€‘IBIG and PhilHealth Table Management ===
-function sssShareByMonthly(monthly){
+function getBracketRate(rows, monthly){
+  const sorted = Array.isArray(rows) ? rows.slice().sort((a,b)=>a.min-b.min) : [];
+  if (sorted.length === 0) return 0;
+  if (monthly <= sorted[0].min) return Number(sorted[0].rate) || 0;
+  for (const row of sorted) {
+    if (monthly >= row.min && monthly <= row.max) return Number(row.rate) || 0;
+  }
+  return Number(sorted[sorted.length - 1].rate) || 0;
+}
+
+function getSssBracketRow(monthly){
   const rows = getSssTable();
-  if(rows.length===0) return 0;
-  rows.sort((a,b)=>a.min-b.min);
-  if(monthly <= rows[0].min) return Number(rows[0].employee)||0;
-  for(const r of rows){ if(monthly >= r.min && monthly <= r.max) return Number(r.employee)||0; }
-  return Number(rows[rows.length-1].employee)||0;
+  if (rows.length === 0) return { employee: 0, employer: 0 };
+  if (monthly <= rows[0].min) return rows[0];
+  for (const row of rows) {
+    if (monthly >= row.min && monthly <= row.max) return row;
+  }
+  return rows[rows.length - 1];
+}
+
+function applyContributionCap(value, cap){
+  const capNum = normalizeContributionNumber(cap, 0);
+  if (capNum > 0) return Math.min(value, capNum);
+  return value;
+}
+
+function computeContributionAmounts(type, monthly, regPay){
+  const config = contributionSettings?.[type] || DEFAULT_CONTRIBUTION_SETTINGS[type];
+  const mode = config?.mode || 'bracket';
+  let employee = 0;
+  let employer = 0;
+  if (mode === 'fixed') {
+    employee = normalizeContributionNumber(config?.employeeShare, 0);
+    employer = normalizeContributionNumber(config?.employerShare, 0);
+  } else if (mode === 'percentage') {
+    const base = type === 'pagibig' ? regPay : monthly;
+    employee = base * normalizeContributionNumber(config?.employeeShare, 0);
+    employer = base * normalizeContributionNumber(config?.employerShare, 0);
+  } else {
+    if (type === 'sss') {
+      const row = getSssBracketRow(monthly);
+      employee = normalizeContributionNumber(row.employee, 0);
+      employer = normalizeContributionNumber(row.employer ?? row.employee, 0);
+    } else {
+      const table = type === 'pagibig' ? getPagibigTable() : getPhilhealthTable();
+      const rate = getBracketRate(table, monthly);
+      const base = type === 'pagibig' ? regPay : monthly;
+      employee = base * rate;
+      const employerRate = normalizeContributionNumber(config?.employerShare, 0);
+      employer = base * (employerRate > 0 ? employerRate : rate);
+    }
+  }
+  const cap = normalizeContributionNumber(config?.cap, 0);
+  employee = applyContributionCap(employee, cap);
+  employer = applyContributionCap(employer, cap);
+  return {
+    employee: roundToCents(employee),
+    employer: roundToCents(employer)
+  };
+}
+
+function sssShareByMonthly(monthly){
+  return computeContributionAmounts('sss', monthly, 0).employee;
 }
 
 function sssEmployerShareByMonthly(monthly){
-  const rows = getSssTable();
-  if(rows.length===0) return 0;
-  rows.sort((a,b)=>a.min-b.min);
-  if(monthly <= rows[0].min) return Number(rows[0].employer ?? rows[0].employee) || 0;
-  for(const r of rows){
-    if(monthly >= r.min && monthly <= r.max){
-      return Number(r.employer ?? r.employee) || 0;
-    }
-  }
-  const last = rows[rows.length-1];
-  return Number(last.employer ?? last.employee) || 0;
-}
-
-// Determine Pagâ€‘IBIG contribution rate based on the monthly income.  Uses the
-// editable Pagâ€‘IBIG table; returns a decimal rate (e.g. 0.02).  If no matching
-// range is found, returns the last row's rate.
-function pagibigRateByMonthly(monthly){
-  const rows = getPagibigTable();
-  if(rows.length===0) return 0;
-  rows.sort((a,b)=>a.min-b.min);
-  if(monthly <= rows[0].min) return Number(rows[0].rate)||0;
-  for(const r of rows){
-    if(monthly >= r.min && monthly <= r.max){
-      return Number(r.rate)||0;
-    }
-  }
-  return Number(rows[rows.length-1].rate)||0;
-}
-
-// Determine PhilHealth contribution rate based on the monthly income.  Uses the
-// editable PhilHealth table; returns a decimal rate.  If no matching range is found,
-// returns the last row's rate.
-function philhealthRateByMonthly(monthly){
-  const rows = getPhilhealthTable();
-  if(rows.length===0) return 0;
-  rows.sort((a,b)=>a.min-b.min);
-  if(monthly <= rows[0].min) return Number(rows[0].rate)||0;
-  for(const r of rows){
-    if(monthly >= r.min && monthly <= r.max){
-      return Number(r.rate)||0;
-    }
-  }
-  return Number(rows[rows.length-1].rate)||0;
+  return computeContributionAmounts('sss', monthly, 0).employer;
 }
 
 function calculateRow(tr){  const readNum = sel => { const el = tr.querySelector(sel); if (!el) return 0; const v = (typeof el.value !== 'undefined' ? el.value : el.textContent); const n = parseFloat(String(v).replace(/,/g,'')); return isNaN(n)?0:n; };
@@ -4934,18 +4955,18 @@ function calculateRow(tr){  const readNum = sel => { const el = tr.querySelector
   tr.querySelector('.totalHrs').textContent = totalHrs.toFixed(2);
   const otPay = +(otTotal * rate * getOvertimeMultiplier()).toFixed(2);
   const gross = +(regPay + otPay + additionalIncome + bVal).toFixed(2);
-  // Compute contributions using dynamic tables (employee share).  Determine the
-  // appropriate rate based on the monthly income and multiply by regular pay.
+  // Compute contributions using dynamic rules tied to monthly income and regular pay.
   const monthly = rate * 8 * 24;
-  const piRate = pagibigRateByMonthly(monthly);
-  const phRate = philhealthRateByMonthly(monthly);
+  const piAmounts = computeContributionAmounts('pagibig', monthly, regPay);
+  const phAmounts = computeContributionAmounts('philhealth', monthly, regPay);
+  const sssAmounts = computeContributionAmounts('sss', monthly, regPay);
   // Check per-employee contribution deduction flags; default to true if not set
   const flags = contribFlags[id] || {};
   const div = Number(divisor) || 1;
   const hasCompensation = (reg > 0) || (otTotal > 0) || (additionalIncome > 0) || (bVal > 0);
-  const pagibig = (hasCompensation && flags.pagibig !== false ? +((regPay * piRate)).toFixed(2) : 0);
-  const philhealth = (hasCompensation && flags.philhealth !== false ? +((regPay * phRate)).toFixed(2) : 0);
-  const sssFull = hasCompensation ? sssShareByMonthly(monthly) : 0;
+  const pagibig = (hasCompensation && flags.pagibig !== false ? piAmounts.employee : 0);
+  const philhealth = (hasCompensation && flags.philhealth !== false ? phAmounts.employee : 0);
+  const sssFull = hasCompensation ? sssAmounts.employee : 0;
   const sss = (hasCompensation && flags.sss !== false ? +(sssFull / div).toFixed(2) : 0);
   const sssLoan = +(lSSS / div).toFixed(2);
   const piLoan = +(lPI / div).toFixed(2);
@@ -5591,59 +5612,6 @@ document.addEventListener('DOMContentLoaded', () => {
   if (restoreBtn) restoreBtn.addEventListener('click', restoreAdjustmentsFromPrompt);
 });
 
-// Initialize the dynamic Pagâ€‘IBIG and PhilHealth rate input fields.  This function
-// sets their values from the current global variables and attaches input
-// listeners to persist changes to localStorage and recalculate payroll.
-function initializeContributionRates() {
-  const pagibigInput = document.getElementById('pagibigRateInput');
-  if (pagibigInput) {
-    // Set current value; show as decimal with 3 decimals
-    pagibigInput.value = typeof pagibigRate === 'number' ? pagibigRate.toFixed(3) : '';
-    pagibigInput.addEventListener('change', function() {
-      let val = parseFloat(pagibigInput.value);
-      if (!isNaN(val)) {
-        // If user enters percent (e.g. 2), convert to decimal
-        if (val > 1) val = val / 100;
-        // Bound to 0â€“1
-        if (val < 0) val = 0;
-        if (val > 1) val = 1;
-        pagibigRate = val;
-        localStorage.setItem(LS_PAGIBIG_RATE, String(val));
-        calculateAll();
-        updateContributionNote();
-      }
-    });
-  }
-  const philInput = document.getElementById('philhealthRateInput');
-  if (philInput) {
-    philInput.value = typeof philhealthRate === 'number' ? philhealthRate.toFixed(3) : '';
-    philInput.addEventListener('change', function() {
-      let val = parseFloat(philInput.value);
-      if (!isNaN(val)) {
-        if (val > 1) val = val / 100;
-        if (val < 0) val = 0;
-        if (val > 1) val = 1;
-        philhealthRate = val;
-        localStorage.setItem(LS_PHILHEALTH_RATE, String(val));
-        calculateAll();
-        updateContributionNote();
-      }
-    });
-  }
-}
-
-// Update the contribution note in the payroll tab to reflect current rates.  It
-// calculates percentages and updates the HTML of the element with id
-// 'contribNote'.  Called after rate changes and on initial load.
-function updateContributionNote() {
-  const noteEl = document.getElementById('contribNote');
-  if (!noteEl) return;
-  const piPct = (pagibigRate * 100).toFixed(2);
-  const phPct = (philhealthRate * 100).toFixed(2);
-  noteEl.innerHTML = 'Pag-IBIG = Regular Pay &times; ' + piPct + '% (not divided), ' +
-    'PhilHealth = Regular Pay &times; ' + phPct + '% (not divided), ' +
-    'SSS = (Employee Share by Monthly Income) &divide; Divisor. SSS Loan and Pag-IBIG Loan are divided by the Divisor. Vales are manual (not divided).';
-}
   document.getElementById('downloadPayrollCSV').addEventListener('click', ()=>{
   // Include Additional Income column before Bantay in payroll CSV export
   const header = ['Week Start','Week End','OT Multiplier','Divisor','ID','Name','Regular Hours','OT Hours','Hourly Rate','Regular Pay','OT Pay','Additional Income','Bantay','Gross Pay','Pag-IBIG','PhilHealth','SSS','SSS Loan','Pag-IBIG Loan','Account','Wed Vale','Total Deductions','Net Pay'];
@@ -5682,7 +5650,6 @@ renderAdditionalIncomeTable();
 // Render new contribution tables and update the note
 renderPagibigTable();
 renderPhilhealthTable();
-updateContributionNote();
     
   // Wire Project Totals CSV download button (global)
   if (document.getElementById('downloadProjectTotalsCSV')) {
@@ -8879,19 +8846,20 @@ rows += `<tr class="allowance">
         const rate = num(se?.[id]?.hourlyRate ?? rates?.[id]);
         const regPay = +(rH * rate).toFixed(2);
         const monthly = rate * 8 * 24;
-        const piRate = (typeof pagibigRateByMonthly==='function') ? pagibigRateByMonthly(monthly) : 0;
-        const phRate = (typeof philhealthRateByMonthly==='function') ? philhealthRateByMonthly(monthly) : 0;
-        const sssFull = (typeof sssShareByMonthly==='function') ? sssShareByMonthly(monthly) : 0;
-        const sssEmployerFull = (typeof sssEmployerShareByMonthly==='function') ? sssEmployerShareByMonthly(monthly) : sssFull;
+        const piAmounts = (typeof computeContributionAmounts==='function') ? computeContributionAmounts('pagibig', monthly, regPay) : { employee: 0, employer: 0 };
+        const phAmounts = (typeof computeContributionAmounts==='function') ? computeContributionAmounts('philhealth', monthly, regPay) : { employee: 0, employer: 0 };
+        const sssAmounts = (typeof computeContributionAmounts==='function') ? computeContributionAmounts('sss', monthly, regPay) : { employee: 0, employer: 0 };
         const flags = flagsAll[id] || {};
-        const pi = (!includePagibig || flags.pagibig===false) ? 0 : +(regPay * piRate).toFixed(2);
-        const ph = (!includePhilhealth || flags.philhealth===false) ? 0 : +(regPay * phRate).toFixed(2);
-        const sssEE = (!includeSSS || flags.sss===false) ? 0 : +(sssFull/div).toFixed(2);
-        const sssER = (!includeSSS || flags.sss===false) ? 0 : +(sssEmployerFull/div).toFixed(2);
+        const pi = (!includePagibig || flags.pagibig===false) ? 0 : roundToCents(piAmounts.employee);
+        const piEr = (!includePagibig || flags.pagibig===false) ? 0 : roundToCents(piAmounts.employer);
+        const ph = (!includePhilhealth || flags.philhealth===false) ? 0 : roundToCents(phAmounts.employee);
+        const phEr = (!includePhilhealth || flags.philhealth===false) ? 0 : roundToCents(phAmounts.employer);
+        const sssEE = (!includeSSS || flags.sss===false) ? 0 : +(sssAmounts.employee/div).toFixed(2);
+        const sssER = (!includeSSS || flags.sss===false) ? 0 : +(sssAmounts.employer/div).toFixed(2);
         const loanSssVal = includeLoanSSS ? +(num(lSSS[id]) / div).toFixed(2) : 0;
         const loanPiVal  = includeLoanPI  ? +(num(lPI[id])  / div).toFixed(2) : 0;
-        bucket.piEE += pi; bucket.piER += pi;
-        bucket.phEE += ph; bucket.phER += ph;
+        bucket.piEE += pi; bucket.piER += piEr;
+        bucket.phEE += ph; bucket.phER += phEr;
         bucket.sssEE += sssEE; bucket.sssER += sssER;
         bucket.loanSSS += loanSssVal;
         bucket.loanPI  += loanPiVal;
@@ -9307,45 +9275,343 @@ rows += `<tr class="allowance">
       #panelSettings .settings-section{border:1px solid #e5e7eb;border-radius:12px;padding:14px}
       #panelSettings .settings-section h4{margin:0 0 10px 0;font-size:15px;color:#0f172a}
       #panelSettings .settings-row{display:flex;flex-wrap:wrap;gap:12px}
+      #panelSettings .settings-tabs{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:16px}
+      #panelSettings .settings-tab-btn{padding:8px 12px;border:1px solid #cbd5e1;border-radius:10px;background:#f8fafc;color:#0f172a;font-weight:600;cursor:pointer;transition:background .15s ease,box-shadow .15s ease}
+      #panelSettings .settings-tab-btn:hover{background:#eef4fb;box-shadow:0 1px 3px rgba(0,0,0,.08)}
+      #panelSettings .settings-tab-btn.active{background:#eef4fb;border-color:#94a3b8}
+      #panelSettings .settings-tab-content{display:none}
+      #panelSettings .settings-tab-content.active{display:block}
+      #panelSettings .settings-banner{display:flex;flex-wrap:wrap;gap:16px;align-items:center;justify-content:space-between;background:#f8fafc;border:1px solid #e2e8f0;border-radius:12px;padding:12px 14px;margin-bottom:16px}
+      #panelSettings .settings-banner p{margin:0;color:#475569;font-size:13px}
+      #panelSettings .settings-banner h4{margin:0 0 6px 0;font-size:16px;color:#0f172a}
+      #panelSettings .settings-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
       #panelSettings label{display:flex;flex-direction:column;font-size:13px;color:#334155;font-weight:600;gap:6px}
       #panelSettings input[type="number"], #panelSettings input[type="time"]{min-width:140px}
       #panelSettings .hint{font-size:12px;color:#64748b;font-weight:400}
       #panelSettings .toggle{flex-direction:row;align-items:center;gap:8px;font-weight:600}
+      #panelSettings .table-card{margin-top:12px}
+      #panelSettings .settings-rule-note{margin:8px 0 0 0;color:#64748b;font-size:12px}
+      #panelSettings .settings-empty{padding:12px;border:1px dashed #cbd5e1;border-radius:10px;background:#f8fafc;color:#64748b;font-size:13px}
     </style>
     <div class="card">
-      <h3 style="margin:0 0 12px 0;">Payroll Settings</h3>
-      <div class="settings-grid">
-        <div class="settings-section">
-          <h4>Overtime</h4>
-          <div class="settings-row">
-            <label>
-              OT Multiplier
-              <input id="settingsOtMultiplier" type="number" step="0.01" min="0" inputmode="decimal">
-              <span class="hint">Used to compute overtime pay.</span>
-            </label>
+      <h3 style="margin:0 0 12px 0;">Settings</h3>
+      <div class="settings-tabs">
+        <button class="settings-tab-btn active" data-settings-tab="company" type="button">Company</button>
+        <button class="settings-tab-btn" data-settings-tab="contributions" type="button">Contributions</button>
+        <button class="settings-tab-btn" data-settings-tab="payrollRules" type="button">Payroll Rules</button>
+        <button class="settings-tab-btn" data-settings-tab="usersAccess" type="button">Users &amp; Access</button>
+        <button class="settings-tab-btn" data-settings-tab="backupSync" type="button">Backup/Sync</button>
+        <button class="settings-tab-btn" data-settings-tab="templates" type="button">Templates</button>
+      </div>
+
+      <div class="settings-tab-content active" id="settingsTabCompany">
+        <div class="settings-grid">
+          <div class="settings-section">
+            <h4>Company details</h4>
+            <p class="hint">Capture company info, branding, and defaults for new payroll runs.</p>
+            <div class="settings-empty">Company details configuration is ready for your next update.</div>
           </div>
         </div>
-        <div class="settings-section">
-          <h4>Night Differential</h4>
-          <div class="settings-row">
-            <label class="toggle">
-              <input id="settingsNdEnabled" type="checkbox">
-              Enabled
-            </label>
+      </div>
+
+      <div class="settings-tab-content" id="settingsTabContributions">
+        <div class="settings-banner">
+          <div>
+            <h4>Government contribution rules</h4>
+            <p>Switch between fixed, percentage, or bracketed rules. Updates are saved automatically across devices.</p>
           </div>
-          <div class="settings-row">
-            <label>
-              Start
-              <input id="settingsNdStart" type="time">
-            </label>
-            <label>
-              End
-              <input id="settingsNdEnd" type="time">
-            </label>
-            <label>
-              Multiplier
-              <input id="settingsNdMultiplier" type="number" step="0.01" min="0" inputmode="decimal">
-            </label>
+          <div class="settings-actions">
+            <button class="danger" id="resetContributionSettings" type="button">Reset to defaults</button>
+          </div>
+        </div>
+
+        <div class="settings-grid">
+          <div class="settings-section">
+            <h4>SSS</h4>
+            <div class="settings-row">
+              <label>
+                Rule mode
+                <select id="sssRuleMode">
+                  <option value="bracket">Bracket table</option>
+                  <option value="percentage">Percentage of monthly income</option>
+                  <option value="fixed">Fixed amount</option>
+                </select>
+              </label>
+              <label>
+                Employee share
+                <input id="sssEmployeeShare" type="number" step="0.01" min="0" inputmode="decimal">
+                <span class="hint">Use ₱ for fixed, decimal for percentage (e.g. 0.05).</span>
+              </label>
+              <label>
+                Employer share
+                <input id="sssEmployerShare" type="number" step="0.01" min="0" inputmode="decimal">
+              </label>
+              <label>
+                Cap (optional)
+                <input id="sssCap" type="number" step="0.01" min="0" inputmode="decimal">
+              </label>
+            </div>
+            <p class="settings-rule-note">Bracket mode uses the table below. Percentage and fixed modes ignore the table.</p>
+            <div class="table-card" data-contrib-table="sss">
+              <div class="table-card__header">
+                <div>
+                  <p class="table-card__tag">SSS</p>
+                  <h4 class="table-card__title">Monthly SSS shares</h4>
+                  <p class="table-card__subtitle">Use the peso amounts that apply to each bracket. PayrollPro will pick the row where <em>min ≤ income ≤ max</em>.</p>
+                </div>
+                <div class="table-card__tags">
+                  <span class="table-card__tag">Peso values</span>
+                  <span class="table-card__tag">Auto-save</span>
+                </div>
+              </div>
+              <div class="controls">
+                <button id="addSssRow">
+                  Add Row
+                </button>
+                <button class="primary" id="resetSss">
+                  Reset to Defaults (Custom)
+                </button>
+                <button class="danger" id="clearSss">
+                  Clear SSS Table
+                </button>
+                <button id="exportSss">
+                  Export CSV
+                </button>
+                <label>
+                  Import CSV (min,max,employeeShare,employerShare)
+                  <br/>
+                  <input accept=".csv,text/csv" id="importSss" type="file"/>
+                </label>
+              </div>
+              <table id="sssTable">
+                <thead>
+                  <tr>
+                    <th>
+                      Range From (₱)
+                    </th>
+                    <th>
+                      Range To (₱)
+                    </th>
+                    <th>
+                      Employee Share (₱)
+                    </th>
+                    <th>
+                      Employer Share (₱)
+                    </th>
+                    <th>
+                      Actions
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                </tbody>
+              </table>
+              <div class="section note contrib-note">
+                <strong>How it is used:</strong> Monthly Income = Hourly Rate × 8 × 24. The matching bracket supplies the employee and employer shares.
+              </div>
+            </div>
+          </div>
+
+          <div class="settings-section">
+            <h4>Pag-IBIG</h4>
+            <div class="settings-row">
+              <label>
+                Rule mode
+                <select id="pagibigRuleMode">
+                  <option value="bracket">Bracket table</option>
+                  <option value="percentage">Percentage of regular pay</option>
+                  <option value="fixed">Fixed amount</option>
+                </select>
+              </label>
+              <label>
+                Employee share
+                <input id="pagibigEmployeeShare" type="number" step="0.0001" min="0" inputmode="decimal">
+                <span class="hint">Decimal for percentage (e.g. 0.02).</span>
+              </label>
+              <label>
+                Employer share
+                <input id="pagibigEmployerShare" type="number" step="0.0001" min="0" inputmode="decimal">
+              </label>
+              <label>
+                Cap (optional)
+                <input id="pagibigCap" type="number" step="0.01" min="0" inputmode="decimal">
+              </label>
+            </div>
+            <p class="settings-rule-note">Bracket mode uses the table below. Percentage and fixed modes ignore the table.</p>
+            <div class="table-card" data-contrib-table="pagibig">
+              <div class="table-card__header">
+                <div>
+                  <p class="table-card__tag">Pag-IBIG</p>
+                  <h4 class="table-card__title">Pag-IBIG employee rates</h4>
+                  <p class="table-card__subtitle">Enter rates as decimals (0.02 = 2%). Applied to regular pay; employer share is assumed to mirror the employee rate.</p>
+                </div>
+                <div class="table-card__tags">
+                  <span class="table-card__tag">Rate table</span>
+                  <span class="table-card__tag">Bracketed</span>
+                </div>
+              </div>
+              <div class="controls">
+                <button id="addPagibigRow">
+                  Add Row
+                </button>
+                <button class="primary" id="resetPagibig">
+                  Reset to Defaults
+                </button>
+                <button class="danger" id="clearPagibig">
+                  Clear Pag-IBIG Table
+                </button>
+              </div>
+              <table id="pagibigTable">
+                <thead>
+                  <tr>
+                    <th>Range From (₱)</th>
+                    <th>Range To (₱)</th>
+                    <th>Rate (decimal)</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                </tbody>
+              </table>
+              <div class="section note contrib-note">
+                Keep ranges continuous so every salary finds a matching rate. Export before major edits so you can restore if needed.
+              </div>
+            </div>
+          </div>
+
+          <div class="settings-section">
+            <h4>PhilHealth</h4>
+            <div class="settings-row">
+              <label>
+                Rule mode
+                <select id="philhealthRuleMode">
+                  <option value="bracket">Bracket table</option>
+                  <option value="percentage">Percentage of monthly income</option>
+                  <option value="fixed">Fixed amount</option>
+                </select>
+              </label>
+              <label>
+                Employee share
+                <input id="philhealthEmployeeShare" type="number" step="0.0001" min="0" inputmode="decimal">
+                <span class="hint">Decimal for percentage (e.g. 0.025).</span>
+              </label>
+              <label>
+                Employer share
+                <input id="philhealthEmployerShare" type="number" step="0.0001" min="0" inputmode="decimal">
+              </label>
+              <label>
+                Cap (optional)
+                <input id="philhealthCap" type="number" step="0.01" min="0" inputmode="decimal">
+              </label>
+            </div>
+            <p class="settings-rule-note">Bracket mode uses the table below. Percentage and fixed modes ignore the table.</p>
+            <div class="table-card" data-contrib-table="philhealth">
+              <div class="table-card__header">
+                <div>
+                  <p class="table-card__tag">PhilHealth</p>
+                  <h4 class="table-card__title">PhilHealth employee rates</h4>
+                  <p class="table-card__subtitle">Provide decimal rates per income band. The rate is applied to monthly income to compute the employee share.</p>
+                </div>
+                <div class="table-card__tags">
+                  <span class="table-card__tag">Rate table</span>
+                  <span class="table-card__tag">Bracketed</span>
+                </div>
+              </div>
+              <div class="controls">
+                <button id="addPhilRow">
+                  Add Row
+                </button>
+                <button class="primary" id="resetPhil">
+                  Reset to Defaults
+                </button>
+                <button class="danger" id="clearPhil">
+                  Clear PhilHealth Table
+                </button>
+              </div>
+              <table id="philhealthTable">
+                <thead>
+                  <tr>
+                    <th>Range From (₱)</th>
+                    <th>Range To (₱)</th>
+                    <th>Rate (decimal)</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                </tbody>
+              </table>
+              <div class="section note contrib-note">
+                Rates use decimal format (e.g. 0.025 = 2.5% employee share). Ensure the final row captures high earners.
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="settings-tab-content" id="settingsTabPayrollRules">
+        <div class="settings-grid">
+          <div class="settings-section">
+            <h4>Overtime</h4>
+            <div class="settings-row">
+              <label>
+                OT Multiplier
+                <input id="settingsOtMultiplier" type="number" step="0.01" min="0" inputmode="decimal">
+                <span class="hint">Used to compute overtime pay.</span>
+              </label>
+            </div>
+          </div>
+          <div class="settings-section">
+            <h4>Night Differential</h4>
+            <div class="settings-row">
+              <label class="toggle">
+                <input id="settingsNdEnabled" type="checkbox">
+                Enabled
+              </label>
+            </div>
+            <div class="settings-row">
+              <label>
+                Start
+                <input id="settingsNdStart" type="time">
+              </label>
+              <label>
+                End
+                <input id="settingsNdEnd" type="time">
+              </label>
+              <label>
+                Multiplier
+                <input id="settingsNdMultiplier" type="number" step="0.01" min="0" inputmode="decimal">
+              </label>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="settings-tab-content" id="settingsTabUsersAccess">
+        <div class="settings-grid">
+          <div class="settings-section">
+            <h4>Users &amp; access</h4>
+            <p class="hint">Define payroll roles, approvals, and visibility for your team.</p>
+            <div class="settings-empty">User access settings can be configured here.</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="settings-tab-content" id="settingsTabBackupSync">
+        <div class="settings-grid">
+          <div class="settings-section">
+            <h4>Backup &amp; sync</h4>
+            <p class="hint">Manage cloud sync keys and export backups.</p>
+            <div class="settings-empty">Sync and backup controls are ready for setup.</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="settings-tab-content" id="settingsTabTemplates">
+        <div class="settings-grid">
+          <div class="settings-section">
+            <h4>Templates</h4>
+            <p class="hint">Standardize pay slips, reports, and payroll exports.</p>
+            <div class="settings-empty">Template presets will appear here.</div>
           </div>
         </div>
       </div>
