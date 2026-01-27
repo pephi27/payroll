@@ -2844,7 +2844,8 @@ window.addEventListener('load', dashReports);
      </div>
      <div class="toolbar" id="additionalIncomeControls">
       <div class="toolbar-left">
-       <button type="button" id="printAdditionalIncomeReportBtn">Print &amp; Download Excel</button>
+       <button type="button" id="printAdditionalIncomePivotBtn">Print Report</button>
+       <button type="button" id="exportAdditionalIncomePivotExcelBtn">Download Excel</button>
       </div>
      </div>
      <table id="additionalIncomeTable">
@@ -6031,7 +6032,37 @@ function buildAdditionalIncomeReportData() {
   return { rows, columnLabels };
 }
 
-function exportAdditionalIncomeReportExcel(report) {
+const PRINT_PIVOT_MAX_TYPES = 6;
+
+function getPrintablePivotColumns(rows, types) {
+  const typeList = Array.isArray(types) ? types : [];
+  const optionsLower = new Set(typeList.map(opt => String(opt || '').toLowerCase()));
+  const totalsMap = new Map();
+  typeList.forEach(label => {
+    const keyLower = String(label || '').toLowerCase();
+    if (!keyLower || totalsMap.has(keyLower)) return;
+    totalsMap.set(keyLower, { label, keyLower, total: 0 });
+  });
+  let customTotal = 0;
+  rows.forEach(row => {
+    const totals = row && row.totals ? row.totals : {};
+    totalsMap.forEach(entry => {
+      entry.total = roundToCents(entry.total + (totals[entry.keyLower] || 0));
+    });
+    Object.keys(totals).forEach(keyLower => {
+      if (!optionsLower.has(keyLower)) {
+        customTotal = roundToCents(customTotal + (totals[keyLower] || 0));
+      }
+    });
+  });
+  const columns = Array.from(totalsMap.values()).filter(col => col.total > 0);
+  if (customTotal > 0) {
+    columns.push({ label: 'Custom/Others', keyLower: '__custom__', total: customTotal, isCustom: true });
+  }
+  return columns;
+}
+
+function exportAdditionalIncomePivotExcel(report) {
   if (typeof XLSX === 'undefined' || !XLSX || !XLSX.utils) {
     alert('Excel library not available');
     return false;
@@ -6081,12 +6112,39 @@ function exportAdditionalIncomeReportExcel(report) {
   return true;
 }
 
-function printAdditionalIncomeReport(report) {
+function printAdditionalIncomePivot(report) {
   const formatAmount = (value) => {
     const num = Number(value);
     if (!Number.isFinite(num) || Math.abs(num) < 0.005) return '-';
     return num.toFixed(2);
   };
+  const incomeOptions = getIncomeTypeOptions();
+  const optionsLower = new Set(incomeOptions.map(opt => String(opt || '').toLowerCase()));
+  const printableColumns = getPrintablePivotColumns(report.rows, incomeOptions);
+  const customColumn = printableColumns.find(col => col.isCustom);
+  const standardColumns = printableColumns.filter(col => !col.isCustom);
+  let columnsToPrint = [];
+  if (standardColumns.length > PRINT_PIVOT_MAX_TYPES) {
+    const sorted = [...standardColumns].sort((a, b) => b.total - a.total);
+    const primary = sorted.slice(0, PRINT_PIVOT_MAX_TYPES);
+    const overflow = sorted.slice(PRINT_PIVOT_MAX_TYPES);
+    columnsToPrint = [...primary];
+    if (overflow.length) {
+      const overflowTotal = overflow.reduce((sum, col) => roundToCents(sum + (col.total || 0)), 0);
+      if (overflowTotal > 0) {
+        columnsToPrint.push({
+          label: 'Others',
+          keyLower: '__others__',
+          total: overflowTotal,
+          isOthers: true,
+          sourceKeys: overflow.map(col => col.keyLower)
+        });
+      }
+    }
+  } else {
+    columnsToPrint = [...standardColumns];
+  }
+  if (customColumn) columnsToPrint.push(customColumn);
   const ws = document.getElementById('weekStart');
   const we = document.getElementById('weekEnd');
   const startDate = ws && ws.value ? ws.value : '';
@@ -6094,33 +6152,45 @@ function printAdditionalIncomeReport(report) {
   const title = (startDate && endDate)
     ? `Additional Income Report (${startDate} to ${endDate})`
     : 'Additional Income Report';
-  let html = '<table><thead><tr><th>ID</th><th>Employee</th>';
-  report.columnLabels.forEach(label => {
-    html += `<th class="num">${label}</th>`;
+  const getRowValue = (row, column) => {
+    if (!row || !row.totals) return 0;
+    if (column.isCustom) {
+      return Object.keys(row.totals).reduce((sum, keyLower) => {
+        if (optionsLower.has(keyLower)) return sum;
+        return roundToCents(sum + (row.totals[keyLower] || 0));
+      }, 0);
+    }
+    if (column.isOthers) {
+      const keys = column.sourceKeys || [];
+      return keys.reduce((sum, keyLower) => roundToCents(sum + (row.totals[keyLower] || 0)), 0);
+    }
+    return row.totals[column.keyLower] || 0;
+  };
+  let html = '<div id="printReportContainer" class="print-scale"><table><thead><tr><th>Employee ID</th><th>Employee Name</th>';
+  columnsToPrint.forEach(column => {
+    html += `<th class="num">${column.label}</th>`;
   });
-  html += '<th class="num">Total</th></tr></thead><tbody>';
+  html += '<th class="num">Total Additional Income</th></tr></thead><tbody>';
   report.rows.forEach(row => {
     html += `<tr><td>${row.id || ''}</td><td>${row.name || ''}</td>`;
-    report.columnLabels.forEach(label => {
-      const keyLower = String(label || '').toLowerCase();
-      html += `<td class="num">${formatAmount(row.totals[keyLower] || 0)}</td>`;
+    columnsToPrint.forEach(column => {
+      html += `<td class="num">${formatAmount(getRowValue(row, column))}</td>`;
     });
     html += `<td class="num">${formatAmount(row.total || 0)}</td></tr>`;
   });
   html += '</tbody><tfoot><tr><td></td><td>Grand Total</td>';
-  report.columnLabels.forEach(label => {
-    const keyLower = String(label || '').toLowerCase();
+  columnsToPrint.forEach(column => {
     let sum = 0;
-    report.rows.forEach(row => { sum = roundToCents(sum + (row.totals[keyLower] || 0)); });
+    report.rows.forEach(row => { sum = roundToCents(sum + getRowValue(row, column)); });
     html += `<td class="num">${formatAmount(sum)}</td>`;
   });
   let grandTotal = 0;
   report.rows.forEach(row => { grandTotal = roundToCents(grandTotal + (row.total || 0)); });
-  html += `<td class="num">${formatAmount(grandTotal)}</td></tr></tfoot></table>`;
+  html += `<td class="num">${formatAmount(grandTotal)}</td></tr></tfoot></table></div>`;
   const w = window.open('', '', 'width=1100,height=700');
   if (!w) return;
   w.document.write('<html><head><meta charset="utf-8"><title>Additional Income Report</title>');
-  w.document.write('<style>@page{size:letter landscape;margin:10mm} body{font-family:Arial,Helvetica,sans-serif;margin:0} h2{margin:0 0 10px;font-size:16px} table{border-collapse:collapse;width:100%;table-layout:fixed} th,td{border:1pt solid #000;padding:4px;font-size:11px} th{background:#f1f5f9} td.num, th.num{text-align:right} thead{display:table-header-group} tfoot{display:table-footer-group} tfoot td{font-weight:700;background:#fff7ed;border-top:2pt solid #000}</style>');
+  w.document.write('<style>@page{size:letter portrait;margin:8mm} body{font-family:Arial,Helvetica,sans-serif;margin:0} h2{margin:0 0 6px;font-size:13px} table{border-collapse:collapse;width:100%;table-layout:fixed} th,td{border:1pt solid #000;padding:2px 4px;font-size:9px;white-space:nowrap} th{background:#f1f5f9} td.num, th.num{text-align:right} thead{display:table-header-group} tfoot{display:table-footer-group} tfoot td{font-weight:700;background:#fff7ed;border-top:2pt solid #000} .print-scale{transform:scale(0.95);transform-origin:top left} @media print{body{font-size:9px} button,input,select,textarea,nav{display:none !important} #printReportContainer{display:block}} </style>');
   w.document.write('</head><body>');
   w.document.write(`<h2>${title}</h2>`);
   w.document.write(html);
@@ -6136,21 +6206,35 @@ function printAdditionalIncomeReport(report) {
 }
 
 document.addEventListener('DOMContentLoaded', () => {
-  const btn = document.getElementById('printAdditionalIncomeReportBtn');
-  if (!btn) return;
-  btn.addEventListener('click', () => {
+  const printBtn = document.getElementById('printAdditionalIncomePivotBtn');
+  const exportBtn = document.getElementById('exportAdditionalIncomePivotExcelBtn');
+  if (!printBtn && !exportBtn) return;
+  const getReport = () => {
     if (!employeeList || !employeeList.length) {
       alert('No employees available for the report.');
-      return;
+      return null;
     }
     const report = buildAdditionalIncomeReportData();
     if (!report.columnLabels.length) {
       alert('No additional income data to report.');
-      return;
+      return null;
     }
-    exportAdditionalIncomeReportExcel(report);
-    printAdditionalIncomeReport(report);
-  });
+    return report;
+  };
+  if (printBtn) {
+    printBtn.addEventListener('click', () => {
+      const report = getReport();
+      if (!report) return;
+      printAdditionalIncomePivot(report);
+    });
+  }
+  if (exportBtn) {
+    exportBtn.addEventListener('click', () => {
+      const report = getReport();
+      if (!report) return;
+      exportAdditionalIncomePivotExcel(report);
+    });
+  }
 });
 
 // === Other Deductions Tab ===
