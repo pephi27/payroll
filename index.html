@@ -141,6 +141,7 @@ const KNOWN_KEYS = [
   "payroll_vale",
   "payroll_vale_wed",
   "payroll_hist",
+  "payrollColumnWidths",
   // additional filter & state keys not previously persisted
   "dtr_filter_from",
   "dtr_filter_to",
@@ -411,7 +412,17 @@ function safeStringify(v){
 
 /* === PERF: faster layout for payroll table === */
 #payrollTable { table-layout: fixed; }
-#payrollTable th, #payrollTable td { white-space: nowrap; }
+#payrollTable th, #payrollTable td { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#payrollTable th { position: relative; }
+#payrollTable .col-resizer {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 6px;
+  height: 100%;
+  cursor: col-resize;
+  user-select: none;
+}
 
 .toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 8px 0 12px; flex-wrap: wrap; }
 .toolbar .toolbar-left { display: flex; gap: 8px; flex-wrap: wrap; }
@@ -1074,7 +1085,7 @@ window.addEventListener('load', dashReports);
   #payrollTab #payrollTable tfoot td:nth-child(16),
   #payrollTab #payrollTable tfoot td:nth-child(17) { display: none; }
 /* === PATCH: column widths for Hourly Rate, Regular Hours, OT Hours === */
-#payrollTable th, #payrollTable td { white-space: nowrap; }
+#payrollTable th, #payrollTable td { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 #payrollTable th:nth-child(3), #payrollTable td:nth-child(3) { width: 110px; min-width: 110px; } /* Hourly Rate */
 #payrollTable th:nth-child(4), #payrollTable td:nth-child(4) { width: 120px; min-width: 120px; } /* Regular Hours */
 #payrollTable th:nth-child(5), #payrollTable td:nth-child(5) { width: 120px; min-width: 120px; } /* OT Hours */
@@ -4616,6 +4627,160 @@ document.addEventListener('DOMContentLoaded', function(){
       toggles.__boundColumnToggle = true;
     }
   } catch (err) {}
+});
+
+const PAYROLL_COLUMN_WIDTHS_KEY = 'payrollColumnWidths';
+let payrollColumnWidths = null;
+
+function loadPayrollColumnWidths() {
+  if (payrollColumnWidths) return payrollColumnWidths;
+  try {
+    const raw = localStorage.getItem(PAYROLL_COLUMN_WIDTHS_KEY);
+    if (!raw) {
+      payrollColumnWidths = {};
+      return payrollColumnWidths;
+    }
+    const parsed = JSON.parse(raw);
+    payrollColumnWidths = parsed && typeof parsed === 'object' ? parsed : {};
+    return payrollColumnWidths;
+  } catch (err) {
+    payrollColumnWidths = {};
+    return payrollColumnWidths;
+  }
+}
+
+function savePayrollColumnWidths() {
+  if (!payrollColumnWidths) return;
+  try {
+    localStorage.setItem(PAYROLL_COLUMN_WIDTHS_KEY, JSON.stringify(payrollColumnWidths));
+  } catch (err) {}
+}
+
+function getPayrollColumnKey(th, index) {
+  return th.getAttribute('data-col') || th.dataset.col || String(index);
+}
+
+function applyPayrollColumnWidth(table, columnIndex, width) {
+  const widthPx = `${Math.round(width)}px`;
+  table.querySelectorAll('tr').forEach(row => {
+    const cell = row.children[columnIndex];
+    if (!cell) return;
+    cell.style.width = widthPx;
+    cell.style.minWidth = widthPx;
+  });
+}
+
+function applyPayrollColumnWidthsToRow(tr, table) {
+  const headers = table.querySelectorAll('thead th');
+  const widths = loadPayrollColumnWidths();
+  headers.forEach((th, index) => {
+    const key = getPayrollColumnKey(th, index);
+    const width = Number(widths[key]);
+    if (!Number.isFinite(width)) return;
+    const cell = tr.children[index];
+    if (!cell) return;
+    const widthPx = `${Math.round(width)}px`;
+    cell.style.width = widthPx;
+    cell.style.minWidth = widthPx;
+  });
+}
+
+function applySavedPayrollColumnWidths(table) {
+  const headers = table.querySelectorAll('thead th');
+  const widths = loadPayrollColumnWidths();
+  headers.forEach((th, index) => {
+    const key = getPayrollColumnKey(th, index);
+    const width = Number(widths[key]);
+    if (!Number.isFinite(width)) return;
+    applyPayrollColumnWidth(table, index, width);
+  });
+}
+
+function setupPayrollColumnResizers() {
+  const table = document.getElementById('payrollTable');
+  if (!table) return;
+  const headers = table.querySelectorAll('thead th');
+  headers.forEach((th, index) => {
+    if (th.querySelector('.col-resizer')) return;
+    const resizer = document.createElement('div');
+    resizer.className = 'col-resizer';
+    resizer.setAttribute('data-col-index', String(index));
+    th.appendChild(resizer);
+  });
+  applySavedPayrollColumnWidths(table);
+
+  if (!table.__payrollResizerBound) {
+    let startX = 0;
+    let startWidth = 0;
+    let activeIndex = null;
+    let activeKey = null;
+    const minWidth = 60;
+
+    const onMouseMove = (event) => {
+      if (activeIndex === null) return;
+      const delta = event.clientX - startX;
+      let newWidth = startWidth + delta;
+      if (newWidth < minWidth) newWidth = minWidth;
+      applyPayrollColumnWidth(table, activeIndex, newWidth);
+      if (!payrollColumnWidths) payrollColumnWidths = {};
+      if (activeKey) {
+        payrollColumnWidths[activeKey] = Math.round(newWidth);
+      }
+    };
+
+    const onMouseUp = () => {
+      if (activeIndex === null) return;
+      savePayrollColumnWidths();
+      document.removeEventListener('mousemove', onMouseMove);
+      document.removeEventListener('mouseup', onMouseUp);
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+      activeIndex = null;
+      activeKey = null;
+    };
+
+    table.addEventListener('mousedown', (event) => {
+      const handle = event.target.closest('.col-resizer');
+      if (!handle) return;
+      const th = handle.parentElement;
+      if (!th) return;
+      const style = window.getComputedStyle(th);
+      if (style.display === 'none' || style.visibility === 'hidden') return;
+      activeIndex = th.cellIndex;
+      if (activeIndex === null || activeIndex === undefined) return;
+      startX = event.clientX;
+      startWidth = th.getBoundingClientRect().width;
+      activeKey = getPayrollColumnKey(th, activeIndex);
+      document.body.style.cursor = 'col-resize';
+      document.body.style.userSelect = 'none';
+      document.addEventListener('mousemove', onMouseMove);
+      document.addEventListener('mouseup', onMouseUp);
+      event.preventDefault();
+    });
+    table.__payrollResizerBound = true;
+  }
+
+  const tbody = table.querySelector('tbody');
+  if (tbody && !tbody.__payrollResizeObserver) {
+    const observer = new MutationObserver((mutations) => {
+      mutations.forEach(mutation => {
+        mutation.addedNodes.forEach(node => {
+          if (node.nodeType !== 1) return;
+          if (node.matches('tr')) {
+            applyPayrollColumnWidthsToRow(node, table);
+          } else if (node.querySelectorAll) {
+            node.querySelectorAll('tr').forEach(row => applyPayrollColumnWidthsToRow(row, table));
+          }
+        });
+      });
+    });
+    observer.observe(tbody, { childList: true, subtree: true });
+    tbody.__payrollResizeObserver = observer;
+  }
+}
+
+document.addEventListener('DOMContentLoaded', function() {
+  setupPayrollColumnResizers();
 });
 
 function findPayrollRowById(empId){
