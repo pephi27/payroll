@@ -404,28 +404,6 @@ function safeStringify(v){
 #additionalIncomeTable .incomeCustomLabel { min-width: 160px; flex: 1; }
 /* === END Additional Income === */
 
-/* === Additional Income Pivot Report === */
-#addIncomePivotReport { margin-top: 16px; background: #fff; border: 1px solid #e2e8f0; border-radius: 10px; padding: 16px; }
-#addIncomePivotReport .pivot-header { text-align: center; }
-#addIncomePivotReport .pivot-header .company-name { font-weight: 700; font-size: 16px; color: #0f172a; }
-#addIncomePivotReport .pivot-header h3 { margin: 6px 0; font-size: 18px; color: #0f172a; }
-#addIncomePivotReport .pivot-meta { display: flex; flex-wrap: wrap; gap: 12px; justify-content: center; font-size: 12px; color: #475569; }
-#addIncomePivotReport table { width: 100%; border-collapse: collapse; table-layout: fixed; margin-top: 12px; }
-#addIncomePivotReport thead { display: table-header-group; }
-#addIncomePivotReport th, #addIncomePivotReport td { border: 1px solid #cbd5f5; padding: 6px 8px; font-size: 12px; }
-#addIncomePivotReport th { background: #f1f5f9; text-align: left; }
-#addIncomePivotReport td.num { text-align: right; font-variant-numeric: tabular-nums; }
-#addIncomePivotReport tfoot td { font-weight: 700; background: #fff7ed; }
-
-@media print {
-  body * { visibility: hidden !important; }
-  #addIncomePivotReport, #addIncomePivotReport * { visibility: visible !important; }
-  #addIncomePivotReport { position: absolute; left: 0; top: 0; width: 100%; }
-  #addIncomePivotReport table { page-break-inside: auto; }
-  #addIncomePivotReport tr { page-break-inside: avoid; break-inside: avoid-page; }
-}
-/* === END Additional Income Pivot Report === */
-
 /* === Other Deductions: type selector layout === */
 #otherDeductionsTable .otherDeductionTypeField { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 #otherDeductionsTable .otherDeductionTypeSelect { min-width: 160px; }
@@ -2875,29 +2853,6 @@ window.addEventListener('load', dashReports);
       </thead>
       <tbody></tbody>
      </table>
-     <div class="toolbar no-print" id="addIncomePivotControls">
-      <div class="toolbar-left">
-       <button type="button" id="printAddIncomePivotBtn">Print Pivot Report</button>
-       <button type="button" id="exportAddIncomePivotExcelBtn">Export Pivot Excel</button>
-      </div>
-     </div>
-     <div id="addIncomePivotReport">
-      <div class="pivot-header">
-       <div class="company-name" id="addIncomePivotCompany">Company Name</div>
-       <h3>Additional Income Pivot Report</h3>
-       <div class="pivot-meta">
-        <span id="addIncomePivotPeriod">Pay Period: -</span>
-        <span id="addIncomePivotGenerated">Generated: -</span>
-       </div>
-      </div>
-      <div class="pivot-table-wrap">
-       <table>
-        <thead></thead>
-        <tbody></tbody>
-        <tfoot></tfoot>
-       </table>
-      </div>
-     </div>
     </div>
 
     <!-- Other Deductions Tab -->
@@ -3213,7 +3168,6 @@ async function loadIncomeTypeOptions(){
     try {
       if (typeof queueAdditionalIncomeRerender === 'function') queueAdditionalIncomeRerender();
       else if (typeof renderAdditionalIncomeTable === 'function') renderAdditionalIncomeTable();
-      if (typeof RenderPivotReport === 'function') RenderPivotReport();
     } catch (_) {}
   } catch (err) {
     console.warn('Loading income type options failed', err);
@@ -5848,7 +5802,6 @@ function renderAdditionalIncomeTable(){
           additionalIncomePersist.flush();
           renderAdditionalIncomeTable();
           updatePayrollRowForEmployee(empId);
-          scheduleAddIncomePivotRender();
         });
         wrapper.appendChild(nameEl);
         wrapper.appendChild(addBtn);
@@ -5938,7 +5891,6 @@ function renderAdditionalIncomeTable(){
           updateAdditionalIncomeTotalForEmployee(empId);
           additionalIncomePersist.schedule();
           updatePayrollRowForEmployee(empId);
-          scheduleAddIncomePivotRender();
         });
         typeSelect.addEventListener('blur', handleBlur);
       }
@@ -5954,7 +5906,6 @@ function renderAdditionalIncomeTable(){
           additionalIncomeDetails[empId][idx].label = customInput.value;
           additionalIncomePersist.schedule();
           updatePayrollRowForEmployee(empId);
-          scheduleAddIncomePivotRender();
         });
         customInput.addEventListener('blur', () => {
           if (!Array.isArray(additionalIncomeDetails[empId])) additionalIncomeDetails[empId] = [];
@@ -5967,7 +5918,6 @@ function renderAdditionalIncomeTable(){
           customInput.value = label;
           additionalIncomePersist.flush();
           updatePayrollRowForEmployee(empId);
-          scheduleAddIncomePivotRender();
           handleBlur();
         });
       }
@@ -5988,7 +5938,6 @@ function renderAdditionalIncomeTable(){
           updateAdditionalIncomeTotalForEmployee(empId);
           additionalIncomePersist.schedule();
           updatePayrollRowForEmployee(empId);
-          scheduleAddIncomePivotRender();
         });
         amountInput.addEventListener('blur', () => {
           if (!Array.isArray(additionalIncomeDetails[empId])) additionalIncomeDetails[empId] = [];
@@ -6006,7 +5955,6 @@ function renderAdditionalIncomeTable(){
           updateAdditionalIncomeTotalForEmployee(empId);
           additionalIncomePersist.flush();
           updatePayrollRowForEmployee(empId);
-          scheduleAddIncomePivotRender();
           handleBlur();
         });
       }
@@ -6019,272 +5967,12 @@ function renderAdditionalIncomeTable(){
           additionalIncomePersist.flush();
           renderAdditionalIncomeTable();
           updatePayrollRowForEmployee(empId);
-          scheduleAddIncomePivotRender();
         });
       }
       atbody.appendChild(tr);
     });
   });
-  try { if (typeof RenderPivotReport === 'function') RenderPivotReport(); } catch (_) {}
 }
-
-const ADD_INCOME_PIVOT_CUSTOM_LABEL = 'Custom (Others)';
-let addIncomePivotRenderTimer = null;
-function scheduleAddIncomePivotRender() {
-  if (addIncomePivotRenderTimer) window.clearTimeout(addIncomePivotRenderTimer);
-  addIncomePivotRenderTimer = window.setTimeout(() => {
-    addIncomePivotRenderTimer = null;
-    try { if (typeof RenderPivotReport === 'function') RenderPivotReport(); } catch (_) {}
-  }, 120);
-}
-
-function getAddIncomePivotCompanyName() {
-  if (typeof COMPANY_OPTIONS !== 'undefined' && Array.isArray(COMPANY_OPTIONS) && COMPANY_OPTIONS[0]) {
-    return COMPANY_OPTIONS[0];
-  }
-  return 'PayrollPro';
-}
-
-function getLockedPeriodAddIncomeByEmp() {
-  try {
-    if (typeof window.isSelectedPeriodLocked === 'function' && window.isSelectedPeriodLocked()) {
-      const ws = document.getElementById('weekStart');
-      const we = document.getElementById('weekEnd');
-      const start = ws && ws.value ? ws.value : '';
-      const end = we && we.value ? we.value : '';
-      const history = Array.isArray(window.payrollHistory) ? window.payrollHistory : [];
-      const snap = history.find(entry => entry && entry.startDate === start && entry.endDate === end);
-      if (snap && snap.addIncomeByEmp && typeof snap.addIncomeByEmp === 'object') return snap.addIncomeByEmp;
-    }
-  } catch (_) {}
-  return null;
-}
-
-function resolveAdditionalIncomeMapForPeriod(periodKeyValue) {
-  const periodSource = (typeof additionalIncomeByPeriod !== 'undefined' && additionalIncomeByPeriod)
-    ? additionalIncomeByPeriod
-    : allAdditionalIncomeDetails;
-  if (periodKeyValue && isPlainObject(periodSource) && isPlainObject(periodSource[periodKeyValue])) {
-    return periodSource[periodKeyValue];
-  }
-  return additionalIncomeDetails;
-}
-
-function BuildPivotReport(periodKeyValue) {
-  const typeOptions = getIncomeTypeOptions();
-  const typeTotals = {};
-  typeOptions.forEach(type => { typeTotals[type] = 0; });
-  let customTotal = 0;
-  let totalSum = 0;
-  const rows = [];
-  const periodKeyResolved = periodKeyValue || (typeof window.periodKey === 'function' ? window.periodKey() : currentPeriodKey);
-  const snapshotMap = getLockedPeriodAddIncomeByEmp();
-  const detailMap = snapshotMap || resolveAdditionalIncomeMapForPeriod(periodKeyResolved);
-
-  employeeList.forEach(emp => {
-    const empId = emp.id;
-    const rowTotals = {};
-    typeOptions.forEach(type => { rowTotals[type] = 0; });
-    let rowCustom = 0;
-    const items = Array.isArray(detailMap && detailMap[empId]) ? detailMap[empId] : [];
-    const normalizedItems = normalizeAdditionalIncomeItems(items);
-
-    normalizedItems.forEach(item => {
-      const rawType = String(item && item.type ? item.type : '').trim();
-      const lowerType = rawType.toLowerCase();
-      const match = matchIncomeTypeOption(rawType);
-      const amount = sanitizeAdditionalIncomeAmount(item && item.amount);
-      const isCustom = lowerType === 'custom' || rawType === CUSTOM_INCOME_TYPE_VALUE || !match;
-      if (isCustom) {
-        rowCustom += amount;
-      } else {
-        rowTotals[match] += amount;
-      }
-    });
-
-    typeOptions.forEach(type => {
-      const rounded = roundToCents(rowTotals[type]);
-      rowTotals[type] = rounded;
-      typeTotals[type] = roundToCents(typeTotals[type] + rounded);
-    });
-
-    rowCustom = roundToCents(rowCustom);
-    const rowTotal = roundToCents(Object.values(rowTotals).reduce((sum, val) => sum + val, 0) + rowCustom);
-    customTotal = roundToCents(customTotal + rowCustom);
-    totalSum = roundToCents(totalSum + rowTotal);
-
-    rows.push({
-      id: empId,
-      name: emp.name || '',
-      values: rowTotals,
-      custom: rowCustom,
-      total: rowTotal
-    });
-  });
-
-  return {
-    columns: typeOptions.slice(),
-    rows,
-    totals: {
-      types: typeTotals,
-      custom: customTotal,
-      total: totalSum
-    }
-  };
-}
-
-function RenderPivotReport(periodKeyValue) {
-  const container = document.getElementById('addIncomePivotReport');
-  if (!container) return;
-  const report = BuildPivotReport(periodKeyValue);
-  const table = container.querySelector('table');
-  if (!table) return;
-  const thead = table.querySelector('thead');
-  const tbody = table.querySelector('tbody');
-  const tfoot = table.querySelector('tfoot');
-  if (!thead || !tbody || !tfoot) return;
-
-  const headers = ['Employee ID', 'Employee Name'].concat(report.columns, [ADD_INCOME_PIVOT_CUSTOM_LABEL, 'Total Additional Income']);
-  const formatAmount = (value) => {
-    const num = Number(value);
-    if (!Number.isFinite(num)) return '0.00';
-    return num.toFixed(2);
-  };
-
-  thead.innerHTML = '';
-  const headerRow = document.createElement('tr');
-  headers.forEach(label => {
-    const th = document.createElement('th');
-    th.textContent = label;
-    headerRow.appendChild(th);
-  });
-  thead.appendChild(headerRow);
-
-  tbody.innerHTML = '';
-  report.rows.forEach(row => {
-    const tr = document.createElement('tr');
-    const idCell = document.createElement('td');
-    idCell.textContent = row.id || '';
-    tr.appendChild(idCell);
-    const nameCell = document.createElement('td');
-    nameCell.textContent = row.name || '';
-    tr.appendChild(nameCell);
-    report.columns.forEach(type => {
-      const td = document.createElement('td');
-      td.className = 'num';
-      td.textContent = formatAmount(row.values[type] || 0);
-      tr.appendChild(td);
-    });
-    const customCell = document.createElement('td');
-    customCell.className = 'num';
-    customCell.textContent = formatAmount(row.custom || 0);
-    tr.appendChild(customCell);
-    const totalCell = document.createElement('td');
-    totalCell.className = 'num';
-    totalCell.textContent = formatAmount(row.total || 0);
-    tr.appendChild(totalCell);
-    tbody.appendChild(tr);
-  });
-
-  tfoot.innerHTML = '';
-  const totalRow = document.createElement('tr');
-  const totalLabel = document.createElement('td');
-  totalLabel.textContent = 'Totals';
-  totalLabel.colSpan = 2;
-  totalRow.appendChild(totalLabel);
-  report.columns.forEach(type => {
-    const td = document.createElement('td');
-    td.className = 'num';
-    td.textContent = formatAmount(report.totals.types[type] || 0);
-    totalRow.appendChild(td);
-  });
-  const customTotalCell = document.createElement('td');
-  customTotalCell.className = 'num';
-  customTotalCell.textContent = formatAmount(report.totals.custom || 0);
-  totalRow.appendChild(customTotalCell);
-  const overallTotalCell = document.createElement('td');
-  overallTotalCell.className = 'num';
-  overallTotalCell.textContent = formatAmount(report.totals.total || 0);
-  totalRow.appendChild(overallTotalCell);
-  tfoot.appendChild(totalRow);
-
-  const companyEl = document.getElementById('addIncomePivotCompany');
-  if (companyEl) companyEl.textContent = getAddIncomePivotCompanyName();
-  const periodEl = document.getElementById('addIncomePivotPeriod');
-  if (periodEl) {
-    const ws = document.getElementById('weekStart');
-    const we = document.getElementById('weekEnd');
-    const start = ws && ws.value ? ws.value : '';
-    const end = we && we.value ? we.value : '';
-    const periodText = (typeof formatDateRange === 'function')
-      ? formatDateRange(start, end)
-      : (start && end ? `${start} - ${end}` : (start || end || 'Not set'));
-    periodEl.textContent = `Pay Period: ${periodText || '-'}`;
-  }
-  const generatedEl = document.getElementById('addIncomePivotGenerated');
-  if (generatedEl) generatedEl.textContent = `Generated: ${new Date().toLocaleString()}`;
-}
-
-function ExportPivotToExcel(periodKeyValue) {
-  if (typeof XLSX === 'undefined' || !XLSX || !XLSX.utils) {
-    alert('Excel library not available');
-    return;
-  }
-  const report = BuildPivotReport(periodKeyValue);
-  const headers = ['EmpID', 'Name'].concat(report.columns, [ADD_INCOME_PIVOT_CUSTOM_LABEL, 'Total']);
-  const rows = [headers];
-
-  report.rows.forEach(row => {
-    const line = [row.id || '', row.name || ''];
-    report.columns.forEach(type => {
-      line.push(Number((row.values[type] || 0).toFixed(2)));
-    });
-    line.push(Number((row.custom || 0).toFixed(2)));
-    line.push(Number((row.total || 0).toFixed(2)));
-    rows.push(line);
-  });
-
-  const totalsLine = ['Totals', ''];
-  report.columns.forEach(type => {
-    totalsLine.push(Number((report.totals.types[type] || 0).toFixed(2)));
-  });
-  totalsLine.push(Number((report.totals.custom || 0).toFixed(2)));
-  totalsLine.push(Number((report.totals.total || 0).toFixed(2)));
-  rows.push(totalsLine);
-
-  const ws = XLSX.utils.aoa_to_sheet(rows);
-  for (let r = 1; r < rows.length; r += 1) {
-    for (let c = 2; c < headers.length; c += 1) {
-      const cellRef = XLSX.utils.encode_cell({ r, c });
-      if (ws[cellRef]) ws[cellRef].z = '0.00';
-    }
-  }
-  const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, ws, 'AddIncome Pivot');
-  XLSX.writeFile(wb, 'Additional_Income_Pivot.xlsx');
-}
-
-function PrintPivotReport(periodKeyValue) {
-  RenderPivotReport(periodKeyValue);
-  window.print();
-}
-
-document.addEventListener('DOMContentLoaded', () => {
-  const printBtn = document.getElementById('printAddIncomePivotBtn');
-  if (printBtn && !printBtn.__pivotBound) {
-    printBtn.addEventListener('click', () => PrintPivotReport());
-    printBtn.__pivotBound = true;
-  }
-  const excelBtn = document.getElementById('exportAddIncomePivotExcelBtn');
-  if (excelBtn && !excelBtn.__pivotBound) {
-    excelBtn.addEventListener('click', () => ExportPivotToExcel());
-    excelBtn.__pivotBound = true;
-  }
-  RenderPivotReport();
-  window.setTimeout(() => {
-    try { RenderPivotReport(); } catch (_) {}
-  }, 0);
-});
 
 // === Other Deductions Tab ===
 function renderOtherDeductionsTable(){
@@ -8055,23 +7743,7 @@ document.addEventListener('DOMContentLoaded', () => {
     } catch (e) {}
     if (!divisorValue || !isFinite(divisorValue) || divisorValue <= 0) divisorValue = 1;
 
-    const addIncomeByEmp = {};
-    try {
-      if (isPlainObject(additionalIncomeDetails)) {
-        Object.keys(additionalIncomeDetails).forEach(empId => {
-          const normalized = normalizeAdditionalIncomeItems(additionalIncomeDetails[empId]);
-          if (normalized.length) {
-            addIncomeByEmp[empId] = normalized.map(item => ({
-              type: item.type,
-              label: item.label,
-              amount: sanitizeAdditionalIncomeAmount(item.amount)
-            }));
-          }
-        });
-      }
-    } catch (_) {}
-
-    return { startDate, endDate, rows, totals, divisor: divisorValue, addIncomeByEmp };
+    return { startDate, endDate, rows, totals, divisor: divisorValue };
   }
   // Expose buildSnapshot globally so it can be called from other scripts
   window.buildSnapshot = buildSnapshot;
