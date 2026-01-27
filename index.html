@@ -2617,6 +2617,7 @@ window.addEventListener('load', dashReports);
       </button>
       <!-- Sub-tab for other deductions -->
       <button class="tab-btn" data-tab="otherDeductionsTab">Other Deductions</button>
+      <button class="tab-btn" data-tab="adjustmentsTab">Adjustments</button>
      </div>
     </header>
     <div class="tab active" id="payrollTab">
@@ -2870,7 +2871,9 @@ window.addEventListener('load', dashReports);
       <div class="toolbar-left">
        <button type="button" id="copyOtherDeductionsBtn">Copy other deductions</button>
        <button type="button" id="restoreOtherDeductionsBtn">Restore other deductions</button>
-      </div>
+             <button type="button" id="printOtherDeductionsPivotBtn">Print Report</button>
+       <button type="button" id="exportOtherDeductionsPivotExcelBtn">Download Excel</button>
+</div>
       <span class="save-indicator" id="otherDeductionsSaveStatus" aria-live="polite">Saved locally</span>
      </div>
      <table id="otherDeductionsTable">
@@ -2884,8 +2887,12 @@ window.addEventListener('load', dashReports);
       </thead>
       <tbody></tbody>
      </table>
+</div>
+
+    <!-- Adjustments Tab -->
+    <div class="tab" id="adjustmentsTab">
      <div class="section note">
-      Adjustment hours are still tracked for overtime calculations.
+      Adjustment hours for correcting previous payroll. This affects overtime calculations.
      </div>
      <table id="adjustmentHoursTable">
       <thead>
@@ -6315,6 +6322,7 @@ function renderOtherDeductionsTable(){
       const amountInput = tr.querySelector('.otherDeductionAmount');
       const removeBtn = tr.querySelector('.removeOtherDeductionBtn');
       const isPlaceholder = !!item.__placeholder;
+      const enableRemove = () => { try { if (removeBtn) removeBtn.disabled = false; } catch(_){} };
       const normalizedItem = isPlaceholder
         ? { type: defaultType, label: '', amount: '', __placeholder: true }
         : normalizeOtherDeductionItem(item);
@@ -6372,6 +6380,7 @@ function renderOtherDeductionsTable(){
       if (typeSelect) {
         typeSelect.addEventListener('focus', () => { otherDeductionsFocusCount += 1; });
         typeSelect.addEventListener('change', () => {
+          enableRemove();
           if (!Array.isArray(otherDeductionsDetails[empId])) otherDeductionsDetails[empId] = [];
           if (!otherDeductionsDetails[empId][idx]) {
             otherDeductionsDetails[empId][idx] = {
@@ -6405,6 +6414,7 @@ function renderOtherDeductionsTable(){
         customInput.addEventListener('focus', () => { otherDeductionsFocusCount += 1; });
         customInput.addEventListener('input', () => {
           if (!typeSelect || typeSelect.value !== CUSTOM_DEDUCTION_TYPE_SELECT_VALUE) return;
+          enableRemove();
           if (!Array.isArray(otherDeductionsDetails[empId])) otherDeductionsDetails[empId] = [];
           if (!otherDeductionsDetails[empId][idx]) {
             otherDeductionsDetails[empId][idx] = { type: CUSTOM_DEDUCTION_TYPE_VALUE, label: '', amount: 0 };
@@ -6433,6 +6443,7 @@ function renderOtherDeductionsTable(){
       if (amountInput) {
         amountInput.addEventListener('focus', () => { otherDeductionsFocusCount += 1; });
         amountInput.addEventListener('input', () => {
+          enableRemove();
           if (!Array.isArray(otherDeductionsDetails[empId])) otherDeductionsDetails[empId] = [];
           if (!otherDeductionsDetails[empId][idx]) {
             otherDeductionsDetails[empId][idx] = {
@@ -17753,6 +17764,254 @@ document.addEventListener('DOMContentLoaded', function(){
     }
   }catch(e){}
 });
+
+/* === Other Deductions Pivot Report (Print + Excel) === */
+(function(){
+  function od_formatMoney(n){
+    var x = Number(n || 0);
+    if (!isFinite(x)) x = 0;
+    return x.toFixed(2);
+  }
+
+  function od_isTypeInList(t, list){
+    if (!t) return false;
+    return list.indexOf(t) !== -1;
+  }
+
+  function od_buildPivot(){
+    try { if (typeof syncPeriodScopedData === 'function') syncPeriodScopedData(); } catch(e){}
+    try { if (typeof ensureOtherDeductionsDetailsMap === 'function') ensureOtherDeductionsDetailsMap(); } catch(e){}
+    var types = [];
+    try { if (typeof getDeductionTypeOptions === 'function') types = getDeductionTypeOptions() || []; } catch(e){ types = []; }
+
+    var CUSTOM_COL = 'Custom';
+    var totals = {};
+    types.forEach(function(t){ totals[t] = 0; });
+    totals[CUSTOM_COL] = 0;
+
+    var rows = [];
+    (typeof employeeList!=='undefined' && Array.isArray(employeeList) ? employeeList : []).forEach(function(emp){
+      var empId = emp && emp.id ? emp.id : '';
+      var empName = emp && emp.name ? emp.name : '';
+      var sums = {};
+      types.forEach(function(t){ sums[t] = 0; });
+      sums[CUSTOM_COL] = 0;
+
+      var items = (typeof otherDeductionsDetails!=='undefined' && otherDeductionsDetails && otherDeductionsDetails[empId]) ? otherDeductionsDetails[empId] : [];
+      if (!Array.isArray(items)) items = [];
+
+      items.forEach(function(it){
+        if (!it) return;
+        var amt = 0;
+        try { amt = parseFloat((it.amount || 0).toString().replace(/,/g,'')) || 0; } catch(e){ amt = 0; }
+        if (amt === 0) return;
+
+        var t = (it.type || '').toString().trim();
+        var lbl = (it.label || '').toString().trim();
+        var resolved = null;
+
+        // Prefer stored type if it matches options
+        if (od_isTypeInList(t, types)) resolved = t;
+        else if (od_isTypeInList(lbl, types)) resolved = lbl;
+
+        if (!resolved) resolved = CUSTOM_COL;
+
+        if (resolved === CUSTOM_COL) sums[CUSTOM_COL] += amt;
+        else sums[resolved] += amt;
+      });
+
+      var rowTotal = 0;
+      types.forEach(function(t){ rowTotal += sums[t]; });
+      rowTotal += sums[CUSTOM_COL];
+
+      // Keep all employees in export; printing will optionally hide zero columns
+      rows.push({
+        id: empId,
+        name: empName,
+        sums: sums,
+        total: rowTotal
+      });
+
+      types.forEach(function(t){ totals[t] += sums[t]; });
+      totals[CUSTOM_COL] += sums[CUSTOM_COL];
+    });
+
+    // Compute grand total
+    var grandTotal = 0;
+    types.forEach(function(t){ grandTotal += totals[t]; });
+    grandTotal += totals[CUSTOM_COL];
+
+    return {
+      periodKey: (typeof periodKey === 'function' ? periodKey() : ''),
+      start: (window.weekStartEl && weekStartEl.value) ? weekStartEl.value : '',
+      end: (window.weekEndEl && weekEndEl.value) ? weekEndEl.value : '',
+      types: types,
+      customCol: CUSTOM_COL,
+      totals: totals,
+      grandTotal: grandTotal,
+      rows: rows
+    };
+  }
+
+  function od_getPrintableTypes(pivot){
+    var types = [];
+    (pivot.types || []).forEach(function(t){
+      if ((pivot.totals && pivot.totals[t]) ? Number(pivot.totals[t]) !== 0 : false) types.push(t);
+    });
+    var includeCustom = pivot.totals && Number(pivot.totals[pivot.customCol]) !== 0;
+    return { types: types, includeCustom: includeCustom };
+  }
+
+  function od_openPrint(pivot){
+    var printable = od_getPrintableTypes(pivot);
+    var types = printable.types;
+    var includeCustom = printable.includeCustom;
+
+    // If nothing to print (no values at all), alert
+    var anyValue = false;
+    for (var i=0;i<types.length;i++){ if (Number(pivot.totals[types[i]]||0) !== 0) { anyValue=true; break; } }
+    if (!anyValue && includeCustom && Number(pivot.totals[pivot.customCol]||0)!==0) anyValue = true;
+    if (!anyValue){
+      alert('No Other Deductions values to print for this period.');
+      return;
+    }
+
+    var colCount = 2 + types.length + (includeCustom ? 1 : 0) + 1; // ID+Name + types + custom + Total
+    var fontSize = (colCount > 10) ? 8 : 9;
+    var headerSize = 12;
+
+    var title = 'Other Deductions Pivot Report';
+    var periodText = (pivot.start && pivot.end) ? (pivot.start + ' to ' + pivot.end) : pivot.periodKey;
+    var generated = new Date().toLocaleString();
+
+    var w = window.open('', '_blank');
+    if (!w){ alert('Popup blocked. Please allow popups to print.'); return; }
+
+    var html = '';
+    html += '<!doctype html><html><head><meta charset="utf-8">';
+    html += '<title>'+title+'</title>';
+    html += '<style>';
+    html += '@page{size:Letter portrait;margin:0.5in;}';
+    html += 'body{font-family:Arial, sans-serif;color:#000;}';
+    html += '.hdr{margin-bottom:10px;}';
+    html += '.hdr h1{font-size:'+headerSize+'px;margin:0 0 4px 0;}';
+    html += '.hdr .meta{font-size:10px;margin:0;}';
+    html += 'table{width:100%;border-collapse:collapse;table-layout:fixed;}';
+    html += 'th,td{border:1px solid #000;padding:2px 4px;font-size:'+fontSize+'px;line-height:1.15;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}';
+    html += 'th{text-align:center;background:#f2f2f2;}';
+    html += 'td{text-align:right;}';
+    html += 'td.col-name, td.col-id{text-align:left;}';
+    html += 'tfoot td{font-weight:bold;}';
+    html += '</style></head><body>';
+    html += '<div class="hdr">';
+    html += '<h1>'+title+'</h1>';
+    html += '<p class="meta"><strong>Period:</strong> '+(periodText||'')+'</p>';
+    html += '<p class="meta"><strong>Generated:</strong> '+generated+'</p>';
+    html += '</div>';
+
+    html += '<table><thead><tr>';
+    html += '<th style="width:80px;">ID</th>';
+    html += '<th style="width:160px;">Name</th>';
+    types.forEach(function(t){ html += '<th>'+t+'</th>'; });
+    if (includeCustom) html += '<th>'+pivot.customCol+'</th>';
+    html += '<th>Total</th>';
+    html += '</tr></thead><tbody>';
+
+    pivot.rows.forEach(function(r){
+      html += '<tr>';
+      html += '<td class="col-id">'+(r.id||'')+'</td>';
+      html += '<td class="col-name">'+(r.name||'')+'</td>';
+      types.forEach(function(t){ html += '<td>'+od_formatMoney((r.sums && r.sums[t]) || 0)+'</td>'; });
+      if (includeCustom) html += '<td>'+od_formatMoney((r.sums && r.sums[pivot.customCol]) || 0)+'</td>';
+      html += '<td>'+od_formatMoney(r.total||0)+'</td>';
+      html += '</tr>';
+    });
+
+    html += '</tbody><tfoot><tr>';
+    html += '<td colspan="2" class="col-name">TOTAL</td>';
+    types.forEach(function(t){ html += '<td>'+od_formatMoney((pivot.totals && pivot.totals[t]) || 0)+'</td>'; });
+    if (includeCustom) html += '<td>'+od_formatMoney((pivot.totals && pivot.totals[pivot.customCol]) || 0)+'</td>';
+    html += '<td>'+od_formatMoney(pivot.grandTotal||0)+'</td>';
+    html += '</tr></tfoot></table>';
+
+    html += '<script>window.onload=function(){window.print();};<\/script>';
+    html += '</body></html>';
+
+    w.document.open();
+    w.document.write(html);
+    w.document.close();
+  }
+
+  function od_exportExcel(pivot){
+    if (typeof XLSX === 'undefined' || !XLSX || !XLSX.utils){
+      alert('Excel library not available');
+      return;
+    }
+    var types = pivot.types || [];
+    var headers = ['Employee ID','Employee Name'].concat(types).concat([pivot.customCol,'Total']);
+    var aoa = [headers];
+
+    pivot.rows.forEach(function(r){
+      var row = [r.id || '', r.name || ''];
+      types.forEach(function(t){ row.push(Number((r.sums && r.sums[t]) || 0)); });
+      row.push(Number((r.sums && r.sums[pivot.customCol]) || 0));
+      row.push(Number(r.total || 0));
+      aoa.push(row);
+    });
+
+    // totals row
+    var totalRow = ['TOTAL',''];
+    types.forEach(function(t){ totalRow.push(Number((pivot.totals && pivot.totals[t]) || 0)); });
+    totalRow.push(Number((pivot.totals && pivot.totals[pivot.customCol]) || 0));
+    totalRow.push(Number(pivot.grandTotal || 0));
+    aoa.push(totalRow);
+
+    var ws = XLSX.utils.aoa_to_sheet(aoa);
+
+    // basic number formatting for amount columns
+    var range = XLSX.utils.decode_range(ws['!ref'] || 'A1:A1');
+    for (var R=1; R<=range.e.r; R++){
+      for (var C=2; C<=range.e.c; C++){
+        var cellAddr = XLSX.utils.encode_cell({r:R,c:C});
+        var cell = ws[cellAddr];
+        if (cell && typeof cell.v === 'number'){
+          cell.t = 'n';
+          cell.z = '0.00';
+        }
+      }
+    }
+
+    ws['!freeze'] = { xSplit: 2, ySplit: 1 };
+    var wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Other Deductions Pivot');
+
+    var safeStart = (pivot.start || '').replace(/[^0-9\-]/g,'');
+    var safeEnd = (pivot.end || '').replace(/[^0-9\-]/g,'');
+    var fname = 'Other_Deductions_Pivot';
+    if (safeStart && safeEnd) fname += '_' + safeStart + '_to_' + safeEnd;
+    fname += '.xlsx';
+
+    XLSX.writeFile(wb, fname);
+  }
+
+  document.addEventListener('DOMContentLoaded', function(){
+    var printBtn = document.getElementById('printOtherDeductionsPivotBtn');
+    if (printBtn){
+      printBtn.addEventListener('click', function(){
+        var pivot = od_buildPivot();
+        od_openPrint(pivot);
+      });
+    }
+    var excelBtn = document.getElementById('exportOtherDeductionsPivotExcelBtn');
+    if (excelBtn){
+      excelBtn.addEventListener('click', function(){
+        var pivot = od_buildPivot();
+        od_exportExcel(pivot);
+      });
+    }
+  });
+})();
+
 </script>
 <script>
 // Full-featured live-reload helper for development.
