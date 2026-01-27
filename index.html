@@ -2842,6 +2842,11 @@ window.addEventListener('load', dashReports);
      <div class="section note">
       Track extra pay items per employee (e.g., Allowance, Bantay, Incentive). Amounts are added to gross pay and cannot be negative.
      </div>
+     <div class="toolbar" id="additionalIncomeControls">
+      <div class="toolbar-left">
+       <button type="button" id="printAdditionalIncomeReportBtn">Print &amp; Download Excel</button>
+      </div>
+     </div>
      <table id="additionalIncomeTable">
       <thead>
        <tr>
@@ -5973,6 +5978,180 @@ function renderAdditionalIncomeTable(){
     });
   });
 }
+
+function buildAdditionalIncomeReportData() {
+  syncPeriodScopedData();
+  ensureAdditionalIncomeDetailsMap();
+  rebuildAdditionalIncomeTotals();
+  const incomeOptions = getIncomeTypeOptions();
+  const optionsLower = new Set(incomeOptions.map(opt => String(opt || '').toLowerCase()));
+  const seenTypes = new Map();
+  const rows = employeeList.map(emp => {
+    const empId = emp.id;
+    const items = getAdditionalIncomeDetailsForEmployee(empId);
+    const totals = {};
+    let rowTotal = 0;
+    items.forEach(item => {
+      const normalized = normalizeAdditionalIncomeItem(item);
+      const label = resolveAdditionalIncomeLabel(normalized.type, normalized.label);
+      const key = String(label || '').trim();
+      if (!key) return;
+      const keyLower = key.toLowerCase();
+      if (!seenTypes.has(keyLower)) seenTypes.set(keyLower, key);
+      const amount = sanitizeAdditionalIncomeAmount(normalized.amount);
+      totals[keyLower] = roundToCents((totals[keyLower] || 0) + amount);
+      rowTotal = roundToCents(rowTotal + amount);
+    });
+    return {
+      id: empId,
+      name: emp.name,
+      totals,
+      total: rowTotal
+    };
+  });
+  const customLabels = [];
+  seenTypes.forEach((label, keyLower) => {
+    if (!optionsLower.has(keyLower)) customLabels.push(label);
+  });
+  customLabels.sort((a, b) => String(a).localeCompare(String(b)));
+  const columnLabels = [];
+  const dedupe = new Set();
+  incomeOptions.forEach(label => {
+    const keyLower = String(label || '').toLowerCase();
+    if (dedupe.has(keyLower)) return;
+    dedupe.add(keyLower);
+    columnLabels.push(label);
+  });
+  customLabels.forEach(label => {
+    const keyLower = String(label || '').toLowerCase();
+    if (dedupe.has(keyLower)) return;
+    dedupe.add(keyLower);
+    columnLabels.push(label);
+  });
+  return { rows, columnLabels };
+}
+
+function exportAdditionalIncomeReportExcel(report) {
+  if (typeof XLSX === 'undefined' || !XLSX || !XLSX.utils) {
+    alert('Excel library not available');
+    return false;
+  }
+  const ws = document.getElementById('weekStart');
+  const we = document.getElementById('weekEnd');
+  const startDate = ws && ws.value ? ws.value : '';
+  const endDate = we && we.value ? we.value : '';
+  const title = (startDate && endDate)
+    ? `Additional Income Report (${startDate} to ${endDate})`
+    : 'Additional Income Report';
+  const header = ['ID', 'Employee', ...report.columnLabels, 'Total'];
+  const rows = [];
+  rows.push([title]);
+  rows.push([]);
+  rows.push(header);
+  report.rows.forEach(row => {
+    const rowCells = [row.id, row.name];
+    report.columnLabels.forEach(label => {
+      const keyLower = String(label || '').toLowerCase();
+      const value = row.totals[keyLower] || 0;
+      rowCells.push(value ? value : 0);
+    });
+    rowCells.push(row.total || 0);
+    rows.push(rowCells);
+  });
+  const totalsRow = ['','Grand Total'];
+  report.columnLabels.forEach(label => {
+    const keyLower = String(label || '').toLowerCase();
+    let sum = 0;
+    report.rows.forEach(row => { sum = roundToCents(sum + (row.totals[keyLower] || 0)); });
+    totalsRow.push(sum);
+  });
+  let grandTotal = 0;
+  report.rows.forEach(row => { grandTotal = roundToCents(grandTotal + (row.total || 0)); });
+  totalsRow.push(grandTotal);
+  rows.push(totalsRow);
+
+  const wb = XLSX.utils.book_new();
+  const sheet = XLSX.utils.aoa_to_sheet(rows);
+  XLSX.utils.book_append_sheet(wb, sheet, 'Additional Income');
+
+  const rangeLabel = (startDate && endDate) ? `${startDate}_to_${endDate}` : '';
+  const safeLabel = rangeLabel.replace(/[^0-9A-Za-z_-]/g, '');
+  const filename = safeLabel ? `Additional_Income_${safeLabel}.xlsx` : 'Additional_Income.xlsx';
+  XLSX.writeFile(wb, filename);
+  return true;
+}
+
+function printAdditionalIncomeReport(report) {
+  const formatAmount = (value) => {
+    const num = Number(value);
+    if (!Number.isFinite(num) || Math.abs(num) < 0.005) return '-';
+    return num.toFixed(2);
+  };
+  const ws = document.getElementById('weekStart');
+  const we = document.getElementById('weekEnd');
+  const startDate = ws && ws.value ? ws.value : '';
+  const endDate = we && we.value ? we.value : '';
+  const title = (startDate && endDate)
+    ? `Additional Income Report (${startDate} to ${endDate})`
+    : 'Additional Income Report';
+  let html = '<table><thead><tr><th>ID</th><th>Employee</th>';
+  report.columnLabels.forEach(label => {
+    html += `<th class="num">${label}</th>`;
+  });
+  html += '<th class="num">Total</th></tr></thead><tbody>';
+  report.rows.forEach(row => {
+    html += `<tr><td>${row.id || ''}</td><td>${row.name || ''}</td>`;
+    report.columnLabels.forEach(label => {
+      const keyLower = String(label || '').toLowerCase();
+      html += `<td class="num">${formatAmount(row.totals[keyLower] || 0)}</td>`;
+    });
+    html += `<td class="num">${formatAmount(row.total || 0)}</td></tr>`;
+  });
+  html += '</tbody><tfoot><tr><td></td><td>Grand Total</td>';
+  report.columnLabels.forEach(label => {
+    const keyLower = String(label || '').toLowerCase();
+    let sum = 0;
+    report.rows.forEach(row => { sum = roundToCents(sum + (row.totals[keyLower] || 0)); });
+    html += `<td class="num">${formatAmount(sum)}</td>`;
+  });
+  let grandTotal = 0;
+  report.rows.forEach(row => { grandTotal = roundToCents(grandTotal + (row.total || 0)); });
+  html += `<td class="num">${formatAmount(grandTotal)}</td></tr></tfoot></table>`;
+  const w = window.open('', '', 'width=1100,height=700');
+  if (!w) return;
+  w.document.write('<html><head><meta charset="utf-8"><title>Additional Income Report</title>');
+  w.document.write('<style>@page{size:letter landscape;margin:10mm} body{font-family:Arial,Helvetica,sans-serif;margin:0} h2{margin:0 0 10px;font-size:16px} table{border-collapse:collapse;width:100%;table-layout:fixed} th,td{border:1pt solid #000;padding:4px;font-size:11px} th{background:#f1f5f9} td.num, th.num{text-align:right} thead{display:table-header-group} tfoot{display:table-footer-group} tfoot td{font-weight:700;background:#fff7ed;border-top:2pt solid #000}</style>');
+  w.document.write('</head><body>');
+  w.document.write(`<h2>${title}</h2>`);
+  w.document.write(html);
+  w.document.write('</body></html>');
+  w.document.close();
+  try {
+    w.addEventListener('load', function(){
+      try { safePrint(w); } catch(e){}
+    }, { once: true });
+  } catch (e) {
+    try { safePrint(w); } catch(_) {}
+  }
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  const btn = document.getElementById('printAdditionalIncomeReportBtn');
+  if (!btn) return;
+  btn.addEventListener('click', () => {
+    if (!employeeList || !employeeList.length) {
+      alert('No employees available for the report.');
+      return;
+    }
+    const report = buildAdditionalIncomeReportData();
+    if (!report.columnLabels.length) {
+      alert('No additional income data to report.');
+      return;
+    }
+    exportAdditionalIncomeReportExcel(report);
+    printAdditionalIncomeReport(report);
+  });
+});
 
 // === Other Deductions Tab ===
 function renderOtherDeductionsTable(){
