@@ -159,7 +159,6 @@ const KNOWN_KEYS = [
   ,"payroll_contrib_flags"
   ,"att_overrides_hours_v1"
   ,"payroll_lock_state"
-  ,"payroll_snapshots"
   ,"dtr_overrides_v1"
   ,"incomeTypeOptions"
   ,"deductionTypeOptions"
@@ -3968,29 +3967,6 @@ function sanitizeAdditionalIncomeAmount(value){
   return roundToCents(Math.max(0, num));
 }
 
-function getActivePayrollSnapshot(){
-  try {
-    return (typeof window !== 'undefined' && window.__activePayrollSnapshot) ? window.__activePayrollSnapshot : null;
-  } catch (err) {
-    return null;
-  }
-}
-
-function getSnapshotAdditionalIncomeData(){
-  const snap = getActivePayrollSnapshot();
-  return snap && snap.additionalIncome ? snap.additionalIncome : null;
-}
-
-function getSnapshotOtherDeductionsData(){
-  const snap = getActivePayrollSnapshot();
-  return snap && snap.otherDeductions ? snap.otherDeductions : null;
-}
-
-function getSnapshotEmployeesIncluded(){
-  const snap = getActivePayrollSnapshot();
-  return (snap && Array.isArray(snap.employeesIncluded)) ? snap.employeesIncluded : null;
-}
-
 function matchIncomeTypeOption(value){
   const target = String(value || '').trim();
   if (!target) return '';
@@ -4072,17 +4048,6 @@ function rebuildAdditionalIncomeTotals(){
 }
 
 function getAdditionalIncomeTotal(empId){
-  const snapshotData = getSnapshotAdditionalIncomeData();
-  if (snapshotData) {
-    const snapTotals = snapshotData.totals;
-    const snapDetails = snapshotData.details;
-    if (snapTotals && Object.prototype.hasOwnProperty.call(snapTotals, empId)) {
-      return Number(snapTotals[empId]) || 0;
-    }
-    if (snapDetails && Object.prototype.hasOwnProperty.call(snapDetails, empId)) {
-      return computeAdditionalIncomeTotal(snapDetails[empId]);
-    }
-  }
   if (additionalIncomeTotal && Object.prototype.hasOwnProperty.call(additionalIncomeTotal, empId)) {
     return Number(additionalIncomeTotal[empId]) || 0;
   }
@@ -4200,17 +4165,6 @@ function rebuildOtherDeductionsTotals(){
 }
 
 function getOtherDeductionsTotal(empId){
-  const snapshotData = getSnapshotOtherDeductionsData();
-  if (snapshotData) {
-    const snapTotals = snapshotData.totals;
-    const snapDetails = snapshotData.details;
-    if (snapTotals && Object.prototype.hasOwnProperty.call(snapTotals, empId)) {
-      return Number(snapTotals[empId]) || 0;
-    }
-    if (snapDetails && Object.prototype.hasOwnProperty.call(snapDetails, empId)) {
-      return computeOtherDeductionsTotal(snapDetails[empId]);
-    }
-  }
   if (otherDeductionsTotal && Object.prototype.hasOwnProperty.call(otherDeductionsTotal, empId)) {
     return Number(otherDeductionsTotal[empId]) || 0;
   }
@@ -4235,10 +4189,7 @@ function updateOtherDeductionsTotalForEmployee(empId){
 
 function getOtherDeductionsDetailsForEmployee(empId){
   if (!empId) return [];
-  const snapshotData = getSnapshotOtherDeductionsData();
-  const items = (snapshotData && snapshotData.details && snapshotData.details[empId])
-    ? snapshotData.details[empId]
-    : (otherDeductionsDetails && otherDeductionsDetails[empId]);
+  const items = otherDeductionsDetails && otherDeductionsDetails[empId];
   return Array.isArray(items) ? items.map(item => normalizeOtherDeductionItem(item)) : [];
 }
 
@@ -5626,10 +5577,7 @@ function updatePayrollRowForEmployee(empId){
 
 function getAdditionalIncomeDetailsForEmployee(empId){
   if (!empId) return [];
-  const snapshotData = getSnapshotAdditionalIncomeData();
-  const items = (snapshotData && snapshotData.details && snapshotData.details[empId])
-    ? snapshotData.details[empId]
-    : (additionalIncomeDetails && additionalIncomeDetails[empId]);
+  const items = additionalIncomeDetails && additionalIncomeDetails[empId];
   return Array.isArray(items) ? normalizeAdditionalIncomeItems(items) : [];
 }
 
@@ -5639,18 +5587,9 @@ function renderAdditionalIncomeTable(){
     return;
   }
   additionalIncomeRenderPending = false;
-  const snapshotData = getSnapshotAdditionalIncomeData();
-  const snapshotEmployees = getSnapshotEmployeesIncluded();
-  const isSnapshotView = !!snapshotData;
-  if (!isSnapshotView) {
-    syncPeriodScopedData();
-    ensureAdditionalIncomeDetailsMap();
-    rebuildAdditionalIncomeTotals();
-  }
-  const detailsSource = (snapshotData && snapshotData.details && typeof snapshotData.details === 'object')
-    ? snapshotData.details
-    : additionalIncomeDetails;
-  const employeesSource = (snapshotEmployees && snapshotEmployees.length) ? snapshotEmployees : employeeList;
+  syncPeriodScopedData();
+  ensureAdditionalIncomeDetailsMap();
+  rebuildAdditionalIncomeTotals();
   const atbody = document.querySelector('#additionalIncomeTable tbody');
   if (!atbody) return;
   const incomeOptions = getIncomeTypeOptions();
@@ -5668,9 +5607,9 @@ function renderAdditionalIncomeTable(){
     }, 0);
   };
   atbody.innerHTML = '';
-  employeesSource.forEach(emp => {
+  employeeList.forEach(emp => {
     const empId = emp.id;
-    const items = Array.isArray(detailsSource && detailsSource[empId]) ? detailsSource[empId] : [];
+    const items = Array.isArray(additionalIncomeDetails[empId]) ? additionalIncomeDetails[empId] : [];
     const renderItems = items.length ? items : [{ label: '', amount: '', __placeholder: true }];
     renderItems.forEach((item, idx) => {
       const tr = document.createElement('tr');
@@ -5696,22 +5635,18 @@ function renderAdditionalIncomeTable(){
         addBtn.className = 'addIncomeItemBtn';
         addBtn.dataset.emp = empId;
         addBtn.textContent = 'Add item';
-        if (isSnapshotView) {
-          addBtn.disabled = true;
-        } else {
-          addBtn.addEventListener('click', () => {
-            if (!Array.isArray(additionalIncomeDetails[empId])) additionalIncomeDetails[empId] = [];
-            additionalIncomeDetails[empId].push({
-              type: defaultType,
-              label: resolveAdditionalIncomeLabel(defaultType, ''),
-              amount: 0
-            });
-            updateAdditionalIncomeTotalForEmployee(empId);
-            additionalIncomePersist.flush();
-            renderAdditionalIncomeTable();
-            updatePayrollRowForEmployee(empId);
+        addBtn.addEventListener('click', () => {
+          if (!Array.isArray(additionalIncomeDetails[empId])) additionalIncomeDetails[empId] = [];
+          additionalIncomeDetails[empId].push({
+            type: defaultType,
+            label: resolveAdditionalIncomeLabel(defaultType, ''),
+            amount: 0
           });
-        }
+          updateAdditionalIncomeTotalForEmployee(empId);
+          additionalIncomePersist.flush();
+          renderAdditionalIncomeTable();
+          updatePayrollRowForEmployee(empId);
+        });
         wrapper.appendChild(nameEl);
         wrapper.appendChild(addBtn);
         empCell.appendChild(wrapper);
@@ -5776,127 +5711,107 @@ function renderAdditionalIncomeTable(){
       if (removeBtn && isPlaceholder) {
         removeBtn.disabled = true;
       }
-      if (isSnapshotView) {
-        if (typeSelect) typeSelect.disabled = true;
-        if (customInput) customInput.disabled = true;
-        if (amountInput) amountInput.disabled = true;
-        if (removeBtn) removeBtn.disabled = true;
-      }
-      if (isSnapshotView) {
-        if (typeSelect) typeSelect.disabled = true;
-        if (customInput) customInput.disabled = true;
-        if (amountInput) amountInput.disabled = true;
-        if (removeBtn) removeBtn.disabled = true;
-      }
       if (typeSelect) {
-        if (!isSnapshotView) {
-          typeSelect.addEventListener('focus', () => { additionalIncomeFocusCount += 1; });
-          typeSelect.addEventListener('change', () => {
-            if (!Array.isArray(additionalIncomeDetails[empId])) additionalIncomeDetails[empId] = [];
-            if (!additionalIncomeDetails[empId][idx]) {
-              additionalIncomeDetails[empId][idx] = { type: defaultType, label: resolveAdditionalIncomeLabel(defaultType, ''), amount: 0 };
-            }
-            const selection = typeSelect.value;
-            const isCustom = selection === CUSTOM_INCOME_TYPE_VALUE;
-            setCustomVisibility(isCustom);
-            if (customInput && !isCustom) customInput.value = '';
-            if (isCustom) {
-              const label = resolveAdditionalIncomeLabel(CUSTOM_INCOME_TYPE_VALUE, customInput ? customInput.value : '');
-              additionalIncomeDetails[empId][idx].type = CUSTOM_INCOME_TYPE_VALUE;
-              additionalIncomeDetails[empId][idx].label = label;
-              if (customInput) customInput.value = label;
-            } else {
-              const normalized = matchIncomeTypeOption(selection) || selection;
-              additionalIncomeDetails[empId][idx].type = normalized;
-              additionalIncomeDetails[empId][idx].label = resolveAdditionalIncomeLabel(normalized, '');
-            }
-            updateAdditionalIncomeTotalForEmployee(empId);
-            additionalIncomePersist.schedule();
-            updatePayrollRowForEmployee(empId);
-          });
-          typeSelect.addEventListener('blur', handleBlur);
-        }
-      }
-      if (customInput) {
-        if (!isSnapshotView) {
-          customInput.addEventListener('focus', () => { additionalIncomeFocusCount += 1; });
-          customInput.addEventListener('input', () => {
-            if (!typeSelect || typeSelect.value !== CUSTOM_INCOME_TYPE_VALUE) return;
-            if (!Array.isArray(additionalIncomeDetails[empId])) additionalIncomeDetails[empId] = [];
-            if (!additionalIncomeDetails[empId][idx]) {
-              additionalIncomeDetails[empId][idx] = { type: CUSTOM_INCOME_TYPE_VALUE, label: '', amount: 0 };
-            }
-            additionalIncomeDetails[empId][idx].type = CUSTOM_INCOME_TYPE_VALUE;
-            additionalIncomeDetails[empId][idx].label = customInput.value;
-            additionalIncomePersist.schedule();
-            updatePayrollRowForEmployee(empId);
-          });
-          customInput.addEventListener('blur', () => {
-            if (!Array.isArray(additionalIncomeDetails[empId])) additionalIncomeDetails[empId] = [];
-            if (!additionalIncomeDetails[empId][idx]) {
-              additionalIncomeDetails[empId][idx] = { type: CUSTOM_INCOME_TYPE_VALUE, label: '', amount: 0 };
-            }
-            const label = resolveAdditionalIncomeLabel(CUSTOM_INCOME_TYPE_VALUE, customInput.value);
+        typeSelect.addEventListener('focus', () => { additionalIncomeFocusCount += 1; });
+        typeSelect.addEventListener('change', () => {
+          if (!Array.isArray(additionalIncomeDetails[empId])) additionalIncomeDetails[empId] = [];
+          if (!additionalIncomeDetails[empId][idx]) {
+            additionalIncomeDetails[empId][idx] = { type: defaultType, label: resolveAdditionalIncomeLabel(defaultType, ''), amount: 0 };
+          }
+          const selection = typeSelect.value;
+          const isCustom = selection === CUSTOM_INCOME_TYPE_VALUE;
+          setCustomVisibility(isCustom);
+          if (customInput && !isCustom) customInput.value = '';
+          if (isCustom) {
+            const label = resolveAdditionalIncomeLabel(CUSTOM_INCOME_TYPE_VALUE, customInput ? customInput.value : '');
             additionalIncomeDetails[empId][idx].type = CUSTOM_INCOME_TYPE_VALUE;
             additionalIncomeDetails[empId][idx].label = label;
-            customInput.value = label;
-            additionalIncomePersist.flush();
-            updatePayrollRowForEmployee(empId);
-            handleBlur();
-          });
-        }
+            if (customInput) customInput.value = label;
+          } else {
+            const normalized = matchIncomeTypeOption(selection) || selection;
+            additionalIncomeDetails[empId][idx].type = normalized;
+            additionalIncomeDetails[empId][idx].label = resolveAdditionalIncomeLabel(normalized, '');
+          }
+          updateAdditionalIncomeTotalForEmployee(empId);
+          additionalIncomePersist.schedule();
+          updatePayrollRowForEmployee(empId);
+        });
+        typeSelect.addEventListener('blur', handleBlur);
+      }
+      if (customInput) {
+        customInput.addEventListener('focus', () => { additionalIncomeFocusCount += 1; });
+        customInput.addEventListener('input', () => {
+          if (!typeSelect || typeSelect.value !== CUSTOM_INCOME_TYPE_VALUE) return;
+          if (!Array.isArray(additionalIncomeDetails[empId])) additionalIncomeDetails[empId] = [];
+          if (!additionalIncomeDetails[empId][idx]) {
+            additionalIncomeDetails[empId][idx] = { type: CUSTOM_INCOME_TYPE_VALUE, label: '', amount: 0 };
+          }
+          additionalIncomeDetails[empId][idx].type = CUSTOM_INCOME_TYPE_VALUE;
+          additionalIncomeDetails[empId][idx].label = customInput.value;
+          additionalIncomePersist.schedule();
+          updatePayrollRowForEmployee(empId);
+        });
+        customInput.addEventListener('blur', () => {
+          if (!Array.isArray(additionalIncomeDetails[empId])) additionalIncomeDetails[empId] = [];
+          if (!additionalIncomeDetails[empId][idx]) {
+            additionalIncomeDetails[empId][idx] = { type: CUSTOM_INCOME_TYPE_VALUE, label: '', amount: 0 };
+          }
+          const label = resolveAdditionalIncomeLabel(CUSTOM_INCOME_TYPE_VALUE, customInput.value);
+          additionalIncomeDetails[empId][idx].type = CUSTOM_INCOME_TYPE_VALUE;
+          additionalIncomeDetails[empId][idx].label = label;
+          customInput.value = label;
+          additionalIncomePersist.flush();
+          updatePayrollRowForEmployee(empId);
+          handleBlur();
+        });
       }
       if (amountInput) {
-        if (!isSnapshotView) {
-          amountInput.addEventListener('focus', () => { additionalIncomeFocusCount += 1; });
-          amountInput.addEventListener('input', () => {
-            if (!Array.isArray(additionalIncomeDetails[empId])) additionalIncomeDetails[empId] = [];
-            if (!additionalIncomeDetails[empId][idx]) {
-              additionalIncomeDetails[empId][idx] = {
-                type: defaultType,
-                label: resolveAdditionalIncomeLabel(defaultType, ''),
-                amount: 0
-              };
-            }
-            const raw = parseFloat(amountInput.value);
-            const amount = Number.isFinite(raw) ? sanitizeAdditionalIncomeAmount(raw) : 0;
-            additionalIncomeDetails[empId][idx].amount = amount;
-            updateAdditionalIncomeTotalForEmployee(empId);
-            additionalIncomePersist.schedule();
-            updatePayrollRowForEmployee(empId);
-          });
-          amountInput.addEventListener('blur', () => {
-            if (!Array.isArray(additionalIncomeDetails[empId])) additionalIncomeDetails[empId] = [];
-            if (!additionalIncomeDetails[empId][idx]) {
-              additionalIncomeDetails[empId][idx] = {
-                type: defaultType,
-                label: resolveAdditionalIncomeLabel(defaultType, ''),
-                amount: 0
-              };
-            }
-            const raw = parseFloat(amountInput.value);
-            const amount = Number.isFinite(raw) ? sanitizeAdditionalIncomeAmount(raw) : 0;
-            additionalIncomeDetails[empId][idx].amount = amount;
-            amountInput.value = amount ? amount.toFixed(2) : '';
-            updateAdditionalIncomeTotalForEmployee(empId);
-            additionalIncomePersist.flush();
-            updatePayrollRowForEmployee(empId);
-            handleBlur();
-          });
-        }
+        amountInput.addEventListener('focus', () => { additionalIncomeFocusCount += 1; });
+        amountInput.addEventListener('input', () => {
+          if (!Array.isArray(additionalIncomeDetails[empId])) additionalIncomeDetails[empId] = [];
+          if (!additionalIncomeDetails[empId][idx]) {
+            additionalIncomeDetails[empId][idx] = {
+              type: defaultType,
+              label: resolveAdditionalIncomeLabel(defaultType, ''),
+              amount: 0
+            };
+          }
+          const raw = parseFloat(amountInput.value);
+          const amount = Number.isFinite(raw) ? sanitizeAdditionalIncomeAmount(raw) : 0;
+          additionalIncomeDetails[empId][idx].amount = amount;
+          updateAdditionalIncomeTotalForEmployee(empId);
+          additionalIncomePersist.schedule();
+          updatePayrollRowForEmployee(empId);
+        });
+        amountInput.addEventListener('blur', () => {
+          if (!Array.isArray(additionalIncomeDetails[empId])) additionalIncomeDetails[empId] = [];
+          if (!additionalIncomeDetails[empId][idx]) {
+            additionalIncomeDetails[empId][idx] = {
+              type: defaultType,
+              label: resolveAdditionalIncomeLabel(defaultType, ''),
+              amount: 0
+            };
+          }
+          const raw = parseFloat(amountInput.value);
+          const amount = Number.isFinite(raw) ? sanitizeAdditionalIncomeAmount(raw) : 0;
+          additionalIncomeDetails[empId][idx].amount = amount;
+          amountInput.value = amount ? amount.toFixed(2) : '';
+          updateAdditionalIncomeTotalForEmployee(empId);
+          additionalIncomePersist.flush();
+          updatePayrollRowForEmployee(empId);
+          handleBlur();
+        });
       }
       if (removeBtn) {
-        if (!isSnapshotView) {
-          removeBtn.addEventListener('click', () => {
-            if (!Array.isArray(additionalIncomeDetails[empId])) additionalIncomeDetails[empId] = [];
-            additionalIncomeDetails[empId].splice(idx, 1);
-            if (!additionalIncomeDetails[empId].length) delete additionalIncomeDetails[empId];
-            updateAdditionalIncomeTotalForEmployee(empId);
-            additionalIncomePersist.flush();
-            renderAdditionalIncomeTable();
-            updatePayrollRowForEmployee(empId);
-          });
-        }
+        removeBtn.addEventListener('click', () => {
+          if (!Array.isArray(additionalIncomeDetails[empId])) additionalIncomeDetails[empId] = [];
+          additionalIncomeDetails[empId].splice(idx, 1);
+          if (!additionalIncomeDetails[empId].length) delete additionalIncomeDetails[empId];
+          updateAdditionalIncomeTotalForEmployee(empId);
+          additionalIncomePersist.flush();
+          renderAdditionalIncomeTable();
+          updatePayrollRowForEmployee(empId);
+        });
       }
       atbody.appendChild(tr);
     });
@@ -5910,18 +5825,9 @@ function renderOtherDeductionsTable(){
     return;
   }
   otherDeductionsRenderPending = false;
-  const snapshotData = getSnapshotOtherDeductionsData();
-  const snapshotEmployees = getSnapshotEmployeesIncluded();
-  const isSnapshotView = !!snapshotData;
-  if (!isSnapshotView) {
-    syncPeriodScopedData();
-    ensureOtherDeductionsDetailsMap();
-    rebuildOtherDeductionsTotals();
-  }
-  const detailsSource = (snapshotData && snapshotData.details && typeof snapshotData.details === 'object')
-    ? snapshotData.details
-    : otherDeductionsDetails;
-  const employeesSource = (snapshotEmployees && snapshotEmployees.length) ? snapshotEmployees : employeeList;
+  syncPeriodScopedData();
+  ensureOtherDeductionsDetailsMap();
+  rebuildOtherDeductionsTotals();
   const tbody = document.querySelector('#otherDeductionsTable tbody');
   if (!tbody) return;
   const deductionOptions = getDeductionTypeOptions();
@@ -5939,9 +5845,9 @@ function renderOtherDeductionsTable(){
     }, 0);
   };
   tbody.innerHTML = '';
-  employeesSource.forEach(emp => {
+  employeeList.forEach(emp => {
     const empId = emp.id;
-    const items = Array.isArray(detailsSource && detailsSource[empId]) ? detailsSource[empId] : [];
+    const items = Array.isArray(otherDeductionsDetails[empId]) ? otherDeductionsDetails[empId] : [];
     const renderItems = items.length ? items : [{ type: defaultType, label: '', amount: '', __placeholder: true }];
     renderItems.forEach((item, idx) => {
       const tr = document.createElement('tr');
@@ -5967,23 +5873,19 @@ function renderOtherDeductionsTable(){
         addBtn.className = 'addOtherDeductionBtn';
         addBtn.dataset.emp = empId;
         addBtn.textContent = 'Add item';
-        if (isSnapshotView) {
-          addBtn.disabled = true;
-        } else {
-          addBtn.addEventListener('click', () => {
-            if (!Array.isArray(otherDeductionsDetails[empId])) otherDeductionsDetails[empId] = [];
-            otherDeductionsDetails[empId].push({
-              type: defaultType,
-              label: resolveOtherDeductionLabel(defaultType, ''),
-              amount: 0
-            });
-            updateOtherDeductionsTotalForEmployee(empId);
-            otherDeductionsPersist.flush();
-            otherDeductionsRefresh.flush();
-            renderOtherDeductionsTable();
-            updatePayrollRowForEmployee(empId);
+        addBtn.addEventListener('click', () => {
+          if (!Array.isArray(otherDeductionsDetails[empId])) otherDeductionsDetails[empId] = [];
+          otherDeductionsDetails[empId].push({
+            type: defaultType,
+            label: resolveOtherDeductionLabel(defaultType, ''),
+            amount: 0
           });
-        }
+          updateOtherDeductionsTotalForEmployee(empId);
+          otherDeductionsPersist.flush();
+          otherDeductionsRefresh.flush();
+          renderOtherDeductionsTable();
+          updatePayrollRowForEmployee(empId);
+        });
         wrapper.appendChild(nameEl);
         wrapper.appendChild(addBtn);
         empCell.appendChild(wrapper);
@@ -6049,124 +5951,116 @@ function renderOtherDeductionsTable(){
         removeBtn.disabled = true;
       }
       if (typeSelect) {
-        if (!isSnapshotView) {
-          typeSelect.addEventListener('focus', () => { otherDeductionsFocusCount += 1; });
-          typeSelect.addEventListener('change', () => {
-            if (!Array.isArray(otherDeductionsDetails[empId])) otherDeductionsDetails[empId] = [];
-            if (!otherDeductionsDetails[empId][idx]) {
-              otherDeductionsDetails[empId][idx] = {
-                type: defaultType,
-                label: resolveOtherDeductionLabel(defaultType, ''),
-                amount: 0
-              };
-            }
-            const selection = typeSelect.value;
-            const isCustom = selection === CUSTOM_DEDUCTION_TYPE_SELECT_VALUE;
-            setCustomVisibility(isCustom);
-            if (customInput && !isCustom) customInput.value = '';
-            if (isCustom) {
-              const label = resolveOtherDeductionLabel(CUSTOM_DEDUCTION_TYPE_VALUE, customInput ? customInput.value : '');
-              otherDeductionsDetails[empId][idx].type = CUSTOM_DEDUCTION_TYPE_VALUE;
-              otherDeductionsDetails[empId][idx].label = label;
-              if (customInput) customInput.value = label;
-            } else {
-              const normalized = matchDeductionTypeOption(selection) || selection;
-              otherDeductionsDetails[empId][idx].type = normalized;
-              otherDeductionsDetails[empId][idx].label = resolveOtherDeductionLabel(normalized, '');
-            }
-            updateOtherDeductionsTotalForEmployee(empId);
-            otherDeductionsPersist.schedule();
-            otherDeductionsRefresh.schedule();
-            updatePayrollRowForEmployee(empId);
-          });
-          typeSelect.addEventListener('blur', handleBlur);
-        }
-      }
-      if (customInput) {
-        if (!isSnapshotView) {
-          customInput.addEventListener('focus', () => { otherDeductionsFocusCount += 1; });
-          customInput.addEventListener('input', () => {
-            if (!typeSelect || typeSelect.value !== CUSTOM_DEDUCTION_TYPE_SELECT_VALUE) return;
-            if (!Array.isArray(otherDeductionsDetails[empId])) otherDeductionsDetails[empId] = [];
-            if (!otherDeductionsDetails[empId][idx]) {
-              otherDeductionsDetails[empId][idx] = { type: CUSTOM_DEDUCTION_TYPE_VALUE, label: '', amount: 0 };
-            }
-            otherDeductionsDetails[empId][idx].type = CUSTOM_DEDUCTION_TYPE_VALUE;
-            otherDeductionsDetails[empId][idx].label = customInput.value;
-            otherDeductionsPersist.schedule();
-            otherDeductionsRefresh.schedule();
-            updatePayrollRowForEmployee(empId);
-          });
-          customInput.addEventListener('blur', () => {
-            if (!Array.isArray(otherDeductionsDetails[empId])) otherDeductionsDetails[empId] = [];
-            if (!otherDeductionsDetails[empId][idx]) {
-              otherDeductionsDetails[empId][idx] = { type: CUSTOM_DEDUCTION_TYPE_VALUE, label: '', amount: 0 };
-            }
-            const label = resolveOtherDeductionLabel(CUSTOM_DEDUCTION_TYPE_VALUE, customInput.value);
+        typeSelect.addEventListener('focus', () => { otherDeductionsFocusCount += 1; });
+        typeSelect.addEventListener('change', () => {
+          if (!Array.isArray(otherDeductionsDetails[empId])) otherDeductionsDetails[empId] = [];
+          if (!otherDeductionsDetails[empId][idx]) {
+            otherDeductionsDetails[empId][idx] = {
+              type: defaultType,
+              label: resolveOtherDeductionLabel(defaultType, ''),
+              amount: 0
+            };
+          }
+          const selection = typeSelect.value;
+          const isCustom = selection === CUSTOM_DEDUCTION_TYPE_SELECT_VALUE;
+          setCustomVisibility(isCustom);
+          if (customInput && !isCustom) customInput.value = '';
+          if (isCustom) {
+            const label = resolveOtherDeductionLabel(CUSTOM_DEDUCTION_TYPE_VALUE, customInput ? customInput.value : '');
             otherDeductionsDetails[empId][idx].type = CUSTOM_DEDUCTION_TYPE_VALUE;
             otherDeductionsDetails[empId][idx].label = label;
-            customInput.value = label;
-            otherDeductionsPersist.flush();
-            otherDeductionsRefresh.flush();
-            updatePayrollRowForEmployee(empId);
-            handleBlur();
-          });
-        }
+            if (customInput) customInput.value = label;
+          } else {
+            const normalized = matchDeductionTypeOption(selection) || selection;
+            otherDeductionsDetails[empId][idx].type = normalized;
+            otherDeductionsDetails[empId][idx].label = resolveOtherDeductionLabel(normalized, '');
+          }
+          updateOtherDeductionsTotalForEmployee(empId);
+          otherDeductionsPersist.schedule();
+          otherDeductionsRefresh.schedule();
+          updatePayrollRowForEmployee(empId);
+        });
+        typeSelect.addEventListener('blur', handleBlur);
+      }
+      if (customInput) {
+        customInput.addEventListener('focus', () => { otherDeductionsFocusCount += 1; });
+        customInput.addEventListener('input', () => {
+          if (!typeSelect || typeSelect.value !== CUSTOM_DEDUCTION_TYPE_SELECT_VALUE) return;
+          if (!Array.isArray(otherDeductionsDetails[empId])) otherDeductionsDetails[empId] = [];
+          if (!otherDeductionsDetails[empId][idx]) {
+            otherDeductionsDetails[empId][idx] = { type: CUSTOM_DEDUCTION_TYPE_VALUE, label: '', amount: 0 };
+          }
+          otherDeductionsDetails[empId][idx].type = CUSTOM_DEDUCTION_TYPE_VALUE;
+          otherDeductionsDetails[empId][idx].label = customInput.value;
+          otherDeductionsPersist.schedule();
+          otherDeductionsRefresh.schedule();
+          updatePayrollRowForEmployee(empId);
+        });
+        customInput.addEventListener('blur', () => {
+          if (!Array.isArray(otherDeductionsDetails[empId])) otherDeductionsDetails[empId] = [];
+          if (!otherDeductionsDetails[empId][idx]) {
+            otherDeductionsDetails[empId][idx] = { type: CUSTOM_DEDUCTION_TYPE_VALUE, label: '', amount: 0 };
+          }
+          const label = resolveOtherDeductionLabel(CUSTOM_DEDUCTION_TYPE_VALUE, customInput.value);
+          otherDeductionsDetails[empId][idx].type = CUSTOM_DEDUCTION_TYPE_VALUE;
+          otherDeductionsDetails[empId][idx].label = label;
+          customInput.value = label;
+          otherDeductionsPersist.flush();
+          otherDeductionsRefresh.flush();
+          updatePayrollRowForEmployee(empId);
+          handleBlur();
+        });
       }
       if (amountInput) {
-        if (!isSnapshotView) {
-          amountInput.addEventListener('focus', () => { otherDeductionsFocusCount += 1; });
-          amountInput.addEventListener('input', () => {
-            if (!Array.isArray(otherDeductionsDetails[empId])) otherDeductionsDetails[empId] = [];
-            if (!otherDeductionsDetails[empId][idx]) {
-              otherDeductionsDetails[empId][idx] = {
-                type: defaultType,
-                label: resolveOtherDeductionLabel(defaultType, ''),
-                amount: 0
-              };
-            }
-            const raw = parseFloat(amountInput.value);
-            const amount = Number.isFinite(raw) ? sanitizeOtherDeductionAmount(raw) : 0;
-            otherDeductionsDetails[empId][idx].amount = amount;
-            updateOtherDeductionsTotalForEmployee(empId);
-            otherDeductionsPersist.schedule();
-            otherDeductionsRefresh.schedule();
-            updatePayrollRowForEmployee(empId);
-          });
-          amountInput.addEventListener('blur', () => {
-            if (!Array.isArray(otherDeductionsDetails[empId])) otherDeductionsDetails[empId] = [];
-            if (!otherDeductionsDetails[empId][idx]) {
-              otherDeductionsDetails[empId][idx] = {
-                type: defaultType,
-                label: resolveOtherDeductionLabel(defaultType, ''),
-                amount: 0
-              };
-            }
-            const raw = parseFloat(amountInput.value);
-            const amount = Number.isFinite(raw) ? sanitizeOtherDeductionAmount(raw) : 0;
-            otherDeductionsDetails[empId][idx].amount = amount;
-            amountInput.value = amount ? amount.toFixed(2) : '';
-            updateOtherDeductionsTotalForEmployee(empId);
-            otherDeductionsPersist.flush();
-            otherDeductionsRefresh.flush();
-            updatePayrollRowForEmployee(empId);
-            handleBlur();
-          });
-        }
+        amountInput.addEventListener('focus', () => { otherDeductionsFocusCount += 1; });
+        amountInput.addEventListener('input', () => {
+          if (!Array.isArray(otherDeductionsDetails[empId])) otherDeductionsDetails[empId] = [];
+          if (!otherDeductionsDetails[empId][idx]) {
+            otherDeductionsDetails[empId][idx] = {
+              type: defaultType,
+              label: resolveOtherDeductionLabel(defaultType, ''),
+              amount: 0
+            };
+          }
+          const raw = parseFloat(amountInput.value);
+          const amount = Number.isFinite(raw) ? sanitizeOtherDeductionAmount(raw) : 0;
+          otherDeductionsDetails[empId][idx].amount = amount;
+          updateOtherDeductionsTotalForEmployee(empId);
+          otherDeductionsPersist.schedule();
+          otherDeductionsRefresh.schedule();
+          updatePayrollRowForEmployee(empId);
+        });
+        amountInput.addEventListener('blur', () => {
+          if (!Array.isArray(otherDeductionsDetails[empId])) otherDeductionsDetails[empId] = [];
+          if (!otherDeductionsDetails[empId][idx]) {
+            otherDeductionsDetails[empId][idx] = {
+              type: defaultType,
+              label: resolveOtherDeductionLabel(defaultType, ''),
+              amount: 0
+            };
+          }
+          const raw = parseFloat(amountInput.value);
+          const amount = Number.isFinite(raw) ? sanitizeOtherDeductionAmount(raw) : 0;
+          otherDeductionsDetails[empId][idx].amount = amount;
+          amountInput.value = amount ? amount.toFixed(2) : '';
+          updateOtherDeductionsTotalForEmployee(empId);
+          otherDeductionsPersist.flush();
+          otherDeductionsRefresh.flush();
+          updatePayrollRowForEmployee(empId);
+          handleBlur();
+        });
       }
       if (removeBtn) {
-        if (!isSnapshotView) {
-          removeBtn.addEventListener('click', () => {
-            if (!Array.isArray(otherDeductionsDetails[empId])) otherDeductionsDetails[empId] = [];
-            otherDeductionsDetails[empId].splice(idx, 1);
-            if (!otherDeductionsDetails[empId].length) delete otherDeductionsDetails[empId];
-            updateOtherDeductionsTotalForEmployee(empId);
-            otherDeductionsPersist.flush();
-            otherDeductionsRefresh.flush();
-            renderOtherDeductionsTable();
-            updatePayrollRowForEmployee(empId);
-          });
-        }
+        removeBtn.addEventListener('click', () => {
+          if (!Array.isArray(otherDeductionsDetails[empId])) otherDeductionsDetails[empId] = [];
+          otherDeductionsDetails[empId].splice(idx, 1);
+          if (!otherDeductionsDetails[empId].length) delete otherDeductionsDetails[empId];
+          updateOtherDeductionsTotalForEmployee(empId);
+          otherDeductionsPersist.flush();
+          otherDeductionsRefresh.flush();
+          renderOtherDeductionsTable();
+          updatePayrollRowForEmployee(empId);
+        });
       }
       tbody.appendChild(tr);
     });
@@ -6179,16 +6073,11 @@ function renderAdjustmentHoursTable(){
     return;
   }
   adjustmentHoursRenderPending = false;
-  const snapshotEmployees = getSnapshotEmployeesIncluded();
-  const isSnapshotView = !!getActivePayrollSnapshot();
-  if (!isSnapshotView) {
-    syncPeriodScopedData();
-  }
+  syncPeriodScopedData();
   const tbody = document.querySelector('#adjustmentHoursTable tbody');
   if (!tbody) return;
   tbody.innerHTML = '';
-  const employeesSource = (snapshotEmployees && snapshotEmployees.length) ? snapshotEmployees : employeeList;
-  employeesSource.forEach(emp => {
+  employeeList.forEach(emp => {
     const id = emp.id;
     const name = emp.name;
     const hrs = adjHrs[id] !== undefined ? adjHrs[id] : '';
@@ -6196,7 +6085,7 @@ function renderAdjustmentHoursTable(){
     tr.innerHTML = `
       <td>${id}</td>
       <td class="wrap">${name}</td>
-      <td><input type="number" min="0" step="0.01" class="adjHrsInput" data-id="${id}" value="${hrs}" ${isSnapshotView ? 'disabled' : ''} /></td>
+      <td><input type="number" min="0" step="0.01" class="adjHrsInput" data-id="${id}" value="${hrs}" /></td>
     `;
     tbody.appendChild(tr);
   });
@@ -6919,55 +6808,6 @@ document.addEventListener('DOMContentLoaded', () => {
   const activeTableBody = document.querySelector('#activePayrollTable tbody');
 
   const PAYROLL_LOCKS_KEY = 'payroll_lock_state';
-  const PAYROLL_SNAPSHOTS_KEY = 'payroll_snapshots';
-
-  function safeClone(value) {
-    if (value == null) return value;
-    try { return JSON.parse(JSON.stringify(value)); } catch (err) {}
-    if (Array.isArray(value)) return value.map(item => safeClone(item));
-    if (typeof value === 'object') {
-      const out = {};
-      Object.keys(value).forEach(key => { out[key] = safeClone(value[key]); });
-      return out;
-    }
-    return value;
-  }
-
-  function loadPayrollSnapshots() {
-    try {
-      const raw = localStorage.getItem(PAYROLL_SNAPSHOTS_KEY);
-      if (!raw) return { __meta: { lastUpdatedAt: Date.now() } };
-      const parsed = JSON.parse(raw);
-      if (!parsed || typeof parsed !== 'object') return { __meta: { lastUpdatedAt: Date.now() } };
-      if (!parsed.__meta) parsed.__meta = {};
-      return parsed;
-    } catch (err) {
-      return { __meta: {} };
-    }
-  }
-
-  let payrollSnapshots = loadPayrollSnapshots();
-  try { window.payrollSnapshots = payrollSnapshots; } catch (err) {}
-
-  function persistPayrollSnapshots() {
-    try {
-      if (!payrollSnapshots || typeof payrollSnapshots !== 'object') payrollSnapshots = { __meta: {} };
-      if (!payrollSnapshots.__meta) payrollSnapshots.__meta = {};
-      payrollSnapshots.__meta.lastUpdatedAt = Date.now();
-      localStorage.setItem(PAYROLL_SNAPSHOTS_KEY, JSON.stringify(payrollSnapshots));
-    } catch (err) {
-      console.warn('Unable to persist payroll snapshots', err);
-    }
-    try {
-      if (typeof window.writeKV === 'function') {
-        window.writeKV(PAYROLL_SNAPSHOTS_KEY, payrollSnapshots).catch(err => {
-          console.warn('payroll snapshots writeKV failed', err);
-        });
-      }
-    } catch (err) {
-      console.warn('payroll snapshots writeKV failed', err);
-    }
-  }
 
   function loadLockMap() {
     try {
@@ -6999,171 +6839,6 @@ document.addEventListener('DOMContentLoaded', () => {
   function periodKey(start, end) {
     return `${start || ''}__${end || ''}`;
   }
-
-  function periodScopedKey(start, end) {
-    return `${start || ''}_${end || ''}`;
-  }
-
-  function getPayrollSnapshot(start, end) {
-    if (!start || !end) return null;
-    const entry = payrollSnapshots && payrollSnapshots[periodKey(start, end)];
-    return entry && typeof entry === 'object' ? entry : null;
-  }
-
-  function setPayrollSnapshot(start, end, snapshotData) {
-    if (!start || !end) return;
-    if (!payrollSnapshots || typeof payrollSnapshots !== 'object') payrollSnapshots = { __meta: {} };
-    payrollSnapshots[periodKey(start, end)] = snapshotData;
-    persistPayrollSnapshots();
-    try { window.payrollSnapshots = payrollSnapshots; } catch (err) {}
-  }
-
-  function getSnapshotEmployeesFromRows(rows) {
-    if (!Array.isArray(rows)) return [];
-    return rows.map(row => {
-      if (!row) return null;
-      const id = row.id != null ? String(row.id).trim() : '';
-      if (!id) return null;
-      const name = row.name != null ? String(row.name) : '';
-      return { id, name };
-    }).filter(Boolean);
-  }
-
-  function filterDtrOverridesForPeriod(overrides, employeeIds, start, end) {
-    if (!overrides || typeof overrides !== 'object') return {};
-    const out = {};
-    const startVal = start || '';
-    const endVal = end || '';
-    Object.keys(overrides).forEach(key => {
-      const parts = String(key).split('___');
-      if (parts.length < 2) return;
-      const empId = parts[0];
-      const date = parts[1];
-      if (!employeeIds.has(empId)) return;
-      if (startVal && date < startVal) return;
-      if (endVal && date > endVal) return;
-      out[key] = safeClone(overrides[key]);
-    });
-    return out;
-  }
-
-  function readPeriodScopedSnapshot(map, key, fallback) {
-    if (map && typeof map === 'object' && Object.prototype.hasOwnProperty.call(map, key)) {
-      return map[key];
-    }
-    return fallback;
-  }
-
-  function buildPayrollSnapshotData(start, end, snapshot) {
-    if (!snapshot || !Array.isArray(snapshot.rows)) return null;
-    const employeesIncluded = getSnapshotEmployeesFromRows(snapshot.rows);
-    const employeeIds = new Set(employeesIncluded.map(emp => emp.id));
-    const startVal = start || '';
-    const endVal = end || '';
-    const dtrRecordsSource = Array.isArray(storedRecords) ? storedRecords : [];
-    const dtrRecords = dtrRecordsSource.filter(rec => {
-      if (!rec || rec.empId == null || !rec.date) return false;
-      const empId = String(rec.empId);
-      if (!employeeIds.has(empId)) return false;
-      if (startVal && rec.date < startVal) return false;
-      if (endVal && rec.date > endVal) return false;
-      return true;
-    }).map(rec => safeClone(rec));
-    const dtrOverrideSnapshot = filterDtrOverridesForPeriod(
-      (typeof dtrOverrides !== 'undefined' ? dtrOverrides : {}),
-      employeeIds,
-      startVal,
-      endVal
-    );
-    const contribSnapshot = {};
-    if (typeof contribFlags !== 'undefined' && contribFlags && typeof contribFlags === 'object') {
-      employeeIds.forEach(empId => {
-        if (contribFlags[empId]) contribSnapshot[empId] = safeClone(contribFlags[empId]);
-      });
-    }
-    const scopedKey = periodScopedKey(startVal, endVal);
-    const addDetails = safeClone(readPeriodScopedSnapshot(
-      (typeof allAdditionalIncomeDetails !== 'undefined' ? allAdditionalIncomeDetails : null),
-      scopedKey,
-      (typeof additionalIncomeDetails !== 'undefined' ? additionalIncomeDetails : {})
-    ));
-    const addTotals = safeClone(readPeriodScopedSnapshot(
-      (typeof allAdditionalIncomeTotals !== 'undefined' ? allAdditionalIncomeTotals : null),
-      scopedKey,
-      (typeof additionalIncomeTotal !== 'undefined' ? additionalIncomeTotal : {})
-    ));
-    const otherDetails = safeClone(readPeriodScopedSnapshot(
-      (typeof allOtherDeductionsDetails !== 'undefined' ? allOtherDeductionsDetails : null),
-      scopedKey,
-      (typeof otherDeductionsDetails !== 'undefined' ? otherDeductionsDetails : {})
-    ));
-    const otherTotals = safeClone(readPeriodScopedSnapshot(
-      (typeof allOtherDeductionsTotals !== 'undefined' ? allOtherDeductionsTotals : null),
-      scopedKey,
-      (typeof otherDeductionsTotal !== 'undefined' ? otherDeductionsTotal : {})
-    ));
-    return {
-      periodKey: periodKey(startVal, endVal),
-      startDate: startVal,
-      endDate: endVal,
-      createdAt: new Date().toISOString(),
-      employeesIncluded,
-      dtr: {
-        records: dtrRecords,
-        overrides: dtrOverrideSnapshot
-      },
-      contributions: {
-        flags: contribSnapshot
-      },
-      additionalIncome: {
-        details: addDetails,
-        totals: addTotals
-      },
-      otherDeductions: {
-        details: otherDetails,
-        totals: otherTotals
-      },
-      payrollRows: safeClone(snapshot.rows),
-      payrollTotals: safeClone(snapshot.totals || {}),
-      divisor: snapshot.divisor
-    };
-  }
-
-  function setActivePayrollSnapshot(snapshotData) {
-    const nextKey = snapshotData && (snapshotData.periodKey || periodKey(snapshotData.startDate, snapshotData.endDate));
-    const currentKey = window.__snapshotPeriodKey || '';
-    if ((nextKey || '') === currentKey && (!!snapshotData) === !!currentKey) {
-      return false;
-    }
-    if (snapshotData) {
-      window.__snapshotPeriodKey = nextKey || '';
-      window.__activePayrollSnapshot = snapshotData;
-      window.__snapshotDtrRecords = (snapshotData.dtr && Array.isArray(snapshotData.dtr.records)) ? snapshotData.dtr.records : null;
-      window.__snapshotDtrOverrides = (snapshotData.dtr && snapshotData.dtr.overrides) ? snapshotData.dtr.overrides : null;
-      window.__snapshotEmployeesIncluded = Array.isArray(snapshotData.employeesIncluded) ? snapshotData.employeesIncluded : null;
-      window.__snapshotAdditionalIncome = snapshotData.additionalIncome || null;
-      window.__snapshotOtherDeductions = snapshotData.otherDeductions || null;
-      window.__snapshotContribFlags = snapshotData.contributions ? snapshotData.contributions.flags : null;
-      if (typeof snapshotData.divisor !== 'undefined') {
-        window.__snapshotDivisorOverride = snapshotData.divisor;
-      }
-    } else {
-      try { delete window.__snapshotPeriodKey; } catch (_) { window.__snapshotPeriodKey = ''; }
-      try { delete window.__activePayrollSnapshot; } catch (_) { window.__activePayrollSnapshot = null; }
-      try { delete window.__snapshotDtrRecords; } catch (_) { window.__snapshotDtrRecords = null; }
-      try { delete window.__snapshotDtrOverrides; } catch (_) { window.__snapshotDtrOverrides = null; }
-      try { delete window.__snapshotEmployeesIncluded; } catch (_) { window.__snapshotEmployeesIncluded = null; }
-      try { delete window.__snapshotAdditionalIncome; } catch (_) { window.__snapshotAdditionalIncome = null; }
-      try { delete window.__snapshotOtherDeductions; } catch (_) { window.__snapshotOtherDeductions = null; }
-      try { delete window.__snapshotContribFlags; } catch (_) { window.__snapshotContribFlags = null; }
-      try { delete window.__snapshotDivisorOverride; } catch (_) { window.__snapshotDivisorOverride = null; }
-    }
-    return true;
-  }
-  try {
-    window.setActivePayrollSnapshot = setActivePayrollSnapshot;
-    window.getPayrollSnapshot = getPayrollSnapshot;
-  } catch (err) {}
 
   function getCurrentPeriodRange() {
     return {
@@ -7509,7 +7184,6 @@ document.addEventListener('DOMContentLoaded', () => {
       enablePayrollInputs();
       updateLockStatusDisplay(null);
       clearSnapshotOverride();
-      setActivePayrollSnapshot(null);
       if (dashLockButton) dashLockButton.disabled = true;
       if (dashUnlockButton) dashUnlockButton.disabled = true;
       return false;
@@ -7520,29 +7194,11 @@ document.addEventListener('DOMContentLoaded', () => {
       disablePayrollInputs();
       updateLockStatusDisplay(entry);
       const snap = findHistorySnapshot(start, end);
-      let storedSnapshot = getPayrollSnapshot(start, end);
-      if (!storedSnapshot && snap) {
-        storedSnapshot = buildPayrollSnapshotData(start, end, snap);
-        if (storedSnapshot) setPayrollSnapshot(start, end, storedSnapshot);
-      }
-      const tableSnapshot = storedSnapshot && Array.isArray(storedSnapshot.payrollRows)
-        ? {
-          rows: storedSnapshot.payrollRows,
-          totals: storedSnapshot.payrollTotals || {},
-          divisor: storedSnapshot.divisor
-        }
-        : snap;
-      if (tableSnapshot) {
-        setSnapshotOverride(tableSnapshot);
-        applySnapshotToPayrollTable(tableSnapshot);
+      if (snap) {
+        setSnapshotOverride(snap);
+        applySnapshotToPayrollTable(snap);
       } else {
         clearSnapshotOverride();
-      }
-      const snapshotChanged = setActivePayrollSnapshot(storedSnapshot || null);
-      if (snapshotChanged) {
-        try { if (typeof renderAdditionalIncomeTable === 'function') renderAdditionalIncomeTable(); } catch (err) {}
-        try { if (typeof renderOtherDeductionsTable === 'function') renderOtherDeductionsTable(); } catch (err) {}
-        try { if (typeof renderResults === 'function') renderResults(); } catch (err) {}
       }
       if (dashLockButton) dashLockButton.disabled = true;
       if (dashUnlockButton) dashUnlockButton.disabled = false;
@@ -7550,12 +7206,6 @@ document.addEventListener('DOMContentLoaded', () => {
       enablePayrollInputs();
       updateLockStatusDisplay(null);
       clearSnapshotOverride();
-      const snapshotChanged = setActivePayrollSnapshot(null);
-      if (snapshotChanged) {
-        try { if (typeof renderAdditionalIncomeTable === 'function') renderAdditionalIncomeTable(); } catch (err) {}
-        try { if (typeof renderOtherDeductionsTable === 'function') renderOtherDeductionsTable(); } catch (err) {}
-        try { if (typeof renderResults === 'function') renderResults(); } catch (err) {}
-      }
       const table = document.getElementById('payrollTable');
       if (table) {
         const snapshotRows = table.querySelectorAll('tbody tr[data-snapshot-row="true"]');
@@ -7597,11 +7247,6 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!snapshot || !Array.isArray(snapshot.rows) || !snapshot.rows.length) {
       alert('Payroll table is missing or empty.');
       return;
-    }
-    const payrollSnapshotData = buildPayrollSnapshotData(start, end, snapshot);
-    if (payrollSnapshotData) {
-      setPayrollSnapshot(start, end, payrollSnapshotData);
-      setActivePayrollSnapshot(payrollSnapshotData);
     }
     let hashHex = '';
     try {
@@ -12463,15 +12108,8 @@ function __fmt12Clock(hhmm){
   
   const nameQuery = (document.getElementById('dtrSearchName') ? document.getElementById('dtrSearchName').value.trim().toLowerCase() : '');
 const groups = {};
-  const snapshotRecords = (typeof window !== 'undefined' && Array.isArray(window.__snapshotDtrRecords))
-    ? window.__snapshotDtrRecords
-    : null;
-  const activeRecords = snapshotRecords || storedRecords;
-  const activeOverrides = (typeof window !== 'undefined' && window.__snapshotDtrOverrides && typeof window.__snapshotDtrOverrides === 'object')
-    ? window.__snapshotDtrOverrides
-    : dtrOverrides;
   const manualKeys = new Set();
-  for(const r of activeRecords){
+  for(const r of storedRecords){
     if(startDate && r.date < startDate) continue;
     if(endDate && r.date > endDate) continue;
     const key = r.date + '___' + r.empId;
@@ -12537,8 +12175,8 @@ if(!_passes) continue;
       otOut:{ start: schedule.rng_ot_out_start || DEFAULT_RANGES.rng_ot_out_start, end: schedule.rng_ot_out_end || DEFAULT_RANGES.rng_ot_out_end }
     };
 
-    const overridePunches = activeOverrides && Object.prototype.hasOwnProperty.call(activeOverrides, overrideKey)
-      ? activeOverrides[overrideKey]
+    const overridePunches = dtrOverrides && Object.prototype.hasOwnProperty.call(dtrOverrides, overrideKey)
+      ? dtrOverrides[overrideKey]
       : null;
     let amInActual = null;
     let amOutActual = null;
@@ -15675,12 +15313,6 @@ function updateWeekInputs(snap) {
   const isLockedSnapshot = !!(snap && snap.locked);
   const startISO = toIsoDate(snap && snap.startDate);
   const endISO   = toIsoDate(snap && snap.endDate);
-  const snapshotKey = `${startISO || (snap && snap.startDate) || ''}__${endISO || (snap && snap.endDate) || ''}`;
-  let storedSnapshot = null;
-  try {
-    const map = window.payrollSnapshots || JSON.parse(localStorage.getItem('payroll_snapshots') || '{}');
-    if (map && typeof map === 'object') storedSnapshot = map[snapshotKey];
-  } catch (_) {}
 
   // If the user already set a custom DTR date filter (persisted in localStorage),
   // do not override it when switching payroll periods or when realtime sync
@@ -15722,24 +15354,9 @@ function updateWeekInputs(snap) {
       if (typeof calculatePayrollFromResultsTable === 'function') { calculatePayrollFromResultsTable(); }
       else if (typeof calculatePayrollFromRecords === 'function') { calculatePayrollFromRecords(); }
     } catch (e) {}
-    try { if (typeof window.setActivePayrollSnapshot === 'function') window.setActivePayrollSnapshot(null); } catch (e) {}
   } else {
-    const tableSnapshot = storedSnapshot && Array.isArray(storedSnapshot.payrollRows)
-      ? {
-        rows: storedSnapshot.payrollRows,
-        totals: storedSnapshot.payrollTotals || {},
-        divisor: storedSnapshot.divisor
-      }
-      : snap;
-    try {
-      if (typeof window.setActivePayrollSnapshot === 'function') {
-        window.setActivePayrollSnapshot(storedSnapshot || null);
-      }
-    } catch (e) {}
-    try { setSnapshotOverride(tableSnapshot); } catch (e) {}
-    try { applySnapshotToPayrollTable(tableSnapshot); } catch (e) {}
-    try { if (typeof renderAdditionalIncomeTable === 'function') renderAdditionalIncomeTable(); } catch (e) {}
-    try { if (typeof renderOtherDeductionsTable === 'function') renderOtherDeductionsTable(); } catch (e) {}
+    try { setSnapshotOverride(snap); } catch (e) {}
+    try { applySnapshotToPayrollTable(snap); } catch (e) {}
   }
 
   // After updating the week range, toggle editing state based on whether the
