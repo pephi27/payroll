@@ -338,7 +338,7 @@ function __kvEnableSync(){ __kvSyncEnabled = true; }
 function __kvDisableSync(){ __kvSyncEnabled = false; }
 try { window.__kvEnableSync = __kvEnableSync; window.__kvDisableSync = __kvDisableSync; } catch(_) {}
 
-const __CLOUD_ONLY_KEYS = new Set(['payroll_loan_tracker','payroll_loan_sss','payroll_loan_pagibig','payroll_vale','payroll_vale_wed']);
+const __CLOUD_ONLY_KEYS = new Set(['payroll_loan_tracker','payroll_loan_sss','payroll_loan_pagibig','payroll_vale','payroll_vale_wed','payroll_other_deductions_details','payroll_other_deductions_total','payroll_additional_income_details','payroll_additional_income_total']);
 function __kvShouldMirror(k){ return KNOWN_KEYS.includes(k) && !__CLOUD_ONLY_KEYS.has(k); }
 
 // Write-through on any localStorage change (only after hydrate succeeds)
@@ -2904,7 +2904,7 @@ window.addEventListener('load', dashReports);
       <h3>Loan Tracker</h3>
       <div class="note">
        Track loan deductions per employee:
-       <b>SSS Salary Loan</b> and <b>SSS Calamity Loan</b> use <b>Total</b> + <b>Weekly</b> (balance is tracked and auto-stops when fully paid).
+       <b>SSS Salary Loan</b> and <b>SSS Calamity Loan</b> use <b>Total</b> + <b>Monthly</b> (per-payroll is computed using the selected divisor; balance is tracked and auto-stops when fully paid).
        <b>Pag-IBIG Salary Loan</b> and <b>Pag-IBIG Calamity Loan</b> use <b>Monthly deduction</b> only (per-payroll is computed using the selected divisor).
        <b>Cash Advance</b> uses <b>Total</b> + <b>Weekly</b> (balance tracked).
       </div>
@@ -2920,11 +2920,13 @@ window.addEventListener('load', dashReports);
           <th>ID</th>
           <th>Name</th>
           <th>SSS Salary Total</th>
-          <th>SSS Salary Weekly</th>
+          <th>SSS Salary Monthly</th>
+          <th>Per Period</th>
           <th>SSS Salary Balance</th>
           <th>Active</th>
           <th>SSS Calamity Total</th>
-          <th>SSS Calamity Weekly</th>
+          <th>SSS Calamity Monthly</th>
+          <th>Per Period</th>
           <th>SSS Calamity Balance</th>
           <th>Active</th>
           <th>Pag-IBIG Salary Monthly</th>
@@ -3752,17 +3754,22 @@ function loadPeriodScopedMap(lsKey){
 }
 
 // === Loan Tracker (SSS Salary/Calamity, Pag-IBIG Salary/Calamity, Cash Advance) ===
-// Stores SSS/Cash principals and weekly deductions (auto-stops when fully paid),
+// Stores SSS principals (total + monthly) with tracked balances (auto-stops when fully paid),
+// Cash Advance principals (total + weekly) with tracked balances,
 // and Pag-IBIG monthly deductions (no total/balance; per-payroll is computed via the divisor).
 const LOAN_TYPES_SSS = ['loanSSS_salary','loanSSS_calamity'];
 const LOAN_TYPES_PI  = ['loanPI_salary','loanPI_calamity'];
 const LOAN_TYPES_CASH = ['vale'];
 
+function isLoanTypeSSS(type){
+  return type === 'loanSSS_salary' || type === 'loanSSS_calamity' || type === 'loanSSS';
+}
 function isLoanTypePagibig(type){
   return type === 'loanPI_salary' || type === 'loanPI_calamity' || type === 'loanPI';
 }
 function loanEntryDefaults(type){
   if (isLoanTypePagibig(type)) return { monthly: 0, active: false };
+  if (isLoanTypeSSS(type)) return { principal: 0, monthly: 0, active: false };
   return { principal: 0, weekly: 0, active: false };
 }
 function ensureLoanTrackerShape(obj){
@@ -3807,14 +3814,25 @@ function migrateLoanTrackerLegacy(obj){
           e.active = e.active === true;
           delete e.principal;
           delete e.weekly;
+        } else if (isLoanTypeSSS(type)) {
+          const e = emp[type];
+          e.principal = roundToCents(Number(e.principal) || 0);
+          const weekly = roundToCents(Number(e.weekly) || 0);
+          let monthly = roundToCents(Number(e.monthly) || 0);
+          if ((!monthly || monthly <= 0) && weekly > 0) monthly = roundToCents(weekly * div);
+          e.monthly = roundToCents(monthly || 0);
+          e.active = e.active === true;
+          delete e.weekly;
         } else {
+          // Cash Advance (weekly-based)
           const e = emp[type];
           e.principal = roundToCents(Number(e.principal) || 0);
           e.weekly = roundToCents(Number(e.weekly) || 0);
           e.active = e.active === true;
+          delete e.monthly;
         }
       });
-    });
+});
   } catch(_) {}
 
   try {
@@ -3990,6 +4008,7 @@ function applyLoanTrackerToPeriod(pk, options){
     }
   };
 
+  // Cash Advance (weekly-based)
   const handlePrincipalWeekly = (empId, type) => {
     const entry = getLoanTrackerEntry(empId, type);
     if (!entry) return 0;
@@ -4017,17 +4036,87 @@ function applyLoanTrackerToPeriod(pk, options){
     }
 
     let scheduled = getLoanTrackerApplied(pk, empId, type);
+    const desired = roundToCents(Math.min(weekly, remainingBefore));
+
     if (scheduled == null || force){
       if (!createEntries && scheduled == null && !force) {
         // navigating backwards / initial load: don't create missing entries
       } else {
-        const amt = roundToCents(Math.min(weekly, remainingBefore));
-        if (amt <= 0) {
+        if (desired <= 0) {
           clearForThisPeriod();
           return 0;
         }
-        setLoanTrackerApplied(pk, empId, type, amt);
-        scheduled = amt;
+        setLoanTrackerApplied(pk, empId, type, desired);
+        scheduled = desired;
+        changed = true;
+      }
+    } else if (createEntries) {
+      const cur = roundToCents(Number(scheduled) || 0);
+      if (cur !== desired) {
+        setLoanTrackerApplied(pk, empId, type, desired);
+        scheduled = desired;
+        changed = true;
+      }
+    }
+
+    if (scheduled == null) return 0;
+
+    const remainingAfter = roundToCents(remainingBefore - roundToCents(scheduled || 0));
+    if (remainingAfter <= 0) {
+      if (entry.active) { entry.active = false; changed = true; }
+    }
+    return roundToCents(scheduled || 0);
+  };
+
+  // SSS Loans (monthly-based; per-period is monthly ÷ divisor)
+  const handlePrincipalMonthly = (empId, type) => {
+    const entry = getLoanTrackerEntry(empId, type);
+    if (!entry) return 0;
+
+    const principal = roundToCents(entry.principal || 0);
+    const monthly = roundToCents(entry.monthly || 0);
+    const basePerPeriod = (div > 0) ? roundToCents(monthly / div) : roundToCents(monthly);
+    const shouldRun = (entry.active === true) && (principal > 0) && (monthly > 0) && (basePerPeriod > 0);
+
+    const clearForThisPeriod = () => {
+      if (!(createEntries || force)) return;
+      clearLoanTrackerApplied(pk, empId, type);
+    };
+
+    if (!shouldRun) {
+      clearForThisPeriod();
+      return 0;
+    }
+
+    const paidBefore = sumLoanTrackerAppliedBefore(pk, empId, type);
+    const remainingBefore = roundToCents(principal - paidBefore);
+    if (remainingBefore <= 0) {
+      if (entry.active) { entry.active = false; changed = true; }
+      clearForThisPeriod();
+      return 0;
+    }
+
+    const desired = roundToCents(Math.min(basePerPeriod, remainingBefore));
+    if (desired <= 0) {
+      clearForThisPeriod();
+      return 0;
+    }
+
+    let scheduled = getLoanTrackerApplied(pk, empId, type);
+
+    if (scheduled == null || force){
+      if (!createEntries && scheduled == null && !force) {
+        // navigating backwards / initial load: don't create missing entries
+      } else {
+        setLoanTrackerApplied(pk, empId, type, desired);
+        scheduled = desired;
+        changed = true;
+      }
+    } else if (createEntries) {
+      const cur = roundToCents(Number(scheduled) || 0);
+      if (cur !== desired) {
+        setLoanTrackerApplied(pk, empId, type, desired);
+        scheduled = desired;
         changed = true;
       }
     }
@@ -4048,8 +4137,9 @@ function applyLoanTrackerToPeriod(pk, options){
     // --- SSS (2 types -> combined into the single period field) ---
     let sssPerPeriod = 0;
     for (const type of LOAN_TYPES_SSS){
-      sssPerPeriod += handlePrincipalWeekly(empId, type);
+      sssPerPeriod += handlePrincipalMonthly(empId, type);
     }
+    // Store as a "raw" value so the deductions table's divisor logic yields the per-period amount
     const sssRaw = roundToCents(sssPerPeriod * div);
     if (canWriteMaps) setMapValue(loanSSS, empId, sssRaw);
 
@@ -4989,6 +5079,64 @@ function renderLoanTrackerTable(){
     const tdId = document.createElement('td'); tdId.textContent = empId; tr.appendChild(tdId);
     const tdName = document.createElement('td'); tdName.textContent = emp.name || ''; tr.appendChild(tdName);
 
+    const addPrincipalMonthlyCells = (type) => {
+      const entry = getLoanTrackerEntry(empId, type) || { principal: 0, monthly: 0, active: false };
+      const principal = roundToCents(entry.principal || 0);
+      const monthly = roundToCents(entry.monthly || 0);
+
+      const basePer = (entry.active && monthly > 0) ? roundToCents((div || 1) > 0 ? (monthly / (div || 1)) : monthly) : 0;
+      const paidBefore = sumLoanTrackerAppliedBefore(pk, empId, type);
+      const remainingBefore = roundToCents(principal - paidBefore);
+      const desired = (entry.active && basePer > 0 && remainingBefore > 0) ? roundToCents(Math.min(basePer, remainingBefore)) : 0;
+
+      const scheduled = getLoanTrackerApplied(pk, empId, type);
+      const perPeriod = scheduled != null ? roundToCents(scheduled || 0) : desired;
+      const bal = loanTrackerRemaining(pk, empId, type);
+
+      const tdPrincipal = document.createElement('td');
+      const inPrincipal = document.createElement('input');
+      inPrincipal.type = 'number'; inPrincipal.step = '0.01'; inPrincipal.min = '0';
+      inPrincipal.value = formatLoanTrackerNumInput(principal);
+      inPrincipal.dataset.empId = empId;
+      inPrincipal.dataset.loanType = type;
+      inPrincipal.dataset.field = 'principal';
+      inPrincipal.setAttribute('inputmode', 'decimal');
+      tdPrincipal.appendChild(inPrincipal);
+      tr.appendChild(tdPrincipal);
+
+      const tdMonthly = document.createElement('td');
+      const inMonthly = document.createElement('input');
+      inMonthly.type = 'number'; inMonthly.step = '0.01'; inMonthly.min = '0';
+      inMonthly.value = formatLoanTrackerNumInput(monthly);
+      inMonthly.dataset.empId = empId;
+      inMonthly.dataset.loanType = type;
+      inMonthly.dataset.field = 'monthly';
+      inMonthly.setAttribute('inputmode', 'decimal');
+      tdMonthly.appendChild(inMonthly);
+      tr.appendChild(tdMonthly);
+
+      const tdPer = document.createElement('td');
+      tdPer.classList.add('num');
+      tdPer.textContent = formatDeductionDisplay(perPeriod);
+      tdPer.title = 'Monthly ÷ Divisor (capped by remaining balance)';
+      tr.appendChild(tdPer);
+
+      const tdBal = document.createElement('td');
+      tdBal.classList.add('num','balance-cell');
+      tdBal.textContent = formatDeductionDisplay(bal);
+      tr.appendChild(tdBal);
+
+      const tdActive = document.createElement('td');
+      const chk = document.createElement('input');
+      chk.type = 'checkbox';
+      chk.checked = !!entry.active;
+      chk.dataset.empId = empId;
+      chk.dataset.loanType = type;
+      chk.dataset.field = 'active';
+      tdActive.appendChild(chk);
+      tr.appendChild(tdActive);
+    };
+
     const addPrincipalWeeklyCells = (type) => {
       const entry = getLoanTrackerEntry(empId, type) || { principal: 0, weekly: 0, active: false };
       const principal = roundToCents(entry.principal || 0);
@@ -5066,15 +5214,15 @@ function renderLoanTrackerTable(){
       tr.appendChild(tdActive);
     };
 
-    // SSS (2 types)
-    addPrincipalWeeklyCells('loanSSS_salary');
-    addPrincipalWeeklyCells('loanSSS_calamity');
+    // SSS (monthly-based, 2 types)
+    addPrincipalMonthlyCells('loanSSS_salary');
+    addPrincipalMonthlyCells('loanSSS_calamity');
 
     // Pag-IBIG (monthly only, 2 types)
     addPagibigMonthlyCells('loanPI_salary');
     addPagibigMonthlyCells('loanPI_calamity');
 
-    // Cash Advance
+    // Cash Advance (weekly-based)
     addPrincipalWeeklyCells('vale');
 
     tbody.appendChild(tr);
