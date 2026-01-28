@@ -338,7 +338,8 @@ function __kvEnableSync(){ __kvSyncEnabled = true; }
 function __kvDisableSync(){ __kvSyncEnabled = false; }
 try { window.__kvEnableSync = __kvEnableSync; window.__kvDisableSync = __kvDisableSync; } catch(_) {}
 
-function __kvShouldMirror(k){ return KNOWN_KEYS.includes(k); }
+const __CLOUD_ONLY_KEYS = new Set(['payroll_loan_tracker','payroll_loan_sss','payroll_loan_pagibig','payroll_vale','payroll_vale_wed']);
+function __kvShouldMirror(k){ return KNOWN_KEYS.includes(k) && !__CLOUD_ONLY_KEYS.has(k); }
 
 // Write-through on any localStorage change (only after hydrate succeeds)
 Storage.prototype.setItem = function(k, v) {
@@ -392,6 +393,7 @@ async function __kvHydrateOnce(){
 
     // Hydration is done. Now it is safe to enable local->cloud mirroring.
     __kvEnableSync();
+    try { window.__kv_cloud_ready = true; window.dispatchEvent(new Event('kv-cloud-ready')); } catch(_){ }
 
     if (changed) {
       try { sessionStorage.removeItem("__kv_reloaded"); } catch {}
@@ -4144,7 +4146,7 @@ let vale = ensurePeriodData(allVale, currentPeriodKey);
 let valeWed = ensurePeriodData(allValeWed, currentPeriodKey);
 let periodPersistenceReady = false;
 try {
-  if (typeof window !== 'undefined' && window.__kv_hydrated === true) periodPersistenceReady = true;
+  if (typeof window !== 'undefined' && window.__kv_cloud_ready === true) periodPersistenceReady = true;
 } catch(_){}
 let allOtherDeductionsDetails = loadPeriodScopedMap(LS_OTHER_DEDUCTIONS_DETAILS);
 let allOtherDeductionsTotals = loadPeriodScopedMap(LS_OTHER_DEDUCTIONS_TOTAL);
@@ -4238,7 +4240,7 @@ function refreshPeriodScopedCachesFromStorage(){
 
 try {
   if (typeof window !== 'undefined') {
-    window.addEventListener('kv-hydrated', () => {
+    window.addEventListener('kv-cloud-ready', () => {
       periodPersistenceReady = true;
       refreshPeriodScopedCachesFromStorage();
       try {
