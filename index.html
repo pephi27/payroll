@@ -3772,6 +3772,96 @@ function loanEntryDefaults(type){
   if (isLoanTypeSSS(type)) return { principal: 0, monthly: 0, active: false };
   return { principal: 0, weekly: 0, active: false };
 }
+
+function loanTypeToProviderKind(type){
+  const t = String(type||'');
+  let provider = null;
+  if (t.indexOf('loanSSS') === 0) provider = 'SSS';
+  else if (t.indexOf('loanPI') === 0) provider = 'PAGIBIG';
+  if (!provider) return null;
+  const kind = (t.indexOf('_calamity') !== -1) ? 'CALAMITY' : 'SALARY';
+  return { provider, kind };
+}
+function providerKindToLoanType(provider, kind){
+  const p = String(provider||'').toUpperCase();
+  const k = String(kind||'').toUpperCase();
+  if (p === 'SSS') return (k === 'CALAMITY') ? 'loanSSS_calamity' : 'loanSSS_salary';
+  if (p === 'PAGIBIG') return (k === 'CALAMITY') ? 'loanPI_calamity' : 'loanPI_salary';
+  return null;
+}
+async function getOrCreatePeriodId(sb, startDate, endDate){
+  const start = String(startDate||'').trim();
+  const end = String(endDate||'').trim();
+  if (!start || !end) return null;
+  window.__periodKeyToId = window.__periodKeyToId || {};
+  const key = start + '_' + end;
+  if (window.__periodKeyToId[key]) return window.__periodKeyToId[key];
+
+  let { data, error } = await sb
+    .from(PERIODS_TABLE)
+    .select('id')
+    .eq('period_start', start)
+    .eq('period_end', end)
+    .maybeSingle();
+
+  if (error) console.warn('payroll_periods select error', error);
+
+  if (!data?.id) {
+    const ins = await sb
+      .from(PERIODS_TABLE)
+      .insert({ period_start: start, period_end: end })
+      .select('id')
+      .single();
+    if (ins.error) { console.warn('payroll_periods insert error', ins.error); return null; }
+    data = ins.data;
+  }
+  window.__periodKeyToId[key] = data.id;
+  return data.id;
+}
+async function ensureEmployeesExistByCode(sb, codes){
+  const unique = Array.from(new Set((codes||[]).map(c=>String(c||'').trim()).filter(Boolean)));
+  if (!unique.length) return { codeToId: {}, idToCode: {} };
+
+  const codeToId = {};
+  const idToCode = {};
+
+  const { data: existing, error } = await sb
+    .from(EMPLOYEES_TABLE)
+    .select('id,employee_code')
+    .in('employee_code', unique);
+
+  if (error) console.warn('employees select error', error);
+
+  (existing||[]).forEach(r=>{
+    if (!r) return;
+    const code = String(r.employee_code||'').trim();
+    if (!code) return;
+    codeToId[code] = r.id;
+    idToCode[r.id] = code;
+  });
+
+  const missing = unique.filter(c=>!codeToId[c]);
+  if (missing.length) {
+    const rows = missing.map(code=>{
+      let fullName = code;
+      try {
+        const e = window.storedEmployees && window.storedEmployees[code];
+        fullName = (e && (e.name || e.full_name || e.fullName)) ? (e.name || e.full_name || e.fullName) : code;
+      } catch(_){}
+      return { employee_code: code, full_name: fullName };
+    });
+    const ins = await sb.from(EMPLOYEES_TABLE).insert(rows).select('id,employee_code');
+    if (ins.error) console.warn('employees insert error', ins.error);
+    (ins.data||[]).forEach(r=>{
+      const code = String(r.employee_code||'').trim();
+      if (!code) return;
+      codeToId[code] = r.id;
+      idToCode[r.id] = code;
+    });
+  }
+
+  return { codeToId, idToCode };
+}
 function ensureLoanTrackerShape(obj){
   if (!isPlainObject(obj)) obj = {};
   if (!isPlainObject(obj.byEmp)) obj.byEmp = {};
@@ -3867,18 +3957,314 @@ function loadLoanTrackerFromStorage(){
   return parsed;
 }
 async function persistLoanTracker(){
+  // keep a local cache (offline convenience) but cloud is source of truth
   try {
     ensureLoanTrackerShape(loanTracker);
     loanTracker.__meta = loanTracker.__meta || {};
     loanTracker.__meta.lastUpdatedAt = Date.now();
   } catch(_) {}
+  try { localStorage.setItem(LS_LOAN_TRACKER, JSON.stringify(loanTracker)); } catch(_){}
+
+  if (!__hasSupabase()) return;
   try {
-    if (typeof window.writeKV === 'function') await window.writeKV(LS_LOAN_TRACKER, loanTracker);
-    else localStorage.setItem(LS_LOAN_TRACKER, JSON.stringify(loanTracker));
-  } catch(_){
-    try { localStorage.setItem(LS_LOAN_TRACKER, JSON.stringify(loanTracker)); } catch(e){}
+    const sb = window.supabase;
+
+    const byEmp = (loanTracker && loanTracker.byEmp) || {};
+    const codes = Object.keys(byEmp || {});
+    const { codeToId } = await ensureEmployeesExistByCode(sb, codes);
+
+    // Build master loan upserts
+    const loanRows = [];
+    const principalByEmpType = {};
+
+    // helper to sum deductions across all periods for a given emp+type
+    function sumAppliedAllPeriods(empCode, type){
+      let s = 0;
+      try {
+        const applied = (loanTracker && loanTracker.applied) || {};
+        Object.keys(applied||{}).forEach(pk=>{
+          const per = applied[pk];
+          if (!per || !per[empCode] || per[empCode][type] == null) return;
+          s += Number(per[empCode][type]) || 0;
+        });
+      } catch(_){}
+      return roundToCents(s);
+    }
+
+    codes.forEach(empCode=>{
+      const empLoans = byEmp[empCode];
+      if (!isPlainObject(empLoans)) return;
+      const employee_id = codeToId[String(empCode).trim()];
+      if (!employee_id) return;
+
+      Object.keys(empLoans).forEach(type=>{
+        const entry = empLoans[type];
+        if (!isPlainObject(entry)) return;
+
+        const map = loanTypeToProviderKind(type);
+        if (!map) return;
+
+        const provider = map.provider;
+        const loan_type = map.kind;
+
+        const row = {
+          employee_id,
+          provider,
+          loan_type,
+          monthly_amount: roundToCents(Number(entry.monthly) || 0),
+          is_active: entry.active === true
+        };
+
+        if (provider === 'SSS') {
+          const principal = roundToCents(Number(entry.principal) || 0);
+          row.total_amount = principal;
+          const paid = sumAppliedAllPeriods(empCode, type);
+          row.balance = Math.max(0, roundToCents(principal - paid));
+          principalByEmpType[employee_id + '|' + provider + '|' + loan_type] = principal;
+          // auto-stop if fully paid
+          if (principal > 0 && row.balance <= 0) row.is_active = false;
+        } else {
+          // PAG-IBIG monthly only (no total/balance tracking by default)
+          row.total_amount = null;
+          row.balance = null;
+        }
+
+        loanRows.push(row);
+      });
+    });
+
+    // Upsert loans and fetch ids
+    let loanKeyToId = {};
+    if (loanRows.length) {
+      const res = await sb
+        .from(LOANS_TABLE)
+        .upsert(loanRows, { onConflict: 'employee_id,provider,loan_type' })
+        .select('id,employee_id,provider,loan_type');
+      if (res.error) console.warn('employee_loans upsert error', res.error);
+      (res.data || []).forEach(r=>{
+        loanKeyToId[r.employee_id + '|' + String(r.provider).toUpperCase() + '|' + String(r.loan_type).toUpperCase()] = r.id;
+      });
+    }
+
+    // Upsert current period deductions (lightweight)
+    const start = (weekStartEl && weekStartEl.value) ? weekStartEl.value : '';
+    const end = (weekEndEl && weekEndEl.value) ? weekEndEl.value : '';
+    const period_id = await getOrCreatePeriodId(sb, start, end);
+    if (!period_id) return;
+
+    const pk = currentPeriodKey || periodKey();
+    const per = loanTracker && loanTracker.applied && loanTracker.applied[pk];
+    const dedRows = [];
+
+    if (isPlainObject(per)) {
+      Object.keys(per).forEach(empCode=>{
+        const emp = per[empCode];
+        if (!isPlainObject(emp)) return;
+        const employee_id = codeToId[String(empCode).trim()];
+        if (!employee_id) return;
+
+        Object.keys(emp).forEach(type=>{
+          const amt = roundToCents(Number(emp[type]) || 0);
+          const map = loanTypeToProviderKind(type);
+          if (!map) return;
+          const key = employee_id + '|' + map.provider.toUpperCase() + '|' + map.kind.toUpperCase();
+          const loan_id = loanKeyToId[key];
+          if (!loan_id) return;
+          dedRows.push({ period_id, loan_id, deducted_amount: amt });
+        });
+      });
+    }
+
+    if (dedRows.length) {
+      const res2 = await sb
+        .from(LOAN_DEDUCTIONS_TABLE)
+        .upsert(dedRows, { onConflict: 'period_id,loan_id' });
+      if (res2.error) console.warn('loan_deductions upsert error', res2.error);
+    }
+
+  } catch (ex) {
+    console.warn('persistLoanTracker failed', ex);
   }
 }
+
+
+// === Supabase Loan Tables (proper tables, realtime) ===
+// Using: employee_loans + loan_deductions + payroll_periods + employees
+// Expected tables (recommended):
+// - employees (employee_code, full_name)
+// - payroll_periods (period_start, period_end)
+// - employee_loans (employee_id, provider, loan_type, monthly_amount, total_amount, balance, is_active)
+// - loan_deductions (period_id, loan_id, deducted_amount)
+//    - period_key text
+//    - employee_code text
+//    - loan_type text
+//    - amount numeric
+//    - updated_at timestamptz default now()
+//    - PRIMARY KEY (period_key, employee_code, loan_type)
+
+const LOANS_TABLE = "employee_loans";
+const LOAN_DEDUCTIONS_TABLE = "loan_deductions"
+const EMPLOYEES_TABLE = "employees";
+const PERIODS_TABLE = "payroll_periods";
+;
+
+function __hasSupabase(){
+  try { return !!(window && window.supabase && typeof window.supabase.from === 'function'); } catch(_) { return false; }
+}
+
+async function loadLoanTrackerFromSupabaseTables(){
+  if (!__hasSupabase()) return false;
+  try {
+    const sb = window.supabase;
+
+    // Load employee code <-> id maps (create missing employee rows if needed)
+    const localCodes = [];
+    try { localCodes.push(...Object.keys((window.storedEmployees||{}))); } catch(_){}
+    try { localCodes.push(...Object.keys((loanTracker && loanTracker.byEmp) || {})); } catch(_){}
+    const { codeToId, idToCode } = await ensureEmployeesExistByCode(sb, localCodes);
+
+    const byEmp = {};
+    const applied = {};
+
+    // Load loan master rows
+    const { data: loans, error: e1 } = await sb
+      .from(LOANS_TABLE)
+      .select('id,employee_id,provider,loan_type,monthly_amount,total_amount,balance,is_active');
+
+    if (e1) { console.warn('employee_loans fetch error', e1); return false; }
+
+    const loanIdToKey = {};
+    (loans || []).forEach(row => {
+      const empId = idToCode[row.employee_id];
+      if (!empId) return;
+      const type = providerKindToLoanType(row.provider, row.loan_type);
+      if (!type) return;
+
+      if (!isPlainObject(byEmp[empId])) byEmp[empId] = {};
+      const entry = Object.assign({}, loanEntryDefaults(type));
+      entry.active = row.is_active === true;
+
+      // For SSS we track principal and compute balance from applied
+      if (isLoanTypePagibig(type)) {
+        entry.monthly = roundToCents(Number(row.monthly_amount) || 0);
+      } else if (isLoanTypeSSS(type)) {
+        const principal = (row.total_amount != null) ? Number(row.total_amount) : (row.balance != null ? Number(row.balance) : 0);
+        entry.principal = roundToCents(principal || 0);
+        entry.monthly = roundToCents(Number(row.monthly_amount) || 0);
+      } else {
+        // legacy/other
+        entry.principal = roundToCents(Number(row.total_amount) || 0);
+        entry.weekly = roundToCents(Number(row.monthly_amount) || 0);
+      }
+      byEmp[empId][type] = entry;
+
+      // Map for deductions join-less lookup
+      loanIdToKey[row.id] = { empId, type };
+    });
+
+    // Load periods (id -> periodKey)
+    const { data: periods, error: eP } = await sb
+      .from(PERIODS_TABLE)
+      .select('id,period_start,period_end');
+
+    const periodIdToKey = {};
+    if (eP) console.warn('payroll_periods fetch error', eP);
+    (periods || []).forEach(p=>{
+      if (!p?.id) return;
+      periodIdToKey[p.id] = String(p.period_start||'') + '_' + String(p.period_end||'');
+    });
+
+    // Load applied deductions (with embedded loan info if available)
+    const { data: ded, error: e2 } = await sb
+      .from(LOAN_DEDUCTIONS_TABLE)
+      .select('period_id,loan_id,deducted_amount,employee_loans:loan_id (employee_id,provider,loan_type)');
+
+    if (e2) { console.warn('loan_deductions fetch error', e2); return false; }
+
+    (ded || []).forEach(row => {
+      const pk = periodIdToKey[row.period_id];
+      if (!pk) return;
+
+      let empId = null;
+      let type = null;
+
+      if (row.employee_loans && row.employee_loans.employee_id) {
+        empId = idToCode[row.employee_loans.employee_id];
+        type = providerKindToLoanType(row.employee_loans.provider, row.employee_loans.loan_type);
+      } else if (loanIdToKey[row.loan_id]) {
+        empId = loanIdToKey[row.loan_id].empId;
+        type = loanIdToKey[row.loan_id].type;
+      }
+
+      if (!empId || !type) return;
+
+      if (!isPlainObject(applied[pk])) applied[pk] = {};
+      if (!isPlainObject(applied[pk][empId])) applied[pk][empId] = {};
+      applied[pk][empId][type] = roundToCents(Number(row.deducted_amount) || 0);
+    });
+
+    const next = ensureLoanTrackerShape({ byEmp, applied });
+    next.__meta = next.__meta || {};
+    next.__meta.lastUpdatedAt = Date.now();
+
+    loanTracker = migrateLoanTrackerLegacy(next);
+    try { window.loanTracker = loanTracker; } catch(_){}
+    // local cache only
+    try { localStorage.setItem(LS_LOAN_TRACKER, JSON.stringify(loanTracker)); } catch(_){}
+
+    try { applyLoanTrackerToPeriod(currentPeriodKey || periodKey(), { createEntries: true }); } catch(_){}
+    try { saveCurrentPeriodDeductions(); } catch(_){}
+
+    return true;
+  } catch (ex) {
+    console.warn('loadLoanTrackerFromSupabaseTables failed', ex);
+    return false;
+  }
+}
+
+
+function setupLoanTablesRealtime(){
+  if (!__hasSupabase()) return;
+  if (window.__loanTablesSubscribed) return;
+  window.__loanTablesSubscribed = true;
+
+  try {
+    const sb = window.supabase;
+    const ch = sb.channel('loan_tables_sync');
+    window.__loanTablesChannel = ch;
+
+    const refresh = () => {
+      // simplest + safest: rehydrate from tables (keeps UI consistent)
+      loadLoanTrackerFromSupabaseTables();
+    };
+
+    ch.on('postgres_changes', { event: '*', schema: 'public', table: LOANS_TABLE }, refresh);
+    ch.on('postgres_changes', { event: '*', schema: 'public', table: LOAN_DEDUCTIONS_TABLE }, refresh);
+
+    ch.subscribe((status) => {
+      if (status === 'CHANNEL_ERROR') console.warn('Loan tables realtime subscribe failed');
+    });
+
+    // Cleanup
+    if (!window.__loanTablesUnloadCleanup) {
+      window.addEventListener('beforeunload', () => {
+        try {
+          if (window.__loanTablesChannel) {
+            if (typeof window.__loanTablesChannel.unsubscribe === 'function') {
+              window.__loanTablesChannel.unsubscribe();
+            } else if (window.supabase && typeof window.supabase.removeChannel === 'function') {
+              window.supabase.removeChannel(window.__loanTablesChannel);
+            }
+          }
+        } catch (_) {}
+      }, { once: true });
+      window.__loanTablesUnloadCleanup = true;
+    }
+  } catch (err) {
+    console.warn('setupLoanTablesRealtime failed', err);
+  }
+}
+
 function getLoanTrackerEntry(empId, type){
   ensureLoanTrackerShape(loanTracker);
   if (!empId || !type) return null;
@@ -4226,6 +4612,20 @@ function persistPeriodScopedMap(lsKey, map){
 let currentPeriodKey = periodKey();
 let loanTracker = loadLoanTrackerFromStorage();
 try { window.loanTracker = loanTracker; } catch(_){ }
+
+// Prefer Supabase proper tables for the Loan Tracker when available
+(function(){
+  const boot = async () => {
+    try {
+      await loadLoanTrackerFromSupabaseTables();
+      setupLoanTablesRealtime();
+    } catch(_) {}
+  };
+  try {
+    if (window && window.__kv_cloud_ready === true) boot();
+    window.addEventListener('kv-cloud-ready', boot);
+  } catch(_) {}
+})();
 let allLoanSSS = loadPeriodScopedMap(LS_LOAN_SSS);
 let allLoanPI = loadPeriodScopedMap(LS_LOAN_PI);
 let allVale = loadPeriodScopedMap(LS_VALE);
