@@ -326,63 +326,106 @@ function scheduleCloudUpsert(key, value) {
   })
 }
 
-// Write-through on any localStorage change
+// Cloud-first syncing:
+// - Cloud is the source of truth on boot
+// - A brand-new/empty PC will NEVER overwrite existing cloud data
+// - We only mirror localStorage -> cloud AFTER we successfully hydrated at least once
+let __kvSyncEnabled = false;
+let __kvHydrating = false;
+try { window.__kvSyncEnabled = () => __kvSyncEnabled; } catch(_) {}
+
+function __kvEnableSync(){ __kvSyncEnabled = true; }
+function __kvDisableSync(){ __kvSyncEnabled = false; }
+try { window.__kvEnableSync = __kvEnableSync; window.__kvDisableSync = __kvDisableSync; } catch(_) {}
+
+function __kvShouldMirror(k){ return KNOWN_KEYS.includes(k); }
+
+// Write-through on any localStorage change (only after hydrate succeeds)
 Storage.prototype.setItem = function(k, v) {
   try { __origSetItem.call(this, k, v) } catch {}
-  // Only mirror known keys to reduce noise
-  if (KNOWN_KEYS.includes(k)) scheduleCloudUpsert(k, v)
+  if (!__kvSyncEnabled) return;
+  if (__kvShouldMirror(k)) scheduleCloudUpsert(k, v);
 }
 Storage.prototype.removeItem = function(k) {
   try { __origRemoveItem.call(this, k) } catch {}
-  if (KNOWN_KEYS.includes(k)) cloudDelete(k)
+  if (!__kvSyncEnabled) return;
+  if (__kvShouldMirror(k)) cloudDelete(k);
 }
 
-// On first load, pull from cloud and hydrate localStorage automatically.
-// If we detect changes vs. current localStorage, we populate and reload once
-// so the rest of the app sees the new data without manual "sync".
-;(async function initialHydrate(){
+async function __kvHydrateOnce(){
   try {
+    __kvHydrating = true;
     const { data, error } = await supabase
       .from(TABLE)
       .select("key, value")
-      .in("key", KNOWN_KEYS)
-    if (error) { console.warn("Supabase fetch error:", error.message); return }
-    let changed = false
+      .in("key", KNOWN_KEYS);
+    if (error) { console.warn("Supabase fetch error:", error.message); return false; }
+
+    let changed = false;
+
     for (const row of (data || [])) {
-      const k = row.key
-      const cloudStr = safeStringify(row.value)
-      const cur = localStorage.getItem(k)
-      // Conflict resolution: if both sides look like period-scoped maps
-      // and have __meta.lastUpdatedAt, prefer the newer side.
-      let preferLocal = false
+      const k = row.key;
+      const cloudStr = safeStringify(row.value);
+      const cur = localStorage.getItem(k);
+
+      // Conflict resolution (period-scoped maps): prefer the newer __meta.lastUpdatedAt side.
+      let preferLocal = false;
       try {
-        const cloudObj = (row && typeof row.value === 'object') ? row.value : JSON.parse(cloudStr || 'null')
-        const localObj = cur ? JSON.parse(cur) : null
-        const lc = localObj && localObj.__meta && Number(localObj.__meta.lastUpdatedAt)
-        const rc = cloudObj && cloudObj.__meta && Number(cloudObj.__meta.lastUpdatedAt)
-        if (lc && rc && lc > rc) preferLocal = true
+        const cloudObj = (row && typeof row.value === 'object') ? row.value : JSON.parse(cloudStr || 'null');
+        const localObj = cur ? JSON.parse(cur) : null;
+        const lc = localObj && localObj.__meta && Number(localObj.__meta.lastUpdatedAt);
+        const rc = cloudObj && cloudObj.__meta && Number(cloudObj.__meta.lastUpdatedAt);
+        if (lc && rc && lc > rc) preferLocal = true;
       } catch(_) {}
+
       if (preferLocal) {
-        try { await supabase.from(TABLE).upsert({ key: k, value: JSON.parse(cur) }, { onConflict: 'key' }) } catch(_){ }
-        continue
+        try { await supabase.from(TABLE).upsert({ key: k, value: JSON.parse(cur) }, { onConflict: 'key' }); } catch(_){}
+        continue;
       }
+
       if (cloudStr != null && cloudStr !== cur) {
-        try { __origSetItem.call(localStorage, k, cloudStr) } catch {}
-        changed = true
+        // Important: write using the original setItem to avoid triggering mirroring back to cloud.
+        try { __origSetItem.call(localStorage, k, cloudStr); } catch {}
+        changed = true;
       }
     }
+
+    // Hydration is done. Now it is safe to enable local->cloud mirroring.
+    __kvEnableSync();
+
     if (changed) {
-      // Avoid reload: signal hydration complete and re-render once safely.
       try { sessionStorage.removeItem("__kv_reloaded"); } catch {}
       queueHydrateRerender();
     } else {
       markHydrated();
     }
+    return true;
   } catch (e) {
     console.warn("Initial hydrate failed", e);
-    markHydrated();
+    return false;
+  } finally {
+    __kvHydrating = false;
   }
-})()
+}
+
+// Boot hydrate with retry (prevents an empty PC from wiping cloud data if network is slow/offline).
+;(async function __kvBootHydrate(){
+  const ok = await __kvHydrateOnce();
+  if (ok) return;
+
+  // Allow the app to run locally, but keep sync disabled until we have fetched cloud at least once.
+  markHydrated();
+  let attempts = 0;
+  const retry = async () => {
+    if (__kvSyncEnabled) return;
+    attempts++;
+    const success = await __kvHydrateOnce();
+    if (success) return;
+    // Keep retrying; low overhead because it is just one SELECT for known keys.
+    window.setTimeout(retry, 3000);
+  };
+  window.setTimeout(retry, 3000);
+})();
 
 function safeStringify(v){
   try { return typeof v === "string" ? v : JSON.stringify(v) } catch { return null }
