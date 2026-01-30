@@ -780,6 +780,10 @@ function safePrint(win){
     var additionalItemsHtml = buildItemLines(additionalIncomeItems, getAdditionalIncomeLabel, 3);
     var otherDeductionsItemsHtml = buildItemLines(otherDeductionsItems, getOtherDeductionLabel, 3);
     var nightDiff = toNum(data.bantay);
+    var sssLoan = toNum(data.sssLoan);
+    var piLoan = toNum(data.piLoan);
+    var vale = toNum(data.vale);
+    var valeWed = toNum(data.valeWed);
     var additionalBlock = '';
     if (additionalIncomeItems.length || additionalIncomeTotal > 0) {
       additionalBlock = `
@@ -829,6 +833,10 @@ function safePrint(win){
           <div class="detail-row"><span>SSS</span><span>${formatMoney(data.sss)}</span></div>
           <div class="detail-row"><span>PhilHealth</span><span>${formatMoney(data.philhealth)}</span></div>
           <div class="detail-row"><span>Pag-IBIG</span><span>${formatMoney(data.pagibig)}</span></div>
+          ${sssLoan > 0 ? `<div class="detail-row"><span>SSS Loan</span><span>${formatMoney(sssLoan)}</span></div>` : ''}
+          ${piLoan > 0 ? `<div class="detail-row"><span>Pag-IBIG Loan</span><span>${formatMoney(piLoan)}</span></div>` : ''}
+          ${vale > 0 ? `<div class="detail-row"><span>Vale</span><span>${formatMoney(vale)}</span></div>` : ''}
+          ${valeWed > 0 ? `<div class="detail-row"><span>Vale (Wed)</span><span>${formatMoney(valeWed)}</span></div>` : ''}
           ${otherDeductionBlock}
         </div>
       </div>
