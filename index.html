@@ -6700,11 +6700,35 @@ function calculateRow(tr){  const readNum = sel => { const el = tr.querySelector
   const otTotal = ot + adjHours;
   const totalHrs = reg + ot + adjHours;
   const rate = Number(tr.querySelector('.rate').value)||0;
-  const lSSS = Number(tr.querySelector('.loanSSS').value)||0;
-  const lPI = Number(tr.querySelector('.loanPI').value)||0;
-  const v = Number(tr.querySelector('.vale').value)||0;
-  const vWEl = tr.querySelector('.valeWed');
-  const vW = Number((vWEl && typeof vWEl.value !== 'undefined') ? vWEl.value : readNum('.valeWed'))||0;
+  const getMappedInputValue = (selector, map) => {
+    const input = tr.querySelector(selector);
+    const fallback = input ? Number(input.value) || 0 : readNum(selector);
+    if (!map || !Object.prototype.hasOwnProperty.call(map, id)) {
+      return { value: fallback, input, fromMap: false };
+    }
+    const mappedRaw = Number(map[id]);
+    const mapped = Number.isFinite(mappedRaw) ? mappedRaw : 0;
+    return { value: mapped, input, fromMap: true };
+  };
+
+  const loanSssInput = getMappedInputValue('.loanSSS', loanSSS);
+  const loanPiInput = getMappedInputValue('.loanPI', loanPI);
+  const valeInput = getMappedInputValue('.vale', vale);
+  const valeWedInput = getMappedInputValue('.valeWed', valeWed);
+  const syncInputValue = (entry) => {
+    if (!entry || !entry.input || !entry.fromMap) return;
+    try {
+      entry.input.value = roundToCents(entry.value || 0).toFixed(2);
+    } catch (_) {}
+  };
+  syncInputValue(loanSssInput);
+  syncInputValue(loanPiInput);
+  syncInputValue(valeInput);
+  syncInputValue(valeWedInput);
+  const lSSS = loanSssInput.value || 0;
+  const lPI = loanPiInput.value || 0;
+  const v = valeInput.value || 0;
+  const vW = valeWedInput.value || 0;
 
   const otherDeductionsAmount = roundToCents(getOtherDeductionsTotal(id));
   const additionalIncome = getAdditionalIncomeTotal(id);
