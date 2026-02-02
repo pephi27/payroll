@@ -17654,13 +17654,159 @@ function updateWeekInputs(snap) {
  * key is fixed to 'records' so that only a single row is maintained.
  */
 async function saveDtrToCloud(records) {
+  // Safer multi-device DTR persistence:
+  // - Avoids wiping cloud when one device has an empty/stale copy
+  // - Uses merge + tombstones to resolve concurrent edits
+  // - Queues saves until initial hydration completes
   try {
     const supa = window.supabase || (typeof supabase !== 'undefined' ? supabase : null);
     if (!supa) return;
+
+    // Queue saves until hydration is done to avoid "blank overwrite" on startup.
+    if (!window.__dtrHydrationDone) {
+      window.__queuedDtrRecords = Array.isArray(records) ? records : [];
+      window.__pendingDtrSave = true;
+      return;
+    }
+
+    const LS_TOMBS = 'payroll_dtr_tombstones';
+    const LS_LAST  = 'payroll_dtr_last_saved_keys';
+    const LS_DEV   = 'payroll_dtr_device_id';
+
+    const getDeviceId = () => {
+      let id = '';
+      try { id = localStorage.getItem(LS_DEV) || ''; } catch(e) {}
+      if (!id) {
+        id = 'dev_' + Math.random().toString(16).slice(2) + '_' + Date.now().toString(16);
+        try { localStorage.setItem(LS_DEV, id); } catch(e) {}
+      }
+      return id;
+    };
+
+    const recKey = (rec) => {
+      if (!rec) return '';
+      const emp = rec.empId != null ? String(rec.empId).trim() : '';
+      const date = rec.date ? String(rec.date) : '';
+      const time = rec.time ? String(rec.time) : '';
+      const src = rec.source ? String(rec.source) : (rec.manual ? 'manual' : '');
+      return emp + '|' + date + '|' + time + '|' + src;
+    };
+
+    const loadJson = (k, fb) => {
+      try { return JSON.parse(localStorage.getItem(k) || '') || fb; } catch(e) { return fb; }
+    };
+    const saveJson = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch(e) {} };
+
+    const localRecs = Array.isArray(records) ? records : [];
+    let localTombs = loadJson(LS_TOMBS, {});
+    const prevKeysArr = loadJson(LS_LAST, []);
+    const prevKeys = new Set(Array.isArray(prevKeysArr) ? prevKeysArr : []);
+
+    // Detect local deletions (keys that existed before but are missing now)
+    const curKeys = new Set();
+    for (const r of localRecs) {
+      const k = recKey(r);
+      if (k) curKeys.add(k);
+    }
+    if (prevKeys.size) {
+      for (const k of prevKeys) {
+        if (!curKeys.has(k) && !localTombs[k]) {
+          localTombs[k] = new Date().toISOString();
+        }
+      }
+    }
+
+    // Fetch remote
+    const remoteRes = await loadDtrFromCloud();
+    if (remoteRes && remoteRes.status === 'error') {
+      // Cloud unreachable; keep local only.
+      console.warn('DTR cloud unreachable, skipping save:', remoteRes.error || '');
+      saveJson(LS_TOMBS, localTombs);
+      saveJson(LS_LAST, Array.from(curKeys));
+      return;
+    }
+
+    const remoteRecs = remoteRes && Array.isArray(remoteRes.records) ? remoteRes.records : [];
+    const remoteTombs = remoteRes && remoteRes.tombstones && typeof remoteRes.tombstones === 'object' ? remoteRes.tombstones : {};
+
+    // Safety: never overwrite a non-empty remote dataset with an empty local dataset
+    if (localRecs.length === 0 && remoteRecs.length > 0) {
+      console.warn('Prevented DTR wipe: local empty, remote has data.');
+      // Re-hydrate local from remote instead
+      try {
+        storedRecords = remoteRecs;
+        window.storedRecords = remoteRecs;
+        localStorage.setItem(LS_RECORDS, JSON.stringify(remoteRecs));
+      } catch(e) {}
+      return;
+    }
+
+    // Merge tombstones (latest wins) and records (union minus tombstones)
+    const mergedTombs = Object.assign({}, remoteTombs, localTombs);
+    for (const k of Object.keys(remoteTombs || {})) {
+      if (localTombs[k] && remoteTombs[k]) {
+        mergedTombs[k] = String(localTombs[k]) > String(remoteTombs[k]) ? localTombs[k] : remoteTombs[k];
+      }
+    }
+
+    const byKey = new Map();
+    const add = (r) => {
+      const k = recKey(r);
+      if (!k) return;
+      if (mergedTombs[k]) return;
+      if (!byKey.has(k)) byKey.set(k, r);
+      else {
+        const prev = byKey.get(k) || {};
+        // Prefer richer fields from either record
+        byKey.set(k, Object.assign({}, prev, r));
+      }
+    };
+    remoteRecs.forEach(add);
+    localRecs.forEach(add);
+
+    const mergedRecs = Array.from(byKey.values());
+    // Stable-ish ordering for nicer UI
+    mergedRecs.sort((a,b)=>{
+      const ea = (a && a.empId != null) ? String(a.empId) : '';
+      const eb = (b && b.empId != null) ? String(b.empId) : '';
+      if (ea !== eb) return ea < eb ? -1 : 1;
+      const da = a && a.date ? String(a.date) : '';
+      const db = b && b.date ? String(b.date) : '';
+      if (da !== db) return da < db ? -1 : 1;
+      const ta = a && a.time ? String(a.time) : '';
+      const tb = b && b.time ? String(b.time) : '';
+      if (ta !== tb) return ta < tb ? -1 : 1;
+      return 0;
+    });
+
+    const payload = {
+      records: mergedRecs,
+      tombstones: mergedTombs,
+      meta: { updatedAt: new Date().toISOString(), updatedBy: getDeviceId() }
+    };
+
     const { error } = await supa
       .from('dtr_records')
-      .upsert({ id: 'records', data: records }, { onConflict: 'id' });
-    if (error) console.error('Supabase DTR save error:', error.message);
+      .upsert({ id: 'records', data: payload }, { onConflict: 'id' });
+
+    if (error) {
+      console.error('Supabase DTR save error:', error.message);
+      // Still update local tombstones/keys so we don't double-delete next time.
+      saveJson(LS_TOMBS, mergedTombs);
+      saveJson(LS_LAST, Array.from(new Set(mergedRecs.map(recKey).filter(Boolean))));
+      return;
+    }
+
+    // Persist merged copy locally (single source of truth)
+    try {
+      storedRecords = mergedRecs;
+      window.storedRecords = mergedRecs;
+      localStorage.setItem(LS_RECORDS, JSON.stringify(mergedRecs));
+    } catch(e) {}
+
+    saveJson(LS_TOMBS, mergedTombs);
+    saveJson(LS_LAST, Array.from(new Set(mergedRecs.map(recKey).filter(Boolean))));
+
   } catch (e) {
     console.error('Supabase DTR save failed', e);
   }
@@ -17696,24 +17842,41 @@ async function uploadDtrFileToCloud(file) {
  * unwrap the nested data field when present.
  */
 async function loadDtrFromCloud() {
+  // Returns { status, records, tombstones, meta?, error? }
   try {
     const supa = window.supabase || (typeof supabase !== 'undefined' ? supabase : null);
-    if (!supa) return null;
+    if (!supa) return { status: 'no_client', records: null, tombstones: null };
     const { data, error } = await supa
       .from('dtr_records')
       .select('data')
       .eq('id', 'records')
       .maybeSingle();
+
     if (error) {
-      // Only warn on fetch errors to avoid blocking page load.  The
-      // application will fall back to localStorage if the fetch fails.
       console.warn('Supabase DTR fetch error:', error.message);
-      return null;
+      return { status: 'error', error: error.message, records: null, tombstones: null };
     }
-    return data && Array.isArray(data.data) ? data.data : null;
+    if (!data) return { status: 'not_found', records: null, tombstones: null };
+
+    const payload = data.data;
+
+    // Backward compatible:
+    // - old shape: [ ...records ]
+    // - new shape: { records: [...], tombstones: {...}, meta: {...} }
+    if (Array.isArray(payload)) {
+      return { status: 'ok', records: payload, tombstones: {} };
+    }
+    if (payload && typeof payload === 'object') {
+      const recs = Array.isArray(payload.records)
+        ? payload.records
+        : (Array.isArray(payload.data) ? payload.data : []);
+      const tombs = (payload.tombstones && typeof payload.tombstones === 'object') ? payload.tombstones : {};
+      return { status: 'ok', records: recs, tombstones: tombs, meta: payload.meta || {} };
+    }
+    return { status: 'ok', records: [], tombstones: {} };
   } catch (e) {
     console.error('Supabase DTR fetch failed', e);
-    return null;
+    return { status: 'error', error: String(e), records: null, tombstones: null };
   }
 }
 
@@ -17743,32 +17906,127 @@ function hideRemoteDtrAlert(){
 // performed after DOMContentLoaded to ensure that other scripts have
 // defined storedRecords and renderResults() before we modify them.
 document.addEventListener('DOMContentLoaded', async function () {
+  // Hydrate DTR safely across devices:
+  // - Never clears local DTR just because remote is empty/unreachable
+  // - Merges remote + local using tombstones so deletes propagate
+  // - Seeds remote from local on first run
+  window.__dtrHydrationDone = false;
+
+  const LS_TOMBS = 'payroll_dtr_tombstones';
+  const LS_LAST  = 'payroll_dtr_last_saved_keys';
+
+  const loadJson = (k, fb) => {
+    try { return JSON.parse(localStorage.getItem(k) || '') || fb; } catch(e) { return fb; }
+  };
+  const saveJson = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch(e) {} };
+
+  const recKey = (rec) => {
+    if (!rec) return '';
+    const emp = rec.empId != null ? String(rec.empId).trim() : '';
+    const date = rec.date ? String(rec.date) : '';
+    const time = rec.time ? String(rec.time) : '';
+    const src = rec.source ? String(rec.source) : (rec.manual ? 'manual' : '');
+    return emp + '|' + date + '|' + time + '|' + src;
+  };
+
+  const localRecs = Array.isArray(window.storedRecords)
+    ? window.storedRecords
+    : (typeof storedRecords !== 'undefined' && Array.isArray(storedRecords) ? storedRecords : []);
+  const localTombs = loadJson(LS_TOMBS, {});
+
   try {
-    const remote = await loadDtrFromCloud();
-    if (Array.isArray(remote) && remote.length) {
-      // When remote data is available, replace the inâ€‘memory dataset.  We
-      // deliberately overwrite both the local variable and the global
-      // window.storedRecords to ensure all modules reference the same
-      // canonical source of truth.  Persist into localStorage as an
-      // offline fallback, but always prefer Supabase on subsequent loads.
-      storedRecords = remote;
-      window.storedRecords = remote;
-      try { localStorage.setItem(LS_RECORDS, JSON.stringify(remote)); } catch (e) {}
+    const res = await loadDtrFromCloud();
+
+    if (res && res.status === 'ok' && Array.isArray(res.records) && res.records.length) {
+      const remoteRecs = res.records;
+      const remoteTombs = (res.tombstones && typeof res.tombstones === 'object') ? res.tombstones : {};
+
+      // Merge tombstones (latest wins)
+      const mergedTombs = Object.assign({}, remoteTombs, localTombs);
+      for (const k of Object.keys(remoteTombs || {})) {
+        if (localTombs[k] && remoteTombs[k]) {
+          mergedTombs[k] = String(localTombs[k]) > String(remoteTombs[k]) ? localTombs[k] : remoteTombs[k];
+        }
+      }
+
+      // Union of records minus tombstones
+      const byKey = new Map();
+      const add = (r) => {
+        const k = recKey(r);
+        if (!k) return;
+        if (mergedTombs[k]) return;
+        if (!byKey.has(k)) byKey.set(k, r);
+        else {
+          const prev = byKey.get(k) || {};
+          byKey.set(k, Object.assign({}, prev, r));
+        }
+      };
+      remoteRecs.forEach(add);
+      localRecs.forEach(add);
+
+      const mergedRecs = Array.from(byKey.values());
+      mergedRecs.sort((a,b)=>{
+        const ea = (a && a.empId != null) ? String(a.empId) : '';
+        const eb = (b && b.empId != null) ? String(b.empId) : '';
+        if (ea !== eb) return ea < eb ? -1 : 1;
+        const da = a && a.date ? String(a.date) : '';
+        const db = b && b.date ? String(b.date) : '';
+        if (da !== db) return da < db ? -1 : 1;
+        const ta = a && a.time ? String(a.time) : '';
+        const tb = b && b.time ? String(b.time) : '';
+        if (ta !== tb) return ta < tb ? -1 : 1;
+        return 0;
+      });
+
+      // Apply merged state
+      try {
+        storedRecords = mergedRecs;
+        window.storedRecords = mergedRecs;
+        localStorage.setItem(LS_RECORDS, JSON.stringify(mergedRecs));
+      } catch(e) {}
+
+      saveJson(LS_TOMBS, mergedTombs);
+      saveJson(LS_LAST, Array.from(new Set(mergedRecs.map(recKey).filter(Boolean))));
+
       if (typeof renderResults === 'function') {
         try { renderResults(); } catch (e) {}
       }
       if (typeof hideRemoteDtrAlert === 'function') hideRemoteDtrAlert();
-    } else {
-      // No remote data: clear any existing local dataset and inform the user. window. try { localStorage.removeItem(LS_RECORDS); } catch (e) {}
-      if (typeof renderResults === 'function') {
-        try { renderResults(); } catch (e) {}
+
+    } else if (res && (res.status === 'not_found' || (res.status === 'ok' && (!res.records || !res.records.length)))) {
+      // Remote is empty/missing
+      if (localRecs.length) {
+        // Seed remote from local
+        window.__dtrHydrationDone = true; // allow save
+        try { await saveDtrToCloud(localRecs); } catch(e) {}
+        if (typeof hideRemoteDtrAlert === 'function') hideRemoteDtrAlert();
+      } else {
+        if (typeof showRemoteDtrAlert === 'function') {
+          showRemoteDtrAlert('No remote DTR data found. Import a .DAT/.TXT file to populate cloud data.');
+        }
       }
+
+    } else {
+      // Cloud unreachable or no client - keep local data
       if (typeof showRemoteDtrAlert === 'function') {
-        showRemoteDtrAlert('No remote DTR data found. Import a .DAT/.TXT file to populate cloud data.');
+        showRemoteDtrAlert('Cloud DTR unavailable right now. Using local copy on this device.');
       }
     }
   } catch (e) {
     console.error('Error hydrating DTR from Supabase', e);
+    if (typeof showRemoteDtrAlert === 'function') {
+      showRemoteDtrAlert('Cloud DTR unavailable right now. Using local copy on this device.');
+    }
+  } finally {
+    window.__dtrHydrationDone = true;
+
+    // Flush any queued save that happened before hydration finished
+    if (window.__pendingDtrSave && Array.isArray(window.__queuedDtrRecords)) {
+      const q = window.__queuedDtrRecords;
+      window.__pendingDtrSave = false;
+      window.__queuedDtrRecords = null;
+      try { await saveDtrToCloud(q); } catch(e) {}
+    }
   }
 });
 </script>
