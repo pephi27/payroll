@@ -188,6 +188,7 @@ function markHydrated() {
 function queueHydrateRerender() {
   markHydrated();
   try { if (typeof refreshPeriodScopedCachesFromStorage === 'function') refreshPeriodScopedCachesFromStorage(); } catch {}
+  try { if (typeof refreshLoanTrackerCacheFromStorage === 'function') refreshLoanTrackerCacheFromStorage(); } catch {}
   const rerender = () => {
     try {
       if (typeof renderOtherDeductionsTable === 'function') renderOtherDeductionsTable();
@@ -378,6 +379,8 @@ async function __kvHydrateOnce(){
         const rc = cloudObj && cloudObj.__meta && Number(cloudObj.__meta.lastUpdatedAt);
         if (lc && rc && lc > rc) preferLocal = true;
       } catch(_) {}
+      // Safety: never auto-push local over cloud for Loan Tracker during boot hydrate.
+      if (k === 'payroll_loan_tracker') preferLocal = false;
 
       if (preferLocal) {
         try { await supabase.from(TABLE).upsert({ key: k, value: JSON.parse(cur) }, { onConflict: 'key' }); } catch(_){}
@@ -3964,6 +3967,14 @@ function loadLoanTrackerFromStorage(){
   parsed = migrateLoanTrackerLegacy(parsed);
   return parsed;
 }
+
+function refreshLoanTrackerCacheFromStorage(){
+  try {
+    loanTracker = loadLoanTrackerFromStorage();
+    try { window.loanTracker = loanTracker; } catch(_){ }
+  } catch(_){ }
+}
+
 async function persistLoanTracker(){
   // Cross-device realtime sync (auditor-safe):
   // - localStorage is only a cache for offline use
@@ -4012,9 +4023,19 @@ async function persistLoanTracker(){
             if (!window.__loanTrackerKVPending) return;
             window.__loanTrackerKVPending = false;
             if (typeof window.writeKV !== 'function') return;
-            const latest = loadLoanTrackerFromStorage();
-            const p = window.writeKV(LS_LOAN_TRACKER, latest);
-            if (p && typeof p.catch === 'function') p.catch(err => console.warn('writeKV loan tracker flush failed', err));
+            (async () => {
+              try {
+                const latest = loadLoanTrackerFromStorage();
+                if (typeof window.readKV === 'function') {
+                  const cloud = await window.readKV(LS_LOAN_TRACKER, null);
+                  const lc = (latest && latest.__meta && Number(latest.__meta.lastUpdatedAt)) || 0;
+                  const rc = (cloud && cloud.__meta && Number(cloud.__meta.lastUpdatedAt)) || 0;
+                  if (rc && lc && rc > lc) return; // cloud newer; don't overwrite
+                }
+                const p = window.writeKV(LS_LOAN_TRACKER, latest);
+                if (p && typeof p.catch === 'function') p.catch(err => console.warn('writeKV loan tracker flush failed', err));
+              } catch(_){ }
+            })();
           } catch(_) {}
         }, { once: true });
       }
@@ -4666,7 +4687,7 @@ function persistPeriodScopedMap(lsKey, map){
   return Promise.resolve();
 }
 let currentPeriodKey = periodKey();
-let loanTracker = loadLoanTrackerFromStorage();
+var loanTracker = loadLoanTrackerFromStorage();
 try { window.loanTracker = loanTracker; } catch(_){ }
 
 // Prefer KV (kv_store) for Loan Tracker realtime sync (same mechanics as Additional Income).
