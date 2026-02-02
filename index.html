@@ -3973,6 +3973,17 @@ async function persistLoanTracker(){
   } catch(_) {}
   try { localStorage.setItem(LS_LOAN_TRACKER, JSON.stringify(loanTracker)); } catch(_){}
 
+  // Also persist to the shared KV store (same mechanism as vale/period maps) so it syncs across devices.
+  try {
+    const writer = (typeof window !== 'undefined' && typeof window.writeKV === 'function') ? window.writeKV : null;
+    if (typeof writer === 'function') {
+      const maybe = writer(LS_LOAN_TRACKER, loanTracker);
+      if (maybe && typeof maybe.then === 'function') {
+        maybe.catch(err => { console.warn('Loan tracker KV persist failed', err); });
+      }
+    }
+  } catch (e) { console.warn('Loan tracker KV persist threw', e); }
+
   if (!__hasSupabase()) return;
   try {
     const sb = window.supabase;
@@ -4785,7 +4796,15 @@ function syncPeriodScopedData(){
   if (pk === currentPeriodKey) return false;
   const prevKey = currentPeriodKey;
   saveCurrentPeriodDeductions();
-  try { persistCurrentAdditionalIncome(); } catch (_) {}
+
+  // Flush/persist all period-scoped editors before switching weeks.
+  // This prevents a debounced save from firing AFTER currentPeriodKey changes and writing into the wrong week.
+  try { if (typeof additionalIncomePersist !== 'undefined' && additionalIncomePersist && typeof additionalIncomePersist.flush === 'function') additionalIncomePersist.flush(); } catch(_) {}
+  try { if (typeof otherDeductionsPersist !== 'undefined' && otherDeductionsPersist && typeof otherDeductionsPersist.flush === 'function') otherDeductionsPersist.flush(); } catch(_) {}
+  try { if (typeof adjustmentHoursPersist !== 'undefined' && adjustmentHoursPersist && typeof adjustmentHoursPersist.flush === 'function') adjustmentHoursPersist.flush(); } catch(_) {}
+  try { if (typeof persistCurrentAdditionalIncome === 'function') persistCurrentAdditionalIncome(); } catch(_) {}
+  try { if (typeof persistCurrentOtherDeductions === 'function') persistCurrentOtherDeductions(); } catch(_) {}
+  try { if (typeof persistCurrentAdjustmentHours === 'function') persistCurrentAdjustmentHours(); } catch(_) {}
   const direction = comparePeriodKeys(pk, prevKey);
   const carryForward = direction >= 0;
   const tplSSS = carryForward ? findCarryTemplate(allLoanSSS, pk, prevKey) : null;
@@ -6932,6 +6951,19 @@ function createDebouncedPersistence(persistFn, delay = 150) {
 const otherDeductionsPersist = createDebouncedPersistence(persistCurrentOtherDeductions, 200);
 const adjustmentHoursPersist = createDebouncedPersistence(persistCurrentAdjustmentHours);
 const additionalIncomePersist = createDebouncedPersistence(persistCurrentAdditionalIncome, 200);
+const __flushPeriodScopedEdits = () => {
+  try { if (typeof additionalIncomePersist !== 'undefined' && additionalIncomePersist && typeof additionalIncomePersist.flush === 'function') additionalIncomePersist.flush(); } catch(_){}
+  try { if (typeof otherDeductionsPersist !== 'undefined' && otherDeductionsPersist && typeof otherDeductionsPersist.flush === 'function') otherDeductionsPersist.flush(); } catch(_){}
+  try { if (typeof adjustmentHoursPersist !== 'undefined' && adjustmentHoursPersist && typeof adjustmentHoursPersist.flush === 'function') adjustmentHoursPersist.flush(); } catch(_){}
+  try { if (typeof saveCurrentPeriodDeductions === 'function') saveCurrentPeriodDeductions(); } catch(_){}
+  try { if (typeof persistLoanTracker === 'function') persistLoanTracker(); } catch(_){}
+};
+try {
+  window.addEventListener('pagehide', __flushPeriodScopedEdits);
+  window.addEventListener('beforeunload', __flushPeriodScopedEdits);
+  document.addEventListener('visibilitychange', () => { if (document.hidden) __flushPeriodScopedEdits(); });
+} catch(_) {}
+
 
 // === Additional Income Tab ===
 let additionalIncomeRenderPending = false;
