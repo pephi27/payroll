@@ -4705,14 +4705,124 @@ function updatePeriodLatest(map, key, data){
 }
 function persistPeriodScopedMap(lsKey, map){
   if (!isPlainObject(map)) return Promise.resolve();
+
+  const bootCloudFirst = !!(typeof __kvBootCloudFirstPeriodKeys !== 'undefined'
+    && __kvBootCloudFirstPeriodKeys
+    && typeof __kvBootCloudFirstPeriodKeys.has === 'function'
+    && __kvBootCloudFirstPeriodKeys.has(lsKey));
+  const userInteracted = !!(typeof window !== 'undefined' && window.__kv_user_interacted === true);
+
+  // Always keep localStorage updated for offline use.
   ensurePeriodMeta(map);
+
+  // Only bump lastUpdatedAt when this looks like a real user-driven change.
+  // (Prevents a freshly opened empty/stale PC from marking itself "newer" and overwriting cloud.)
   try {
-    if (isPlainObject(map.__meta)) map.__meta.lastUpdatedAt = Date.now();
+    if (!bootCloudFirst || userInteracted) {
+      if (isPlainObject(map.__meta)) map.__meta.lastUpdatedAt = Date.now();
+    }
   } catch(_){}
   try { localStorage.setItem(lsKey, JSON.stringify(map)); } catch(e){}
+
   const writer = (typeof window !== 'undefined' && typeof window.writeKV === 'function')
     ? window.writeKV
     : null;
+
+  // Auditor-safe: NEVER write cloud until initial KV hydrate completes.
+  const canCloudWrite = !!(typeof window !== 'undefined' && window.__kv_cloud_ready === true && typeof writer === 'function');
+
+  if (!canCloudWrite) {
+    // For cloud-first keys, don't queue a boot-time flush unless the user already interacted.
+    // This prevents "open PC2" from later flushing placeholders into the cloud.
+    if (bootCloudFirst && !userInteracted) return Promise.resolve();
+
+    // Queue a one-time flush for this key after kv-cloud-ready.
+    try {
+      window.__periodScopedKVPending = window.__periodScopedKVPending || {};
+      window.__periodScopedKVPending[lsKey] = true;
+
+      if (!window.__periodScopedKVPendingHooked) {
+        window.__periodScopedKVPendingHooked = true;
+        window.addEventListener('kv-cloud-ready', () => {
+          (async () => {
+            try {
+              if (!window.__periodScopedKVPending || typeof window.writeKV !== 'function') return;
+              const keys = Object.keys(window.__periodScopedKVPending);
+              window.__periodScopedKVPending = {};
+
+              for (const k of keys) {
+                try {
+                  const raw = localStorage.getItem(k);
+                  if (!raw) continue;
+                  let localVal = null;
+                  try { localVal = JSON.parse(raw); } catch(_){ continue; }
+
+                  // Cloud-first boot protection for Additional Income + Other Deductions:
+                  // only seed cloud if cloud is empty; never overwrite meaningful cloud during boot.
+                  if (typeof window.readKV === 'function' && typeof __kvBootCloudFirstDecision === 'function') {
+                    try {
+                      const cloudVal = await window.readKV(k, null);
+                      const decision = __kvBootCloudFirstDecision(k, localVal, cloudVal);
+                      if (decision === false) continue; // cloud wins
+                      if (decision === true) {
+                        const p0 = window.writeKV(k, localVal);
+                        if (p0 && typeof p0.catch === 'function') p0.catch(err => console.warn('writeKV period map flush failed', err));
+                        continue;
+                      }
+                      // decision === null -> fall through to timestamp checks
+                    } catch(_){}
+                  }
+
+                  // If cloud is newer + meaningful, do not overwrite it.
+                  if (typeof window.readKV === 'function') {
+                    try {
+                      const cloudVal = await window.readKV(k, null);
+                      const cloudHas = (typeof __kvHasMeaningfulPeriodMap === 'function') ? __kvHasMeaningfulPeriodMap(cloudVal) : false;
+                      const localHas = (typeof __kvHasMeaningfulPeriodMap === 'function') ? __kvHasMeaningfulPeriodMap(localVal) : false;
+
+                      const lc = (localVal && localVal.__meta && Number(localVal.__meta.lastUpdatedAt)) || 0;
+                      const rc = (cloudVal && cloudVal.__meta && Number(cloudVal.__meta.lastUpdatedAt)) || 0;
+
+                      if (cloudHas && !localHas) continue;
+                      if (cloudHas && rc && lc && rc > lc) continue;
+                    } catch(_){}
+                  }
+
+                  const p = window.writeKV(k, localVal);
+                  if (p && typeof p.catch === 'function') p.catch(err => console.warn('writeKV period map flush failed', err));
+                } catch(_){}
+              }
+            } catch(_){}
+          })();
+        });
+      }
+    } catch(_){}
+    return Promise.resolve();
+  }
+
+  // Cloud is ready. For cloud-first keys, don't overwrite meaningful cloud on open
+  // unless the user has interacted in this session. Only seed when cloud is empty.
+  if (bootCloudFirst && !userInteracted) {
+    if (typeof window.readKV === 'function' && typeof __kvBootCloudFirstDecision === 'function' && typeof writer === 'function') {
+      return (async () => {
+        try {
+          const cloudVal = await window.readKV(lsKey, null);
+          const decision = __kvBootCloudFirstDecision(lsKey, map, cloudVal);
+          if (decision === true) {
+            const maybe = writer(lsKey, map);
+            if (maybe && typeof maybe.then === 'function') {
+              return maybe.catch(err=>{ console.warn('writeKV persist failed', err); });
+            }
+            return maybe;
+          }
+        } catch(_){}
+        return;
+      })();
+    }
+    return Promise.resolve();
+  }
+
+  // Normal write-through once cloud is ready.
   if (typeof writer === 'function') {
     try {
       const maybe = writer(lsKey, map);
@@ -4934,7 +5044,7 @@ function syncPeriodScopedData(){
   if (pk === currentPeriodKey) return false;
   const prevKey = currentPeriodKey;
   saveCurrentPeriodDeductions();
-  try { persistCurrentAdditionalIncome(); } catch (_) {}
+  try { if (typeof window !== 'undefined' && window.__kv_user_interacted === true) persistCurrentAdditionalIncome(); } catch (_) {}
   const direction = comparePeriodKeys(pk, prevKey);
   const carryForward = direction >= 0;
   const tplSSS = carryForward ? findCarryTemplate(allLoanSSS, pk, prevKey) : null;
