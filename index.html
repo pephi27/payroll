@@ -3965,13 +3965,61 @@ function loadLoanTrackerFromStorage(){
   return parsed;
 }
 async function persistLoanTracker(){
-  // keep a local cache (offline convenience) but cloud is source of truth
+  // Cross-device realtime sync (auditor-safe):
+  // - localStorage is only a cache for offline use
+  // - kv_store (via writeKV) is the cross-device source of truth (same pattern as Additional Income)
+  // - NEVER push to cloud until kv-cloud-ready to prevent an empty/brand-new PC from overwriting cloud data
+  try { ensureLoanTrackerShape(loanTracker); } catch(_){}
+
+  // No-op if nothing changed since last save (prevents bumping timestamps / noisy realtime updates)
   try {
-    ensureLoanTrackerShape(loanTracker);
+    const curStr = localStorage.getItem(LS_LOAN_TRACKER);
+    const nextStrNoMetaBump = JSON.stringify(loanTracker);
+    if (curStr && curStr === nextStrNoMetaBump) return;
+  } catch(_){}
+
+  // Stamp only when actually changed
+  try {
     loanTracker.__meta = loanTracker.__meta || {};
     loanTracker.__meta.lastUpdatedAt = Date.now();
-  } catch(_) {}
-  try { localStorage.setItem(LS_LOAN_TRACKER, JSON.stringify(loanTracker)); } catch(_){}
+  } catch(_){}
+
+  let savedStr = null;
+  try { savedStr = JSON.stringify(loanTracker); localStorage.setItem(LS_LOAN_TRACKER, savedStr); } catch(_){}
+
+  // KV sync (realtime across devices): write to kv_store using writeKV, debounced.
+  try {
+    const canCloudWrite = !!(window && window.__kv_cloud_ready === true && typeof window.writeKV === 'function');
+    if (canCloudWrite) {
+      const snapshot = (savedStr != null)
+        ? (function(){ try { return JSON.parse(savedStr); } catch(_){ return loanTracker; } })()
+        : loanTracker;
+
+      if (window.__loanTrackerKVTimer) { try { clearTimeout(window.__loanTrackerKVTimer); } catch(_){ } }
+      window.__loanTrackerKVTimer = setTimeout(() => {
+        try {
+          const p = window.writeKV(LS_LOAN_TRACKER, snapshot);
+          if (p && typeof p.catch === 'function') p.catch(err => console.warn('writeKV loan tracker failed', err));
+        } catch(err) { console.warn('writeKV loan tracker threw', err); }
+      }, 350);
+    } else {
+      // Queue a one-time flush once cloud is ready (prevents empty PC overwrite).
+      window.__loanTrackerKVPending = true;
+      if (!window.__loanTrackerKVPendingHooked) {
+        window.__loanTrackerKVPendingHooked = true;
+        window.addEventListener('kv-cloud-ready', () => {
+          try {
+            if (!window.__loanTrackerKVPending) return;
+            window.__loanTrackerKVPending = false;
+            if (typeof window.writeKV !== 'function') return;
+            const latest = loadLoanTrackerFromStorage();
+            const p = window.writeKV(LS_LOAN_TRACKER, latest);
+            if (p && typeof p.catch === 'function') p.catch(err => console.warn('writeKV loan tracker flush failed', err));
+          } catch(_) {}
+        }, { once: true });
+      }
+    }
+  } catch(_){}
 
   if (!__hasSupabase()) return;
   try {
@@ -4621,14 +4669,56 @@ let currentPeriodKey = periodKey();
 let loanTracker = loadLoanTrackerFromStorage();
 try { window.loanTracker = loanTracker; } catch(_){ }
 
-// Prefer Supabase proper tables for the Loan Tracker when available
+// Prefer KV (kv_store) for Loan Tracker realtime sync (same mechanics as Additional Income).
+// Only fall back to Supabase proper tables if KV/local is empty (prevents overwriting good data).
 (function(){
+  function __loanTrackerHasMeaningfulData(obj){
+    try {
+      obj = ensureLoanTrackerShape(obj);
+      const byEmpCount = obj && obj.byEmp ? Object.keys(obj.byEmp).length : 0;
+      const appliedCount = obj && obj.applied ? Object.keys(obj.applied).length : 0;
+      return (byEmpCount + appliedCount) > 0;
+    } catch(_){ return false; }
+  }
+
+  async function __migrateLocalLoanTrackerToKV(){
+    try {
+      if (!(window && window.__kv_cloud_ready === true)) return;
+      if (typeof window.writeKV !== 'function' || typeof window.readKV !== 'function') return;
+
+      const local = loadLoanTrackerFromStorage();
+      if (!__loanTrackerHasMeaningfulData(local)) return;
+
+      // If cloud is missing/empty, seed it from local to avoid "new PC = empty" data loss.
+      const cloud = await window.readKV(LS_LOAN_TRACKER, null);
+      if (!cloud || !__loanTrackerHasMeaningfulData(cloud)) {
+        local.__meta = local.__meta || {};
+        if (!local.__meta.lastUpdatedAt) local.__meta.lastUpdatedAt = Date.now();
+        await window.writeKV(LS_LOAN_TRACKER, local);
+      }
+    } catch(e){ console.warn('LoanTracker migrate-to-KV failed', e); }
+  }
+
   const boot = async () => {
     try {
+      await __migrateLocalLoanTrackerToKV();
+
+      // If KV already hydrated data, DO NOT override it from tables.
+      const localNow = loadLoanTrackerFromStorage();
+      if (__loanTrackerHasMeaningfulData(localNow)) return;
+
+      // Fallback: load from proper loan tables (if you created them), then seed KV for future realtime sync.
       await loadLoanTrackerFromSupabaseTables();
-      setupLoanTablesRealtime();
+      try {
+        if (window && window.__kv_cloud_ready === true && typeof window.writeKV === 'function') {
+          const seeded = loadLoanTrackerFromStorage();
+          if (__loanTrackerHasMeaningfulData(seeded)) await window.writeKV(LS_LOAN_TRACKER, seeded);
+        }
+      } catch(_){}
+      try { setupLoanTablesRealtime(); } catch(_){}
     } catch(_) {}
   };
+
   try {
     if (window && window.__kv_cloud_ready === true) boot();
     window.addEventListener('kv-cloud-ready', boot);
