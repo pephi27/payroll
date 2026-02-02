@@ -222,6 +222,35 @@ try { if (typeof window.calculateAll === 'function') window.calculateAll(); } ca
     setTimeout(rerender, 0);
   }
 }
+
+function __kvHasMeaningfulPeriodMap(obj){
+  try{
+    if (!obj || typeof obj !== 'object') return false;
+    for (const pk of Object.keys(obj)) {
+      if (pk === '__meta') continue;
+      const pv = obj[pk];
+      if (pv == null) continue;
+      if (Array.isArray(pv)) { if (pv.length) return true; continue; }
+      if (typeof pv === 'object') { if (Object.keys(pv).length) return true; continue; }
+      if (pv !== '' && pv !== 0 && pv !== false) return true;
+    }
+  } catch(_) {}
+  return false;
+}
+const __kvBootCloudFirstPeriodKeys = new Set([
+  'payroll_other_deductions_details',
+  'payroll_other_deductions_total',
+  'payroll_additional_income_details',
+  'payroll_additional_income_total'
+]);
+function __kvBootCloudFirstDecision(k, localObj, cloudObj){
+  if (!__kvBootCloudFirstPeriodKeys.has(k)) return null;
+  const cloudHas = __kvHasMeaningfulPeriodMap(cloudObj);
+  if (cloudHas) return false; // never overwrite meaningful cloud with local
+  const localHas = __kvHasMeaningfulPeriodMap(localObj);
+  if (localHas) return true;  // seed cloud if cloud empty/missing
+  return false;
+}
 try { window.queueHydrateRerender = queueHydrateRerender; } catch (_) {}
 
 if (!window.__kvSubscribed) {
@@ -372,15 +401,24 @@ async function __kvHydrateOnce(){
 
       // Conflict resolution (period-scoped maps): prefer the newer __meta.lastUpdatedAt side.
       let preferLocal = false;
+      let cloudObj = null;
+      let localObj = null;
       try {
-        const cloudObj = (row && typeof row.value === 'object') ? row.value : JSON.parse(cloudStr || 'null');
-        const localObj = cur ? JSON.parse(cur) : null;
+        cloudObj = (row && typeof row.value === 'object') ? row.value : JSON.parse(cloudStr || 'null');
+        localObj = cur ? JSON.parse(cur) : null;
         const lc = localObj && localObj.__meta && Number(localObj.__meta.lastUpdatedAt);
         const rc = cloudObj && cloudObj.__meta && Number(cloudObj.__meta.lastUpdatedAt);
         if (lc && rc && lc > rc) preferLocal = true;
       } catch(_) {}
+
       // Safety: never auto-push local over cloud for Loan Tracker during boot hydrate.
       if (k === 'payroll_loan_tracker') preferLocal = false;
+
+      // Safety: cloud-first on startup for Additional Income + Other Deductions to prevent an empty/stale PC overwriting newer cloud data.
+      try {
+        const decision = __kvBootCloudFirstDecision(k, localObj, cloudObj);
+        if (typeof decision === 'boolean') preferLocal = decision;
+      } catch(_) {}
 
       if (preferLocal) {
         try { await supabase.from(TABLE).upsert({ key: k, value: JSON.parse(cur) }, { onConflict: 'key' }); } catch(_){}
