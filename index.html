@@ -3761,30 +3761,6 @@ function loadPeriodScopedMap(lsKey){
   return parsed;
 }
 
-function canPersistToCloud(){
-  try { return window && window.__kv_cloud_ready === true; } catch(_) {}
-  return false;
-}
-
-function hasMeaningfulPeriodData(map){
-  if (!isPlainObject(map)) return false;
-  const keys = Object.keys(map || {}).filter(k => k !== PERIOD_META_KEY && k !== PERIOD_DEFAULT_KEY);
-  if (!keys.length) return false;
-  for (const key of keys) {
-    const entry = map[key];
-    if (!isPlainObject(entry)) continue;
-    if (Object.keys(entry).length) return true;
-  }
-  return false;
-}
-
-function hasLoanTrackerData(data){
-  if (!isPlainObject(data)) return false;
-  const byEmp = isPlainObject(data.byEmp) ? data.byEmp : {};
-  const applied = isPlainObject(data.applied) ? data.applied : {};
-  return Object.keys(byEmp).length > 0 || Object.keys(applied).length > 0;
-}
-
 // === Loan Tracker (SSS Salary/Calamity, Pag-IBIG Salary/Calamity, Cash Advance) ===
 // Stores SSS principals (total + monthly) with tracked balances (auto-stops when fully paid),
 // Cash Advance principals (total + weekly) with tracked balances,
@@ -3989,26 +3965,53 @@ function loadLoanTrackerFromStorage(){
   return parsed;
 }
 async function persistLoanTracker(){
-  // keep a local cache (offline convenience) but cloud is source of truth
-  try {
-    ensureLoanTrackerShape(loanTracker);
-    loanTracker.__meta = loanTracker.__meta || {};
-    loanTracker.__meta.lastUpdatedAt = Date.now();
-  } catch(_) {}
+  // Keep a local cache (offline convenience). Avoid generating default entries that could wipe cloud data.
+  try { ensureLoanTrackerShape(loanTracker); } catch(_) {}
+  try { loanTracker = migrateLoanTrackerLegacy(loanTracker); } catch(_) {}
   try { localStorage.setItem(LS_LOAN_TRACKER, JSON.stringify(loanTracker)); } catch(_){}
 
-  // Also persist to the shared KV store (same mechanism as vale/period maps) so it syncs across devices.
-  try {
-    const writer = (typeof window !== 'undefined' && typeof window.writeKV === 'function') ? window.writeKV : null;
-    if (typeof writer === 'function' && (canPersistToCloud() || hasLoanTrackerData(loanTracker))) {
-      const maybe = writer(LS_LOAN_TRACKER, loanTracker);
-      if (maybe && typeof maybe.then === 'function') {
-        maybe.catch(err => { console.warn('Loan tracker KV persist failed', err); });
+  // Detect whether there is any meaningful loan tracker data before touching the cloud
+  const __loanTrackerHasMeaningfulData = (() => {
+    try {
+      const obj = ensureLoanTrackerShape(loanTracker);
+      const byEmp = obj.byEmp || {};
+      for (const empId of Object.keys(byEmp || {})) {
+        const empLoans = byEmp[empId];
+        if (!isPlainObject(empLoans)) continue;
+        for (const type of Object.keys(empLoans || {})) {
+          const e = empLoans[type];
+          if (!isPlainObject(e)) continue;
+          const touched = (typeof e.__touched !== 'undefined' && e.__touched != null);
+          const active = e.active === true;
+          const principal = Number(e.principal) || 0;
+          const monthly = Number(e.monthly) || 0;
+          const weekly = Number(e.weekly) || 0;
+          if (touched || active || principal > 0 || monthly > 0 || weekly > 0) return true;
+        }
       }
-    }
-  } catch (e) { console.warn('Loan tracker KV persist threw', e); }
+      const applied = obj.applied || {};
+      for (const pk of Object.keys(applied || {})) {
+        const per = applied[pk];
+        if (!isPlainObject(per)) continue;
+        for (const empId of Object.keys(per || {})) {
+          const m = per[empId];
+          if (!isPlainObject(m)) continue;
+          for (const t of Object.keys(m || {})) {
+            if ((Number(m[t]) || 0) > 0) return true;
+          }
+        }
+      }
+      return false;
+    } catch(_){ return false; }
+  })();
+
+  // Only update lastUpdatedAt when there's something real to persist
+  if (__loanTrackerHasMeaningfulData) {
+    try { loanTracker.__meta = loanTracker.__meta || {}; loanTracker.__meta.lastUpdatedAt = Date.now(); } catch(_){}
+  }
 
   if (!__hasSupabase()) return;
+  if (typeof __loanTrackerHasMeaningfulData !== 'undefined' && !__loanTrackerHasMeaningfulData) return;
   try {
     const sb = window.supabase;
 
@@ -4043,6 +4046,14 @@ async function persistLoanTracker(){
       Object.keys(empLoans).forEach(type=>{
         const entry = empLoans[type];
         if (!isPlainObject(entry)) return;
+
+        // Skip untouched/default rows (prevents new devices from overwriting cloud with zeros)
+        const __touched = (typeof entry.__touched !== 'undefined' && entry.__touched != null);
+        const __active = entry.active === true;
+        const __principal = Number(entry.principal) || 0;
+        const __monthly = Number(entry.monthly) || 0;
+        const __weekly = Number(entry.weekly) || 0;
+        if (!__touched && !__active && __principal <= 0 && __monthly <= 0 && __weekly <= 0) return;
 
         const map = loanTypeToProviderKind(type);
         if (!map) return;
@@ -4176,6 +4187,27 @@ async function loadLoanTrackerFromSupabaseTables(){
 
     if (e1) { console.warn('employee_loans fetch error', e1); return false; }
 
+    // On a fresh device, we may not yet have employee_code -> id mappings (storedEmployees not hydrated yet).
+    // Build an id -> code map directly from the employees table so loan rows can be mapped reliably.
+    try {
+      const empIds = Array.from(new Set((loans || []).map(r => r && r.employee_id).filter(Boolean)));
+      if (empIds.length) {
+        const { data: empsById, error: eE } = await sb
+          .from(EMPLOYEES_TABLE)
+          .select('id,employee_code')
+          .in('id', empIds);
+        if (eE) console.warn('employees select by id error', eE);
+        (empsById || []).forEach(r => {
+          if (!r || !r.id) return;
+          const code = String(r.employee_code || '').trim();
+          if (!code) return;
+          idToCode[r.id] = code;
+          codeToId[code] = r.id;
+        });
+      }
+    } catch(_) {}
+
+
     const loanIdToKey = {};
     (loans || []).forEach(row => {
       const empId = idToCode[row.employee_id];
@@ -4308,7 +4340,7 @@ function setupLoanTablesRealtime(){
   }
 }
 
-function getLoanTrackerEntry(empId, type){
+function peekLoanTrackerEntry(empId, type){
   ensureLoanTrackerShape(loanTracker);
   if (!empId || !type) return null;
   if (!isPlainObject(loanTracker.byEmp[empId])) loanTracker.byEmp[empId] = {};
@@ -4328,8 +4360,23 @@ function getLoanTrackerEntry(empId, type){
   }
   return entry;
 }
+
+// Read-only lookup (does NOT create default rows). Important to avoid wiping cloud data on new devices.
+function peekLoanTrackerEntry(empId, type){
+  try {
+    ensureLoanTrackerShape(loanTracker);
+    if (!empId || !type) return null;
+    if (!isPlainObject(loanTracker.byEmp[empId])) return null;
+    const e = loanTracker.byEmp[empId][type];
+    if (!isPlainObject(e)) return null;
+    return e;
+  } catch(_){
+    return null;
+  }
+}
+
 function isLoanTrackerActive(empId, type){
-  const e = getLoanTrackerEntry(empId, type);
+  const e = peekLoanTrackerEntry(empId, type);
   if (!e) return false;
   if (isLoanTypePagibig(type)) return !!(e.active && (Number(e.monthly) > 0));
   return !!(e.active && (Number(e.principal) > 0) && (Number(e.weekly) > 0));
@@ -4379,7 +4426,7 @@ function sumLoanTrackerAppliedUpTo(periodKey, empId, type){
   return roundToCents(sum);
 }
 function loanTrackerRemaining(periodKey, empId, type){
-  const entry = getLoanTrackerEntry(empId, type);
+  const entry = peekLoanTrackerEntry(empId, type);
   if (!entry || isLoanTypePagibig(type)) return 0;
   const principal = roundToCents(entry.principal || 0);
   const paid = sumLoanTrackerAppliedUpTo(periodKey, empId, type);
@@ -4400,7 +4447,7 @@ function loanTrackerCurrentPeriodAmount(empId, type){
     return 0;
   }
   // For Pag-IBIG: compute per-period from monthly
-  const entry = getLoanTrackerEntry(empId, type);
+  const entry = peekLoanTrackerEntry(empId, type);
   if (!entry || !entry.active) return 0;
   return loanTrackerPerPeriodFromMonthly(entry.monthly || 0);
 }
@@ -4439,7 +4486,7 @@ function applyLoanTrackerToPeriod(pk, options){
 
   // Cash Advance (weekly-based)
   const handlePrincipalWeekly = (empId, type) => {
-    const entry = getLoanTrackerEntry(empId, type);
+    const entry = peekLoanTrackerEntry(empId, type);
     if (!entry) return 0;
 
     const principal = roundToCents(entry.principal || 0);
@@ -4499,7 +4546,7 @@ function applyLoanTrackerToPeriod(pk, options){
 
   // SSS Loans (monthly-based; per-period is monthly ÷ divisor)
   const handlePrincipalMonthly = (empId, type) => {
-    const entry = getLoanTrackerEntry(empId, type);
+    const entry = peekLoanTrackerEntry(empId, type);
     if (!entry) return 0;
 
     const principal = roundToCents(entry.principal || 0);
@@ -4575,7 +4622,7 @@ function applyLoanTrackerToPeriod(pk, options){
     // --- Pag-IBIG (monthly only; combined) ---
     let piMonthly = 0;
     for (const type of LOAN_TYPES_PI){
-      const entry = getLoanTrackerEntry(empId, type);
+      const entry = peekLoanTrackerEntry(empId, type);
       const monthly = roundToCents(entry && entry.active ? (entry.monthly || 0) : 0);
       if (monthly > 0) piMonthly += monthly;
     }
@@ -4641,7 +4688,7 @@ function persistPeriodScopedMap(lsKey, map){
   const writer = (typeof window !== 'undefined' && typeof window.writeKV === 'function')
     ? window.writeKV
     : null;
-  if (typeof writer === 'function' && (canPersistToCloud() || hasMeaningfulPeriodData(map))) {
+  if (typeof writer === 'function') {
     try {
       const maybe = writer(lsKey, map);
       if (maybe && typeof maybe.then === 'function') {
@@ -4735,6 +4782,11 @@ function persistCurrentAdditionalIncome(){
 }
 
 function refreshPeriodScopedCachesFromStorage(){
+  // Refresh employee caches after cloud hydration so UI reflects synced data
+  try { storedEmployees = JSON.parse(localStorage.getItem(LS_EMPLOYEES) || '{}'); } catch(_){ storedEmployees = {}; }
+  try { window.storedEmployees = storedEmployees; } catch(_){ }
+  try { employeeList = loadEmployees(); } catch(_){ }
+
   allLoanSSS = loadPeriodScopedMap(LS_LOAN_SSS);
   allLoanPI = loadPeriodScopedMap(LS_LOAN_PI);
   allVale = loadPeriodScopedMap(LS_VALE);
@@ -4820,15 +4872,9 @@ function syncPeriodScopedData(){
   if (pk === currentPeriodKey) return false;
   const prevKey = currentPeriodKey;
   saveCurrentPeriodDeductions();
-
-  // Flush/persist all period-scoped editors before switching weeks.
-  // This prevents a debounced save from firing AFTER currentPeriodKey changes and writing into the wrong week.
-  try { if (typeof additionalIncomePersist !== 'undefined' && additionalIncomePersist && typeof additionalIncomePersist.flush === 'function') additionalIncomePersist.flush(); } catch(_) {}
-  try { if (typeof otherDeductionsPersist !== 'undefined' && otherDeductionsPersist && typeof otherDeductionsPersist.flush === 'function') otherDeductionsPersist.flush(); } catch(_) {}
-  try { if (typeof adjustmentHoursPersist !== 'undefined' && adjustmentHoursPersist && typeof adjustmentHoursPersist.flush === 'function') adjustmentHoursPersist.flush(); } catch(_) {}
-  try { if (typeof persistCurrentAdditionalIncome === 'function') persistCurrentAdditionalIncome(); } catch(_) {}
-  try { if (typeof persistCurrentOtherDeductions === 'function') persistCurrentOtherDeductions(); } catch(_) {}
-  try { if (typeof persistCurrentAdjustmentHours === 'function') persistCurrentAdjustmentHours(); } catch(_) {}
+  try { persistCurrentAdditionalIncome(); } catch (_) {}
+  try { persistCurrentOtherDeductions(); } catch (_) {}
+  try { persistCurrentAdjustmentHours(); } catch (_) {}
   const direction = comparePeriodKeys(pk, prevKey);
   const carryForward = direction >= 0;
   const tplSSS = carryForward ? findCarryTemplate(allLoanSSS, pk, prevKey) : null;
@@ -4910,7 +4956,7 @@ function loadEmployees() {
   list.sort((a,b)=> (a.name||'').localeCompare(b.name||''));
   return list;
 }
-const employeeList = loadEmployees();
+let employeeList = loadEmployees();
 function getSssTable(){
   let arr = [];
   try { arr = JSON.parse(localStorage.getItem(LS_SSS_TABLE) || '[]'); }
@@ -5531,7 +5577,7 @@ function renderLoanTrackerTable(){
     const tdName = document.createElement('td'); tdName.textContent = emp.name || ''; tr.appendChild(tdName);
 
     const addPrincipalMonthlyCells = (type) => {
-      const entry = getLoanTrackerEntry(empId, type) || { principal: 0, monthly: 0, active: false };
+      const entry = peekLoanTrackerEntry(empId, type) || { principal: 0, monthly: 0, active: false };
       const principal = roundToCents(entry.principal || 0);
       const monthly = roundToCents(entry.monthly || 0);
 
@@ -5589,7 +5635,7 @@ function renderLoanTrackerTable(){
     };
 
     const addPrincipalWeeklyCells = (type) => {
-      const entry = getLoanTrackerEntry(empId, type) || { principal: 0, weekly: 0, active: false };
+      const entry = peekLoanTrackerEntry(empId, type) || { principal: 0, weekly: 0, active: false };
       const principal = roundToCents(entry.principal || 0);
       const weekly = roundToCents(entry.weekly || 0);
       const bal = loanTrackerRemaining(pk, empId, type);
@@ -5633,7 +5679,7 @@ function renderLoanTrackerTable(){
     };
 
     const addPagibigMonthlyCells = (type) => {
-      const entry = getLoanTrackerEntry(empId, type) || { monthly: 0, active: false };
+      const entry = peekLoanTrackerEntry(empId, type) || { monthly: 0, active: false };
       const monthly = roundToCents(entry.monthly || 0);
       const perPeriod = (entry.active && monthly > 0) ? roundToCents(monthly / (div || 1)) : 0;
 
@@ -5735,6 +5781,7 @@ document.addEventListener('change', function(ev){
   } else if (field === 'monthly') {
     entry.monthly = roundToCents(Number(el.value) || 0);
   }
+  try { entry.__touched = Date.now(); } catch(_){ }
   loanTrackerRefresh.schedule({ createEntries: true });
 });
 
@@ -6975,19 +7022,6 @@ function createDebouncedPersistence(persistFn, delay = 150) {
 const otherDeductionsPersist = createDebouncedPersistence(persistCurrentOtherDeductions, 200);
 const adjustmentHoursPersist = createDebouncedPersistence(persistCurrentAdjustmentHours);
 const additionalIncomePersist = createDebouncedPersistence(persistCurrentAdditionalIncome, 200);
-const __flushPeriodScopedEdits = () => {
-  try { if (typeof additionalIncomePersist !== 'undefined' && additionalIncomePersist && typeof additionalIncomePersist.flush === 'function') additionalIncomePersist.flush(); } catch(_){}
-  try { if (typeof otherDeductionsPersist !== 'undefined' && otherDeductionsPersist && typeof otherDeductionsPersist.flush === 'function') otherDeductionsPersist.flush(); } catch(_){}
-  try { if (typeof adjustmentHoursPersist !== 'undefined' && adjustmentHoursPersist && typeof adjustmentHoursPersist.flush === 'function') adjustmentHoursPersist.flush(); } catch(_){}
-  try { if (typeof saveCurrentPeriodDeductions === 'function') saveCurrentPeriodDeductions(); } catch(_){}
-  try { if (typeof persistLoanTracker === 'function') persistLoanTracker(); } catch(_){}
-};
-try {
-  window.addEventListener('pagehide', __flushPeriodScopedEdits);
-  window.addEventListener('beforeunload', __flushPeriodScopedEdits);
-  document.addEventListener('visibilitychange', () => { if (document.hidden) __flushPeriodScopedEdits(); });
-} catch(_) {}
-
 
 // === Additional Income Tab ===
 let additionalIncomeRenderPending = false;
