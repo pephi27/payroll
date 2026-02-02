@@ -3012,6 +3012,7 @@ window.addEventListener('load', dashReports);
        <tr>
         <th>Employee</th>
         <th>Type</th>
+        <th>Project</th>
         <th>Amount</th>
         <th>Actions</th>
        </tr>
@@ -5222,10 +5223,12 @@ function normalizeAdditionalIncomeItem(item){
   } else {
     type = labelMatch || CUSTOM_INCOME_TYPE_VALUE;
   }
+  const rawProject = String(item && (item.project != null ? item.project : (item.projectId != null ? item.projectId : ''))).trim();
   const label = resolveAdditionalIncomeLabel(type, rawLabel);
   return {
     type: type || CUSTOM_INCOME_TYPE_VALUE,
     label,
+    project: rawProject,
     amount: sanitizeAdditionalIncomeAmount(item && item.amount)
   };
 }
@@ -7239,6 +7242,21 @@ function renderAdditionalIncomeTable(){
   if (!atbody) return;
   const incomeOptions = getIncomeTypeOptions();
   const defaultType = incomeOptions[0] || CUSTOM_INCOME_TYPE_VALUE;
+  const projectMap = (typeof storedProjects !== 'undefined' && storedProjects) || {};
+  const projectEntries = Object.entries(projectMap || {}).sort((a,b)=>{
+    const A = (a[1]?.name || a[0]).toUpperCase();
+    const B = (b[1]?.name || b[0]).toUpperCase();
+    return A.localeCompare(B);
+  });
+  const resolveProjectId = (value) => {
+    const v = String(value || '').trim();
+    if (!v) return '';
+    try {
+      if (projectMap && Object.prototype.hasOwnProperty.call(projectMap, v)) return v;
+    } catch(e){}
+    const hit = projectEntries.find(([pid, proj]) => (proj && proj.name ? String(proj.name) : String(pid)) === v);
+    return hit ? hit[0] : v;
+  };
   const handleBlur = () => {
     additionalIncomeFocusCount = Math.max(0, additionalIncomeFocusCount - 1);
     setTimeout(() => {
@@ -7263,6 +7281,7 @@ function renderAdditionalIncomeTable(){
       tr.innerHTML = `
         <td class="wrap"></td>
         <td class="incomeTypeCell"></td>
+        <td class="incomeProjectCell"></td>
         <td><input type="number" min="0" step="0.01" class="incomeAmount" data-emp="${empId}" data-index="${idx}"></td>
         <td><button type="button" class="removeIncomeItemBtn" data-emp="${empId}" data-index="${idx}">Remove</button></td>
       `;
@@ -7285,6 +7304,7 @@ function renderAdditionalIncomeTable(){
           additionalIncomeDetails[empId].push({
             type: defaultType,
             label: resolveAdditionalIncomeLabel(defaultType, ''),
+            project: '',
             amount: 0
           });
           updateAdditionalIncomeTotalForEmployee(empId);
@@ -7299,11 +7319,12 @@ function renderAdditionalIncomeTable(){
         empCell.innerHTML = '&nbsp;';
       }
       const typeCell = tr.querySelector('.incomeTypeCell');
+      const projectCell = tr.querySelector('.incomeProjectCell');
       const amountInput = tr.querySelector('.incomeAmount');
       const removeBtn = tr.querySelector('.removeIncomeItemBtn');
       const isPlaceholder = !!item.__placeholder;
       const normalizedItem = isPlaceholder
-        ? { type: defaultType, label: '', amount: '', __placeholder: true }
+        ? { type: defaultType, label: '', project: '', amount: '', __placeholder: true }
         : normalizeAdditionalIncomeItem(item);
       const typeMatch = matchIncomeTypeOption(normalizedItem.type);
       const labelMatch = matchIncomeTypeOption(normalizedItem.label);
@@ -7312,6 +7333,7 @@ function renderAdditionalIncomeTable(){
       const amountValue = isPlaceholder ? '' : sanitizeAdditionalIncomeAmount(normalizedItem.amount);
       let typeSelect = null;
       let customInput = null;
+      let projectSelect = null;
       if (typeCell) {
         const field = document.createElement('div');
         field.className = 'incomeTypeField';
@@ -7339,6 +7361,36 @@ function renderAdditionalIncomeTable(){
         field.appendChild(customInput);
         typeCell.appendChild(field);
       }
+      if (projectCell) {
+        projectSelect = document.createElement('select');
+        projectSelect.className = 'incomeProjectSelect';
+        projectSelect.dataset.emp = empId;
+        projectSelect.dataset.index = String(idx);
+
+        const opt0 = document.createElement('option');
+        opt0.value = '';
+        opt0.textContent = 'Select project';
+        projectSelect.appendChild(opt0);
+
+        projectEntries.forEach(([pid, proj]) => {
+          const o = document.createElement('option');
+          o.value = pid;
+          o.textContent = (proj && proj.name) ? proj.name : pid;
+          projectSelect.appendChild(o);
+        });
+
+        const currentRaw = isPlaceholder ? '' : String((normalizedItem && (normalizedItem.project || normalizedItem.projectId)) || '').trim();
+        const currentResolved = resolveProjectId(currentRaw);
+        // Preserve unknown/legacy project values
+        if (currentResolved && !Object.prototype.hasOwnProperty.call(projectMap, currentResolved)) {
+          const o = document.createElement('option');
+          o.value = currentResolved;
+          o.textContent = currentResolved;
+          projectSelect.appendChild(o);
+        }
+        projectSelect.value = currentResolved || '';
+        projectCell.appendChild(projectSelect);
+      }
       const setCustomVisibility = (show) => {
         if (!customInput) return;
         customInput.style.display = show ? '' : 'none';
@@ -7361,7 +7413,7 @@ function renderAdditionalIncomeTable(){
         typeSelect.addEventListener('change', () => {
           if (!Array.isArray(additionalIncomeDetails[empId])) additionalIncomeDetails[empId] = [];
           if (!additionalIncomeDetails[empId][idx]) {
-            additionalIncomeDetails[empId][idx] = { type: defaultType, label: resolveAdditionalIncomeLabel(defaultType, ''), amount: 0 };
+            additionalIncomeDetails[empId][idx] = { type: defaultType, label: resolveAdditionalIncomeLabel(defaultType, ''), project: projectSelect ? String(projectSelect.value || '').trim() : '', amount: 0 };
           }
           const selection = typeSelect.value;
           const isCustom = selection === CUSTOM_INCOME_TYPE_VALUE;
@@ -7383,13 +7435,31 @@ function renderAdditionalIncomeTable(){
         });
         typeSelect.addEventListener('blur', handleBlur);
       }
+      if (projectSelect) {
+        projectSelect.addEventListener('focus', () => { additionalIncomeFocusCount += 1; });
+        projectSelect.addEventListener('change', () => {
+          if (!Array.isArray(additionalIncomeDetails[empId])) additionalIncomeDetails[empId] = [];
+          if (!additionalIncomeDetails[empId][idx]) {
+            additionalIncomeDetails[empId][idx] = {
+              type: defaultType,
+              label: resolveAdditionalIncomeLabel(defaultType, ''),
+              project: '',
+              amount: 0
+            };
+          }
+          additionalIncomeDetails[empId][idx].project = String(projectSelect.value || '').trim();
+          additionalIncomePersist.schedule();
+          updatePayrollRowForEmployee(empId);
+        });
+        projectSelect.addEventListener('blur', handleBlur);
+      }
       if (customInput) {
         customInput.addEventListener('focus', () => { additionalIncomeFocusCount += 1; });
         customInput.addEventListener('input', () => {
           if (!typeSelect || typeSelect.value !== CUSTOM_INCOME_TYPE_VALUE) return;
           if (!Array.isArray(additionalIncomeDetails[empId])) additionalIncomeDetails[empId] = [];
           if (!additionalIncomeDetails[empId][idx]) {
-            additionalIncomeDetails[empId][idx] = { type: CUSTOM_INCOME_TYPE_VALUE, label: '', amount: 0 };
+            additionalIncomeDetails[empId][idx] = { type: CUSTOM_INCOME_TYPE_VALUE, label: '', project: projectSelect ? String(projectSelect.value || '').trim() : '', amount: 0 };
           }
           additionalIncomeDetails[empId][idx].type = CUSTOM_INCOME_TYPE_VALUE;
           additionalIncomeDetails[empId][idx].label = customInput.value;
@@ -7399,7 +7469,7 @@ function renderAdditionalIncomeTable(){
         customInput.addEventListener('blur', () => {
           if (!Array.isArray(additionalIncomeDetails[empId])) additionalIncomeDetails[empId] = [];
           if (!additionalIncomeDetails[empId][idx]) {
-            additionalIncomeDetails[empId][idx] = { type: CUSTOM_INCOME_TYPE_VALUE, label: '', amount: 0 };
+            additionalIncomeDetails[empId][idx] = { type: CUSTOM_INCOME_TYPE_VALUE, label: '', project: projectSelect ? String(projectSelect.value || '').trim() : '', amount: 0 };
           }
           const label = resolveAdditionalIncomeLabel(CUSTOM_INCOME_TYPE_VALUE, customInput.value);
           additionalIncomeDetails[empId][idx].type = CUSTOM_INCOME_TYPE_VALUE;
@@ -7418,6 +7488,7 @@ function renderAdditionalIncomeTable(){
             additionalIncomeDetails[empId][idx] = {
               type: defaultType,
               label: resolveAdditionalIncomeLabel(defaultType, ''),
+              project: projectSelect ? String(projectSelect.value || '').trim() : '',
               amount: 0
             };
           }
@@ -7434,6 +7505,7 @@ function renderAdditionalIncomeTable(){
             additionalIncomeDetails[empId][idx] = {
               type: defaultType,
               label: resolveAdditionalIncomeLabel(defaultType, ''),
+              project: projectSelect ? String(projectSelect.value || '').trim() : '',
               amount: 0
             };
           }
@@ -10344,7 +10416,33 @@ document.addEventListener('DOMContentLoaded', () => {
         });
         Object.keys(allowByProjName).forEach(pn => { if (!data[pn]) data[pn] = {}; });
       } catch (e) { /* ignore */ }
-      __report = { data, from, to, dates };
+
+      // Additional Income per project (assigned in Additional Income tab)
+      let additionalIncomeByProject = {};
+      try { if (typeof syncPeriodScopedData === 'function') syncPeriodScopedData(); } catch (_) {}
+      try {
+        const sp = (typeof storedProjects !== 'undefined' && storedProjects) || {};
+        const ai = (typeof additionalIncomeDetails !== 'undefined' && additionalIncomeDetails) || {};
+        Object.keys(ai).forEach(empId => {
+          const items = Array.isArray(ai[empId]) ? ai[empId] : [];
+          items.forEach(it => {
+            const amt = parseFloat((it && it.amount) || 0) || 0;
+            if (amt <= 0) return;
+            const assigned = String((it && (it.project != null ? it.project : (it.projectId != null ? it.projectId : ''))) || '').trim();
+            if (!assigned) return;
+            const projName = (sp[assigned] && sp[assigned].name) ? sp[assigned].name : assigned;
+            if (!isRealProject(projName)) return;
+            let label = '';
+            try { if (typeof getAdditionalIncomeLabel === 'function') label = getAdditionalIncomeLabel(it); } catch (e) {}
+            if (!label) label = String((it && (it.label != null ? it.label : it.type)) || 'Additional Income').trim() || 'Additional Income';
+            if (!additionalIncomeByProject[projName]) additionalIncomeByProject[projName] = {};
+            additionalIncomeByProject[projName][label] = (additionalIncomeByProject[projName][label] || 0) + amt;
+          });
+        });
+        Object.keys(additionalIncomeByProject).forEach(pn => { if (!data[pn]) data[pn] = {}; });
+      } catch (e) { additionalIncomeByProject = {}; }
+
+      __report = { data, from, to, dates, additionalIncomeByProject };
 
       const totalCols = 2 + (dates.length*2) + 4;
       const hint = $('#r_range_hint');
@@ -10416,6 +10514,7 @@ const allow = Object.keys(bantay || {}).reduce((sum, empId) => {
 }, 0);
 
 // Render Allowance row (amount in Gross column)
+if (allow && allow > 0) {
 rows += `<tr class="allowance">
   <td class="left">Allowance</td>
   <td class="num">-</td>
@@ -10428,6 +10527,27 @@ rows += `<tr class="allowance">
 
   // Include allowance in project gross
   pGross += allow;
+}
+
+  // Additional Income rows assigned to this project
+  try {
+    const aiMap = (additionalIncomeByProject && additionalIncomeByProject[proj]) || {};
+    Object.keys(aiMap).sort((a,b)=>String(a).localeCompare(String(b))).forEach(lbl => {
+      const amt = parseFloat(aiMap[lbl]) || 0;
+      if (amt <= 0) return;
+      const safeLbl = String(lbl || 'Additional Income').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+      rows += `<tr class="add-income">
+  <td class="left">${safeLbl}</td>
+  <td class="num">-</td>
+  ${dates.map(()=>`<td class="num">-</td><td class="num">-</td>`).join('')}
+  <td class="num">-</td>
+  <td class="num">-</td>
+  <td class="num">-</td>
+  <td class="num">${f2(amt)}</td>
+</tr>`;
+      pGross += amt;
+    });
+  } catch (e) { /* ignore */ }
 
   rows += `<tr class="totals">
             <td class="left">Project Total</td>
@@ -10538,10 +10658,12 @@ rows += `<tr class="allowance">
             return (matchesById || matchesByName) ? (sum + amt) : sum;
           }, 0);
           // Push a CSV row for Allowance with zero hours and gross = allowance
-          const zeroCells = new Array(dates.length*2).fill('0.00');
-          rows.push([proj, 'Allowance', ''].concat(zeroCells, ['0.00','0.00','0.00', to2(allow)]));
-          // Include allowance in project gross before rolling into grand totals
-          pGross += allow;
+          if (allow && allow > 0) {
+            const zeroCells = new Array(dates.length*2).fill('0.00');
+            rows.push([proj, 'Allowance', ''].concat(zeroCells, ['0.00','0.00','0.00', to2(allow)]));
+            // Include allowance in project gross before rolling into grand totals
+            pGross += allow;
+          }
         } catch (e) { /* no-op if allowance data missing */ }
 
         gReg += pReg; gOT += pOT; gGross += pGross;
