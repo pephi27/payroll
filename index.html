@@ -3761,11 +3761,6 @@ function loadPeriodScopedMap(lsKey){
   return parsed;
 }
 
-function canPersistToCloud(){
-  try { return window && window.__kv_cloud_ready === true; } catch(_) {}
-  return false;
-}
-
 // === Loan Tracker (SSS Salary/Calamity, Pag-IBIG Salary/Calamity, Cash Advance) ===
 // Stores SSS principals (total + monthly) with tracked balances (auto-stops when fully paid),
 // Cash Advance principals (total + weekly) with tracked balances,
@@ -3981,7 +3976,7 @@ async function persistLoanTracker(){
   // Also persist to the shared KV store (same mechanism as vale/period maps) so it syncs across devices.
   try {
     const writer = (typeof window !== 'undefined' && typeof window.writeKV === 'function') ? window.writeKV : null;
-    if (typeof writer === 'function' && canPersistToCloud()) {
+    if (typeof writer === 'function') {
       const maybe = writer(LS_LOAN_TRACKER, loanTracker);
       if (maybe && typeof maybe.then === 'function') {
         maybe.catch(err => { console.warn('Loan tracker KV persist failed', err); });
@@ -4622,7 +4617,7 @@ function persistPeriodScopedMap(lsKey, map){
   const writer = (typeof window !== 'undefined' && typeof window.writeKV === 'function')
     ? window.writeKV
     : null;
-  if (typeof writer === 'function' && canPersistToCloud()) {
+  if (typeof writer === 'function') {
     try {
       const maybe = writer(lsKey, map);
       if (maybe && typeof maybe.then === 'function') {
