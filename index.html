@@ -589,6 +589,61 @@ function safeStringify(v){
   margin-top: 16px;
 }
 
+/* DTR subtabs */
+.dtr-subtabs {
+  display: inline-flex;
+  gap: 6px;
+  margin: 8px 0 4px;
+  flex-wrap: wrap;
+}
+.dtr-subtab-btn {
+  border: 1px solid #cbd5f5;
+  background: #f8fafc;
+  color: #0f172a;
+  border-radius: 999px;
+  padding: 6px 14px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.dtr-subtab-btn.is-active {
+  background: #2563eb;
+  border-color: #1d4ed8;
+  color: #fff;
+}
+
+/* Hide columns per DTR subtab */
+#panelMain[data-dtr-subtab="regular"] #resultsTable th:nth-child(10),
+#panelMain[data-dtr-subtab="regular"] #resultsTable td:nth-child(10),
+#panelMain[data-dtr-subtab="regular"] #resultsTable th:nth-child(11),
+#panelMain[data-dtr-subtab="regular"] #resultsTable td:nth-child(11),
+#panelMain[data-dtr-subtab="regular"] #resultsTable th:nth-child(13),
+#panelMain[data-dtr-subtab="regular"] #resultsTable td:nth-child(13),
+#panelMain[data-dtr-subtab="regular"] #resultsTable th:nth-child(14),
+#panelMain[data-dtr-subtab="regular"] #resultsTable td:nth-child(14) {
+  display: none;
+}
+#panelMain[data-dtr-subtab="overtime"] #resultsTable th:nth-child(6),
+#panelMain[data-dtr-subtab="overtime"] #resultsTable td:nth-child(6),
+#panelMain[data-dtr-subtab="overtime"] #resultsTable th:nth-child(7),
+#panelMain[data-dtr-subtab="overtime"] #resultsTable td:nth-child(7),
+#panelMain[data-dtr-subtab="overtime"] #resultsTable th:nth-child(8),
+#panelMain[data-dtr-subtab="overtime"] #resultsTable td:nth-child(8),
+#panelMain[data-dtr-subtab="overtime"] #resultsTable th:nth-child(9),
+#panelMain[data-dtr-subtab="overtime"] #resultsTable td:nth-child(9),
+#panelMain[data-dtr-subtab="overtime"] #resultsTable th:nth-child(12),
+#panelMain[data-dtr-subtab="overtime"] #resultsTable td:nth-child(12),
+#panelMain[data-dtr-subtab="overtime"] #resultsTable th:nth-child(14),
+#panelMain[data-dtr-subtab="overtime"] #resultsTable td:nth-child(14) {
+  display: none;
+}
+
+/* DTR Punch Editor fields by scope */
+#dtrPunchModal[data-scope="regular"] .dtr-punch-field[data-field-group="ot"],
+#dtrPunchModal[data-scope="overtime"] .dtr-punch-field[data-field-group="regular"] {
+  display: none;
+}
+
 
 /* Loan Tracker */
 .loan-tracker h3 { margin: 14px 0 6px; }
@@ -2331,6 +2386,10 @@ window.addEventListener('load', dashReports);
    </div>
    <div class="note">
     Regular hours computed per schedule segments. Grace applies to AM/PM in. OT detected after PM out reference.
+   </div>
+   <div class="dtr-subtabs" role="tablist" aria-label="DTR sections">
+     <button type="button" class="dtr-subtab-btn is-active" data-subtab="regular" role="tab" aria-selected="true">Regular</button>
+     <button type="button" class="dtr-subtab-btn" data-subtab="overtime" role="tab" aria-selected="false">Overtime</button>
    </div>
    <!-- Alert to display when there is no remote DTR data and no local DTR data.  This
         banner is hidden by default and shown via showRemoteDtrAlert() -->
@@ -13206,10 +13265,15 @@ function openPunchEditor(rowContext) {
   const modal = document.getElementById('dtrPunchModal');
   if (!modal || !rowContext) return;
   const { empId, date, name } = rowContext;
+  const scope = rowContext.scope || getActiveDtrSubtab();
   const title = document.getElementById('dtrPunchModalTitle');
-  if (title) title.textContent = `Edit Punches: ${name || empId} — ${date}`;
+  if (title) {
+    const label = scope === 'overtime' ? 'OT' : 'Regular';
+    title.textContent = `Edit ${label} Punches: ${name || empId} — ${date}`;
+  }
   modal.dataset.empId = empId;
   modal.dataset.date = date;
+  modal.dataset.scope = scope;
   const options = getPunchOptions(empId, date);
   const overrideKey = `${empId}___${date}`;
   const overrides = dtrOverrides[overrideKey] || {};
@@ -14450,6 +14514,35 @@ function formatHours(value){
   return (!isFinite(num) || num === 0) ? '-' : num.toFixed(2);
 }
 
+const LS_DTR_SUBTAB = 'dtr_active_subtab';
+function getActiveDtrSubtab(){
+  const panel = document.getElementById('panelMain');
+  if (panel && panel.dataset && panel.dataset.dtrSubtab) return panel.dataset.dtrSubtab;
+  return localStorage.getItem(LS_DTR_SUBTAB) || 'regular';
+}
+function setActiveDtrSubtab(next){
+  const panel = document.getElementById('panelMain');
+  if (panel) panel.dataset.dtrSubtab = next;
+  try { localStorage.setItem(LS_DTR_SUBTAB, next); } catch (e) {}
+  document.querySelectorAll('.dtr-subtab-btn').forEach(btn => {
+    const isActive = btn.dataset.subtab === next;
+    btn.classList.toggle('is-active', isActive);
+    btn.setAttribute('aria-selected', isActive ? 'true' : 'false');
+  });
+}
+function wireDtrSubtabs(){
+  const btns = document.querySelectorAll('.dtr-subtab-btn');
+  if (!btns.length) return;
+  btns.forEach(btn => {
+    if (btn.__dtrSubtabBound) return;
+    btn.__dtrSubtabBound = true;
+    btn.addEventListener('click', () => {
+      setActiveDtrSubtab(btn.dataset.subtab || 'regular');
+    });
+  });
+  setActiveDtrSubtab(getActiveDtrSubtab());
+}
+
 function renderResults(){
 
 // 12-hour clock formatter for display only (keeps underlying logic 24h)
@@ -14683,16 +14776,18 @@ try {
     const totalRegularDecimal = minsToDecimal(totalMins);
 let otMins = 0;
     if(otInCalc && otOutCalc){
-      const nextDayOffset = /\+\s*\d+\s*$/.test(String(otOutCalc || '')) ? 24 * 60 : 0;
-      const otStartClamp = Math.max(
-        toMins(otInCalc),
-        toMins(__isSaturday ? (__satEnd || rangesForEmp.otIn.start) : rangesForEmp.otIn.start) + nextDayOffset
-      );
-      const otEndClamp = Math.min(
-        toMins(otOutCalc),
-        toMins(__isSaturday ? '23:59' : (rangesForEmp.otOut.end || rangesForEmp.otIn.end)) + nextDayOffset
-      );
-      if(otEndClamp > otStartClamp) otMins = otEndClamp - otStartClamp;
+      const otInM = toMins(otInCalc);
+      let otOutM = toMins(otOutCalc);
+      if (otInM !== null && otOutM !== null) {
+        let rangeStart = toMins(__isSaturday ? (__satEnd || rangesForEmp.otIn.start) : rangesForEmp.otIn.start);
+        let rangeEnd = toMins(__isSaturday ? '23:59' : (rangesForEmp.otOut.end || rangesForEmp.otIn.end));
+        if (otOutM < otInM) otOutM += 24 * 60;
+        if (otOutM >= 24 * 60 && rangeEnd < 24 * 60) rangeEnd += 24 * 60;
+        if (otInM >= 24 * 60 && rangeStart < 24 * 60) rangeStart += 24 * 60;
+        const otStartClamp = Math.max(otInM, rangeStart);
+        const otEndClamp = Math.min(otOutM, rangeEnd);
+        if(otEndClamp > otStartClamp) otMins = otEndClamp - otStartClamp;
+      }
     }
     
     // Saturday definitive OT computation: last OUT beyond Saturday end is OT
@@ -15099,6 +15194,7 @@ async function initApp(){
   renderEmployees();
   renderProjects();
   renderProjectFilterOptions();
+  wireDtrSubtabs();
   const savedFilter = localStorage.getItem(LS_FILTER_PROJECT);
   if(document.getElementById('filterProject') && savedFilter && [...document.getElementById('filterProject').options].some(o=>o.value===savedFilter)){
     document.getElementById('filterProject').value = savedFilter;
@@ -15619,22 +15715,22 @@ function restoreData(file) {
   <div class="dtr-modal-dialog" role="dialog" aria-modal="true" aria-labelledby="dtrPunchModalTitle">
     <h3 id="dtrPunchModalTitle">Edit Punches</h3>
     <div class="dtr-modal-grid">
-      <label>Clock In 1
+      <label class="dtr-punch-field" data-field-group="regular">Clock In 1
         <select id="dtrPunchAmIn"></select>
       </label>
-      <label>Clock Out 1
+      <label class="dtr-punch-field" data-field-group="regular">Clock Out 1
         <select id="dtrPunchAmOut"></select>
       </label>
-      <label>Clock In 2
+      <label class="dtr-punch-field" data-field-group="regular">Clock In 2
         <select id="dtrPunchPmIn"></select>
       </label>
-      <label>Clock Out 2
+      <label class="dtr-punch-field" data-field-group="regular">Clock Out 2
         <select id="dtrPunchPmOut"></select>
       </label>
-      <label>OT In
+      <label class="dtr-punch-field" data-field-group="ot">OT In
         <select id="dtrPunchOtIn"></select>
       </label>
-      <label>OT Out
+      <label class="dtr-punch-field" data-field-group="ot">OT Out
         <select id="dtrPunchOtOut"></select>
       </label>
     </div>
@@ -15724,10 +15820,22 @@ function restoreData(file) {
     if (clearBtn) clearBtn.addEventListener('click', function(){
       const empId = modal.dataset.empId;
       const date = modal.dataset.date;
+      const scope = modal.dataset.scope || 'regular';
       if (!empId || !date) return closePunchModal();
       const key = `${empId}___${date}`;
       if (dtrOverrides && Object.prototype.hasOwnProperty.call(dtrOverrides, key)) {
-        delete dtrOverrides[key];
+        const existing = dtrOverrides[key] || {};
+        const nextValues = {
+          amIn: scope === 'overtime' ? normalizeOverrideValue(existing.amIn) : null,
+          amOut: scope === 'overtime' ? normalizeOverrideValue(existing.amOut) : null,
+          pmIn: scope === 'overtime' ? normalizeOverrideValue(existing.pmIn) : null,
+          pmOut: scope === 'overtime' ? normalizeOverrideValue(existing.pmOut) : null,
+          otIn: scope === 'regular' ? normalizeOverrideValue(existing.otIn) : null,
+          otOut: scope === 'regular' ? normalizeOverrideValue(existing.otOut) : null
+        };
+        const hasAny = Object.values(nextValues).some(val => normalizeOverrideValue(val));
+        if (hasAny) dtrOverrides[key] = nextValues;
+        else delete dtrOverrides[key];
         saveDtrOverrides();
       }
       closePunchModal();
@@ -15736,19 +15844,21 @@ function restoreData(file) {
     if (saveBtn) saveBtn.addEventListener('click', function(){
       const empId = modal.dataset.empId;
       const date = modal.dataset.date;
+      const scope = modal.dataset.scope || 'regular';
       if (!empId || !date) return closePunchModal();
       const key = `${empId}___${date}`;
+      const existing = dtrOverrides[key] || {};
       const getVal = (id) => {
         const el = document.getElementById(id);
         return el ? normalizeOverrideValue(el.value) : null;
       };
       const nextValues = {
-        amIn: getVal('dtrPunchAmIn'),
-        amOut: getVal('dtrPunchAmOut'),
-        pmIn: getVal('dtrPunchPmIn'),
-        pmOut: getVal('dtrPunchPmOut'),
-        otIn: getVal('dtrPunchOtIn'),
-        otOut: getVal('dtrPunchOtOut')
+        amIn: scope === 'overtime' ? normalizeOverrideValue(existing.amIn) : getVal('dtrPunchAmIn'),
+        amOut: scope === 'overtime' ? normalizeOverrideValue(existing.amOut) : getVal('dtrPunchAmOut'),
+        pmIn: scope === 'overtime' ? normalizeOverrideValue(existing.pmIn) : getVal('dtrPunchPmIn'),
+        pmOut: scope === 'overtime' ? normalizeOverrideValue(existing.pmOut) : getVal('dtrPunchPmOut'),
+        otIn: scope === 'regular' ? normalizeOverrideValue(existing.otIn) : getVal('dtrPunchOtIn'),
+        otOut: scope === 'regular' ? normalizeOverrideValue(existing.otOut) : getVal('dtrPunchOtOut')
       };
       const hasAny = Object.values(nextValues).some(Boolean);
       if (hasAny) {
@@ -15861,7 +15971,7 @@ function restoreData(file) {
       if (!empId || !date) return;
       const emp = storedEmployees && storedEmployees[empId];
       const name = emp && emp.name ? emp.name : (tr.cells[1] ? tr.cells[1].textContent.trim() : '');
-      openPunchEditor({ empId, date, name });
+      openPunchEditor({ empId, date, name, scope: getActiveDtrSubtab() });
     });
   }
   function addDtrDeleteButtons(){
