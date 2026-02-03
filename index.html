@@ -16605,6 +16605,17 @@ document.addEventListener('DOMContentLoaded', function(){
     if (s && e) return s + ' to ' + e;
     return s || e || '';
   }
+  function getDtrProjectText(){
+    var projectEl = document.getElementById('filterProject');
+    if (!projectEl) return '';
+    var selected = projectEl.options && projectEl.selectedIndex >= 0 ? projectEl.options[projectEl.selectedIndex] : null;
+    var label = selected ? selected.textContent : '';
+    var value = selected ? selected.value : '';
+    if (!label) return '';
+    if (value === 'all') return 'All Projects';
+    if (value === 'none') return 'No Project';
+    return label;
+  }
   function normalizeHeader(text){
     return String(text || '').replace(/\s+/g, ' ').trim().toLowerCase();
   }
@@ -16707,6 +16718,10 @@ document.addEventListener('DOMContentLoaded', function(){
       w.document.write('<div class="report-title">' + reportTitle + '</div>');
       if (periodText) {
         w.document.write('<div class="report-period">Period: ' + periodText + '</div>');
+      }
+      var projectText = getDtrProjectText();
+      if (projectText) {
+        w.document.write('<div class="report-period">Project: ' + projectText + '</div>');
       }
       w.document.write('</div>');
       w.document.write(clone.outerHTML);
