@@ -153,8 +153,11 @@ const KNOWN_KEYS = [
   ,"payroll_pagibig_table"
   ,"payroll_philhealth_table"
   ,"payroll_adjustment_hours"
+  ,"payroll_adj_reg_hours"
+  ,"payroll_adj_ot_hours"
   ,"payroll_additional_income_details"
   ,"payroll_additional_income_total"
+  ,"payroll_ot_overrides"
   ,"payroll_bantay"
   ,"payroll_bantay_proj"
   ,"payroll_contrib_flags"
@@ -189,13 +192,16 @@ function queueHydrateRerender() {
   markHydrated();
   try { if (typeof refreshPeriodScopedCachesFromStorage === 'function') refreshPeriodScopedCachesFromStorage(); } catch {}
   try { if (typeof refreshLoanTrackerCacheFromStorage === 'function') refreshLoanTrackerCacheFromStorage(); } catch {}
-  const rerender = () => {
-    try {
+    const rerender = () => {
+      try {
       if (typeof renderOtherDeductionsTable === 'function') renderOtherDeductionsTable();
       if (typeof renderAdjustmentHoursTable === 'function') renderAdjustmentHoursTable();
     } catch {}
     try {
       if (typeof renderAdditionalIncomeTable === 'function') renderAdditionalIncomeTable();
+    } catch {}
+    try {
+      if (typeof renderOvertimeTables === 'function') renderOvertimeTables();
     } catch {}
     
     try {
@@ -680,10 +686,11 @@ function safePrint(win){
       rate: readCell(row, '.rate', 'value'),
       regHours: readCell(row, '.regHrs', 'value'),
       otHours: readCell(row, '.otHrs', 'value'),
-      adjustmentHours: readCell(row, '.adjHrs'),
+      adjRegHours: readCell(row, '.adjRegHrs'),
+      adjOtHours: readCell(row, '.adjOtHrs'),
       totalHours: readCell(row, '.totalHrs'),
       regPay: readCell(row, '.regPay'),
-      otPay: readCell(row, '.otPay'),
+      otPay: readCell(row, '.totalOtPay'),
       gross: readCell(row, '.grossPay'),
       pagibig: readCell(row, '.pagibig'),
       philhealth: readCell(row, '.philhealth'),
@@ -748,9 +755,23 @@ function safePrint(win){
     if (!data.totalHours){
       var r = toNum(data.regHours);
       var o = toNum(data.otHours);
-      var a = toNum(data.adjustmentHours);
-      var total = r + o + a;
+      var ar = toNum(data.adjRegHours);
+      var ao = toNum(data.adjOtHours);
+      var total = r + o + ar + ao;
       data.totalHours = total ? total.toFixed(2) : '';
+    }
+    if (!data.otHours || toNum(data.otHours) === 0) {
+      try {
+        if (data.id && typeof otHours !== 'undefined' && otHours && Object.prototype.hasOwnProperty.call(otHours, data.id)) {
+          data.otHours = fmt(otHours[data.id]);
+        }
+      } catch (_) {}
+    }
+    if (!data.otPay || toNum(data.otPay) === 0) {
+      try {
+        const datasetVal = row && row.dataset ? row.dataset.otPay : null;
+        if (datasetVal != null && datasetVal !== '') data.otPay = datasetVal;
+      } catch (_) {}
     }
     return data;
   }
@@ -994,7 +1015,7 @@ body{font-family:Arial,Helvetica,sans-serif;margin:0;padding:0 0.1in;}
       if(!tbl || !tbl.tBodies || !tbl.tBodies[0]) return;
       const tbody = tbl.tBodies[0];
       // Inputs: blank zeros only for the three computed fields
-      tbody.querySelectorAll('input.regHrs, input.otHrs, input.rate').forEach(inp=>{
+      tbody.querySelectorAll('input.regHrs, input.rate').forEach(inp=>{
         const v = parseFloat((inp.value||'').toString().replace(/,/g,''));
         if(!isNaN(v) && v===0){ inp.value = ''; }
       });
@@ -1070,7 +1091,7 @@ applyZeroSoon();
 (function(){
   function zeroBlankInputs(){
     try{
-    document.querySelectorAll('#payrollTable input.regHrs, #payrollTable input.otHrs, #payrollTable input.rate').forEach(function(inp){
+    document.querySelectorAll('#payrollTable input.regHrs, #payrollTable input.rate').forEach(function(inp){
         var v = parseFloat((inp.value||'').toString().replace(/,/g,''));
         if(!isNaN(v) && v===0){ inp.value = ''; }
       });
@@ -1254,7 +1275,6 @@ window.addEventListener('load', dashReports);
   #panelPayroll input.cell { width:100%;padding:4px;border:1px solid var(--border);border-radius:4px;text-align:right }
 /* === PATCH: make computed hours/rate look like plain text & non-interactive === */
 #panelPayroll input.regHrs,
-#panelPayroll input.otHrs,
 #panelPayroll input.rate {
   pointer-events: none;      /* no clicks */
   border: none;              /* look like text */
@@ -1268,15 +1288,12 @@ window.addEventListener('load', dashReports);
   text-align: right;
 }
 #panelPayroll input.regHrs[disabled],
-#panelPayroll input.otHrs[disabled],
 #panelPayroll input.rate[disabled] {
   color: inherit;            /* avoid greyed-out disabled look */
 }
 /* hide number spinners where applicable */
 #panelPayroll input.regHrs::-webkit-outer-spin-button,
 #panelPayroll input.regHrs::-webkit-inner-spin-button,
-#panelPayroll input.otHrs::-webkit-outer-spin-button,
-#panelPayroll input.otHrs::-webkit-inner-spin-button,
 #panelPayroll input.rate::-webkit-outer-spin-button,
 #panelPayroll input.rate::-webkit-inner-spin-button {
   -webkit-appearance: none;
@@ -2759,8 +2776,11 @@ window.addEventListener('load', dashReports);
       Payroll
      </h2>
      <div class="tabs">
-      <button class="tab-btn active" data-tab="payrollTab">
+     <button class="tab-btn active" data-tab="payrollTab">
        Payroll
+      </button>
+      <button class="tab-btn" data-tab="otComputationTab">
+       OT Computation
       </button>
       <button class="tab-btn" data-tab="deductionsTab">
        Deductions
@@ -2832,18 +2852,12 @@ window.addEventListener('load', dashReports);
          Regular Hours
         </th>
         <th>
-         OT Hours
-        </th>
-        <th>
-         Adjustment Hrs
+         Adj Reg Hrs
         </th>
         
         <th>Total Hours</th>
         <th>
          Regular Pay
-        </th>
-        <th>
-         OT Pay
         </th>
         <th>
          Additional Income
@@ -2876,6 +2890,9 @@ window.addEventListener('load', dashReports);
          Total Deductions
         </th>
         <th>
+         Total OT Pay
+        </th>
+        <th>
          Net Pay
         </th>
        <th>
@@ -2893,11 +2910,9 @@ window.addEventListener('load', dashReports);
     <td colspan="2" class="label-cell">Grand Total</td>
     <td class="num" data-col="rate"></td>
     <td class="num" data-col="regHrs">0.00</td>
-    <td class="num" data-col="otHrs">0.00</td>
-    <td class="num" data-col="adjHrs">0.00</td>
+    <td class="num" data-col="adjRegHrs">0.00</td>
     <td class="num" data-col="totalHrs">0.00</td>
       <td class="num" data-col="regPay">0.00</td>
-      <td class="num" data-col="otPay">0.00</td>
       <td class="num" data-col="adjAmt">0.00</td>
       <td class="num" data-col="grossPay">0.00</td>
     <td class="num" data-col="pagibig">0.00</td>
@@ -2908,6 +2923,7 @@ window.addEventListener('load', dashReports);
       <td class="num" data-col="vale">0.00</td>
       <td class="num" data-col="valeWed">0.00</td>
       <td class="num" data-col="totalDed">0.00</td>
+      <td class="num" data-col="totalOtPay">0.00</td>
       <td class="num" data-col="netPay">0.00</td>
     <td></td>
   </tr>
@@ -2921,6 +2937,25 @@ window.addEventListener('load', dashReports);
       </code>
       (id&rarr;{name}). If none found, shows a sample row.
      </div>
+    </div>
+    <div class="tab" id="otComputationTab">
+     <div class="section note">
+      Review and override overtime hours for the current payroll period. OT pay uses the current OT multiplier.
+     </div>
+     <table id="otComputationTable">
+      <thead>
+       <tr>
+        <th>ID</th>
+        <th>Name</th>
+        <th>Hourly Rate</th>
+        <th>OT Hours</th>
+        <th>Adj OT Hrs</th>
+        <th>Total OT Hrs</th>
+        <th>OT Pay</th>
+       </tr>
+      </thead>
+      <tbody></tbody>
+     </table>
     </div>
     <div class="tab" id="deductionsTab">
      <div id="dedMainSection" class="subtab-panel active">
@@ -3092,14 +3127,15 @@ window.addEventListener('load', dashReports);
     <!-- Adjustments Tab -->
     <div class="tab" id="adjustmentsTab">
      <div class="section note">
-      Adjustment hours for correcting previous payroll. This affects overtime calculations.
+      Adjustment hours for correcting previous payroll. Track regular vs OT adjustments separately.
      </div>
      <table id="adjustmentHoursTable">
       <thead>
        <tr>
         <th>ID</th>
         <th>Name</th>
-        <th>Adjustment Hrs</th>
+        <th>Adj Reg Hrs</th>
+        <th>Adj OT Hrs</th>
        </tr>
       </thead>
       <tbody></tbody>
@@ -3118,8 +3154,13 @@ const LS_OTHER_DEDUCTIONS_DETAILS='payroll_other_deductions_details';
 const LS_OTHER_DEDUCTIONS_TOTAL='payroll_other_deductions_total';
 // Legacy LocalStorage key for per-employee payroll adjustments
 const LS_ADJ_LEGACY='payroll_adjustments';
-// LocalStorage key for per-employee adjustment hours (OT adjustments)
+// Legacy LocalStorage key for per-employee adjustment hours (treated as OT)
 const LS_ADJ_HRS='payroll_adjustment_hours';
+// LocalStorage keys for per-employee adjustment hours (regular + OT)
+const LS_ADJ_REG_HRS='payroll_adj_reg_hours';
+const LS_ADJ_OT_HRS='payroll_adj_ot_hours';
+// LocalStorage key for per-employee OT overrides (period-scoped)
+const LS_OT_OVERRIDES='payroll_ot_overrides';
 // LocalStorage keys for dynamic Pagâ€‘IBIG and PhilHealth contribution rates (employee share)
 const LS_PAGIBIG_RATE='payroll_pagibig_rate';
 const LS_PHILHEALTH_RATE='payroll_philhealth_rate';
@@ -3767,6 +3808,9 @@ document.querySelectorAll('#panelPayroll .tabs .tab-btn').forEach(btn=>{
     btn.classList.add('active');
     const panel = document.querySelector('#panelPayroll #' + btn.dataset.tab);
     if (panel) panel.classList.add('active');
+    if (btn.dataset && btn.dataset.tab === 'otComputationTab') {
+      try { if (typeof renderOvertimeTables === 'function') renderOvertimeTables(); } catch (_) {}
+    }
   });
 });
 if (otMultiplierEl) otMultiplierEl.value = String(getOvertimeMultiplier());
@@ -4951,10 +4995,24 @@ let allOtherDeductionsDetails = loadPeriodScopedMap(LS_OTHER_DEDUCTIONS_DETAILS)
 let allOtherDeductionsTotals = loadPeriodScopedMap(LS_OTHER_DEDUCTIONS_TOTAL);
 let otherDeductionsDetails = ensurePeriodData(allOtherDeductionsDetails, currentPeriodKey);
 let otherDeductionsTotal = ensurePeriodData(allOtherDeductionsTotals, currentPeriodKey);
-let allAdjHrs = JSON.parse(localStorage.getItem(LS_ADJ_HRS) || '{}');
-let adjHrs = allAdjHrs[currentPeriodKey] || {};
+let allAdjRegHrs = JSON.parse(localStorage.getItem(LS_ADJ_REG_HRS) || '{}');
+let allAdjOtHrs = JSON.parse(localStorage.getItem(LS_ADJ_OT_HRS) || '{}');
+// Migration: legacy adjustment hours were treated as OT adjustments.
+if ((!allAdjOtHrs || !Object.keys(allAdjOtHrs).length) && !Object.keys(allAdjRegHrs || {}).length) {
+  try {
+    const legacy = JSON.parse(localStorage.getItem(LS_ADJ_HRS) || '{}');
+    if (legacy && Object.keys(legacy).length) {
+      allAdjOtHrs = legacy;
+      try { localStorage.setItem(LS_ADJ_OT_HRS, JSON.stringify(allAdjOtHrs)); } catch (_){}
+    }
+  } catch (_) {}
+}
+let adjRegHrs = allAdjRegHrs[currentPeriodKey] || {};
+let adjOtHrs = allAdjOtHrs[currentPeriodKey] || {};
 let allBantay = JSON.parse(localStorage.getItem(LS_BANTAY) || '{}');
 let bantay = allBantay[currentPeriodKey] || {};
+let allOtOverrides = JSON.parse(localStorage.getItem(LS_OT_OVERRIDES) || '{}');
+let otOverrides = allOtOverrides[currentPeriodKey] || {};
 let allAdditionalIncomeDetails = loadPeriodScopedMap(LS_ADDITIONAL_INCOME_DETAILS);
 let allAdditionalIncomeTotals = loadPeriodScopedMap(LS_ADDITIONAL_INCOME_TOTAL);
 let additionalIncomeDetails = ensurePeriodData(allAdditionalIncomeDetails, currentPeriodKey);
@@ -4977,11 +5035,24 @@ function persistCurrentOtherDeductions(){
 }
 
 function persistCurrentAdjustmentHours(){
-  if (!isPlainObject(allAdjHrs)) allAdjHrs = {};
-  if (!isPlainObject(adjHrs)) adjHrs = {};
-  allAdjHrs[currentPeriodKey] = adjHrs;
-  updatePeriodLatest(allAdjHrs, currentPeriodKey, adjHrs);
-  persistPeriodScopedMap(LS_ADJ_HRS, allAdjHrs);
+  if (!isPlainObject(allAdjRegHrs)) allAdjRegHrs = {};
+  if (!isPlainObject(allAdjOtHrs)) allAdjOtHrs = {};
+  if (!isPlainObject(adjRegHrs)) adjRegHrs = {};
+  if (!isPlainObject(adjOtHrs)) adjOtHrs = {};
+  allAdjRegHrs[currentPeriodKey] = adjRegHrs;
+  allAdjOtHrs[currentPeriodKey] = adjOtHrs;
+  updatePeriodLatest(allAdjRegHrs, currentPeriodKey, adjRegHrs);
+  updatePeriodLatest(allAdjOtHrs, currentPeriodKey, adjOtHrs);
+  persistPeriodScopedMap(LS_ADJ_REG_HRS, allAdjRegHrs);
+  persistPeriodScopedMap(LS_ADJ_OT_HRS, allAdjOtHrs);
+}
+
+function persistCurrentOtOverrides(){
+  if (!isPlainObject(allOtOverrides)) allOtOverrides = {};
+  if (!isPlainObject(otOverrides)) otOverrides = {};
+  allOtOverrides[currentPeriodKey] = otOverrides;
+  updatePeriodLatest(allOtOverrides, currentPeriodKey, otOverrides);
+  persistPeriodScopedMap(LS_OT_OVERRIDES, allOtOverrides);
 }
 
 function persistCurrentAdditionalIncome(){
@@ -5016,10 +5087,14 @@ function refreshPeriodScopedCachesFromStorage(){
   allOtherDeductionsTotals = loadPeriodScopedMap(LS_OTHER_DEDUCTIONS_TOTAL);
   otherDeductionsDetails = ensurePeriodData(allOtherDeductionsDetails, currentPeriodKey);
   otherDeductionsTotal = ensurePeriodData(allOtherDeductionsTotals, currentPeriodKey);
-  allAdjHrs = JSON.parse(localStorage.getItem(LS_ADJ_HRS) || '{}');
-  adjHrs = allAdjHrs[currentPeriodKey] || {};
+  allAdjRegHrs = JSON.parse(localStorage.getItem(LS_ADJ_REG_HRS) || '{}');
+  allAdjOtHrs = JSON.parse(localStorage.getItem(LS_ADJ_OT_HRS) || '{}');
+  adjRegHrs = allAdjRegHrs[currentPeriodKey] || {};
+  adjOtHrs = allAdjOtHrs[currentPeriodKey] || {};
   allBantay = JSON.parse(localStorage.getItem(LS_BANTAY) || '{}');
   bantay = allBantay[currentPeriodKey] || {};
+  allOtOverrides = JSON.parse(localStorage.getItem(LS_OT_OVERRIDES) || '{}');
+  otOverrides = allOtOverrides[currentPeriodKey] || {};
   allAdditionalIncomeDetails = loadPeriodScopedMap(LS_ADDITIONAL_INCOME_DETAILS);
   allAdditionalIncomeTotals = loadPeriodScopedMap(LS_ADDITIONAL_INCOME_TOTAL);
   additionalIncomeDetails = ensurePeriodData(allAdditionalIncomeDetails, currentPeriodKey);
@@ -5087,6 +5162,8 @@ function syncPeriodScopedData(){
   const prevKey = currentPeriodKey;
   saveCurrentPeriodDeductions();
   try { if (typeof window !== 'undefined' && window.__kv_user_interacted === true) persistCurrentAdditionalIncome(); } catch (_) {}
+  try { persistCurrentAdjustmentHours(); } catch (_) {}
+  try { persistCurrentOtOverrides(); } catch (_) {}
   const direction = comparePeriodKeys(pk, prevKey);
   const carryForward = direction >= 0;
   const tplSSS = carryForward ? findCarryTemplate(allLoanSSS, pk, prevKey) : null;
@@ -5101,8 +5178,10 @@ function syncPeriodScopedData(){
   try { persistLoanTracker(); } catch(_){ }
   otherDeductionsDetails = ensurePeriodData(allOtherDeductionsDetails, pk, null, { allowDefault: false });
   otherDeductionsTotal = ensurePeriodData(allOtherDeductionsTotals, pk, null, { allowDefault: false });
-  adjHrs = allAdjHrs[pk] || {};
+  adjRegHrs = allAdjRegHrs[pk] || {};
+  adjOtHrs = allAdjOtHrs[pk] || {};
   bantay = allBantay[pk] || {};
+  otOverrides = allOtOverrides[pk] || {};
   additionalIncomeDetails = ensurePeriodData(allAdditionalIncomeDetails, pk, null, { allowDefault: false });
   additionalIncomeTotal = ensurePeriodData(allAdditionalIncomeTotals, pk, null, { allowDefault: false });
   ensureAdditionalIncomeDetailsMap();
@@ -6449,9 +6528,8 @@ function renderTable(){
     getEmployeeList().forEach(emp=>{
       const tr = document.createElement('tr');
       const rH = Number(regHours[emp.id] ?? 0);
-      const oH = Number(otHours[emp.id] ?? 0);
       // Adjustment hours for this employee (default to 0 if undefined)
-      const aH = Number(adjHrs[emp.id] ?? 0);
+      const aRegH = Number(adjRegHrs[emp.id] ?? 0);
       const rate = Number((storedEmployees[emp.id]?.hourlyRate) ?? (payrollRates[emp.id] ?? 0));
       payrollRates[emp.id] = isNaN(rate) ? 0 : rate;
       const lSSS = Number(loanSSS[emp.id] ?? 0);
@@ -6464,9 +6542,8 @@ function renderTable(){
         
         <td><input class="cell rate" name="payroll_rate_${emp.id}" title="Non-editable in Payroll" type="number" step="0.01" value="${rate}" disabled></td>
         <td><input class="cell regHrs" name="payroll_reg_hours_${emp.id}" title="Non-editable in Payroll" type="number" step="0.01" value="${rH}" disabled></td>
-        <td><input class="cell otHrs" name="payroll_ot_hours_${emp.id}" title="Non-editable in Payroll" type="number" step="0.01" value="${oH}" disabled></td>
-        <td class="adjHrs num">${aH ? aH.toFixed(2) : '0.00'}</td><td class="totalHrs num">0.00</td><td class="regPay num">0.00</td>
-        <td class="otPay num">0.00</td>
+        <td class="adjRegHrs num">${aRegH ? aRegH.toFixed(2) : '0.00'}</td>
+        <td class="totalHrs num">0.00</td><td class="regPay num">0.00</td>
         <td class="adjAmt num">0.00</td>
         <td class="grossPay num">0.00</td>
         <td class="pagibig num">0.00</td>
@@ -6477,6 +6554,7 @@ function renderTable(){
         <td><input class="cell vale" name="payroll_vale_${emp.id}" type="number" step="0.01" value="${v}"></td>
         <td><input class="cell valeWed" name="payroll_vale_wed_${emp.id}" type="number" step="0.01" value="${vW}"></td>
         <td class="totalDed num">0.00</td>
+        <td class="totalOtPay num">0.00</td>
         <td class="netPay num">0.00</td>
         <td><button type="button" class="payslipBtn">Payslip</button></td>`;
       frag.appendChild(tr);
@@ -6491,6 +6569,121 @@ function renderTable(){
     try { (window.scheduleTotals || window.updatePayrollGrandTotals || function(){})(); } catch(e){}
     try { (window.scheduleTotals || window.updateDeductionsGrandTotals || function(){})(); } catch(e){}
   }
+}
+
+function updatePayrollRowOvertime(empId){
+  if (!empId) return;
+  const rows = document.querySelectorAll('#payrollTable tbody tr');
+  if (!rows || !rows.length) return;
+  for (const tr of rows) {
+    const idCell = tr.cells && tr.cells[0];
+    const rowId = idCell ? (idCell.textContent || '').trim() : '';
+    if (rowId === empId) {
+      calculateRow(tr);
+      break;
+    }
+  }
+  try { if (typeof scheduleTotals === 'function') scheduleTotals(); } catch (_) {}
+}
+
+function renderOvertimeTables(){
+  syncPeriodScopedData();
+  const tables = [
+    document.getElementById('otComputationTable')
+  ].filter(Boolean);
+  if (!tables.length) return;
+  const employees = getEmployeeList();
+  const buildRowHtml = (emp) => {
+    const rate = Number((storedEmployees[emp.id]?.hourlyRate) ?? (payrollRates[emp.id] ?? 0));
+    payrollRates[emp.id] = isNaN(rate) ? 0 : rate;
+    const otVal = Number(otHours[emp.id] ?? 0);
+    const adjOtVal = Number(adjOtHrs[emp.id] ?? 0);
+    const totalOt = otVal + adjOtVal;
+    const otPay = +(totalOt * rate * getOvertimeMultiplier()).toFixed(2);
+    const otDisplay = Number.isFinite(otVal) ? otVal.toFixed(2) : '0.00';
+    return `
+      <td>${emp.id}</td>
+      <td class="wrap">${emp.name}</td>
+      <td class="num">${rate ? rate.toFixed(2) : '0.00'}</td>
+      <td><input type="number" min="0" step="0.01" class="cell otHoursInput" data-id="${emp.id}" value="${otDisplay}" /></td>
+      <td class="num adjOtDisplay">${adjOtVal ? adjOtVal.toFixed(2) : '0.00'}</td>
+      <td class="num otTotalHrs">${totalOt.toFixed(2)}</td>
+      <td class="num otPay">${otPay.toFixed(2)}</td>
+    `;
+  };
+  const updateOvertimeRowDisplay = (row, empId) => {
+    if (!row || !empId) return;
+    const rate = Number((storedEmployees[empId]?.hourlyRate) ?? (payrollRates[empId] ?? 0));
+    const otVal = Number(otHours[empId] ?? 0);
+    const adjOtVal = Number(adjOtHrs[empId] ?? 0);
+    const totalOt = otVal + adjOtVal;
+    const otPay = +(totalOt * rate * getOvertimeMultiplier()).toFixed(2);
+    const totalCell = row.querySelector('.otTotalHrs');
+    const payCell = row.querySelector('.otPay');
+    const adjCell = row.querySelector('.adjOtDisplay');
+    if (adjCell) adjCell.textContent = adjOtVal ? adjOtVal.toFixed(2) : '0.00';
+    if (totalCell) totalCell.textContent = totalOt.toFixed(2);
+    if (payCell) payCell.textContent = otPay.toFixed(2);
+  };
+  const handleOvertimeInput = (input, finalize) => {
+    const empId = input.getAttribute('data-id');
+    if (!empId) return;
+    const rawStr = String(input.value || '').trim();
+    if (!rawStr) {
+      delete otOverrides[empId];
+      otHours[empId] = getComputedOtHoursForEmployee(empId);
+    } else {
+      const raw = parseFloat(rawStr);
+      if (!Number.isFinite(raw)) return;
+      const rounded = roundToCents(Math.max(0, raw));
+      otOverrides[empId] = rounded;
+      otHours[empId] = rounded;
+      if (finalize) input.value = rounded.toFixed(2);
+    }
+    persistCurrentOtOverrides();
+    try { localStorage.setItem(LS_OT_HRS, JSON.stringify(otHours)); } catch(_){}
+    updatePayrollRowOvertime(empId);
+    const row = input.closest('tr');
+    updateOvertimeRowDisplay(row, empId);
+  };
+
+  tables.forEach(table => {
+    const tbody = table.querySelector('tbody');
+    if (!tbody) return;
+    tbody.innerHTML = '';
+    employees.forEach(emp => {
+      const tr = document.createElement('tr');
+      tr.innerHTML = buildRowHtml(emp);
+      tbody.appendChild(tr);
+    });
+    tbody.querySelectorAll('.otHoursInput').forEach(input => {
+      input.addEventListener('input', () => handleOvertimeInput(input, false));
+      input.addEventListener('change', () => {
+        handleOvertimeInput(input, true);
+        renderOvertimeTables();
+      });
+      input.addEventListener('blur', () => {
+        handleOvertimeInput(input, true);
+        renderOvertimeTables();
+      });
+    });
+  });
+}
+
+function bindOvertimeControls(){
+  const recalcOvertimeBtn = document.getElementById('recalculateOvertimeBtn');
+  if (recalcOvertimeBtn && !recalcOvertimeBtn.__bound) {
+    recalcOvertimeBtn.addEventListener('click', () => {
+      try { if (typeof calculatePayrollFromRecords === 'function') calculatePayrollFromRecords(); } catch (e) {}
+      try { if (typeof renderOvertimeTables === 'function') renderOvertimeTables(); } catch (e) {}
+    });
+    recalcOvertimeBtn.__bound = true;
+  }
+}
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', bindOvertimeControls, { once: true });
+} else {
+  bindOvertimeControls();
 }
 
 
@@ -6603,19 +6796,17 @@ function attachRowEvents(){
   tbody.querySelectorAll('tr').forEach(row=>{
     const id = row.cells[0].textContent.trim();
     const regI = row.querySelector('.regHrs');
-    const otI = row.querySelector('.otHrs');
     const rateI = row.querySelector('.rate');
     const lSSSI = row.querySelector('.loanSSS');
     const lPII = row.querySelector('.loanPI');
     const vI = row.querySelector('.vale');
     const vWI = row.querySelector('.valeWed');
-    const watchedInputs = [regI, otI, rateI, lSSSI, lPII, vI];
+    const watchedInputs = [regI, rateI, lSSSI, lPII, vI];
     if (vWI && typeof vWI.value !== 'undefined') watchedInputs.push(vWI);
     watchedInputs.forEach(inp=>{
       if (!inp || typeof inp.addEventListener !== 'function') return;
       inp.addEventListener('input', ()=>{
         regHours[id] = +(Number(regI.value)||0).toFixed(2);
-        otHours[id] = +(Number(otI.value)||0).toFixed(2);
         payrollRates[id] = +(Number(rateI.value)||0).toFixed(2);
         loanSSS[id] = +(Number(lSSSI.value)||0).toFixed(2);
         loanPI[id] = +(Number(lPII.value)||0).toFixed(2);
@@ -6996,12 +7187,13 @@ function calculateRow(tr){  const readNum = sel => { const el = tr.querySelector
 
   const id = tr.cells[0].textContent.trim();
   const reg = Number(tr.querySelector('.regHrs').value)||0;
-  const ot = Number(tr.querySelector('.otHrs').value)||0;
-  // Adjustment hours from the adjHrs object (if any)
-  const adjHours = Number(adjHrs[id] || 0);
-  // Combined OT hours including adjustments
-  const otTotal = ot + adjHours;
-  const totalHrs = reg + ot + adjHours;
+  const ot = Number(otHours && Object.prototype.hasOwnProperty.call(otHours, id) ? otHours[id] : 0) || 0;
+  // Adjustment hours (regular + OT) from the adjustment maps (if any)
+  const adjRegHours = Number(adjRegHrs[id] || 0);
+  const adjOtHours = Number(adjOtHrs[id] || 0);
+  const totalRegHrs = reg + adjRegHours;
+  const totalOtHrs = ot + adjOtHours;
+  const totalHrs = totalRegHrs + totalOtHrs;
   const rate = Number(tr.querySelector('.rate').value)||0;
   const getMappedInputValue = (selector, map) => {
     const input = tr.querySelector(selector);
@@ -7038,10 +7230,11 @@ function calculateRow(tr){  const readNum = sel => { const el = tr.querySelector
   // Bantay allowance (treated as positive allowance).  Parse numeric value from bantay input.
   const bVal = parseFloat((tr.querySelector('.bantay')?.value || '').trim()) || 0;
 
-  const regPay = +(reg * rate).toFixed(2);
+  const regPay = +(totalRegHrs * rate).toFixed(2);
   tr.querySelector('.totalHrs').textContent = totalHrs.toFixed(2);
-  const otPay = +(otTotal * rate * getOvertimeMultiplier()).toFixed(2);
+  const otPay = +(totalOtHrs * rate * getOvertimeMultiplier()).toFixed(2);
   const gross = +(regPay + otPay + additionalIncome + bVal).toFixed(2);
+  try { tr.dataset.otPay = otPay.toFixed(2); } catch (_) {}
   // Compute contributions using dynamic tables (employee share).  Determine the
   // appropriate rate based on the monthly income and multiply by regular pay.
   const monthly = rate * 8 * 24;
@@ -7050,7 +7243,7 @@ function calculateRow(tr){  const readNum = sel => { const el = tr.querySelector
   // Check per-employee contribution deduction flags; default to true if not set
   const flags = contribFlags[id] || {};
   const div = Number(divisor) || 1;
-  const hasCompensation = (reg > 0) || (otTotal > 0) || (additionalIncome > 0) || (bVal > 0);
+  const hasCompensation = (totalRegHrs > 0) || (totalOtHrs > 0) || (additionalIncome > 0) || (bVal > 0);
   const pagibig = (hasCompensation && flags.pagibig !== false ? +((regPay * piRate)).toFixed(2) : 0);
   const philhealth = (hasCompensation && flags.philhealth !== false ? +((regPay * phRate)).toFixed(2) : 0);
   const sssFull = hasCompensation ? sssShareByMonthly(monthly) : 0;
@@ -7076,7 +7269,7 @@ function calculateRow(tr){  const readNum = sel => { const el = tr.querySelector
   const net = gross - total;
 
   w('.regPay', regPay);
-  w('.otPay', otPay);
+  w('.totalOtPay', otPay);
   w('.grossPay', gross);
   const applyDeductionCell = (selector, key) => {
     const applied = roundToCents(deductionEffective[key] || 0);
@@ -7150,7 +7343,8 @@ function calculateRow(tr){  const readNum = sel => { const el = tr.querySelector
     tr.dataset.additionalIncomeTotal = additionalIncome ? additionalIncome.toFixed(2) : '0.00';
   } catch (_) {}
   // Update the displayed adjustment hours cell if present
-  const adjHrsCell = tr.querySelector('.adjHrs'); if (adjHrsCell) { adjHrsCell.textContent = (adjHours===0 ? '-' : adjHours.toFixed(2)); }
+  const adjRegCell = tr.querySelector('.adjRegHrs'); if (adjRegCell) { adjRegCell.textContent = (adjRegHours===0 ? '-' : adjRegHours.toFixed(2)); }
+  const adjOtCell = tr.querySelector('.adjOtHrs'); if (adjOtCell) { adjOtCell.textContent = (adjOtHours===0 ? '-' : adjOtHours.toFixed(2)); }
   w('.netPay', net);
 }
 
@@ -8099,19 +8293,21 @@ function renderAdjustmentHoursTable(){
   getEmployeeList().forEach(emp => {
     const id = emp.id;
     const name = emp.name;
-    const hrs = adjHrs[id] !== undefined ? adjHrs[id] : '';
+    const regHrsVal = adjRegHrs[id] !== undefined ? adjRegHrs[id] : '';
+    const otHrsVal = adjOtHrs[id] !== undefined ? adjOtHrs[id] : '';
     const tr = document.createElement('tr');
     tr.innerHTML = `
       <td>${id}</td>
       <td class="wrap">${name}</td>
-      <td><input type="number" min="0" step="0.01" class="adjHrsInput" data-id="${id}" value="${hrs}" /></td>
+      <td><input type="number" min="0" step="0.01" class="adjRegHrsInput" data-id="${id}" value="${regHrsVal}" /></td>
+      <td><input type="number" min="0" step="0.01" class="adjOtHrsInput" data-id="${id}" value="${otHrsVal}" /></td>
     `;
     tbody.appendChild(tr);
   });
-  const formatAdjustmentHoursInput = (input) => {
+  const formatAdjustmentInput = (input, map) => {
     const empId = input.getAttribute('data-id');
     if (!empId) return;
-    const stored = adjHrs[empId];
+    const stored = map[empId];
     const num = Number(stored);
     if (Number.isFinite(num)) {
       const rounded = roundToCents(num);
@@ -8126,70 +8322,63 @@ function renderAdjustmentHoursTable(){
     }
     input.value = '';
   };
-  const stageAdjustmentHoursInput = (input) => {
+  const stageAdjustmentInput = (input, map) => {
     const empId = input.getAttribute('data-id');
     if (!empId) return;
     const raw = parseFloat(input.value);
     if (Number.isFinite(raw)) {
       const rounded = roundToCents(Math.max(0, raw));
       if (rounded !== 0) {
-        adjHrs[empId] = rounded;
+        map[empId] = rounded;
       } else {
-        delete adjHrs[empId];
+        delete map[empId];
       }
     } else {
-      delete adjHrs[empId];
+      delete map[empId];
     }
   };
-  const commitAdjustmentHoursInput = (input) => {
-    const empId = input.getAttribute('data-id');
-    if (!empId) return;
-    const raw = parseFloat(input.value);
-    if (Number.isFinite(raw)) {
-      const rounded = roundToCents(Math.max(0, raw));
-      if (rounded !== 0) {
-        adjHrs[empId] = rounded;
-      } else {
-        delete adjHrs[empId];
-      }
-    } else {
-      delete adjHrs[empId];
-    }
+  const commitAdjustmentInput = (input, map) => {
+    stageAdjustmentInput(input, map);
     adjustmentHoursPersist.flush();
     otherDeductionsRefresh.flush();
   };
-  tbody.querySelectorAll('.adjHrsInput').forEach(inp => {
-    inp.addEventListener('focus', () => { adjustmentHoursFocusCount += 1; });
-    inp.addEventListener('blur', () => {
-      adjustmentHoursFocusCount = Math.max(0, adjustmentHoursFocusCount - 1);
-      commitAdjustmentHoursInput(inp);
-      formatAdjustmentHoursInput(inp);
-      otherDeductionsRefresh.flush();
-      setTimeout(() => {
-        if (adjustmentHoursFocusCount === 0 && adjustmentHoursRenderPending) queueOtherDeductionsRerender();
-        if (adjustmentHoursFocusCount === 0 && window.__otherDeductionsHydratePending) {
-          window.__otherDeductionsHydratePending = false;
-          try {
-            if (typeof window.queueHydrateRerender === 'function') window.queueHydrateRerender();
-          } catch (_) {}
-        }
-      }, 0);
+  const bindAdjustmentInputs = (selector, map) => {
+    tbody.querySelectorAll(selector).forEach(inp => {
+      inp.addEventListener('focus', () => { adjustmentHoursFocusCount += 1; });
+      inp.addEventListener('blur', () => {
+        adjustmentHoursFocusCount = Math.max(0, adjustmentHoursFocusCount - 1);
+        commitAdjustmentInput(inp, map);
+        formatAdjustmentInput(inp, map);
+        otherDeductionsRefresh.flush();
+        setTimeout(() => {
+          if (adjustmentHoursFocusCount === 0 && adjustmentHoursRenderPending) queueOtherDeductionsRerender();
+          if (adjustmentHoursFocusCount === 0 && window.__otherDeductionsHydratePending) {
+            window.__otherDeductionsHydratePending = false;
+            try {
+              if (typeof window.queueHydrateRerender === 'function') window.queueHydrateRerender();
+            } catch (_) {}
+          }
+        }, 0);
+      });
+      inp.addEventListener('input', () => {
+        stageAdjustmentInput(inp, map);
+        adjustmentHoursPersist.schedule();
+        otherDeductionsRefresh.schedule();
+      });
+      inp.addEventListener('change', () => { commitAdjustmentInput(inp, map); formatAdjustmentInput(inp, map); });
+      formatAdjustmentInput(inp, map);
     });
-    inp.addEventListener('input', () => {
-      stageAdjustmentHoursInput(inp);
-      adjustmentHoursPersist.schedule();
-      otherDeductionsRefresh.schedule();
-    });
-    inp.addEventListener('change', () => { commitAdjustmentHoursInput(inp); formatAdjustmentHoursInput(inp); });
-    formatAdjustmentHoursInput(inp);
-  });
+  };
+  bindAdjustmentInputs('.adjRegHrsInput', adjRegHrs);
+  bindAdjustmentInputs('.adjOtHrsInput', adjOtHrs);
 }
 
 function otherDeductionsBackupPayload(){
   return {
     otherDeductionsDetails: isPlainObject(allOtherDeductionsDetails) ? allOtherDeductionsDetails : {},
     otherDeductionsTotals: isPlainObject(allOtherDeductionsTotals) ? allOtherDeductionsTotals : {},
-    adjustmentHours: isPlainObject(allAdjHrs) ? allAdjHrs : {},
+    adjustmentRegHours: isPlainObject(allAdjRegHrs) ? allAdjRegHrs : {},
+    adjustmentOtHours: isPlainObject(allAdjOtHrs) ? allAdjOtHrs : {},
     currentPeriod: currentPeriodKey
   };
 }
@@ -8221,10 +8410,15 @@ async function restoreOtherDeductionsFromPrompt(){
     const parsed = JSON.parse(text);
     if (isPlainObject(parsed.otherDeductionsDetails)) allOtherDeductionsDetails = parsed.otherDeductionsDetails;
     if (isPlainObject(parsed.otherDeductionsTotals)) allOtherDeductionsTotals = parsed.otherDeductionsTotals;
-    if (isPlainObject(parsed.adjustmentHours)) allAdjHrs = parsed.adjustmentHours;
+    if (isPlainObject(parsed.adjustmentRegHours)) allAdjRegHrs = parsed.adjustmentRegHours;
+    if (isPlainObject(parsed.adjustmentOtHours)) allAdjOtHrs = parsed.adjustmentOtHours;
+    if (!isPlainObject(parsed.adjustmentRegHours) && isPlainObject(parsed.adjustmentHours)) {
+      allAdjOtHrs = parsed.adjustmentHours;
+    }
     otherDeductionsDetails = ensurePeriodData(allOtherDeductionsDetails, currentPeriodKey);
     otherDeductionsTotal = ensurePeriodData(allOtherDeductionsTotals, currentPeriodKey);
-    adjHrs = allAdjHrs[currentPeriodKey] || {};
+    adjRegHrs = allAdjRegHrs[currentPeriodKey] || {};
+    adjOtHrs = allAdjOtHrs[currentPeriodKey] || {};
     ensureOtherDeductionsDetailsMap();
     rebuildOtherDeductionsTotals();
     persistCurrentOtherDeductions();
@@ -8310,15 +8504,18 @@ function updateContributionNote() {
 }
   document.getElementById('downloadPayrollCSV').addEventListener('click', ()=>{
   // Include Additional Income column in payroll CSV export
-  const header = ['Week Start','Week End','OT Multiplier','Divisor','ID','Name','Regular Hours','OT Hours','Hourly Rate','Regular Pay','OT Pay','Additional Income','Gross Pay','Pag-IBIG','PhilHealth','SSS','SSS Loan','Pag-IBIG Loan','Account','Wed Vale','Total Deductions','Net Pay'];
+  const header = ['Week Start','Week End','OT Multiplier','Divisor','ID','Name','Regular Hours','OT Hours','Adj Reg Hrs','Adj OT Hrs','Total Hours','Hourly Rate','Regular Pay','OT Pay','Additional Income','Gross Pay','Pag-IBIG','PhilHealth','SSS','SSS Loan','Pag-IBIG Loan','Account','Wed Vale','Total Deductions','Net Pay'];
   const rows=[header];
   const ws = weekStartEl.value||''; const we = weekEndEl.value||''; const otm = String(getOvertimeMultiplier()); const div = String(divisorEl.value||'1');
   document.querySelectorAll('#payrollTable tbody tr').forEach(tr=>{
     const tds = tr.querySelectorAll('td');
     const id = tds[0].textContent.trim(); const name = tds[1].textContent.trim();
-    const regI = tr.querySelector('.regHrs'); const otI = tr.querySelector('.otHrs'); const rateI = tr.querySelector('.rate');
+    const regI = tr.querySelector('.regHrs'); const rateI = tr.querySelector('.rate');
+    const adjReg = tr.querySelector('.adjRegHrs')?.textContent.trim() || '';
+    const adjOt = adjOtHrs && Object.prototype.hasOwnProperty.call(adjOtHrs, id) ? Number(adjOtHrs[id]).toFixed(2) : '0.00';
+    const totalHrs = tr.querySelector('.totalHrs')?.textContent.trim() || '';
     const regPay = tr.querySelector('.regPay').textContent.trim();
-    const otPay = tr.querySelector('.otPay').textContent.trim();
+    const otPay = tr.querySelector('.totalOtPay')?.textContent.trim() || '';
     const adj   = tr.querySelector('.adjAmt') ? tr.querySelector('.adjAmt').textContent.trim() : '';
     const grossPay = tr.querySelector('.grossPay').textContent.trim();
     const pagibig = tr.querySelector('.pagibig').textContent.trim();
@@ -8328,7 +8525,8 @@ function updateContributionNote() {
     const v = tr.querySelector('.vale').value; const vW = tr.querySelector('.valeWed').value;
     const total = tr.querySelector('.totalDed').textContent.trim();
     const net   = tr.querySelector('.netPay').textContent.trim();
-    rows.push([ws,we,otm,div,id,name,regI.value,otI.value,rateI.value,regPay,otPay,adj,grossPay,pagibig,philhealth,sss,lSSS,lPI,v,vW,total,net]);
+    const otHoursValue = otHours && Object.prototype.hasOwnProperty.call(otHours, id) ? Number(otHours[id]).toFixed(2) : '0.00';
+    rows.push([ws,we,otm,div,id,name,regI.value,otHoursValue,adjReg,adjOt,totalHrs,rateI.value,regPay,otPay,adj,grossPay,pagibig,philhealth,sss,lSSS,lPI,v,vW,total,net]);
   });
   const csv = rows.map(r=>r.map(s=>{
     s = String(s ?? '');
@@ -8954,7 +9152,8 @@ document.addEventListener('DOMContentLoaded', () => {
       const name = row && row.name != null ? String(row.name) : '';
       const rate = formatInputValue(row?.rate, 2);
       const regHrs = formatInputValue(row?.regHrs, 2);
-      const otHrs = formatInputValue(row?.otHrs, 2);
+      const adjRegHrs = formatInputValue(row?.adjRegHrs, 2);
+      const adjOtHrs = formatInputValue(row?.adjOtHrs, 2);
       const loanSSSVal = formatInputValue(row?.loanSSS, 2);
       const loanPIVal = formatInputValue(row?.loanPI, 2);
       const valeVal = formatInputValue(row?.vale, 2);
@@ -8966,11 +9165,9 @@ document.addEventListener('DOMContentLoaded', () => {
         <td class="wrap">${name}</td>
         <td><input class="cell rate" name="payroll_rate_${empId}" type="number" step="0.01" value="${rate}" disabled></td>
         <td><input class="cell regHrs" name="payroll_reg_hours_${empId}" type="number" step="0.01" value="${regHrs}" disabled></td>
-        <td><input class="cell otHrs" name="payroll_ot_hours_${empId}" type="number" step="0.01" value="${otHrs}" disabled></td>
-        <td class="adjHrs num">0.00</td>
+        <td class="adjRegHrs num">${adjRegHrs || '0.00'}</td>
         <td class="totalHrs num">0.00</td>
         <td class="regPay num">0.00</td>
-        <td class="otPay num">0.00</td>
         <td class="adjAmt num">0.00</td>
         <td class="grossPay num">0.00</td>
         <td class="pagibig num">0.00</td>
@@ -8981,6 +9178,7 @@ document.addEventListener('DOMContentLoaded', () => {
         <td><input class="cell vale" name="payroll_vale_${empId}" type="number" step="0.01" value="${valeVal}"></td>
         <td><input class="cell valeWed" name="payroll_vale_wed_${empId}" type="number" step="0.01" value="${valeWedVal}"></td>
         <td class="totalDed num">0.00</td>
+        <td class="totalOtPay num">0.00</td>
         <td class="netPay num">0.00</td>
         <td><button type="button" class="payslipBtn">Payslip</button></td>`;
       return tr;
@@ -9037,23 +9235,28 @@ document.addEventListener('DOMContentLoaded', () => {
 
       applyInput('.rate', data.rate);
       applyInput('.regHrs', data.regHrs);
-      applyInput('.otHrs', data.otHrs);
 
-      const adjHrsCell = tr.querySelector('.adjHrs');
-      if (adjHrsCell) {
-        const adjHoursNum = Number(data.adjHrs);
-        if (!Number.isFinite(adjHoursNum)) {
-          adjHrsCell.textContent = '-';
-        } else if (Math.abs(adjHoursNum) < 0.0005) {
-          adjHrsCell.textContent = '-';
+      const adjRegCell = tr.querySelector('.adjRegHrs');
+      const adjOtCell = tr.querySelector('.adjOtHrs');
+      const adjRegNum = Number(data.adjRegHrs);
+      const adjOtNum = Number((typeof data.adjOtHrs !== 'undefined') ? data.adjOtHrs : data.adjHrs);
+      if (adjRegCell) {
+        if (!Number.isFinite(adjRegNum) || Math.abs(adjRegNum) < 0.0005) {
+          adjRegCell.textContent = '-';
         } else {
-          adjHrsCell.textContent = adjHoursNum.toFixed(2);
+          adjRegCell.textContent = adjRegNum.toFixed(2);
+        }
+      }
+      if (adjOtCell) {
+        if (!Number.isFinite(adjOtNum) || Math.abs(adjOtNum) < 0.0005) {
+          adjOtCell.textContent = '-';
+        } else {
+          adjOtCell.textContent = adjOtNum.toFixed(2);
         }
       }
 
       applyText('.totalHrs', data.totalHrs, { decimals: 2, keepZero: true });
       applyText('.regPay', data.regPay);
-      applyText('.otPay', data.otPay);
       applyText('.adjAmt', data.adjAmt);
       applyText('.grossPay', data.grossPay);
       applyText('.pagibig', data.pagibig);
@@ -9064,6 +9267,7 @@ document.addEventListener('DOMContentLoaded', () => {
       applyInput('.vale', data.vale);
       applyInput('.valeWed', data.valeWed);
       applyText('.totalDed', data.totalDed);
+      applyText('.totalOtPay', data.otPay);
       applyText('.netPay', data.netPay);
 
       const additionalIncome = Number(data.adjAmt) || 0;
@@ -9078,7 +9282,8 @@ document.addEventListener('DOMContentLoaded', () => {
       if (typeof payrollRates === 'object' && payrollRates) payrollRates[empId] = Number(data.rate) || 0;
       if (typeof regHours === 'object' && regHours) regHours[empId] = Number(data.regHrs) || 0;
       if (typeof otHours === 'object' && otHours) otHours[empId] = Number(data.otHrs) || 0;
-      if (typeof adjHrs === 'object' && adjHrs) adjHrs[empId] = Number(data.adjHrs) || 0;
+      if (typeof adjRegHrs === 'object' && adjRegHrs) adjRegHrs[empId] = Number(data.adjRegHrs) || 0;
+      if (typeof adjOtHrs === 'object' && adjOtHrs) adjOtHrs[empId] = Number((typeof data.adjOtHrs !== 'undefined') ? data.adjOtHrs : data.adjHrs) || 0;
       if (typeof additionalIncomeTotal === 'object' && additionalIncomeTotal) {
         additionalIncomeTotal[empId] = Number(data.adjAmt) || 0;
       }
@@ -9497,27 +9702,28 @@ document.addEventListener('DOMContentLoaded', () => {
         return isNaN(num2) ? 0 : num2;
     }
       // Column index fallbacks aligned with current payrollTable structure
-      // 0:ID, 1:Name, 2:Rate, 3:RegHrs, 4:OTHrs, 5:AdjHrs, 6:TotalHrs, 7:RegPay, 8:OTPay, 9:Additional Income,
-      // 10:Gross, 11:Pag-IBIG, 12:PhilHealth, 13:SSS, 14:SSS Loan, 15:Pag-IBIG Loan,
-      // 16:Vale, 17:Wed Vale, 18:Total Ded, 19:Net Pay, 20:Payslip
+      // 0:ID, 1:Name, 2:Rate, 3:RegHrs, 4:AdjRegHrs, 5:TotalHrs, 6:RegPay, 7:Additional Income,
+      // 8:Gross, 9:Pag-IBIG, 10:PhilHealth, 11:SSS, 12:SSS Loan, 13:Pag-IBIG Loan,
+      // 14:Vale, 15:Wed Vale, 16:Total Ded, 17:Total OT Pay, 18:Net Pay, 19:Payslip
       data.rate = readNum('.rate', 2);
       data.regHrs = readNum('.regHrs', 3);
-      data.otHrs = readNum('.otHrs', 4);
-      data.adjHrs = readNum('.adjHrs', 5);
-      data.totalHrs = readNum('.totalHrs', 6);
-      data.regPay = readNum('.regPay', 7);
-      data.otPay = readNum('.otPay', 8);
-      data.adjAmt = readNum('.adjAmt', 9);
-      data.grossPay = readNum('.grossPay', 10);
-      data.pagibig = readNum('.pagibig', 11);
-      data.philhealth = readNum('.philhealth', 12);
-      data.sss = readNum('.sss', 13);
-      data.loanSSS = readNum('.loanSSS', 14);
-      data.loanPI = readNum('.loanPI', 15);
-      data.vale = readNum('.vale', 16);
-      data.valeWed = readNum('.valeWed', 17);
-      data.totalDed = readNum('.totalDed', 18);
-      data.netPay = readNum('.netPay', 19);
+      data.adjRegHrs = readNum('.adjRegHrs', 4);
+      data.adjOtHrs = Number(adjOtHrs && Object.prototype.hasOwnProperty.call(adjOtHrs, data.id) ? adjOtHrs[data.id] : 0);
+      data.otHrs = Number(otHours && Object.prototype.hasOwnProperty.call(otHours, data.id) ? otHours[data.id] : 0);
+      data.totalHrs = readNum('.totalHrs', 5);
+      data.regPay = readNum('.regPay', 6);
+      data.adjAmt = readNum('.adjAmt', 7);
+      data.grossPay = readNum('.grossPay', 8);
+      data.pagibig = readNum('.pagibig', 9);
+      data.philhealth = readNum('.philhealth', 10);
+      data.sss = readNum('.sss', 11);
+      data.loanSSS = readNum('.loanSSS', 12);
+      data.loanPI = readNum('.loanPI', 13);
+      data.vale = readNum('.vale', 14);
+      data.valeWed = readNum('.valeWed', 15);
+      data.totalDed = readNum('.totalDed', 16);
+      data.otPay = readNum('.totalOtPay', 17);
+      data.netPay = readNum('.netPay', 18);
       try {
         let otherDeductionTotal = row && row.dataset ? row.dataset.otherDeductionsTotal : null;
         if (otherDeductionTotal != null && otherDeductionTotal !== '') {
@@ -9929,7 +10135,7 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   function buildPayrollSectionFromSnapshot(snap) {
-    const headers = ['ID','Name','Hourly Rate','Regular Hours','OT Hours','Adjustment Hrs','Total Hours','Regular Pay','OT Pay','Additional Income','Gross Pay','Pag-IBIG','PhilHealth','SSS','SSS Loan','Pag-IBIG Loan','Account','Wed Vale','Total Deductions','Net Pay','Other Deductions'];
+    const headers = ['ID','Name','Hourly Rate','Regular Hours','OT Hours','Adj Reg Hrs','Adj OT Hrs','Total Hours','Regular Pay','Additional Income','Gross Pay','Pag-IBIG','PhilHealth','SSS','SSS Loan','Pag-IBIG Loan','Account','Wed Vale','Total Deductions','Total OT Pay','Net Pay','Other Deductions'];
     const numericCols = headers.map((_, idx) => idx).filter(idx => idx > 1);
     const rows = Array.isArray(snap?.rows) ? snap.rows.map((row) => {
       return [
@@ -9938,10 +10144,10 @@ document.addEventListener('DOMContentLoaded', () => {
         formatNumber(row.rate),
         formatNumber(row.regHrs),
         formatNumber(row.otHrs),
-        formatNumber(row.adjHrs),
+        formatNumber(typeof row.adjRegHrs !== 'undefined' ? row.adjRegHrs : 0),
+        formatNumber(typeof row.adjOtHrs !== 'undefined' ? row.adjOtHrs : row.adjHrs),
         formatNumber(row.totalHrs),
         formatNumber(row.regPay),
-        formatNumber(row.otPay),
         formatNumber(row.adjAmt),
         formatNumber(row.grossPay),
         formatNumber(row.pagibig),
@@ -9952,22 +10158,26 @@ document.addEventListener('DOMContentLoaded', () => {
         formatNumber(row.vale),
         formatNumber(row.valeWed),
         formatNumber(row.totalDed),
+        formatNumber(row.otPay),
         formatNumber(row.netPay),
         formatNumber(typeof row.otherDeductionsTotal !== 'undefined' ? row.otherDeductionsTotal : row.adjustmentDeduction)
       ];
     }) : [];
     const totals = snap?.totals || {};
-    const footer = headers.map((label, idx) => {
-      if (idx === 0) return 'Totals';
-      if (idx === 1) return '';
-      const keyMap = ['rate','regHrs','otHrs','adjHrs','totalHrs','regPay','otPay','adjAmt','grossPay','pagibig','philhealth','sss','loanSSS','loanPI','vale','valeWed','totalDed','netPay','otherDeductionsTotal'];
-      const key = keyMap[idx - 2];
-      let val = key ? totals[key] : null;
-      if (typeof val === 'undefined' && key === 'otherDeductionsTotal') {
-        val = totals.adjustments;
-      }
-      return formatNumber(val);
-    });
+      const footer = headers.map((label, idx) => {
+        if (idx === 0) return 'Totals';
+        if (idx === 1) return '';
+        const keyMap = ['rate','regHrs','otHrs','adjRegHrs','adjOtHrs','totalHrs','regPay','adjAmt','grossPay','pagibig','philhealth','sss','loanSSS','loanPI','vale','valeWed','totalDed','totalOtPay','netPay','otherDeductionsTotal'];
+        const key = keyMap[idx - 2];
+        let val = key ? totals[key] : null;
+        if (typeof val === 'undefined' && key === 'otherDeductionsTotal') {
+          val = totals.adjustments;
+        }
+        if (typeof val === 'undefined' && key === 'totalOtPay') {
+          val = totals.otPay;
+        }
+        return formatNumber(val);
+      });
     const range = formatDateRangeInline(snap?.startDate, snap?.endDate);
     const subtitle = range ? `<div class="report-subtitle">${escapeHtml(range)}</div>` : '';
     const table = buildTableHtml(headers, rows, { numericCols, footerRow: footer });
@@ -10850,10 +11060,10 @@ rows += `<tr class="allowance">
       const endDate = document.getElementById('weekEnd')?.value || '';
       const title = (startDate && endDate) ? `Payroll Report (${startDate} to ${endDate})` : 'Payroll Report';
       const header = [
-        'ID','Name','Hourly Rate','Regular Hours','OT Hours','Adjustment Hrs','Total Hours',
-        'Regular Pay','OT Pay','Additional Income','Gross Pay',
+        'ID','Name','Hourly Rate','Regular Hours','OT Hours','Adj Reg Hrs','Adj OT Hrs','Total Hours',
+        'Regular Pay','Additional Income','Gross Pay',
         'Pag-IBIG','PhilHealth','SSS','SSS Loan','Pag-IBIG Loan','Account','Wed Vale',
-        'Total Deductions','Net Pay'
+        'Total Deductions','Total OT Pay','Net Pay'
       ];
 
       let snapshotOverride = null;
@@ -10920,21 +11130,22 @@ rows += `<tr class="allowance">
 
           const aoa = [[title], [''], header.slice()];
           const totals = {
-            regHrs:0, otHrs:0, adjHrs:0, totalHrs:0,
-            regPay:0, otPay:0, adjAmt:0, grossPay:0,
+            regHrs:0, otHrs:0, adjRegHrs:0, adjOtHrs:0, totalHrs:0,
+            regPay:0, adjAmt:0, grossPay:0,
             pagibig:0, philhealth:0, sss:0,
             loanSSS:0, loanPI:0, vale:0, valeWed:0,
-            totalDed:0, netPay:0
+            totalDed:0, totalOtPay:0, netPay:0
           };
 
           const rows = Array.isArray(snap.rows) ? snap.rows : [];
           rows.forEach(row => {
             const regHrsNum = toNum(row.regHrs);
             const otHrsNum = toNum(row.otHrs);
-            const adjHrsNum = toNum(row.adjHrs);
+            const adjRegHrsNum = toNum(row.adjRegHrs);
+            const adjOtHrsNum = toNum((typeof row.adjOtHrs !== 'undefined') ? row.adjOtHrs : row.adjHrs);
             const totalHrsNum = toNum(row.totalHrs);
             const regPayNum = toNum(row.regPay);
-            const otPayNum = toNum(row.otPay);
+            const totalOtPayNum = toNum(row.otPay);
             const adjAmtNum = toNum(row.adjAmt);
             const grossNum = toNum(row.grossPay);
             const pagibigNum = toNum(row.pagibig);
@@ -10949,10 +11160,11 @@ rows += `<tr class="allowance">
 
             totals.regHrs += regHrsNum;
             totals.otHrs += otHrsNum;
-            totals.adjHrs += adjHrsNum;
+            totals.adjRegHrs += adjRegHrsNum;
+            totals.adjOtHrs += adjOtHrsNum;
             totals.totalHrs += totalHrsNum;
             totals.regPay += regPayNum;
-            totals.otPay += otPayNum;
+            totals.totalOtPay += totalOtPayNum;
             totals.adjAmt += adjAmtNum;
             totals.grossPay += grossNum;
             totals.pagibig += pagibigNum;
@@ -10971,10 +11183,10 @@ rows += `<tr class="allowance">
               fmt(row.rate),
               fmt(regHrsNum),
               fmt(otHrsNum),
-              fmt(adjHrsNum),
+              fmt(adjRegHrsNum),
+              fmt(adjOtHrsNum),
               fmt(totalHrsNum),
               fmt(regPayNum),
-              fmt(otPayNum),
               fmt(adjAmtNum),
               fmt(grossNum),
               fmt(pagibigNum),
@@ -10985,6 +11197,7 @@ rows += `<tr class="allowance">
               fmt(valeNum),
               fmt(valeWedNum),
               fmt(totalDedNum),
+              fmt(row.otPay),
               fmt(netPayNum)
             ]);
           });
@@ -10994,10 +11207,10 @@ rows += `<tr class="allowance">
             const keyMap = {
               regHrs: 'regHrs',
               otHrs: 'otHrs',
-              adjHrs: 'adjHrs',
+              adjRegHrs: 'adjRegHrs',
+              adjOtHrs: 'adjOtHrs',
               totalHrs: 'totalHrs',
               regPay: 'regPay',
-              otPay: 'otPay',
               adjAmt: 'adjAmt',
               grossPay: 'grossPay',
               pagibig: 'pagibig',
@@ -11008,6 +11221,7 @@ rows += `<tr class="allowance">
               vale: 'vale',
               valeWed: 'valeWed',
               totalDed: 'totalDed',
+              totalOtPay: 'totalOtPay',
               netPay: 'netPay'
             };
             Object.keys(keyMap).forEach(destKey => {
@@ -11019,6 +11233,14 @@ rows += `<tr class="allowance">
                 }
               }
             });
+            if (typeof storedTotals.otPay !== 'undefined' && typeof storedTotals.totalOtPay === 'undefined') {
+              const legacyOt = Number(storedTotals.otPay);
+              if (!isNaN(legacyOt) && isFinite(legacyOt)) totals.totalOtPay = legacyOt;
+            }
+            if (typeof storedTotals.adjHrs !== 'undefined' && typeof storedTotals.adjOtHrs === 'undefined') {
+              const legacyAdj = Number(storedTotals.adjHrs);
+              if (!isNaN(legacyAdj) && isFinite(legacyAdj)) totals.adjOtHrs = legacyAdj;
+            }
           }
 
           if (aoa.length > 3) {
@@ -11027,10 +11249,10 @@ rows += `<tr class="allowance">
               '',
               fmt(totals.regHrs),
               fmt(totals.otHrs),
-              fmt(totals.adjHrs),
+              fmt(totals.adjRegHrs),
+              fmt(totals.adjOtHrs),
               fmt(totals.totalHrs),
               fmt(totals.regPay),
-              fmt(totals.otPay),
               fmt(totals.adjAmt),
               fmt(totals.grossPay),
               fmt(totals.pagibig),
@@ -11041,6 +11263,7 @@ rows += `<tr class="allowance">
               fmt(totals.vale),
               fmt(totals.valeWed),
               fmt(totals.totalDed),
+              fmt(totals.totalOtPay),
               fmt(totals.netPay)
             ]);
           }
@@ -11605,12 +11828,13 @@ rows += `<tr class="allowance">
         const id = emp.id;
         const rH = num(rHours[id]);
         const oH = (typeof otHours !== 'undefined' && otHours) ? num(otHours[id]) : 0;
-        const adjH = (typeof adjHrs !== 'undefined' && adjHrs) ? num(adjHrs[id]) : 0;
-        const totalHours = rH + oH + Math.abs(adjH);
+        const adjReg = (typeof adjRegHrs !== 'undefined' && adjRegHrs) ? num(adjRegHrs[id]) : 0;
+        const adjOt = (typeof adjOtHrs !== 'undefined' && adjOtHrs) ? num(adjOtHrs[id]) : 0;
+        const totalHours = rH + oH + Math.abs(adjReg) + Math.abs(adjOt);
         if (totalHours <= 0) return;
         const bucket = ensureBucket(se?.[id]?.company);
         const rate = num(se?.[id]?.hourlyRate ?? rates?.[id]);
-        const regPay = +(rH * rate).toFixed(2);
+        const regPay = +((rH + adjReg) * rate).toFixed(2);
         const monthly = rate * 8 * 24;
         const piRate = (typeof pagibigRateByMonthly==='function') ? pagibigRateByMonthly(monthly) : 0;
         const phRate = (typeof philhealthRateByMonthly==='function') ? philhealthRateByMonthly(monthly) : 0;
@@ -15101,6 +15325,25 @@ function computeHoursForDateRange(startDate, endDate) {
   }
   return { totalsReg, totalsOT };
 }
+function getPayrollDateRange(){
+  const start = (typeof weekStartEl !== 'undefined' && weekStartEl && weekStartEl.value) ? weekStartEl.value : (dtrStartEl ? dtrStartEl.value : '');
+  const end   = (typeof weekEndEl   !== 'undefined' && weekEndEl   && weekEndEl.value)   ? weekEndEl.value   : (dtrEndEl   ? dtrEndEl.value   : '');
+  return { start, end };
+}
+function applyOtOverridesToHours(){
+  if (!otOverrides || typeof otOverrides !== 'object') return;
+  Object.keys(otOverrides).forEach(id => {
+    const raw = Number(otOverrides[id]);
+    if (Number.isFinite(raw) && raw >= 0) {
+      otHours[id] = roundToCents(raw);
+    }
+  });
+}
+function getComputedOtHoursForEmployee(empId){
+  const { start, end } = getPayrollDateRange();
+  const { totalsOT } = computeHoursForDateRange(start, end);
+  return Number(totalsOT && totalsOT[empId] ? totalsOT[empId] : 0);
+}
 const dtrStartEl = document.getElementById('filterStart');
 const dtrEndEl = document.getElementById('filterEnd');
 
@@ -15117,8 +15360,7 @@ function calculatePayrollFromRecords(){
   try {
     // Determine the date range from the payroll period inputs.  Fall back
     // to the DTR filter inputs if the payroll period inputs are absent.
-    const start = (typeof weekStartEl !== 'undefined' && weekStartEl && weekStartEl.value) ? weekStartEl.value : (dtrStartEl ? dtrStartEl.value : '');
-    const end   = (typeof weekEndEl   !== 'undefined' && weekEndEl   && weekEndEl.value)   ? weekEndEl.value   : (dtrEndEl   ? dtrEndEl.value   : '');
+    const { start, end } = getPayrollDateRange();
     // Use the helper to compute perâ€‘employee hours across the full dataset.
     const { totalsReg, totalsOT } = computeHoursForDateRange(start, end);
     // Initialize regHours and otHours with computed totals
@@ -15130,6 +15372,7 @@ function calculatePayrollFromRecords(){
       if (!regHours.hasOwnProperty(id)) regHours[id] = 0;
       if (!otHours.hasOwnProperty(id))  otHours[id]  = 0;
     });
+    applyOtOverridesToHours();
     // Persist hours to localStorage
     try {
       localStorage.setItem(LS_REG_HRS, JSON.stringify(regHours));
@@ -15156,6 +15399,7 @@ function calculatePayrollFromRecords(){
   } catch (err) {
     console.warn('renderTable failed', err);
   }
+  try { if (typeof renderOvertimeTables === 'function') renderOvertimeTables(); } catch (_) {}
 }
 
   /**
@@ -15261,6 +15505,7 @@ function calculatePayrollFromRecords(){
         if (!regHours.hasOwnProperty(id)) regHours[id] = 0;
         if (!otHours.hasOwnProperty(id))  otHours[id]  = 0;
       });
+      applyOtOverridesToHours();
       // Persist the hours to localStorage
       try {
         localStorage.setItem(LS_REG_HRS, JSON.stringify(regHours));
@@ -15268,6 +15513,7 @@ function calculatePayrollFromRecords(){
       } catch (err) {}
       // Rebuild the payroll table using the computed hours
       if (typeof renderTable === 'function') renderTable();
+      try { if (typeof renderOvertimeTables === 'function') renderOvertimeTables(); } catch (_) {}
     } catch (err) {
       console.warn('calculatePayrollFromResultsTable failed', err);
     }
@@ -16408,18 +16654,16 @@ document.addEventListener('DOMContentLoaded', function(){
     var tb = document.querySelector('#payrollTable tbody');
     var foot = document.querySelector('#payrollTotalsFoot');
     if (!tb || !foot) return;
-      var t = {regHrs:0, otHrs:0, adjHrs:0, totalHrs:0, rate:0, regPay:0, otPay:0, adjAmt:0, grossPay:0, pagibig:0, philhealth:0, sss:0, loanSSS:0, loanPI:0, vale:0, valeWed:0, totalDed:0, netPay:0};
+  var t = {regHrs:0, adjRegHrs:0, totalHrs:0, rate:0, regPay:0, adjAmt:0, grossPay:0, pagibig:0, philhealth:0, sss:0, loanSSS:0, loanPI:0, vale:0, valeWed:0, totalDed:0, totalOtPay:0, netPay:0};
     var div = Number(divisor) || 1;
     tb.querySelectorAll('tr').forEach(function(tr){
       t.regHrs   += _parse(_val(tr.querySelector('.regHrs')));
-      t.otHrs    += _parse(_val(tr.querySelector('.otHrs')));
-      // Sum adjustment hours from the adjHrs cell (displayed as text)
-      t.adjHrs   += _parse(tr.querySelector('.adjHrs')?.textContent);
+      // Sum adjustment hours from the adj reg cell (displayed as text)
+      t.adjRegHrs   += _parse(tr.querySelector('.adjRegHrs')?.textContent);
       // Sum total hours from the computed totalHrs cell
       t.totalHrs += _parse(tr.querySelector('.totalHrs')?.textContent);
       t.rate     += _parse(_val(tr.querySelector('.rate')));
         t.regPay   += _parse(tr.querySelector('.regPay')?.textContent);
-        t.otPay    += _parse(tr.querySelector('.otPay')?.textContent);
         t.adjAmt   += _parse(tr.querySelector('.adjAmt')?.textContent);
         t.grossPay += _parse(tr.querySelector('.grossPay')?.textContent);
         const dedPagibig = readRowDeductionDataset(tr, 'pagibig', 'effective');
@@ -16438,6 +16682,7 @@ document.addEventListener('DOMContentLoaded', function(){
         t.vale     += dedVale != null ? _parse(dedVale) : _parse(_val(tr.querySelector('.vale')));
         t.valeWed  += dedValeWed != null ? _parse(dedValeWed) : _parse(_val(tr.querySelector('.valeWed')));
         t.totalDed += dedTotal != null ? _parse(dedTotal) : _parse(tr.querySelector('.totalDed')?.textContent);
+        t.totalOtPay += _parse(tr.querySelector('.totalOtPay')?.textContent);
         t.netPay   += _parse(tr.querySelector('.netPay')?.textContent);
     });
     Object.keys(t).forEach(function(k){
@@ -16800,9 +17045,9 @@ document.addEventListener('click', function(e) {
 
   var rate      = rowData ? rowData.rate : inputVal('.rate');
   var regHrs    = rowData ? rowData.regHours : inputVal('.regHrs');
-  var otHrs     = rowData ? rowData.otHours : inputVal('.otHrs');
+  var otHrs     = rowData ? rowData.otHours : (id && otHours && Object.prototype.hasOwnProperty.call(otHours, id) ? otHours[id] : '');
   var regPay    = rowData ? rowData.regPay : cellText('.regPay');
-  var otPay     = rowData ? rowData.otPay : cellText('.otPay');
+  var otPay     = rowData ? rowData.otPay : (cellText('.totalOtPay') || datasetNumber('otPay'));
   var gross     = rowData ? rowData.gross : cellText('.grossPay');
   var pagibig   = rowData ? rowData.pagibig : cellText('.pagibig');
   var philhealth= rowData ? rowData.philhealth : cellText('.philhealth');
@@ -17110,7 +17355,7 @@ function loadSaved(){
       }
     });
     // Inputs: hide zeros by showing blank
-    document.querySelectorAll('#payrollTable input.regHrs, #payrollTable input.otHrs, #payrollTable input.rate').forEach(function(inp){
+    document.querySelectorAll('#payrollTable input.regHrs, #payrollTable input.rate').forEach(function(inp){
       var v = parseFloat(inp.value);
       if (!isNaN(v) && v === 0) { inp.value = ''; }
     });
