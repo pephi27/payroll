@@ -2828,15 +2828,6 @@ window.addEventListener('load', dashReports);
          Gross Pay
         </th>
         <th>
-         Pag-IBIG Loan
-        </th>
-        <th>
-         Account
-        </th>
-        <th>
-         Wed Vale
-        </th>
-        <th>
          Total Deductions
         </th>
         <th>
@@ -2864,9 +2855,6 @@ window.addEventListener('load', dashReports);
       <td class="num" data-col="otPay">0.00</td>
       <td class="num" data-col="adjAmt">0.00</td>
       <td class="num" data-col="grossPay">0.00</td>
-    <td class="num" data-col="loanPI">0.00</td>
-      <td class="num" data-col="vale">0.00</td>
-      <td class="num" data-col="valeWed">0.00</td>
       <td class="num" data-col="totalDed">0.00</td>
       <td class="num" data-col="netPay">0.00</td>
     <td></td>
@@ -6414,9 +6402,6 @@ function renderTable(){
       const aH = Number(adjHrs[emp.id] ?? 0);
       const rate = Number((storedEmployees[emp.id]?.hourlyRate) ?? (payrollRates[emp.id] ?? 0));
       payrollRates[emp.id] = isNaN(rate) ? 0 : rate;
-      const lPI = Number(loanPI[emp.id] ?? 0);
-      const v = Number(vale[emp.id] ?? 0);
-      const vW = Number(valeWed[emp.id] ?? 0);
       tr.innerHTML = `
         <td>${emp.id}</td>
         <td class="wrap">${emp.name}</td>
@@ -6428,9 +6413,6 @@ function renderTable(){
         <td class="otPay num">0.00</td>
         <td class="adjAmt num">0.00</td>
         <td class="grossPay num">0.00</td>
-        <td><input class="cell loanPI" name="payroll_loan_pagibig_${emp.id}" type="number" step="0.01" value="${lPI}"></td>
-        <td><input class="cell vale" name="payroll_vale_${emp.id}" type="number" step="0.01" value="${v}"></td>
-        <td><input class="cell valeWed" name="payroll_vale_wed_${emp.id}" type="number" step="0.01" value="${vW}"></td>
         <td class="totalDed num">0.00</td>
         <td class="netPay num">0.00</td>
         <td><button type="button" class="payslipBtn">Payslip</button></td>`;
@@ -6575,8 +6557,12 @@ function attachRowEvents(){
         if (lSSSI) {
           loanSSS[id] = +(Number(lSSSI.value)||0).toFixed(2);
         }
-        loanPI[id] = +(Number(lPII.value)||0).toFixed(2);
-        vale[id] = +(Number(vI.value)||0).toFixed(2);
+        if (lPII) {
+          loanPI[id] = +(Number(lPII.value)||0).toFixed(2);
+        }
+        if (vI) {
+          vale[id] = +(Number(vI.value)||0).toFixed(2);
+        }
         if (vWI && typeof vWI.value !== 'undefined') {
           valeWed[id] = +(Number(vWI.value)||0).toFixed(2);
         }
@@ -8267,7 +8253,7 @@ function updateContributionNote() {
 }
   document.getElementById('downloadPayrollCSV').addEventListener('click', ()=>{
   // Include Additional Income column in payroll CSV export
-  const header = ['Week Start','Week End','OT Multiplier','Divisor','ID','Name','Regular Hours','OT Hours','Hourly Rate','Regular Pay','OT Pay','Additional Income','Gross Pay','Pag-IBIG Loan','Account','Wed Vale','Total Deductions','Net Pay'];
+  const header = ['Week Start','Week End','OT Multiplier','Divisor','ID','Name','Regular Hours','OT Hours','Hourly Rate','Regular Pay','OT Pay','Additional Income','Gross Pay','Total Deductions','Net Pay'];
   const rows=[header];
   const ws = weekStartEl.value||''; const we = weekEndEl.value||''; const otm = String(getOvertimeMultiplier()); const div = String(divisorEl.value||'1');
   document.querySelectorAll('#payrollTable tbody tr').forEach(tr=>{
@@ -8278,11 +8264,9 @@ function updateContributionNote() {
     const otPay = tr.querySelector('.otPay').textContent.trim();
     const adj   = tr.querySelector('.adjAmt') ? tr.querySelector('.adjAmt').textContent.trim() : '';
     const grossPay = tr.querySelector('.grossPay').textContent.trim();
-    const lPI = tr.querySelector('.loanPI').value;
-    const v = tr.querySelector('.vale').value; const vW = tr.querySelector('.valeWed').value;
     const total = tr.querySelector('.totalDed').textContent.trim();
     const net   = tr.querySelector('.netPay').textContent.trim();
-    rows.push([ws,we,otm,div,id,name,regI.value,otI.value,rateI.value,regPay,otPay,adj,grossPay,lPI,v,vW,total,net]);
+    rows.push([ws,we,otm,div,id,name,regI.value,otI.value,rateI.value,regPay,otPay,adj,grossPay,total,net]);
   });
   const csv = rows.map(r=>r.map(s=>{
     s = String(s ?? '');
@@ -8505,9 +8489,9 @@ document.addEventListener('DOMContentLoaded', function(){
       const norm = (s) => String(s || '').replace(/\s+/g, ' ').trim().toLowerCase();
       const headerRow = clone.querySelector('thead tr');
       if (!headerRow) return;
-      const accountIndex = Array.from(headerRow.cells || []).findIndex(cell => norm(cell.textContent) === 'account');
-      if (accountIndex < 0) return;
-      const insertIndex = accountIndex + 1;
+      const totalDedIndex = Array.from(headerRow.cells || []).findIndex(cell => norm(cell.textContent) === 'total deductions');
+      if (totalDedIndex < 0) return;
+      const insertIndex = totalDedIndex;
       let totalAdjDeduction = 0;
 
       const insertCellAt = (tr, cell, columnIndex) => {
@@ -8909,9 +8893,6 @@ document.addEventListener('DOMContentLoaded', () => {
       const rate = formatInputValue(row?.rate, 2);
       const regHrs = formatInputValue(row?.regHrs, 2);
       const otHrs = formatInputValue(row?.otHrs, 2);
-      const loanPIVal = formatInputValue(row?.loanPI, 2);
-      const valeVal = formatInputValue(row?.vale, 2);
-      const valeWedVal = formatInputValue(row?.valeWed, 2);
       const tr = document.createElement('tr');
       tr.dataset.snapshotRow = 'true';
       tr.innerHTML = `
@@ -8926,9 +8907,6 @@ document.addEventListener('DOMContentLoaded', () => {
         <td class="otPay num">0.00</td>
         <td class="adjAmt num">0.00</td>
         <td class="grossPay num">0.00</td>
-        <td><input class="cell loanPI" name="payroll_loan_pagibig_${empId}" type="number" step="0.01" value="${loanPIVal}"></td>
-        <td><input class="cell vale" name="payroll_vale_${empId}" type="number" step="0.01" value="${valeVal}"></td>
-        <td><input class="cell valeWed" name="payroll_vale_wed_${empId}" type="number" step="0.01" value="${valeWedVal}"></td>
         <td class="totalDed num">0.00</td>
         <td class="netPay num">0.00</td>
         <td><button type="button" class="payslipBtn">Payslip</button></td>`;
@@ -9441,6 +9419,7 @@ document.addEventListener('DOMContentLoaded', () => {
           if (!isNaN(num)) return num;
         }
         // Fallback to cell index text if selector not found or not numeric
+        if (typeof cellIndex !== 'number') return 0;
         const cellVal = row.cells[cellIndex] && row.cells[cellIndex].textContent;
         const num2 = parseFloat(String(cellVal).replace(/,/g,''));
         return isNaN(num2) ? 0 : num2;
@@ -9455,7 +9434,7 @@ document.addEventListener('DOMContentLoaded', () => {
       };
       // Column index fallbacks aligned with current payrollTable structure
       // 0:ID, 1:Name, 2:Rate, 3:RegHrs, 4:OTHrs, 5:AdjHrs, 6:TotalHrs, 7:RegPay, 8:OTPay, 9:Additional Income,
-      // 10:Gross, 11:Pag-IBIG Loan, 12:Vale, 13:Wed Vale, 14:Total Ded, 15:Net Pay, 16:Payslip
+      // 10:Gross, 11:Total Ded, 12:Net Pay, 13:Payslip
       data.rate = readNum('.rate', 2);
       data.regHrs = readNum('.regHrs', 3);
       data.otHrs = readNum('.otHrs', 4);
@@ -9469,11 +9448,11 @@ document.addEventListener('DOMContentLoaded', () => {
       data.philhealth = readDeduction('philhealth', '.philhealth');
       data.sss = readDeduction('sss', '.sss');
       data.loanSSS = readDeduction('loanSSS', '.loanSSS');
-      data.loanPI = readDeduction('loanPI', '.loanPI', 11);
-      data.vale = readDeduction('vale', '.vale', 12);
-      data.valeWed = readDeduction('valeWed', '.valeWed', 13);
-      data.totalDed = readDeduction('total', '.totalDed', 14);
-      data.netPay = readNum('.netPay', 15);
+      data.loanPI = readDeduction('loanPI', '.loanPI');
+      data.vale = readDeduction('vale', '.vale');
+      data.valeWed = readDeduction('valeWed', '.valeWed');
+      data.totalDed = readDeduction('total', '.totalDed', 11);
+      data.netPay = readNum('.netPay', 12);
       try {
         let otherDeductionTotal = row && row.dataset ? row.dataset.otherDeductionsTotal : null;
         if (otherDeductionTotal != null && otherDeductionTotal !== '') {
@@ -9885,7 +9864,7 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   function buildPayrollSectionFromSnapshot(snap) {
-    const headers = ['ID','Name','Hourly Rate','Regular Hours','OT Hours','Adjustment Hrs','Total Hours','Regular Pay','OT Pay','Additional Income','Gross Pay','Pag-IBIG Loan','Account','Wed Vale','Total Deductions','Net Pay','Other Deductions'];
+    const headers = ['ID','Name','Hourly Rate','Regular Hours','OT Hours','Adjustment Hrs','Total Hours','Regular Pay','OT Pay','Additional Income','Gross Pay','Total Deductions','Net Pay','Other Deductions'];
     const numericCols = headers.map((_, idx) => idx).filter(idx => idx > 1);
     const rows = Array.isArray(snap?.rows) ? snap.rows.map((row) => {
       return [
@@ -9900,9 +9879,6 @@ document.addEventListener('DOMContentLoaded', () => {
         formatNumber(row.otPay),
         formatNumber(row.adjAmt),
         formatNumber(row.grossPay),
-        formatNumber(row.loanPI),
-        formatNumber(row.vale),
-        formatNumber(row.valeWed),
         formatNumber(row.totalDed),
         formatNumber(row.netPay),
         formatNumber(typeof row.otherDeductionsTotal !== 'undefined' ? row.otherDeductionsTotal : row.adjustmentDeduction)
@@ -9912,7 +9888,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const footer = headers.map((label, idx) => {
       if (idx === 0) return 'Totals';
       if (idx === 1) return '';
-      const keyMap = ['rate','regHrs','otHrs','adjHrs','totalHrs','regPay','otPay','adjAmt','grossPay','loanPI','vale','valeWed','totalDed','netPay','otherDeductionsTotal'];
+      const keyMap = ['rate','regHrs','otHrs','adjHrs','totalHrs','regPay','otPay','adjAmt','grossPay','totalDed','netPay','otherDeductionsTotal'];
       const key = keyMap[idx - 2];
       let val = key ? totals[key] : null;
       if (typeof val === 'undefined' && key === 'otherDeductionsTotal') {
@@ -10804,7 +10780,6 @@ rows += `<tr class="allowance">
       const header = [
         'ID','Name','Hourly Rate','Regular Hours','OT Hours','Adjustment Hrs','Total Hours',
         'Regular Pay','OT Pay','Additional Income','Gross Pay',
-        'Pag-IBIG Loan','Account','Wed Vale',
         'Total Deductions','Net Pay'
       ];
 
@@ -10874,7 +10849,6 @@ rows += `<tr class="allowance">
           const totals = {
             regHrs:0, otHrs:0, adjHrs:0, totalHrs:0,
             regPay:0, otPay:0, adjAmt:0, grossPay:0,
-            loanPI:0, vale:0, valeWed:0,
             totalDed:0, netPay:0
           };
 
@@ -10888,9 +10862,6 @@ rows += `<tr class="allowance">
             const otPayNum = toNum(row.otPay);
             const adjAmtNum = toNum(row.adjAmt);
             const grossNum = toNum(row.grossPay);
-            const loanPINum = toNum(row.loanPI, { divideLoan: true });
-            const valeNum = toNum(row.vale);
-            const valeWedNum = toNum(row.valeWed);
             const totalDedNum = toNum(row.totalDed);
             const netPayNum = toNum(row.netPay);
 
@@ -10902,9 +10873,6 @@ rows += `<tr class="allowance">
             totals.otPay += otPayNum;
             totals.adjAmt += adjAmtNum;
             totals.grossPay += grossNum;
-            totals.loanPI += loanPINum;
-            totals.vale += valeNum;
-            totals.valeWed += valeWedNum;
             totals.totalDed += totalDedNum;
             totals.netPay += netPayNum;
 
@@ -10920,9 +10888,6 @@ rows += `<tr class="allowance">
               fmt(otPayNum),
               fmt(adjAmtNum),
               fmt(grossNum),
-              fmt(row.loanPI, { divideLoan: true }),
-              fmt(valeNum),
-              fmt(valeWedNum),
               fmt(totalDedNum),
               fmt(netPayNum)
             ]);
@@ -10939,9 +10904,6 @@ rows += `<tr class="allowance">
               otPay: 'otPay',
               adjAmt: 'adjAmt',
               grossPay: 'grossPay',
-              loanPI: 'loanPI',
-              vale: 'vale',
-              valeWed: 'valeWed',
               totalDed: 'totalDed',
               netPay: 'netPay'
             };
@@ -10968,9 +10930,6 @@ rows += `<tr class="allowance">
               fmt(totals.otPay),
               fmt(totals.adjAmt),
               fmt(totals.grossPay),
-              fmt(totals.loanPI),
-              fmt(totals.vale),
-              fmt(totals.valeWed),
               fmt(totals.totalDed),
               fmt(totals.netPay)
             ]);
