@@ -16647,7 +16647,11 @@ document.addEventListener('DOMContentLoaded', function(){
       if (!cell) return;
       var val = '';
       if (el.tagName === 'SELECT') {
-        var opt = el.options && el.options[el.selectedIndex];
+        var selectedIndex = typeof el.selectedIndex === 'number' ? el.selectedIndex : -1;
+        var opt = el.options && selectedIndex >= 0 ? el.options[selectedIndex] : null;
+        if (!opt && el.options && el.options.length) {
+          opt = el.options[0];
+        }
         val = opt ? opt.textContent : (el.value || '');
       } else if (el.tagName === 'BUTTON') {
         val = '';
@@ -16667,11 +16671,16 @@ document.addEventListener('DOMContentLoaded', function(){
       if (!isNaN(num) && num === 0) td.textContent = '-';
     });
   }
-  function removeEmptyColumns(table){
+  function removeEmptyColumns(table, preserveLabels){
     var bodyRows = Array.from((table.tBodies && table.tBodies[0] && table.tBodies[0].rows) || []);
     var headerRow = table.tHead && table.tHead.rows && table.tHead.rows[0];
     if (!headerRow || !bodyRows.length) return;
+    var preserve = Array.isArray(preserveLabels)
+      ? preserveLabels.map(function(label){ return normalizeHeader(label); })
+      : [];
     for (var idx = headerRow.cells.length - 1; idx >= 0; idx -= 1) {
+      var headerText = headerRow.cells[idx] ? normalizeHeader(headerRow.cells[idx].textContent) : '';
+      if (preserve.indexOf(headerText) !== -1) continue;
       var hasContent = bodyRows.some(function(row){
         var cell = row.cells[idx];
         if (!cell) return false;
@@ -16697,7 +16706,7 @@ document.addEventListener('DOMContentLoaded', function(){
     var removeIdx = collectHeaderIndexes(clone, removeLabels);
     removeColumnsByIndex(clone, removeIdx);
     replaceZeroWithDash(clone);
-    removeEmptyColumns(clone);
+    removeEmptyColumns(clone, ['Project']);
     return clone;
   }
   function printDTR(scope){
