@@ -485,6 +485,9 @@ function safeStringify(v){
     opacity: 0.6;
   }
 
+  /* Inactive rows */
+  tr.emp-inactive td, tr.proj-inactive td { opacity: 0.6; }
+
 /* === PATCH: Additional Income column width === */
 #payrollTable th:nth-child(10), #payrollTable td:nth-child(10) { width: 100px; min-width: 100px; } /* Additional Income */
 /* === END PATCH === */
@@ -2697,6 +2700,9 @@ window.addEventListener('load', dashReports);
        SSS
       </th>
       <th>
+       Active
+      </th>
+      <th>
        Action
       </th>
      </tr>
@@ -2733,6 +2739,10 @@ window.addEventListener('load', dashReports);
       <th>
        Company
       </th>
+      <th>
+       Active
+      </th>
+      
       <th>
        Action
       </th>
@@ -4528,7 +4538,7 @@ function applyLoanTrackerToPeriod(pk, options){
   ensureLoanTrackerShape(loanTracker);
   if (!pk) return;
   const div = Number(divisor) || 1;
-  if (!employeeList || !Array.isArray(employeeList)) return;
+  if (!getEmployeeList() || !Array.isArray(getEmployeeList())) return;
   let changed = false;
 
   const setMapValue = (map, empId, value) => {
@@ -4663,7 +4673,7 @@ function applyLoanTrackerToPeriod(pk, options){
     return roundToCents(scheduled || 0);
   };
 
-  for (const emp of employeeList){
+  for (const emp of getEmployeeList()){
     const empId = emp && emp.id;
     if (!empId) continue;
 
@@ -5153,12 +5163,12 @@ divisorEl.addEventListener('change', () => {
 });
 function loadEmployees() {
   const stored = JSON.parse(localStorage.getItem('att_employees_v2') || '{}');
-  let list = Object.keys(stored).map(id=>({id, name: stored[id]?.name || ''}));
+  let list = Object.keys(stored).filter(id => !(stored[id] && stored[id].active === false)).map(id=>({id, name: stored[id]?.name || ''}));
   if (list.length === 0) list = [{id:'001', name:'Sample Employee'}];
   list.sort((a,b)=> (a.name||'').localeCompare(b.name||''));
   return list;
 }
-const employeeList = loadEmployees();
+function getEmployeeList(){ return loadEmployees(); }
 function getSssTable(){
   let arr = [];
   try { arr = JSON.parse(localStorage.getItem(LS_SSS_TABLE) || '[]'); }
@@ -5772,7 +5782,7 @@ function renderLoanTrackerTable(){
   const div = Number(divisor) || 1;
   tbody.innerHTML = '';
 
-  (employeeList || []).forEach(emp => {
+  (getEmployeeList() || []).forEach(emp => {
     if (!emp || !emp.id) return;
     const empId = emp.id;
     const tr = document.createElement('tr');
@@ -6004,7 +6014,7 @@ function renderDeductionsTable(){
   const dtbody = document.querySelector('#deductionsTable tbody');
   if (!dtbody) return;
   dtbody.innerHTML = '';
-  employeeList.forEach(emp => {
+  getEmployeeList().forEach(emp => {
     const rH = Number(regHours[emp.id] ?? 0);
     const rate = Number((storedEmployees[emp.id]?.hourlyRate) ?? (payrollRates[emp.id] ?? 0));
     payrollRates[emp.id] = isNaN(rate) ? 0 : rate;
@@ -6319,7 +6329,7 @@ function findDeductionRowById(empId){
 function updateDeductionRowDisplay(empId){
   const tr = findDeductionRowById(empId);
   if (!tr) return;
-  const emp = employeeList.find(e => e.id === empId) || { id: empId };
+  const emp = getEmployeeList().find(e => e.id === empId) || { id: empId };
   const empKey = emp.id || empId;
   const stored = (typeof storedEmployees !== 'undefined' && storedEmployees) ? storedEmployees : {};
   let rate = Number((stored[empKey]?.hourlyRate) ?? (payrollRates?.[empKey] ?? 0));
@@ -6436,7 +6446,7 @@ function renderTable(){
   try {
     const frag = document.createDocumentFragment();
     tbody.innerHTML = '';
-    employeeList.forEach(emp=>{
+    getEmployeeList().forEach(emp=>{
       const tr = document.createElement('tr');
       const rH = Number(regHours[emp.id] ?? 0);
       const oH = Number(otHours[emp.id] ?? 0);
@@ -7301,7 +7311,7 @@ function renderAdditionalIncomeTable(){
     }, 0);
   };
   atbody.innerHTML = '';
-  employeeList.forEach(emp => {
+  getEmployeeList().forEach(emp => {
     const empId = emp.id;
     const items = Array.isArray(additionalIncomeDetails[empId]) ? additionalIncomeDetails[empId] : [];
     const renderItems = items.length ? items : [{ label: '', amount: '', __placeholder: true }];
@@ -7573,7 +7583,7 @@ function buildAdditionalIncomeReportData() {
   const incomeOptions = getIncomeTypeOptions();
   const optionsLower = new Set(incomeOptions.map(opt => String(opt || '').toLowerCase()));
   const seenTypes = new Map();
-  const rows = employeeList.map(emp => {
+  const rows = getEmployeeList().map(emp => {
     const empId = emp.id;
     const items = getAdditionalIncomeDetailsForEmployee(empId);
     const totals = {};
@@ -7796,7 +7806,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const exportBtn = document.getElementById('exportAdditionalIncomePivotExcelBtn');
   if (!printBtn && !exportBtn) return;
   const getReport = () => {
-    if (!employeeList || !employeeList.length) {
+    if (!getEmployeeList() || !getEmployeeList().length) {
       alert('No employees available for the report.');
       return null;
     }
@@ -7850,7 +7860,7 @@ function renderOtherDeductionsTable(){
     }, 0);
   };
   tbody.innerHTML = '';
-  employeeList.forEach(emp => {
+  getEmployeeList().forEach(emp => {
     const empId = emp.id;
     const items = Array.isArray(otherDeductionsDetails[empId]) ? otherDeductionsDetails[empId] : [];
     const renderItems = items.length ? items : [{ type: defaultType, label: '', amount: '', __placeholder: true }];
@@ -8086,7 +8096,7 @@ function renderAdjustmentHoursTable(){
   const tbody = document.querySelector('#adjustmentHoursTable tbody');
   if (!tbody) return;
   tbody.innerHTML = '';
-  employeeList.forEach(emp => {
+  getEmployeeList().forEach(emp => {
     const id = emp.id;
     const name = emp.name;
     const hrs = adjHrs[id] !== undefined ? adjHrs[id] : '';
@@ -11578,7 +11588,7 @@ rows += `<tr class="allowance">
     const seeds = defaults.length ? defaults : ['Edifice','Portafolio'];
     seeds.forEach(name => ensureBucket(name));
     try{
-      const list = (typeof employeeList!=='undefined' && employeeList) ? employeeList : [];
+      const list = (typeof getEmployeeList()!=='undefined' && getEmployeeList()) ? getEmployeeList() : [];
       const rates = (typeof payrollRates!=='undefined' && payrollRates) ? payrollRates : {};
       const se = (typeof storedEmployees!=='undefined' && storedEmployees) ? storedEmployees : {};
       const rHours = (typeof regHours!=='undefined' && regHours) ? regHours : {};
@@ -13558,6 +13568,10 @@ function renderProjects(){
   let needsSave = false;
   Object.keys(storedProjects).forEach(pid=>{
     const project = storedProjects[pid];
+    // Backward-compatible migration: add active/deactivatedAt if missing
+    if (project && typeof project.active === 'undefined') { project.active = true; project.deactivatedAt = null; needsSave = true; }
+    const isProjActive = !(project && project.active === false);
+    const projBtnLabel = isProjActive ? 'Deactivate' : 'Reactivate';
     let company = project.company;
     if (!COMPANY_OPTIONS.includes(company)) {
       company = COMPANY_OPTIONS[0] || '';
@@ -13566,22 +13580,43 @@ function renderProjects(){
     }
     const companyOptionsHtml = buildCompanyOptionsHtml(company);
     const tr = document.createElement('tr');
+    tr.classList.toggle('proj-inactive', !isProjActive);
     tr.innerHTML = `<td><input class="cell proj-name-input" data-id="${pid}" value="${project.name}"></td>
       <td><select class="proj-company-select" data-id="${pid}">${companyOptionsHtml}</select></td>
-      <td><button class="del-proj" data-id="${pid}">Delete</button></td>`;
+      <td><input type="checkbox" class="proj-active" data-id="${pid}" ${isProjActive ? 'checked' : ''}></td>
+      <td><button class="del-proj" data-id="${pid}">${projBtnLabel}</button></td>`;
     tbody.appendChild(tr);
   });
   if (needsSave) saveProjectsToLS({ skipRender: true });
+
+  document.querySelectorAll('.proj-active').forEach(cb=>{
+    cb.addEventListener('change', e=>{
+      const id = e.target.dataset.id;
+      if(!storedProjects[id]) return;
+      const isActive = !!e.target.checked;
+      storedProjects[id].active = isActive;
+      storedProjects[id].deactivatedAt = isActive ? null : new Date().toISOString();
+      saveProjectsToLS();
+      renderEmployees();
+    });
+  });
+
   document.querySelectorAll('.del-proj').forEach(btn=>{
     btn.addEventListener('click', e=>{
       const id = e.target.dataset.id;
-      if(confirm('Delete project "' + storedProjects[id].name + '"?')){
-        delete storedProjects[id];
-        Object.keys(storedEmployees).forEach(eid=>{ if(storedEmployees[eid].projectId === id) storedEmployees[eid].projectId = null; });
-        saveProjectsToLS(); saveEmployeesToLS(); renderEmployees(); renderResults();
+      const proj = storedProjects[id];
+      if(!proj) return;
+      const isActive = !(proj.active === false);
+      const action = isActive ? 'Deactivate' : 'Reactivate';
+      if(confirm(`${action} project "${proj.name}"?`)){
+        proj.active = !isActive;
+        proj.deactivatedAt = proj.active ? null : new Date().toISOString();
+        saveProjectsToLS();
+        renderEmployees();
       }
     });
   });
+
   document.querySelectorAll('.proj-name-input').forEach(inp => {
     inp.addEventListener('change', e => {
       const id = e.target.dataset.id;
@@ -13589,6 +13624,7 @@ function renderProjects(){
       saveProjectsToLS();
     });
   });
+
   document.querySelectorAll('.proj-company-select').forEach(sel => {
     sel.addEventListener('change', e => {
       const id = e.target.dataset.id;
@@ -13602,14 +13638,15 @@ function renderProjects(){
       saveProjectsToLS();
     });
   });
-
 }
+
+
 function renderProjectDropdowns(){
   const sel = document.getElementById('empProjectSelect');
   if(!sel) return;
   sel.innerHTML = '';
   const noneOpt = document.createElement('option'); noneOpt.value = ''; noneOpt.textContent = '(None)'; sel.appendChild(noneOpt);
-  Object.keys(storedProjects).forEach(pid=>{
+  Object.keys(storedProjects).filter(pid => !(storedProjects[pid] && storedProjects[pid].active === false)).forEach(pid=>{
     const o=document.createElement('option'); o.value=pid; o.textContent=storedProjects[pid].name; sel.appendChild(o);
   });
 }
@@ -13619,11 +13656,22 @@ function renderEmpProjectDropdownsInTable(){
     const prev = sel.value;
     sel.innerHTML = '';
     const noneOpt = document.createElement('option'); noneOpt.value = ''; noneOpt.textContent = '(None)'; sel.appendChild(noneOpt);
-    Object.keys(storedProjects).forEach(pid=>{
+    const activePids = Object.keys(storedProjects).filter(pid => !(storedProjects[pid] && storedProjects[pid].active === false));
+    activePids.forEach(pid=>{
       const o = document.createElement('option'); o.value = pid; o.textContent = storedProjects[pid].name;
       if(storedEmployees[id] && storedEmployees[id].projectId === pid) o.selected = true;
       sel.appendChild(o);
     });
+    // If this employee is assigned to an inactive project, keep it visible
+    const curPid = storedEmployees[id] ? storedEmployees[id].projectId : '';
+    if (curPid && storedProjects[curPid] && storedProjects[curPid].active === false) {
+      const o = document.createElement('option');
+      o.value = curPid;
+      o.textContent = storedProjects[curPid].name + ' (inactive)';
+      o.selected = true;
+      sel.appendChild(o);
+    }
+
     if(prev) sel.value = prev;
   });
 }
@@ -13637,7 +13685,8 @@ function renderProjectFilterOptions(){
   filterProjectSel.appendChild(make('all','All Projects'));
   filterProjectSel.appendChild(make('none','(No project)'));
   Object.keys(storedProjects).forEach(pid=>{
-    filterProjectSel.appendChild(make(pid, storedProjects[pid].name));
+    const isActive = !(storedProjects[pid] && storedProjects[pid].active === false);
+    filterProjectSel.appendChild(make(pid, storedProjects[pid].name + (isActive ? '' : ' (inactive)')));
   });
   if([...filterProjectSel.options].some(o=>o.value===prev)) filterProjectSel.value = prev;
   else filterProjectSel.value = 'all';
@@ -13684,6 +13733,8 @@ function renderEmployees(){
   let needsSave = false;
   ids.forEach(id => {
     const emp = storedEmployees[id];
+    // Backward-compatible migration: add active/deactivatedAt if missing
+    if (emp && typeof emp.active === 'undefined') { emp.active = true; emp.deactivatedAt = null; needsSave = true; }
     let company = emp.company;
     if (!COMPANY_OPTIONS.includes(company)) {
       company = COMPANY_OPTIONS[0] || '';
@@ -13698,11 +13749,21 @@ function renderEmployees(){
       scheduleOptionsHtml += `<option value="${sid}" ${emp.scheduleId===sid ? 'selected' : ''}>${label}</option>`;
     });
     let projectOptionsHtml = `<option value="">(None)</option>`;
-    Object.keys(storedProjects).forEach(pid=>{
+    const activeProjectIds = Object.keys(storedProjects).filter(pid => !(storedProjects[pid] && storedProjects[pid].active === false));
+    activeProjectIds.forEach(pid=>{
       projectOptionsHtml += `<option value="${pid}" ${emp.projectId===pid ? 'selected' : ''}>${storedProjects[pid].name}</option>`;
     });
+    if (emp.projectId && storedProjects[emp.projectId] && storedProjects[emp.projectId].active === false) {
+      projectOptionsHtml += `<option value="${emp.projectId}" selected>${storedProjects[emp.projectId].name} (inactive)</option>`;
+    }
     const companyOptionsHtml = buildCompanyOptionsHtml(company);
+    const isEmpActive = !(emp && emp.active === false);
+    const empBtnLabel = isEmpActive ? 'Deactivate' : 'Reactivate';
+    const assignedProj = (emp.projectId && storedProjects[emp.projectId]) ? storedProjects[emp.projectId] : null;
+    const isAssignedProjActive = !(assignedProj && assignedProj.active === false);
     const tr = document.createElement('tr');
+    tr.classList.toggle('emp-inactive', !isEmpActive);
+    tr.classList.toggle('proj-inactive', emp.projectId && !isAssignedProjActive);
     tr.innerHTML = `<td>${id}</td>
       <td><input class="cell emp-name-input" data-id="${id}" value="${emp.name}"></td>
       <td><input class="cell emp-rate-input" type="number" step="0.01" min="0" data-id="${id}" value="${emp.hourlyRate != null ? emp.hourlyRate : ''}"></td>
@@ -13713,7 +13774,8 @@ function renderEmployees(){
       <td><input type="checkbox" class="emp-pagibig" data-id="${id}" ${ (contribFlags[id] && contribFlags[id].pagibig === false) ? '' : 'checked'}></td>
       <td><input type="checkbox" class="emp-philhealth" data-id="${id}" ${ (contribFlags[id] && contribFlags[id].philhealth === false) ? '' : 'checked'}></td>
       <td><input type="checkbox" class="emp-sss" data-id="${id}" ${ (contribFlags[id] && contribFlags[id].sss === false) ? '' : 'checked'}></td>
-      <td><button class="del-emp" data-id="${id}">Delete</button></td>`;
+      <td><input type=\"checkbox\" class=\"emp-active\" data-id=\"${id}\" ${isEmpActive ? 'checked' : ''}></td>
+      <td><button class=\"del-emp\" data-id=\"${id}\">${empBtnLabel}</button></td>`;
     tbody.appendChild(tr);
     // Attach event listeners for contribution checkboxes for this employee
     const cbPagibig = tr.querySelector('.emp-pagibig');
@@ -13775,10 +13837,31 @@ document.querySelectorAll('.emp-sel-schedule').forEach(sel=> sel.addEventListene
     saveEmployeesToLS();
     renderResults();
   }));
+  document.querySelectorAll('.emp-active').forEach(cb=> cb.addEventListener('change', (e)=>{
+    const id = e.target.dataset.id;
+    if (!storedEmployees[id]) return;
+    const isActive = !!e.target.checked;
+    storedEmployees[id].active = isActive;
+    storedEmployees[id].deactivatedAt = isActive ? null : new Date().toISOString();
+    saveEmployeesToLS();
+    renderEmployees();
+    renderResults();
+  }));
   document.querySelectorAll('.del-emp').forEach(btn=> btn.addEventListener('click', (e)=>{
     const id=e.target.dataset.id;
-    if(confirm(`Delete employee ${id} - ${storedEmployees[id].name}?`)){
-      delete storedEmployees[id]; saveEmployeesToLS(); renderEmployees(); renderResults();
+    {
+      const emp = storedEmployees[id];
+      if (!emp) return;
+      const isActive = !(emp.active === false);
+      const action = isActive ? 'Deactivate' : 'Reactivate';
+      const msg = `${action} employee ${id} - ${emp.name}?`;
+      if (confirm(msg)) {
+        emp.active = !isActive;
+        emp.deactivatedAt = emp.active ? null : new Date().toISOString();
+        saveEmployeesToLS();
+        renderEmployees();
+        renderResults();
+      }
     }
   }));
 }
@@ -13794,7 +13877,7 @@ document.getElementById('addEmployeeBtn').addEventListener('click', ()=>{
   if (!COMPANY_OPTIONS.includes(company)) company = COMPANY_OPTIONS[0] || '';
   const bank = document.getElementById('empBankInput').value.trim();
   if(!id){ alert('Enter ID'); return; } if(!name){ alert('Enter Name'); return; }
-  storedEmployees[id] = { name: name, hourlyRate: rate, bankAccount: bank, scheduleId: scheduleId, projectId: projectId, company: company };
+  storedEmployees[id] = { name: name, hourlyRate: rate, bankAccount: bank, scheduleId: scheduleId, projectId: projectId, company: company, active: true, deactivatedAt: null };
   // Initialize default contribution deduction flags for new employee if not already set
   if (!contribFlags[id]) {
     contribFlags[id] = { pagibig: true, philhealth: true, sss: true };
@@ -14055,13 +14138,20 @@ function buildProjectDropdown(empId, date, currentProjectId){
   noneOpt.value = '';
   noneOpt.textContent = '(None)';
   sel.appendChild(noneOpt);
-  Object.keys(storedProjects).forEach(pid => {
+  Object.keys(storedProjects).filter(pid => !(storedProjects[pid] && storedProjects[pid].active === false)).forEach(pid => {
     const o = document.createElement('option');
     o.value = pid;
     o.textContent = storedProjects[pid].name;
     if(pid === currentProjectId) o.selected = true;
     sel.appendChild(o);
   });
+  if (currentProjectId && storedProjects[currentProjectId] && storedProjects[currentProjectId].active === false) {
+    const o = document.createElement('option');
+    o.value = currentProjectId;
+    o.textContent = storedProjects[currentProjectId].name + ' (inactive)';
+    o.selected = true;
+    sel.appendChild(o);
+  }
   sel.addEventListener('change', ()=>{
     overridesProjects[empId + '___' + date] = sel.value;
     saveOverrides();
@@ -14080,13 +14170,20 @@ function buildProjectDropdownHalf(empId, date, half, currentProjectId){
   noneOpt.value = '';
   noneOpt.textContent = '(None)';
   sel.appendChild(noneOpt);
-  Object.keys(storedProjects).forEach(pid => {
+  Object.keys(storedProjects).filter(pid => !(storedProjects[pid] && storedProjects[pid].active === false)).forEach(pid => {
     const o = document.createElement('option');
     o.value = pid;
     o.textContent = storedProjects[pid].name;
     if(pid === currentProjectId) o.selected = true;
     sel.appendChild(o);
   });
+  if (currentProjectId && storedProjects[currentProjectId] && storedProjects[currentProjectId].active === false) {
+    const o = document.createElement('option');
+    o.value = currentProjectId;
+    o.textContent = storedProjects[currentProjectId].name + ' (inactive)';
+    o.selected = true;
+    sel.appendChild(o);
+  }
   sel.addEventListener('change', () => {
     // Persist override keyed by empId + date + half
     overridesProjects[empId + '___' + date + '___' + half] = sel.value;
@@ -14752,7 +14849,7 @@ document.getElementById('addProjectBtn').addEventListener('click', ()=>{
   const companySelect = document.getElementById('projectCompanySelect');
   let company = companySelect ? companySelect.value : '';
   if (!COMPANY_OPTIONS.includes(company)) company = COMPANY_OPTIONS[0] || '';
-  storedProjects[id] = { name, company };
+  storedProjects[id] = { name, company, active: true, deactivatedAt: null };
   document.getElementById('projectNameInput').value='';
   if (companySelect) companySelect.value = COMPANY_OPTIONS[0] || '';
   saveProjectsToLS();
@@ -15029,6 +15126,7 @@ function calculatePayrollFromRecords(){
     otHours  = Object.assign({}, totalsOT  || {});
     // Guarantee every employee has a defined entry (default 0)
     Object.keys(storedEmployees || {}).forEach(id => {
+        if (storedEmployees[id] && storedEmployees[id].active === false) return;
       if (!regHours.hasOwnProperty(id)) regHours[id] = 0;
       if (!otHours.hasOwnProperty(id))  otHours[id]  = 0;
     });
@@ -19995,7 +20093,7 @@ document.addEventListener('DOMContentLoaded', function(){
     totals[CUSTOM_COL] = 0;
 
     var rows = [];
-    (typeof employeeList!=='undefined' && Array.isArray(employeeList) ? employeeList : []).forEach(function(emp){
+    (typeof getEmployeeList()!=='undefined' && Array.isArray(getEmployeeList()) ? getEmployeeList() : []).forEach(function(emp){
       var empId = emp && emp.id ? emp.id : '';
       var empName = emp && emp.name ? emp.name : '';
       var sums = {};
