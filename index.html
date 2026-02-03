@@ -16589,6 +16589,37 @@ document.addEventListener('DOMContentLoaded', function(){
 // Enhanced DTR print: clones the results table, removes 'Split' or 'Actions' columns,
 // replaces dropdowns with selected text, and shows date range/project filter.
 (function(){
+  function resolveProjectName(empId, dtrRow){
+    var rawProject = '';
+    if (dtrRow && dtrRow.project != null) {
+      rawProject = String(dtrRow.project).trim();
+    }
+    var projectName = '';
+    if (rawProject) {
+      if (typeof storedProjects !== 'undefined' && storedProjects && storedProjects[rawProject] && storedProjects[rawProject].name) {
+        projectName = storedProjects[rawProject].name;
+      } else {
+        projectName = rawProject;
+      }
+    }
+    if (!projectName) {
+      var emp = (typeof storedEmployees !== 'undefined' && storedEmployees) ? storedEmployees[empId] : null;
+      var empProjectId = emp && emp.projectId ? String(emp.projectId).trim() : '';
+      if (empProjectId) {
+        if (typeof storedProjects !== 'undefined' && storedProjects && storedProjects[empProjectId] && storedProjects[empProjectId].name) {
+          projectName = storedProjects[empProjectId].name;
+        } else {
+          projectName = empProjectId;
+        }
+      }
+    }
+    var normalized = String(projectName || '').trim();
+    var normalizedLower = normalized.toLowerCase();
+    if (!normalized || normalizedLower === 'none' || normalizedLower === '(none)' || normalizedLower === 'null' || normalizedLower === 'undefined' || normalizedLower === '0') {
+      return '-';
+    }
+    return normalized;
+  }
   function getDtrReportCompanyName(){
     if (typeof COMPANY_OPTIONS !== 'undefined' && Array.isArray(COMPANY_OPTIONS) && COMPANY_OPTIONS[0]) {
       return COMPANY_OPTIONS[0];
@@ -16710,6 +16741,40 @@ document.addEventListener('DOMContentLoaded', function(){
       cell.textContent = val;
     });
   }
+  function fillProjectNames(table){
+    var headerRow = table.querySelector('thead tr');
+    if (!headerRow) return;
+    var projectIdx = -1;
+    for (var i = 0; i < headerRow.cells.length; i += 1) {
+      if (normalizeHeader(headerRow.cells[i].textContent) === 'project') {
+        projectIdx = i;
+        break;
+      }
+    }
+    if (projectIdx < 0) return;
+    var bodyRows = Array.from((table.tBodies && table.tBodies[0] && table.tBodies[0].rows) || []);
+    bodyRows.forEach(function(row){
+      var empId = row.dataset && row.dataset.empId ? row.dataset.empId : '';
+      if (!empId && row.cells[0]) empId = String(row.cells[0].textContent || '').trim();
+      var date = row.dataset && row.dataset.date ? row.dataset.date : '';
+      var half = row.dataset && row.dataset.half ? row.dataset.half : '';
+      var overrideKey = empId && date ? empId + '___' + date : '';
+      var rowProject = '';
+      if (overrideKey && typeof overridesProjects !== 'undefined' && overridesProjects) {
+        if (half) {
+          var halfKey = overrideKey + '___' + half;
+          if (Object.prototype.hasOwnProperty.call(overridesProjects, halfKey)) {
+            rowProject = overridesProjects[halfKey];
+          }
+        }
+        if (!rowProject && Object.prototype.hasOwnProperty.call(overridesProjects, overrideKey)) {
+          rowProject = overridesProjects[overrideKey];
+        }
+      }
+      var resolved = resolveProjectName(empId, { project: rowProject });
+      if (row.cells[projectIdx]) row.cells[projectIdx].textContent = resolved;
+    });
+  }
   function replaceZeroWithDash(table){
     table.querySelectorAll('td').forEach(function(td){
       var text = (td.textContent || '').trim();
@@ -16744,6 +16809,7 @@ document.addEventListener('DOMContentLoaded', function(){
     if (!tbl) return null;
     var clone = tbl.cloneNode(true);
     replaceInputsWithText(clone);
+    fillProjectNames(clone);
     var removeLabels = ['Punches', 'Actions'];
     if (scope === 'regular') {
       removeLabels = removeLabels.concat(['OT In', 'OT Out', 'OT Hrs']);
