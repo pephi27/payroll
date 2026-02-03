@@ -2886,7 +2886,7 @@ window.addEventListener('load', dashReports);
     </div>
     <div class="tab" id="deductionsTab">
      <div id="dedMainSection" class="subtab-panel active">
-     <div class="controls">
+    <div class="controls">
       <!-- Divisor selector for splitting deductions across pay periods (Deductions tab) -->
       <label>
        Divide Deductions By
@@ -2911,6 +2911,8 @@ window.addEventListener('load', dashReports);
       <label><input type="checkbox" name="deductions_include_vale_wed" data-col="valeWed" checked/> Wed Vale</label>
       <label><input type="checkbox" name="deductions_include_total" data-col="total" checked/> Total Deductions</label>
       </div>
+      <div style="flex:1 1 auto"></div>
+      <button type="button" id="printDeductionsBtn">Print</button>
      </div>
      <div class="section note">
       SSS Loan, Pag-IBIG Loan, and Account are managed in the Loan Tracker below and are <b>read-only</b> in this table. SSS and Cash Advance use <b>Total</b> + <b>Weekly</b> (with auto-stop when fully paid). Pag-IBIG loans use <b>Monthly deduction</b> only (per-payroll amount is computed using the selected divisor). Wed Vale can still be edited here if you use it.
@@ -6487,6 +6489,11 @@ function renderOvertimeTable(){
   const tbody = document.querySelector('#overtimeTable tbody');
   if (!tbody) return;
   tbody.innerHTML = '';
+  const formatZeroDisplay = (value) => {
+    const num = Number(value);
+    if (!Number.isFinite(num) || Math.abs(num) < 0.005) return '-';
+    return num.toFixed(2);
+  };
   getEmployeeList().forEach(emp => {
     const id = emp.id;
     const name = emp.name;
@@ -6501,11 +6508,11 @@ function renderOvertimeTable(){
     tr.innerHTML = `
       <td>${id}</td>
       <td class="wrap">${name}</td>
-      <td class="num otRate">${rate.toFixed(2)}</td>
-      <td class="num otHoursTotal">${otTotal.toFixed(2)}</td>
-      <td class="num otAdjustHours">${adj.toFixed(2)}</td>
-      <td class="num otFinalHours">${otFinal.toFixed(2)}</td>
-      <td class="num otPay">${otPay.toFixed(2)}</td>
+      <td class="num otRate">${formatZeroDisplay(rate)}</td>
+      <td class="num otHoursTotal">${formatZeroDisplay(otTotal)}</td>
+      <td class="num otAdjustHours">${formatZeroDisplay(adj)}</td>
+      <td class="num otFinalHours">${formatZeroDisplay(otFinal)}</td>
+      <td class="num otPay">${formatZeroDisplay(otPay)}</td>
     `;
     tbody.appendChild(tr);
   });
@@ -6518,15 +6525,15 @@ function renderOvertimeTable(){
     const otFinal = otTotal + adj;
     const otPay = getOvertimePayForEmployee(empId, baseRate);
     const rateCell = tr.querySelector('.otRate');
-    if (rateCell) rateCell.textContent = rate.toFixed(2);
+    if (rateCell) rateCell.textContent = formatZeroDisplay(rate);
     const totalCell = tr.querySelector('.otHoursTotal');
-    if (totalCell) totalCell.textContent = otTotal.toFixed(2);
+    if (totalCell) totalCell.textContent = formatZeroDisplay(otTotal);
     const adjCell = tr.querySelector('.otAdjustHours');
-    if (adjCell) adjCell.textContent = adj.toFixed(2);
+    if (adjCell) adjCell.textContent = formatZeroDisplay(adj);
     const finalCell = tr.querySelector('.otFinalHours');
-    if (finalCell) finalCell.textContent = otFinal.toFixed(2);
+    if (finalCell) finalCell.textContent = formatZeroDisplay(otFinal);
     const payCell = tr.querySelector('.otPay');
-    if (payCell) payCell.textContent = otPay.toFixed(2);
+    if (payCell) payCell.textContent = formatZeroDisplay(otPay);
   };
 }
 
@@ -6543,16 +6550,21 @@ function updateOvertimeRowForEmployee(empId){
   const adj = getOvertimeAdjustmentHours(empId);
   const otFinal = otTotal + adj;
   const otPay = getOvertimePayForEmployee(empId, baseRate);
+  const formatZeroDisplay = (value) => {
+    const num = Number(value);
+    if (!Number.isFinite(num) || Math.abs(num) < 0.005) return '-';
+    return num.toFixed(2);
+  };
   const rateCell = row.querySelector('.otRate');
-  if (rateCell) rateCell.textContent = rate.toFixed(2);
+  if (rateCell) rateCell.textContent = formatZeroDisplay(rate);
   const totalCell = row.querySelector('.otHoursTotal');
-  if (totalCell) totalCell.textContent = otTotal.toFixed(2);
+  if (totalCell) totalCell.textContent = formatZeroDisplay(otTotal);
   const adjCell = row.querySelector('.otAdjustHours');
-  if (adjCell) adjCell.textContent = adj.toFixed(2);
+  if (adjCell) adjCell.textContent = formatZeroDisplay(adj);
   const finalCell = row.querySelector('.otFinalHours');
-  if (finalCell) finalCell.textContent = otFinal.toFixed(2);
+  if (finalCell) finalCell.textContent = formatZeroDisplay(otFinal);
   const payCell = row.querySelector('.otPay');
-  if (payCell) payCell.textContent = otPay.toFixed(2);
+  if (payCell) payCell.textContent = formatZeroDisplay(otPay);
 }
 
 
@@ -8160,6 +8172,21 @@ function renderAdjustmentHoursTable(){
   const tbody = document.querySelector('#adjustmentHoursTable tbody');
   if (!tbody) return;
   tbody.innerHTML = '';
+  const formatZeroDisplay = (value) => {
+    const num = Number(value);
+    if (!Number.isFinite(num) || Math.abs(num) < 0.005) return '-';
+    return num.toFixed(2);
+  };
+  const parseAdjustmentInputValue = (input) => {
+    const raw = String(input.value || '').trim();
+    if (!raw) {
+      return input.dataset.zeroDisplay === '1' ? 0 : null;
+    }
+    if (raw === '-') return 0;
+    const num = Number(raw);
+    if (!Number.isFinite(num)) return null;
+    return roundToCents(num);
+  };
   getEmployeeList().forEach(emp => {
     const id = emp.id;
     const name = emp.name;
@@ -8168,62 +8195,53 @@ function renderAdjustmentHoursTable(){
     tr.innerHTML = `
       <td>${id}</td>
       <td class="wrap">${name}</td>
-      <td><input type="number" step="0.01" class="adjHrsInput" data-id="${id}" value="${hrs}" /></td>
+      <td><input type="text" inputmode="decimal" step="0.01" class="adjHrsInput" data-id="${id}" value="${hrs}" /></td>
     `;
     tbody.appendChild(tr);
   });
   const formatAdjustmentHoursInput = (input) => {
     const empId = input.getAttribute('data-id');
     if (!empId) return;
-    const stored = adjHrs[empId];
+    const hasStored = Object.prototype.hasOwnProperty.call(adjHrs || {}, empId);
+    const stored = hasStored ? adjHrs[empId] : null;
     const num = Number(stored);
     if (Number.isFinite(num)) {
-      const rounded = roundToCents(num);
-      if (rounded !== 0) {
-        input.value = rounded.toFixed(2);
-        return;
-      }
-      if (num === 0) {
-        input.value = '0.00';
-        return;
-      }
+      input.dataset.zeroDisplay = num === 0 ? '1' : '0';
+      input.value = formatZeroDisplay(num);
+      return;
     }
-    input.value = '';
+    input.dataset.zeroDisplay = '0';
+    input.value = formatZeroDisplay(0);
   };
   const stageAdjustmentHoursInput = (input) => {
     const empId = input.getAttribute('data-id');
     if (!empId) return;
-    const raw = parseFloat(input.value);
-    if (Number.isFinite(raw)) {
-      const rounded = roundToCents(raw);
-      if (rounded !== 0) {
-        adjHrs[empId] = rounded;
-      } else {
-        delete adjHrs[empId];
-      }
-    } else {
+    const rounded = parseAdjustmentInputValue(input);
+    if (rounded === null) {
       delete adjHrs[empId];
+      return;
     }
+    adjHrs[empId] = rounded;
   };
   const commitAdjustmentHoursInput = (input) => {
     const empId = input.getAttribute('data-id');
     if (!empId) return;
-    const raw = parseFloat(input.value);
-    if (Number.isFinite(raw)) {
-      const rounded = roundToCents(raw);
-      if (rounded !== 0) {
-        adjHrs[empId] = rounded;
-      } else {
-        delete adjHrs[empId];
-      }
-    } else {
+    const rounded = parseAdjustmentInputValue(input);
+    if (rounded === null) {
       delete adjHrs[empId];
+    } else {
+      adjHrs[empId] = rounded;
     }
     adjustmentHoursPersist.flush();
     otherDeductionsRefresh.flush();
   };
   tbody.querySelectorAll('.adjHrsInput').forEach(inp => {
-    inp.addEventListener('focus', () => { adjustmentHoursFocusCount += 1; });
+    inp.addEventListener('focus', () => {
+      adjustmentHoursFocusCount += 1;
+      if ((inp.value || '').trim() === '-') {
+        inp.value = '';
+      }
+    });
     inp.addEventListener('blur', () => {
       adjustmentHoursFocusCount = Math.max(0, adjustmentHoursFocusCount - 1);
       commitAdjustmentHoursInput(inp);
@@ -8245,6 +8263,9 @@ function renderAdjustmentHoursTable(){
       }, 0);
     });
     inp.addEventListener('input', () => {
+      if ((inp.value || '').trim()) {
+        inp.dataset.zeroDisplay = '0';
+      }
       stageAdjustmentHoursInput(inp);
       adjustmentHoursPersist.schedule();
       otherDeductionsRefresh.schedule();
@@ -8675,6 +8696,141 @@ document.addEventListener('DOMContentLoaded', function(){
     } catch(e) { try { safePrint(w); } catch(_){} }
     // Optionally close after printing (comment out if you don't want auto-close)
     // w.close();
+  });
+});
+
+function getDeductionsReportCompanyName() {
+  if (typeof COMPANY_OPTIONS !== 'undefined' && Array.isArray(COMPANY_OPTIONS) && COMPANY_OPTIONS[0]) {
+    return COMPANY_OPTIONS[0];
+  }
+  return 'PayrollPro';
+}
+
+function buildDeductionsReportData() {
+  syncPeriodScopedData();
+  const rows = [];
+  const totals = {};
+  DEDUCTION_COLUMN_KEYS.forEach(key => { totals[key] = 0; });
+  getEmployeeList().forEach(emp => {
+    const rH = Number(regHours[emp.id] ?? 0);
+    const rate = Number((storedEmployees[emp.id]?.hourlyRate) ?? (payrollRates[emp.id] ?? 0));
+    payrollRates[emp.id] = isNaN(rate) ? 0 : rate;
+    const lSSS = roundToCents(loanSSS[emp.id] ?? 0);
+    const lPI = roundToCents(loanPI[emp.id] ?? 0);
+    const v = roundToCents(vale[emp.id] ?? 0);
+    const vW = roundToCents(valeWed[emp.id] ?? 0);
+    const otherDeductionsAmount = roundToCents(getOtherDeductionsTotal(emp.id));
+    const regPay = +(rH * rate).toFixed(2);
+    const monthly = rate * 8 * 24;
+    const piRate = pagibigRateByMonthly(monthly);
+    const phRate = philhealthRateByMonthly(monthly);
+    const flags = (typeof contribFlags !== 'undefined' && contribFlags[emp.id]) || {};
+    const div = Number(divisor) || 1;
+    const pagibig = (flags.pagibig === false) ? 0 : +((regPay * piRate).toFixed(2));
+    const philhealth = (flags.philhealth === false) ? 0 : +((regPay * phRate).toFixed(2));
+    const sssFull = (flags.sss === false) ? 0 : sssShareByMonthly(monthly);
+    const sss = (flags.sss === false) ? 0 : +((sssFull / div).toFixed(2));
+    const sssLoan = +(lSSS / div).toFixed(2);
+    const piLoan = +(lPI / div).toFixed(2);
+    const rowRaw = {
+      pagibig,
+      philhealth,
+      sss,
+      loanSSS: sssLoan,
+      loanPI: piLoan,
+      vale: v,
+      adjustments: otherDeductionsAmount,
+      valeWed: vW
+    };
+    rowRaw.total = roundToCents(pagibig + philhealth + sss + sssLoan + piLoan + v + vW + otherDeductionsAmount);
+    const rowEffective = computeEffectiveDeductionValues(rowRaw);
+    DEDUCTION_COLUMN_KEYS.forEach(key => {
+      totals[key] = roundToCents((totals[key] || 0) + (Number(rowEffective[key]) || 0));
+    });
+    rows.push({
+      id: emp.id,
+      name: emp.name,
+      values: rowEffective
+    });
+  });
+  const visibleColumns = DEDUCTION_COLUMN_KEYS.filter(key => {
+    if (!isDeductionColumnIncluded(key)) return false;
+    return rows.some(row => Math.abs(Number(row.values[key]) || 0) >= 0.005);
+  });
+  return { rows, totals, visibleColumns };
+}
+
+document.addEventListener('DOMContentLoaded', function(){
+  const btn = document.getElementById('printDeductionsBtn');
+  if (!btn) return;
+  btn.addEventListener('click', function(){
+    if (!getEmployeeList() || !getEmployeeList().length) {
+      alert('No employees available for the deductions report.');
+      return;
+    }
+    const report = buildDeductionsReportData();
+    if (!report.visibleColumns.length) {
+      alert('No deductions data to print for this period.');
+      return;
+    }
+    const columnLabels = {
+      pagibig: 'Pag-IBIG',
+      philhealth: 'PhilHealth',
+      sss: 'SSS',
+      loanSSS: 'SSS Loan',
+      loanPI: 'Pag-IBIG Loan',
+      vale: 'Account',
+      adjustments: 'Other Deductions',
+      valeWed: 'Wed Vale',
+      total: 'Total Deductions'
+    };
+    let html = '<div id="printDeductionsReport"><table><thead><tr><th>Employee ID</th><th>Employee Name</th>';
+    report.visibleColumns.forEach(col => {
+      html += `<th class="num">${columnLabels[col] || col}</th>`;
+    });
+    html += '</tr></thead><tbody>';
+    report.rows.forEach(row => {
+      html += `<tr><td>${row.id || ''}</td><td>${row.name || ''}</td>`;
+      report.visibleColumns.forEach(col => {
+        html += `<td class="num">${formatDeductionDisplay(row.values[col])}</td>`;
+      });
+      html += '</tr>';
+    });
+    html += '</tbody><tfoot><tr><td></td><td>Total</td>';
+    report.visibleColumns.forEach(col => {
+      html += `<td class="num">${formatDeductionDisplay(report.totals[col])}</td>`;
+    });
+    html += '</tr></tfoot></table></div>';
+
+    const ws = document.getElementById('weekStart');
+    const we = document.getElementById('weekEnd');
+    const startDate = ws && ws.value ? ws.value : '';
+    const endDate = we && we.value ? we.value : '';
+    const periodText = (startDate && endDate) ? `${startDate} to ${endDate}` : (startDate || endDate || '');
+    const companyName = getDeductionsReportCompanyName();
+
+    const w = window.open('', '', 'width=1100,height=700');
+    if (!w) return;
+    w.document.write('<html><head><meta charset="utf-8"><title>Deductions Report</title>');
+    w.document.write('<style>@page{size:letter landscape;margin:10mm} body{font-family:Arial,Helvetica,sans-serif;margin:0} .report-header{margin:0 0 8px} .company-name{font-size:14px;font-weight:700} .report-title{font-size:12px;font-weight:600;margin-top:2px} .report-period{font-size:10px;margin-top:2px} table{border-collapse:collapse;width:100%;table-layout:fixed} th,td{border:1pt solid #000;padding:4px;font-size:10px} th{background:#f1f5f9} td.num, th.num{text-align:right} thead{display:table-header-group} tfoot{display:table-footer-group} tfoot td{font-weight:700;background:#fff7ed;border-top:2pt solid #000}</style>');
+    w.document.write('</head><body>');
+    w.document.write('<div class="report-header">');
+    w.document.write(`<div class="company-name">${companyName}</div>`);
+    w.document.write('<div class="report-title">Deductions Report</div>');
+    if (periodText) {
+      w.document.write(`<div class="report-period">Period: ${periodText}</div>`);
+    }
+    w.document.write('</div>');
+    w.document.write(html);
+    w.document.write('</body></html>');
+    w.document.close();
+    try {
+      w.addEventListener('load', function(){
+        try { safePrint(w); } catch(e){}
+      }, { once: true });
+    } catch (e) {
+      try { safePrint(w); } catch(_) {}
+    }
   });
 });
 
