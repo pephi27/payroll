@@ -2863,12 +2863,8 @@ window.addEventListener('load', dashReports);
     </div>
     <div class="tab" id="overtimeTab">
      <div class="controls">
-      <label>
-       OT Multiplier
-       <br/>
-       <input id="otMultiplier" step="0.01" style="width:100px" type="number" value="1.25"/>
-      </label>
       <div style="flex:1 1 auto"></div>
+      <button type="button" id="printOvertimeBtn">Print</button>
      </div>
      <table id="overtimeTable">
       <thead>
@@ -2876,8 +2872,7 @@ window.addEventListener('load', dashReports);
         <th>Employee ID</th>
         <th>Employee Name</th>
         <th>Hourly Rate</th>
-        <th>OT Multiplier</th>
-        <th>Overtime Hours Total</th>
+        <th>Total OT Hrs</th>
         <th>Adjustment OT Hours</th>
         <th>Overtime Hours Final</th>
         <th>Overtime Pay</th>
@@ -2886,7 +2881,7 @@ window.addEventListener('load', dashReports);
       <tbody></tbody>
      </table>
      <div class="section note">
-      Overtime hours are sourced from the DTR totals. Adjust OT hours or add manual adjustments here to update payroll totals.
+      Overtime hours are sourced from the DTR totals. Adjustment OT hours are managed in the Adjustments subtab and synced here automatically.
      </div>
     </div>
     <div class="tab" id="deductionsTab">
@@ -3223,9 +3218,16 @@ function getOvertimeFinalHours(empId) {
   return Number.isFinite(total) ? total : 0;
 }
 
+function getEffectiveOvertimeRateForEmployee(empId, rateOverride) {
+  const baseRate = Number.isFinite(Number(rateOverride)) ? Number(rateOverride) : getEmployeeHourlyRate(empId);
+  const multiplier = getOvertimeMultiplier();
+  const effective = baseRate * multiplier;
+  return Number.isFinite(effective) ? effective : 0;
+}
+
 function getOvertimePayForEmployee(empId, rateOverride) {
-  const rate = Number.isFinite(Number(rateOverride)) ? Number(rateOverride) : getEmployeeHourlyRate(empId);
-  const pay = getOvertimeFinalHours(empId) * rate * getOvertimeMultiplier();
+  const rate = getEffectiveOvertimeRateForEmployee(empId, rateOverride);
+  const pay = getOvertimeFinalHours(empId) * rate;
   if (typeof roundToCents === 'function') return roundToCents(pay);
   return Math.round(pay * 100) / 100;
 }
@@ -3557,6 +3559,7 @@ function initPayrollSettingsUI() {
   if (settingsOt && !settingsOt.__settingsBound) {
     settingsOt.addEventListener('input', () => {
       updatePayrollSettings({ overtime: { multiplier: parseFloat(settingsOt.value) || 0 } });
+      try { renderOvertimeTable(); } catch (_) {}
     });
     settingsOt.__settingsBound = true;
   }
@@ -6484,27 +6487,23 @@ function renderOvertimeTable(){
   const tbody = document.querySelector('#overtimeTable tbody');
   if (!tbody) return;
   tbody.innerHTML = '';
-  const roundValue = (val) => (typeof roundToCents === 'function'
-    ? roundToCents(val)
-    : Math.round((Number(val) || 0) * 100) / 100);
-  const otMultiplier = getOvertimeMultiplier();
   getEmployeeList().forEach(emp => {
     const id = emp.id;
     const name = emp.name;
-    const rate = getEmployeeHourlyRate(id);
+    const baseRate = getEmployeeHourlyRate(id);
+    const rate = getEffectiveOvertimeRateForEmployee(id, baseRate);
     const otTotal = getOvertimeHoursTotal(id);
     const adj = getOvertimeAdjustmentHours(id);
     const otFinal = otTotal + adj;
-    const otPay = getOvertimePayForEmployee(id, rate);
+    const otPay = getOvertimePayForEmployee(id, baseRate);
     const tr = document.createElement('tr');
     tr.dataset.empId = id;
     tr.innerHTML = `
       <td>${id}</td>
       <td class="wrap">${name}</td>
-      <td class="num">${rate.toFixed(2)}</td>
-      <td class="num otMultiplierDisplay">${otMultiplier.toFixed(2)}</td>
-      <td><input type="number" min="0" step="0.01" class="cell otHoursInput" data-id="${id}" value="${otTotal.toFixed(2)}" /></td>
-      <td><input type="number" step="0.01" class="cell otAdjustInput" data-id="${id}" value="${adj ? adj.toFixed(2) : ''}" /></td>
+      <td class="num otRate">${rate.toFixed(2)}</td>
+      <td class="num otHoursTotal">${otTotal.toFixed(2)}</td>
+      <td class="num otAdjustHours">${adj.toFixed(2)}</td>
       <td class="num otFinalHours">${otFinal.toFixed(2)}</td>
       <td class="num otPay">${otPay.toFixed(2)}</td>
     `;
@@ -6512,76 +6511,23 @@ function renderOvertimeTable(){
   });
 
   const updateOvertimeRowDisplay = (tr, empId) => {
-    const rate = getEmployeeHourlyRate(empId);
-    const multiplier = getOvertimeMultiplier();
+    const baseRate = getEmployeeHourlyRate(empId);
+    const rate = getEffectiveOvertimeRateForEmployee(empId, baseRate);
     const otTotal = getOvertimeHoursTotal(empId);
     const adj = getOvertimeAdjustmentHours(empId);
     const otFinal = otTotal + adj;
-    const otPay = getOvertimePayForEmployee(empId, rate);
-    const multiplierCell = tr.querySelector('.otMultiplierDisplay');
-    if (multiplierCell) multiplierCell.textContent = multiplier.toFixed(2);
+    const otPay = getOvertimePayForEmployee(empId, baseRate);
+    const rateCell = tr.querySelector('.otRate');
+    if (rateCell) rateCell.textContent = rate.toFixed(2);
+    const totalCell = tr.querySelector('.otHoursTotal');
+    if (totalCell) totalCell.textContent = otTotal.toFixed(2);
+    const adjCell = tr.querySelector('.otAdjustHours');
+    if (adjCell) adjCell.textContent = adj.toFixed(2);
     const finalCell = tr.querySelector('.otFinalHours');
     if (finalCell) finalCell.textContent = otFinal.toFixed(2);
     const payCell = tr.querySelector('.otPay');
     if (payCell) payCell.textContent = otPay.toFixed(2);
   };
-
-  tbody.querySelectorAll('.otHoursInput').forEach(inp => {
-    inp.addEventListener('input', () => {
-      const empId = inp.dataset.id;
-      if (!empId) return;
-      const raw = parseFloat(inp.value);
-      const next = Number.isFinite(raw) ? Math.max(0, raw) : 0;
-      otHours[empId] = roundValue(next);
-      localStorage.setItem(LS_OT_HRS, JSON.stringify(otHours));
-      const row = inp.closest('tr');
-      if (row) updateOvertimeRowDisplay(row, empId);
-      updatePayrollRowForEmployee(empId);
-    });
-    inp.addEventListener('blur', () => {
-      const empId = inp.dataset.id;
-      if (!empId) return;
-      const raw = parseFloat(inp.value);
-      const next = Number.isFinite(raw) ? Math.max(0, raw) : 0;
-      const rounded = roundValue(next);
-      inp.value = rounded.toFixed(2);
-    });
-  });
-
-  tbody.querySelectorAll('.otAdjustInput').forEach(inp => {
-    inp.addEventListener('input', () => {
-      const empId = inp.dataset.id;
-      if (!empId) return;
-      const raw = parseFloat(inp.value);
-      if (Number.isFinite(raw)) {
-        const rounded = roundValue(raw);
-        if (rounded !== 0) {
-          adjHrs[empId] = rounded;
-        } else {
-          delete adjHrs[empId];
-        }
-      } else {
-        delete adjHrs[empId];
-      }
-      if (typeof persistCurrentAdjustmentHours === 'function') {
-        try { persistCurrentAdjustmentHours(); } catch (_) {}
-      }
-      const row = inp.closest('tr');
-      if (row) updateOvertimeRowDisplay(row, empId);
-      updatePayrollRowForEmployee(empId);
-    });
-    inp.addEventListener('blur', () => {
-      const empId = inp.dataset.id;
-      if (!empId) return;
-      const raw = parseFloat(inp.value);
-      if (Number.isFinite(raw) && raw !== 0) {
-        const rounded = roundValue(raw);
-        inp.value = rounded.toFixed(2);
-      } else {
-        inp.value = '';
-      }
-    });
-  });
 }
 
 function updateOvertimeRowForEmployee(empId){
@@ -6591,18 +6537,18 @@ function updateOvertimeRowForEmployee(empId){
     : empId.replace(/\"/g, '\\"');
   const row = document.querySelector(`#overtimeTable tbody tr[data-emp-id="${safeId}"]`);
   if (!row) return;
-  const rate = getEmployeeHourlyRate(empId);
-  const multiplier = getOvertimeMultiplier();
+  const baseRate = getEmployeeHourlyRate(empId);
+  const rate = getEffectiveOvertimeRateForEmployee(empId, baseRate);
   const otTotal = getOvertimeHoursTotal(empId);
   const adj = getOvertimeAdjustmentHours(empId);
   const otFinal = otTotal + adj;
-  const otPay = getOvertimePayForEmployee(empId, rate);
-  const multiplierCell = row.querySelector('.otMultiplierDisplay');
-  if (multiplierCell) multiplierCell.textContent = multiplier.toFixed(2);
-  const totalInput = row.querySelector('.otHoursInput');
-  if (totalInput && document.activeElement !== totalInput) totalInput.value = otTotal.toFixed(2);
-  const adjInput = row.querySelector('.otAdjustInput');
-  if (adjInput && document.activeElement !== adjInput) adjInput.value = adj ? adj.toFixed(2) : '';
+  const otPay = getOvertimePayForEmployee(empId, baseRate);
+  const rateCell = row.querySelector('.otRate');
+  if (rateCell) rateCell.textContent = rate.toFixed(2);
+  const totalCell = row.querySelector('.otHoursTotal');
+  if (totalCell) totalCell.textContent = otTotal.toFixed(2);
+  const adjCell = row.querySelector('.otAdjustHours');
+  if (adjCell) adjCell.textContent = adj.toFixed(2);
   const finalCell = row.querySelector('.otFinalHours');
   if (finalCell) finalCell.textContent = otFinal.toFixed(2);
   const payCell = row.querySelector('.otPay');
@@ -7159,7 +7105,8 @@ function calculateRow(tr){  const readNum = sel => { const el = tr.querySelector
 
   const regPay = +(reg * rate).toFixed(2);
   tr.querySelector('.totalHrs').textContent = totalHrs.toFixed(2);
-  const otPay = +(otTotal * rate * getOvertimeMultiplier()).toFixed(2);
+  const effectiveOtRate = getEffectiveOvertimeRateForEmployee(id, rate);
+  const otPay = +(otTotal * effectiveOtRate).toFixed(2);
   const gross = +(regPay + otPay + additionalIncome + bVal).toFixed(2);
   // Compute contributions using dynamic tables (employee share).  Determine the
   // appropriate rate based on the monthly income and multiply by regular pay.
@@ -8783,6 +8730,120 @@ document.addEventListener('DOMContentLoaded', function(){
     } catch(e) { try { safePrint(w); } catch(_){} }
     // Optionally close after printing (comment out if you don't want auto-close)
     // w.close();
+  });
+});
+
+function getOvertimeReportCompanyName() {
+  if (typeof COMPANY_OPTIONS !== 'undefined' && Array.isArray(COMPANY_OPTIONS) && COMPANY_OPTIONS[0]) {
+    return COMPANY_OPTIONS[0];
+  }
+  return 'PayrollPro';
+}
+
+function buildOvertimeReportData() {
+  syncPeriodScopedData();
+  const rows = [];
+  getEmployeeList().forEach(emp => {
+    const baseRate = getEmployeeHourlyRate(emp.id);
+    const effectiveRate = getEffectiveOvertimeRateForEmployee(emp.id, baseRate);
+    const otTotal = getOvertimeHoursTotal(emp.id);
+    const adj = getOvertimeAdjustmentHours(emp.id);
+    const otFinal = otTotal + adj;
+    const otPay = getOvertimePayForEmployee(emp.id, baseRate);
+    rows.push({
+      id: emp.id,
+      name: emp.name,
+      rate: effectiveRate,
+      total: otTotal,
+      adj,
+      final: otFinal,
+      pay: otPay
+    });
+  });
+  return { rows };
+}
+
+document.addEventListener('DOMContentLoaded', function(){
+  const btn = document.getElementById('printOvertimeBtn');
+  if (!btn) return;
+  btn.addEventListener('click', function(){
+    if (!getEmployeeList() || !getEmployeeList().length) {
+      alert('No employees available for the overtime report.');
+      return;
+    }
+    const report = buildOvertimeReportData();
+    const columns = [
+      { key: 'rate', label: 'Hourly Rate', numeric: true },
+      { key: 'total', label: 'Total OT Hrs', numeric: true },
+      { key: 'adj', label: 'Adjustment OT Hours', numeric: true },
+      { key: 'final', label: 'Overtime Hours Final', numeric: true },
+      { key: 'pay', label: 'Overtime Pay', numeric: true }
+    ];
+    const visibleColumns = columns.filter(col => report.rows.some(row => Number(row[col.key]) !== 0));
+    if (!visibleColumns.length) {
+      alert('No overtime data to print for this period.');
+      return;
+    }
+    const formatAmount = (value) => {
+      const num = Number(value);
+      if (!Number.isFinite(num) || Math.abs(num) < 0.005) return '-';
+      return num.toFixed(2);
+    };
+    const totalOtHrs = report.rows.reduce((sum, row) => roundToCents(sum + (Number(row.total) || 0)), 0);
+    const totalOtPay = report.rows.reduce((sum, row) => roundToCents(sum + (Number(row.pay) || 0)), 0);
+    const totals = { total: totalOtHrs, pay: totalOtPay };
+
+    let html = '<div id="printOvertimeReport"><table><thead><tr><th>Employee ID</th><th>Employee Name</th>';
+    visibleColumns.forEach(col => {
+      html += `<th class="num">${col.label}</th>`;
+    });
+    html += '</tr></thead><tbody>';
+    report.rows.forEach(row => {
+      html += `<tr><td>${row.id || ''}</td><td>${row.name || ''}</td>`;
+      visibleColumns.forEach(col => {
+        html += `<td class="num">${formatAmount(row[col.key])}</td>`;
+      });
+      html += '</tr>';
+    });
+    html += '</tbody><tfoot><tr><td></td><td>Total</td>';
+    visibleColumns.forEach(col => {
+      if (Object.prototype.hasOwnProperty.call(totals, col.key)) {
+        html += `<td class="num">${formatAmount(totals[col.key])}</td>`;
+      } else {
+        html += '<td></td>';
+      }
+    });
+    html += '</tr></tfoot></table></div>';
+
+    const ws = document.getElementById('weekStart');
+    const we = document.getElementById('weekEnd');
+    const startDate = ws && ws.value ? ws.value : '';
+    const endDate = we && we.value ? we.value : '';
+    const periodText = (startDate && endDate) ? `${startDate} to ${endDate}` : (startDate || endDate || '');
+    const companyName = getOvertimeReportCompanyName();
+
+    const w = window.open('', '', 'width=1000,height=700');
+    if (!w) return;
+    w.document.write('<html><head><meta charset="utf-8"><title>Overtime Report</title>');
+    w.document.write('<style>@page{size:letter landscape;margin:10mm} body{font-family:Arial,Helvetica,sans-serif;margin:0} .report-header{margin:0 0 8px} .company-name{font-size:14px;font-weight:700} .report-title{font-size:12px;font-weight:600;margin-top:2px} .report-period{font-size:10px;margin-top:2px} table{border-collapse:collapse;width:100%;table-layout:fixed} th,td{border:1pt solid #000;padding:4px;font-size:10px} th{background:#f1f5f9} td.num, th.num{text-align:right} thead{display:table-header-group} tfoot{display:table-footer-group} tfoot td{font-weight:700;background:#fff7ed;border-top:2pt solid #000}</style>');
+    w.document.write('</head><body>');
+    w.document.write('<div class="report-header">');
+    w.document.write(`<div class="company-name">${companyName}</div>`);
+    w.document.write('<div class="report-title">Overtime Report</div>');
+    if (periodText) {
+      w.document.write(`<div class="report-period">Period: ${periodText}</div>`);
+    }
+    w.document.write('</div>');
+    w.document.write(html);
+    w.document.write('</body></html>');
+    w.document.close();
+    try {
+      w.addEventListener('load', function(){
+        try { safePrint(w); } catch(e){}
+      }, { once: true });
+    } catch (e) {
+      try { safePrint(w); } catch(_) {}
+    }
   });
 });
 
