@@ -16607,14 +16607,61 @@ document.addEventListener('DOMContentLoaded', function(){
   }
   function getDtrProjectText(){
     var projectEl = document.getElementById('filterProject');
-    if (!projectEl) return '';
-    var selected = projectEl.options && projectEl.selectedIndex >= 0 ? projectEl.options[projectEl.selectedIndex] : null;
-    var label = selected ? selected.textContent : '';
+    var selected = projectEl && projectEl.options && projectEl.selectedIndex >= 0
+      ? projectEl.options[projectEl.selectedIndex]
+      : null;
+    var label = selected ? (selected.textContent || '').trim() : '';
     var value = selected ? selected.value : '';
-    if (!label) return '';
+    var normalize = function(text){ return String(text || '').trim(); };
+    var projectLabelFromValue = function(val){
+      if (!val) return '';
+      if (val === 'all') return 'All Projects';
+      if (val === 'none') return 'No Project';
+      if (typeof storedProjects !== 'undefined' && storedProjects && storedProjects[val]) {
+        return storedProjects[val].name || val;
+      }
+      return val;
+    };
+    var projectLabelFromCell = function(cell){
+      if (!cell) return '';
+      var sel = cell.querySelector ? cell.querySelector('select') : null;
+      if (sel) {
+        var opt = sel.options && sel.selectedIndex >= 0 ? sel.options[sel.selectedIndex] : null;
+        var optLabel = opt ? normalize(opt.textContent) : '';
+        if (optLabel && optLabel !== '(None)') return optLabel;
+        var val = normalize(sel.value);
+        var mapped = projectLabelFromValue(val);
+        return mapped && mapped !== 'No Project' ? mapped : '';
+      }
+      var text = normalize(cell.textContent);
+      if (text && text !== '(None)') return text;
+      return '';
+    };
+    var collectProjectLabelsFromTable = function(){
+      var table = document.getElementById('resultsTable');
+      if (!table || !table.tHead || !table.tHead.rows.length) return [];
+      var headerCells = Array.from(table.tHead.rows[0].cells || []);
+      var idx = headerCells.findIndex(function(cell){
+        return normalize(cell.textContent).toLowerCase() === 'project';
+      });
+      if (idx < 0 || !table.tBodies.length) return [];
+      var labels = [];
+      Array.from(table.tBodies[0].rows || []).forEach(function(row){
+        var cell = row.cells && row.cells[idx];
+        var labelText = projectLabelFromCell(cell);
+        if (labelText) labels.push(labelText);
+      });
+      return Array.from(new Set(labels));
+    };
+    if (value && value !== 'none' && value !== 'all') {
+      return label || projectLabelFromValue(value);
+    }
     if (value === 'all') return 'All Projects';
+    var labels = collectProjectLabelsFromTable();
+    if (labels.length === 1) return labels[0];
+    if (labels.length > 1) return 'All Projects';
     if (value === 'none') return 'No Project';
-    return label;
+    return label || '';
   }
   function normalizeHeader(text){
     return String(text || '').replace(/\s+/g, ' ').trim().toLowerCase();
