@@ -502,6 +502,11 @@ function safeStringify(v){
 #otherDeductionsTable .otherDeductionCustomLabel { min-width: 160px; flex: 1; }
 /* === END Other Deductions === */
 
+/* === Grand Total rows (subtabs) === */
+.grand-total-row td { font-weight: 700; background: #f8fafc; }
+.grand-total-row td.num { text-align: right; }
+/* === END Grand Total rows === */
+
 /* === PERF: faster layout for payroll table === */
 #payrollTable { table-layout: fixed; }
 #payrollTable th, #payrollTable td { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -5696,6 +5701,7 @@ function updateAdditionalIncomeTotalForEmployee(empId){
   } else {
     delete additionalIncomeTotal[empId];
   }
+  try { updateAdditionalIncomeGrandTotalRow(); } catch (_) {}
   return total;
 }
 
@@ -5813,6 +5819,7 @@ function updateOtherDeductionsTotalForEmployee(empId){
   } else {
     delete otherDeductionsTotal[empId];
   }
+  try { updateOtherDeductionsGrandTotalRow(); } catch (_) {}
   return total;
 }
 
@@ -6853,6 +6860,10 @@ function renderOvertimeTable(){
   const tbody = document.querySelector('#overtimeTable tbody');
   if (!tbody) return;
   tbody.innerHTML = '';
+  let totalOtHours = 0;
+  let totalAdjHours = 0;
+  let totalFinalHours = 0;
+  let totalOtPay = 0;
   const formatZeroDisplay = (value) => {
     const num = Number(value);
     if (!Number.isFinite(num) || Math.abs(num) < 0.005) return '-';
@@ -6867,6 +6878,10 @@ function renderOvertimeTable(){
     const adj = getOvertimeAdjustmentHours(id);
     const otFinal = otTotal + adj;
     const otPay = getOvertimePayForEmployee(id, baseRate);
+    totalOtHours = roundToCents(totalOtHours + otTotal);
+    totalAdjHours = roundToCents(totalAdjHours + adj);
+    totalFinalHours = roundToCents(totalFinalHours + otFinal);
+    totalOtPay = roundToCents(totalOtPay + otPay);
     const tr = document.createElement('tr');
     tr.dataset.empId = id;
     tr.innerHTML = `
@@ -6880,6 +6895,18 @@ function renderOvertimeTable(){
     `;
     tbody.appendChild(tr);
   });
+  const totalRow = document.createElement('tr');
+  totalRow.className = 'grand-total-row';
+  totalRow.innerHTML = `
+    <td>Grand Total</td>
+    <td></td>
+    <td class="num"></td>
+    <td class="num" data-col="totalOtHours">${formatZeroDisplay(totalOtHours)}</td>
+    <td class="num" data-col="adjOtHours">${formatZeroDisplay(totalAdjHours)}</td>
+    <td class="num" data-col="finalOtHours">${formatZeroDisplay(totalFinalHours)}</td>
+    <td class="num" data-col="otPay">${formatZeroDisplay(totalOtPay)}</td>
+  `;
+  tbody.appendChild(totalRow);
 
   const updateOvertimeRowDisplay = (tr, empId) => {
     const baseRate = getEmployeeHourlyRate(empId);
@@ -6899,6 +6926,42 @@ function renderOvertimeTable(){
     const payCell = tr.querySelector('.otPay');
     if (payCell) payCell.textContent = formatZeroDisplay(otPay);
   };
+}
+
+function updateOvertimeGrandTotals() {
+  syncPeriodScopedData();
+  const tbody = document.querySelector('#overtimeTable tbody');
+  if (!tbody) return;
+  const totalRow = tbody.querySelector('tr.grand-total-row');
+  if (!totalRow) return;
+  let totalOtHours = 0;
+  let totalAdjHours = 0;
+  let totalFinalHours = 0;
+  let totalOtPay = 0;
+  getEmployeeList().forEach(emp => {
+    const baseRate = getEmployeeHourlyRate(emp.id);
+    const otTotal = getOvertimeHoursTotal(emp.id);
+    const adj = getOvertimeAdjustmentHours(emp.id);
+    const otFinal = otTotal + adj;
+    const otPay = getOvertimePayForEmployee(emp.id, baseRate);
+    totalOtHours = roundToCents(totalOtHours + otTotal);
+    totalAdjHours = roundToCents(totalAdjHours + adj);
+    totalFinalHours = roundToCents(totalFinalHours + otFinal);
+    totalOtPay = roundToCents(totalOtPay + otPay);
+  });
+  const formatZeroDisplay = (value) => {
+    const num = Number(value);
+    if (!Number.isFinite(num) || Math.abs(num) < 0.005) return '-';
+    return num.toFixed(2);
+  };
+  const setCell = (col, value) => {
+    const cell = totalRow.querySelector(`[data-col="${col}"]`);
+    if (cell) cell.textContent = formatZeroDisplay(value);
+  };
+  setCell('totalOtHours', totalOtHours);
+  setCell('adjOtHours', totalAdjHours);
+  setCell('finalOtHours', totalFinalHours);
+  setCell('otPay', totalOtPay);
 }
 
 function updateOvertimeRowForEmployee(empId){
@@ -6929,6 +6992,7 @@ function updateOvertimeRowForEmployee(empId){
   if (finalCell) finalCell.textContent = formatZeroDisplay(otFinal);
   const payCell = row.querySelector('.otPay');
   if (payCell) payCell.textContent = formatZeroDisplay(otPay);
+  updateOvertimeGrandTotals();
 }
 
 
@@ -7748,8 +7812,10 @@ function renderAdditionalIncomeTable(){
     }, 0);
   };
   atbody.innerHTML = '';
+  let grandTotal = 0;
   getEmployeeList().forEach(emp => {
     const empId = emp.id;
+    grandTotal = roundToCents(grandTotal + getAdditionalIncomeTotal(empId));
     const items = Array.isArray(additionalIncomeDetails[empId]) ? additionalIncomeDetails[empId] : [];
     const renderItems = items.length ? items : [{ label: '', amount: '', __placeholder: true }];
     renderItems.forEach((item, idx) => {
@@ -8011,6 +8077,27 @@ function renderAdditionalIncomeTable(){
       atbody.appendChild(tr);
     });
   });
+  const totalRow = document.createElement('tr');
+  totalRow.className = 'grand-total-row';
+  totalRow.innerHTML = `
+    <td class="wrap">Grand Total</td>
+    <td></td>
+    <td></td>
+    <td class="num" data-col="amount">${formatDeductionDisplay(grandTotal)}</td>
+    <td></td>
+  `;
+  atbody.appendChild(totalRow);
+}
+
+function updateAdditionalIncomeGrandTotalRow() {
+  const row = document.querySelector('#additionalIncomeTable tbody tr.grand-total-row');
+  if (!row) return;
+  let grandTotal = 0;
+  getEmployeeList().forEach(emp => {
+    grandTotal = roundToCents(grandTotal + getAdditionalIncomeTotal(emp.id));
+  });
+  const cell = row.querySelector('[data-col="amount"]');
+  if (cell) cell.textContent = formatDeductionDisplay(grandTotal);
 }
 
 function buildAdditionalIncomeReportData() {
@@ -8290,8 +8377,10 @@ function renderOtherDeductionsTable(){
     }, 0);
   };
   tbody.innerHTML = '';
+  let grandTotal = 0;
   getEmployeeList().forEach(emp => {
     const empId = emp.id;
+    grandTotal = roundToCents(grandTotal + getOtherDeductionsTotal(empId));
     const items = Array.isArray(otherDeductionsDetails[empId]) ? otherDeductionsDetails[empId] : [];
     const renderItems = items.length ? items : [{ type: defaultType, label: '', amount: '', __placeholder: true }];
     renderItems.forEach((item, idx) => {
@@ -8514,6 +8603,26 @@ function renderOtherDeductionsTable(){
       tbody.appendChild(tr);
     });
   });
+  const totalRow = document.createElement('tr');
+  totalRow.className = 'grand-total-row';
+  totalRow.innerHTML = `
+    <td class="wrap">Grand Total</td>
+    <td></td>
+    <td class="num" data-col="amount">${formatDeductionDisplay(grandTotal)}</td>
+    <td></td>
+  `;
+  tbody.appendChild(totalRow);
+}
+
+function updateOtherDeductionsGrandTotalRow() {
+  const row = document.querySelector('#otherDeductionsTable tbody tr.grand-total-row');
+  if (!row) return;
+  let grandTotal = 0;
+  getEmployeeList().forEach(emp => {
+    grandTotal = roundToCents(grandTotal + getOtherDeductionsTotal(emp.id));
+  });
+  const cell = row.querySelector('[data-col="amount"]');
+  if (cell) cell.textContent = formatDeductionDisplay(grandTotal);
 }
 
 function renderAdjustmentHoursTable(){
@@ -8526,6 +8635,7 @@ function renderAdjustmentHoursTable(){
   const tbody = document.querySelector('#adjustmentHoursTable tbody');
   if (!tbody) return;
   tbody.innerHTML = '';
+  let grandTotal = 0;
   const formatZeroDisplay = (value) => {
     const num = Number(value);
     if (!Number.isFinite(num) || Math.abs(num) < 0.005) return '-';
@@ -8545,6 +8655,9 @@ function renderAdjustmentHoursTable(){
     const id = emp.id;
     const name = emp.name;
     const hrs = adjHrs[id] !== undefined ? adjHrs[id] : '';
+    if (hrs !== '' && Number.isFinite(Number(hrs))) {
+      grandTotal = roundToCents(grandTotal + Number(hrs));
+    }
     const tr = document.createElement('tr');
     tr.innerHTML = `
       <td>${id}</td>
@@ -8553,6 +8666,14 @@ function renderAdjustmentHoursTable(){
     `;
     tbody.appendChild(tr);
   });
+  const totalRow = document.createElement('tr');
+  totalRow.className = 'grand-total-row';
+  totalRow.innerHTML = `
+    <td>Grand Total</td>
+    <td></td>
+    <td class="num" data-col="hours">${formatZeroDisplay(grandTotal)}</td>
+  `;
+  tbody.appendChild(totalRow);
   const formatAdjustmentHoursInput = (input) => {
     const empId = input.getAttribute('data-id');
     if (!empId) return;
@@ -8600,6 +8721,7 @@ function renderAdjustmentHoursTable(){
       adjustmentHoursFocusCount = Math.max(0, adjustmentHoursFocusCount - 1);
       commitAdjustmentHoursInput(inp);
       formatAdjustmentHoursInput(inp);
+      updateAdjustmentHoursGrandTotalRow();
       const empId = inp.getAttribute('data-id');
       if (empId) {
         updateOvertimeRowForEmployee(empId);
@@ -8623,6 +8745,7 @@ function renderAdjustmentHoursTable(){
       stageAdjustmentHoursInput(inp);
       adjustmentHoursPersist.schedule();
       otherDeductionsRefresh.schedule();
+      updateAdjustmentHoursGrandTotalRow();
       const empId = inp.getAttribute('data-id');
       if (empId) {
         updateOvertimeRowForEmployee(empId);
@@ -8632,6 +8755,7 @@ function renderAdjustmentHoursTable(){
     inp.addEventListener('change', () => {
       commitAdjustmentHoursInput(inp);
       formatAdjustmentHoursInput(inp);
+      updateAdjustmentHoursGrandTotalRow();
       const empId = inp.getAttribute('data-id');
       if (empId) {
         updateOvertimeRowForEmployee(empId);
@@ -8640,6 +8764,24 @@ function renderAdjustmentHoursTable(){
     });
     formatAdjustmentHoursInput(inp);
   });
+}
+
+function updateAdjustmentHoursGrandTotalRow() {
+  const row = document.querySelector('#adjustmentHoursTable tbody tr.grand-total-row');
+  if (!row) return;
+  let grandTotal = 0;
+  getEmployeeList().forEach(emp => {
+    const raw = adjHrs && Object.prototype.hasOwnProperty.call(adjHrs, emp.id) ? adjHrs[emp.id] : 0;
+    const num = Number(raw);
+    if (Number.isFinite(num)) grandTotal = roundToCents(grandTotal + num);
+  });
+  const formatZeroDisplay = (value) => {
+    const num = Number(value);
+    if (!Number.isFinite(num) || Math.abs(num) < 0.005) return '-';
+    return num.toFixed(2);
+  };
+  const cell = row.querySelector('[data-col="hours"]');
+  if (cell) cell.textContent = formatZeroDisplay(grandTotal);
 }
 
 function otherDeductionsBackupPayload(){
@@ -9232,8 +9374,10 @@ document.addEventListener('DOMContentLoaded', function(){
       return num.toFixed(2);
     };
     const totalOtHrs = report.rows.reduce((sum, row) => roundToCents(sum + (Number(row.total) || 0)), 0);
+    const totalAdjHrs = report.rows.reduce((sum, row) => roundToCents(sum + (Number(row.adj) || 0)), 0);
+    const totalFinalHrs = report.rows.reduce((sum, row) => roundToCents(sum + (Number(row.final) || 0)), 0);
     const totalOtPay = report.rows.reduce((sum, row) => roundToCents(sum + (Number(row.pay) || 0)), 0);
-    const totals = { total: totalOtHrs, pay: totalOtPay };
+    const totals = { total: totalOtHrs, adj: totalAdjHrs, final: totalFinalHrs, pay: totalOtPay };
 
     let html = '<div id="printOvertimeReport"><table><thead><tr><th>Employee ID</th><th>Employee Name</th>';
     visibleColumns.forEach(col => {
@@ -9247,7 +9391,7 @@ document.addEventListener('DOMContentLoaded', function(){
       });
       html += '</tr>';
     });
-    html += '</tbody><tfoot><tr><td></td><td>Total</td>';
+    html += '</tbody><tfoot><tr><td></td><td>Grand Total</td>';
     visibleColumns.forEach(col => {
       if (Object.prototype.hasOwnProperty.call(totals, col.key)) {
         html += `<td class="num">${formatAmount(totals[col.key])}</td>`;
