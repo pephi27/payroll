@@ -525,18 +525,17 @@ function safeStringify(v){
 .save-indicator.error { color: #a40000; font-weight: 600; }
 
 
-/* === Reports: Stabilize last 4 totals columns to prevent twitch === */
-#r_table, #projectTotalsTable { table-layout: fixed; }
-#r_table th:nth-last-child(4), #r_table td:nth-last-child(4),
-#projectTotalsTable th:nth-last-child(4), #projectTotalsTable td:nth-last-child(4) { width: 100px; min-width: 100px; max-width: 110px; }
-#r_table th:nth-last-child(3), #r_table td:nth-last-child(3),
-#projectTotalsTable th:nth-last-child(3), #projectTotalsTable td:nth-last-child(3) { width: 100px; min-width: 100px; max-width: 110px; }
+/* === Reports: Stabilize totals columns to prevent twitch === */
+#r_table, #r_ot_table, #projectTotalsTable { table-layout: fixed; }
 #r_table th:nth-last-child(2), #r_table td:nth-last-child(2),
+#r_ot_table th:nth-last-child(2), #r_ot_table td:nth-last-child(2),
 #projectTotalsTable th:nth-last-child(2), #projectTotalsTable td:nth-last-child(2) { width: 120px; min-width: 120px; max-width: 140px; }
 #r_table th:nth-last-child(1), #r_table td:nth-last-child(1),
+#r_ot_table th:nth-last-child(1), #r_ot_table td:nth-last-child(1),
 #projectTotalsTable th:nth-last-child(1), #projectTotalsTable td:nth-last-child(1) { width: 110px; min-width: 110px; max-width: 120px; }
 /* Make first (personnel) column robust but constrained */
 #r_table th:first-child, #r_table td:first-child,
+#r_ot_table th:first-child, #r_ot_table td:first-child,
 #projectTotalsTable th:first-child, #projectTotalsTable td:first-child {
   text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   width: 170px; min-width: 170px; max-width: 170px;
@@ -10601,11 +10600,12 @@ document.addEventListener('DOMContentLoaded', () => {
     @media print{
       header,.header,.controls{display:none!important}
       .card{box-shadow:none;border:0;padding:0}
-      #r_table thead{display:table-header-group}
-      #r_table tfoot{display:none!important}
-      #r_table tbody.proj-page{display:table-row-group;break-inside:avoid;page-break-inside:avoid}
-      #r_table tbody.proj-page{break-before:page;page-break-before:always}
-      #r_table tbody.proj-page:first-of-type{break-before:auto;page-break-before:auto}
+      #r_table thead, #r_ot_table thead{display:table-header-group}
+      #r_table tfoot, #r_ot_table tfoot{display:none!important}
+      #r_table tbody.proj-page, #r_ot_table tbody.proj-page{display:table-row-group;break-inside:avoid;page-break-inside:avoid}
+      #r_table tbody.proj-page, #r_ot_table tbody.proj-page{break-before:page;page-break-before:always}
+      #r_table tbody.proj-page:first-of-type,
+      #r_ot_table tbody.proj-page:first-of-type{break-before:auto;page-break-before:auto}
       /* Master report print tweaks */
       #masterReportContainer .mr-table thead{display:table-header-group}
     }
@@ -10615,6 +10615,7 @@ document.addEventListener('DOMContentLoaded', () => {
     <h3 style="margin:0 0 8px 0;">Reports</h3>
     <div class="subtab-nav">
       <button class="tab-btn subtab-btn active" data-subtab="reportsDetailedTab" id="btnReportsDetailed">Detailed</button>
+      <button class="tab-btn subtab-btn" data-subtab="reportsOvertimeTab" id="btnReportsOvertime">Overtime</button>
       <button class="tab-btn subtab-btn" data-subtab="masterReportTab" id="btnMasterReport">Master Report</button>
     </div>
 
@@ -10627,6 +10628,17 @@ document.addEventListener('DOMContentLoaded', () => {
       </div>
       <div id="r_msg" style="font-size:13px;color:#64748b;display:none;"></div>
       <table id="r_table" aria-live="polite"></table>
+    </div>
+
+    <!-- Overtime reports view -->
+    <div id="reportsOvertimeTab" class="subtab-panel">
+      <div class="controls">
+        <button id="r_ot_print">Print</button>
+        <button id="r_ot_csv">CSV (All)</button>
+        <span id="r_ot_range_hint" style="font-size:12px;color:#64748b;margin-left:auto;"></span>
+      </div>
+      <div id="r_ot_msg" style="font-size:13px;color:#64748b;display:none;"></div>
+      <table id="r_ot_table" aria-live="polite"></table>
     </div>
 
     <!-- New Master Report view -->
@@ -10646,7 +10658,10 @@ document.addEventListener('DOMContentLoaded', () => {
     const $$ = s => Array.from(document.querySelectorAll(s));
     const toNum = v => { const n = parseFloat(String(v||'').replace(/,/g,'')); return isNaN(n)?0:n; };
     const f2  = n => { const x = Number(n)||0; return x===0 ? '-' : x.toLocaleString('en-US',{minimumFractionDigits:2, maximumFractionDigits:2}); };
-    const showMsg = (t)=>{ const m=$('#r_msg'); if(m){ m.textContent=t; m.style.display=t?'block':'none'; } };
+    const showMsg = (t, id = 'r_msg')=>{
+      const m = document.getElementById(id);
+      if(m){ m.textContent=t; m.style.display=t?'block':'none'; }
+    };
 
     const isRealProject = (p)=>{
       if (!p) return false;
@@ -10773,20 +10788,14 @@ document.addEventListener('DOMContentLoaded', () => {
       return M;
     }
 
-    function buildTable(){
+    function buildReportData(){
       const dtrRows = $$('#resultsTable tbody tr');
-      const table = $('#r_table'); if(!table) return;
-      if (dtrRows.length === 0){
-        showMsg('No DTR rows found. Import DTR or open a period first.');
-        table.innerHTML='';
-        __report = null;
-        return;
-      }
-      showMsg('');
+      if (dtrRows.length === 0) return null;
 
       const [from, to] = getPayrollRange();
       const dates = eachDate(new Date(from).setHours(0,0,0,0), new Date(to).setHours(0,0,0,0));
       const data = collect(from, to) || {};
+
       // Ensure projects that only have Bantay allowance (no DTR rows) appear as their own blocks
       try {
         const bp = (typeof bantayProj !== 'undefined' && bantayProj) || {};
@@ -10830,31 +10839,52 @@ document.addEventListener('DOMContentLoaded', () => {
         Object.keys(additionalIncomeByProject).forEach(pn => { if (!data[pn]) data[pn] = {}; });
       } catch (e) { additionalIncomeByProject = {}; }
 
-      __report = { data, from, to, dates, additionalIncomeByProject };
+      return { data, from, to, dates, additionalIncomeByProject };
+    }
 
-      const totalCols = 2 + (dates.length*2) + 4;
-      const hint = $('#r_range_hint');
+    function buildReportTable(mode, report){
+      const isOvertime = mode === 'oth';
+      const tableId = isOvertime ? 'r_ot_table' : 'r_table';
+      const msgId = isOvertime ? 'r_ot_msg' : 'r_msg';
+      const hintId = isOvertime ? 'r_ot_range_hint' : 'r_range_hint';
+      const table = document.getElementById(tableId);
+      if (!table) return;
+
+      if (!report){
+        showMsg('No DTR rows found. Import DTR or open a period first.', msgId);
+        table.innerHTML = '';
+        return;
+      }
+      showMsg('', msgId);
+
+      const { data, from, to, dates, additionalIncomeByProject } = report;
+      const totalCols = 2 + dates.length + 2;
+      const hint = document.getElementById(hintId);
       if (hint) hint.textContent = `Range: ${from} - ${to}`;
+
+      const dayLabel = isOvertime ? 'OTH' : 'RWH';
+      const totalLabel = isOvertime ? 'TOTAL OT HRS' : 'TOTAL REG HRS';
+      const grossLabel = isOvertime ? 'OT GROSS' : 'GROSS';
 
       // THEAD
       let thead1 = `<tr><th class="left" rowspan="2">PERSONNEL</th><th rowspan="2">RATE</th>`;
       dates.forEach(d=>{
         const lbl = d.toLocaleDateString(undefined,{day:'2-digit',month:'short'});
-        thead1 += `<th colspan="2">${lbl}</th>`;
+        thead1 += `<th>${lbl}</th>`;
       });
-      thead1 += `<th rowspan="2">TOTAL REG HRS</th><th rowspan="2">TOTAL OT HRS</th><th rowspan="2">GRAND TOTAL HOURS</th><th rowspan="2">GROSS</th></tr>`;
-      let thead2 = `<tr>${dates.map(()=>`<th>RWH</th><th>OTH</th>`).join('')}</tr>`;
+      thead1 += `<th rowspan="2">${totalLabel}</th><th rowspan="2">${grossLabel}</th></tr>`;
+      let thead2 = `<tr>${dates.map(()=>`<th>${dayLabel}</th>`).join('')}</tr>`;
 
       // Per-project TBODY blocks
       const tbodies = [];
-      let gReg=0,gOT=0,gGross=0;
-      const gDayTotals = dates.map(() => ({ rwh: 0, oth: 0 }));
+      let gHours=0,gGross=0;
+      const gDayTotals = dates.map(() => 0);
       const projects = Object.keys(data).sort();
 
       projects.forEach(proj=>{
         const empMap = data[proj];
-        let pReg=0,pOT=0,pGross=0;
-        const dayTotals = dates.map(() => ({ rwh: 0, oth: 0 }));
+        let pHours=0,pGross=0;
+        const dayTotals = dates.map(() => 0);
         let rows='';
 
         rows += `<tr class="proj-break"><td colspan="${totalCols}">${proj}</td></tr>`;
@@ -10867,33 +10897,33 @@ document.addEventListener('DOMContentLoaded', () => {
           const rec = empMap[empId];
           const display = rec.name || empId;
           const rate = getRate(empId, display);
-          let rReg=0,rOT=0;
+          let rowHours=0;
 
           const cells = dates.map((d,i)=>{
             const key = d.setHours(0,0,0,0);
             const v = rec.days[key] || { rwh:0, oth:0 };
-            rReg += v.rwh; rOT += v.oth;
-            dayTotals[i].rwh += v.rwh; dayTotals[i].oth += v.oth;
-            return `<td class="num">${f2(v.rwh)}</td><td class="num">${f2(v.oth)}</td>`;
+            const hours = isOvertime ? v.oth : v.rwh;
+            rowHours += hours;
+            dayTotals[i] += hours;
+            return `<td class="num">${f2(hours)}</td>`;
           }).join('');
 
           const otMult = getOvertimeMultiplier();
-          const gross = (rReg * rate) + (rOT * rate * otMult);
-          pReg += rReg; pOT += rOT; pGross += gross;
+          const gross = isOvertime ? (rowHours * rate * otMult) : (rowHours * rate);
+          pHours += rowHours;
+          pGross += gross;
 
           rows += `<tr>
             <td class="left">${display}</td>
             <td class="num">${f2(rate)}</td>
             ${cells}
-            <td class="num">${f2(rReg)}</td>
-            <td class="num">${f2(rOT)}</td>
-            <td class="num">${f2(rReg + rOT)}</td>
+            <td class="num">${f2(rowHours)}</td>
             <td class="num">${f2(gross)}</td>
           </tr>`;
         });
 
 // Compute per-project Bantay allowance (Supabase-backed)
-const allow = Object.keys(bantay || {}).reduce((sum, empId) => {
+const allow = isOvertime ? 0 : Object.keys(bantay || {}).reduce((sum, empId) => {
   const assigned = (bantayProj || {})[empId];
   if (!assigned) return sum;
   const matchesById   = (assigned === proj);
@@ -10902,13 +10932,11 @@ const allow = Object.keys(bantay || {}).reduce((sum, empId) => {
 }, 0);
 
 // Render Allowance row (amount in Gross column)
-if (allow && allow > 0) {
+if (!isOvertime && allow && allow > 0) {
 rows += `<tr class="allowance">
   <td class="left">Allowance</td>
   <td class="num">-</td>
-  ${dates.map(()=>`<td class="num">-</td><td class="num">-</td>`).join('')}
-  <td class="num">-</td>
-  <td class="num">-</td>
+  ${dates.map(()=>`<td class="num">-</td>`).join('')}
   <td class="num">-</td>
   <td class="num">${f2(allow)}</td>
 </tr>`;
@@ -10918,37 +10946,35 @@ rows += `<tr class="allowance">
 }
 
   // Additional Income rows assigned to this project
-  try {
-    const aiMap = (additionalIncomeByProject && additionalIncomeByProject[proj]) || {};
-    Object.keys(aiMap).sort((a,b)=>String(a).localeCompare(String(b))).forEach(lbl => {
-      const amt = parseFloat(aiMap[lbl]) || 0;
-      if (amt <= 0) return;
-      const safeLbl = String(lbl || 'Additional Income').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-      rows += `<tr class="add-income">
+  if (!isOvertime) {
+    try {
+      const aiMap = (additionalIncomeByProject && additionalIncomeByProject[proj]) || {};
+      Object.keys(aiMap).sort((a,b)=>String(a).localeCompare(String(b))).forEach(lbl => {
+        const amt = parseFloat(aiMap[lbl]) || 0;
+        if (amt <= 0) return;
+        const safeLbl = String(lbl || 'Additional Income').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+        rows += `<tr class="add-income">
   <td class="left">${safeLbl}</td>
   <td class="num">-</td>
-  ${dates.map(()=>`<td class="num">-</td><td class="num">-</td>`).join('')}
-  <td class="num">-</td>
-  <td class="num">-</td>
+  ${dates.map(()=>`<td class="num">-</td>`).join('')}
   <td class="num">-</td>
   <td class="num">${f2(amt)}</td>
 </tr>`;
-      pGross += amt;
-    });
-  } catch (e) { /* ignore */ }
+        pGross += amt;
+      });
+    } catch (e) { /* ignore */ }
+  }
 
   rows += `<tr class="totals">
             <td class="left">Project Total</td>
             <td class="num">-</td>
-            ${dayTotals.map(dt => `<td class="num">${f2(dt.rwh)}</td><td class="num">${f2(dt.oth)}</td>`).join('')}
-            <td class="num">${f2(pReg)}</td>
-            <td class="num">${f2(pOT)}</td>
-            <td class="num">${f2(pReg + pOT)}</td>
+            ${dayTotals.map(dt => `<td class="num">${f2(dt)}</td>`).join('')}
+            <td class="num">${f2(pHours)}</td>
             <td class="num">${f2(pGross)}</td>
           </tr>`;
 
-          gReg += pReg; gOT += pOT; gGross += pGross;
-          dayTotals.forEach((dt,i)=>{ gDayTotals[i].rwh += dt.rwh; gDayTotals[i].oth += dt.oth; });
+          gHours += pHours; gGross += pGross;
+          dayTotals.forEach((dt,i)=>{ gDayTotals[i] += dt; });
 
           tbodies.push(`<tbody class="proj-page">${rows}</tbody>`);
         });
@@ -10956,14 +10982,12 @@ rows += `<tr class="allowance">
         const foot = `<tr class="totals">
           <td class="left">Grand Total</td>
           <td class="num">-</td>
-          ${gDayTotals.map(dt => `<td class="num">${f2(dt.rwh)}</td><td class="num">${f2(dt.oth)}</td>`).join('')}
-          <td class="num">${f2(gReg)}</td>
-          <td class="num">${f2(gOT)}</td>
-          <td class="num">${f2(gReg + gOT)}</td>
+          ${gDayTotals.map(dt => `<td class="num">${f2(dt)}</td>`).join('')}
+          <td class="num">${f2(gHours)}</td>
           <td class="num">${f2(gGross)}</td>
         </tr>`;
 
-      $('#r_table').innerHTML = `<thead>${thead1}${thead2}</thead>${tbodies.join('')}<tfoot>${foot}</tfoot>`;
+      table.innerHTML = `<thead>${thead1}${thead2}</thead>${tbodies.join('')}<tfoot>${foot}</tfoot>`;
 
       // Commas for numeric cells
       (function applyCommas(){
@@ -10972,9 +10996,16 @@ rows += `<tr class="allowance">
           if (isNaN(n)) return v;
           return n.toLocaleString('en-US',{minimumFractionDigits:2, maximumFractionDigits:2});
         };
-        const cells = Array.from(document.querySelectorAll('#r_table td.num, #r_table tfoot td.num'));
+        const cells = Array.from(table.querySelectorAll('td.num, tfoot td.num'));
         cells.forEach(td=>{ td.textContent = fmt(td.textContent); });
       })();
+    }
+
+    function buildTables(){
+      const report = buildReportData();
+      __report = report;
+      buildReportTable('rwh', report);
+      buildReportTable('oth', report);
     }
 
     function csvEscape(s){
@@ -10985,28 +11016,29 @@ rows += `<tr class="allowance">
     }
     function to2(n){ n = parseFloat(String(n).replace(/,/g,'')); if (isNaN(n)) n = 0; return (Math.round(n*100)/100).toFixed(2); }
 
-    function buildDetailedReportRows(){
+    function buildReportRows(mode){
       if (!__report) return null;
-      const { data, dates, from, to } = __report;
+      const isOvertime = mode === 'oth';
+      const { data, dates, from, to, additionalIncomeByProject } = __report;
 
       const dayHeader = dates.map(d=>{
         const lbl = d.toLocaleDateString(undefined,{day:'2-digit',month:'short'});
-        return [`RWH ${lbl}`, `OTH ${lbl}`];
-      }).flat();
+        return `${isOvertime ? 'OTH' : 'RWH'} ${lbl}`;
+      });
 
       const header = ['PROJECT','PERSONNEL','RATE']
         .concat(dayHeader)
-        .concat(['TOTAL REG HRS','TOTAL OT HRS','GRAND TOTAL HOURS','GROSS']);
+        .concat([isOvertime ? 'TOTAL OT HRS' : 'TOTAL REG HRS', isOvertime ? 'OT GROSS' : 'GROSS']);
       const rows = [header];
 
       const projects = Object.keys(data).sort();
-      let gReg=0,gOT=0,gGross=0;
-      const gDayTotals = dates.map(() => ({ rwh:0, oth:0 }));
+      let gHours=0,gGross=0;
+      const gDayTotals = dates.map(() => 0);
 
       projects.forEach(proj=>{
         const empMap = data[proj];
-        let pReg=0,pOT=0,pGross=0;
-        const dayTotals = dates.map(() => ({ rwh:0, oth:0 }));
+        let pHours=0,pGross=0;
+        const dayTotals = dates.map(() => 0);
 
         Object.keys(empMap).sort((a,b)=>{
           const A = (empMap[a].name||a).toUpperCase();
@@ -11018,55 +11050,67 @@ rows += `<tr class="allowance">
 
           const rate = getRate(empId, display);
 
-          let rReg=0,rOT=0;
+          let rowHours=0;
           const dayCells = [];
           dates.forEach((d,i)=>{
             const key = d.setHours(0,0,0,0);
             const v = rec.days[key] || { rwh:0, oth:0 };
-            rReg += v.rwh; rOT += v.oth;
-            dayTotals[i].rwh += v.rwh; dayTotals[i].oth += v.oth;
-            dayCells.push(to2(v.rwh), to2(v.oth));
+            const hours = isOvertime ? v.oth : v.rwh;
+            rowHours += hours;
+            dayTotals[i] += hours;
+            dayCells.push(to2(hours));
           });
 
           const otMult = getOvertimeMultiplier();
-          const gross = (rReg * rate) + (rOT * rate * otMult);
-          pReg += rReg; pOT += rOT; pGross += gross;
+          const gross = isOvertime ? (rowHours * rate * otMult) : (rowHours * rate);
+          pHours += rowHours; pGross += gross;
 
-          rows.push([proj, display, to2(rate)].concat(dayCells, [to2(rReg), to2(rOT), to2(rReg + rOT), to2(gross)]));
+          rows.push([proj, display, to2(rate)].concat(dayCells, [to2(rowHours), to2(gross)]));
         });
 
-        // Add per-project Allowance row (amount placed in GROSS column)
-        try {
-          const allow = Object.keys(bantay || {}).reduce((sum, empId) => {
-            const assigned = (bantayProj || {})[empId];
-            if (!assigned) return sum;
-            const matchesById   = (assigned === proj);
-            const matchesByName = ((typeof storedProjects !== 'undefined' && storedProjects && storedProjects[assigned]?.name) === proj);
-            const amt = parseFloat((bantay && bantay[empId]) || 0) || 0;
-            return (matchesById || matchesByName) ? (sum + amt) : sum;
-          }, 0);
-          // Push a CSV row for Allowance with zero hours and gross = allowance
-          if (allow && allow > 0) {
-            const zeroCells = new Array(dates.length*2).fill('0.00');
-            rows.push([proj, 'Allowance', ''].concat(zeroCells, ['0.00','0.00','0.00', to2(allow)]));
-            // Include allowance in project gross before rolling into grand totals
-            pGross += allow;
-          }
-        } catch (e) { /* no-op if allowance data missing */ }
+        if (!isOvertime) {
+          // Add per-project Allowance row (amount placed in GROSS column)
+          try {
+            const allow = Object.keys(bantay || {}).reduce((sum, empId) => {
+              const assigned = (bantayProj || {})[empId];
+              if (!assigned) return sum;
+              const matchesById   = (assigned === proj);
+              const matchesByName = ((typeof storedProjects !== 'undefined' && storedProjects && storedProjects[assigned]?.name) === proj);
+              const amt = parseFloat((bantay && bantay[empId]) || 0) || 0;
+              return (matchesById || matchesByName) ? (sum + amt) : sum;
+            }, 0);
+            if (allow && allow > 0) {
+              const zeroCells = new Array(dates.length).fill('0.00');
+              rows.push([proj, 'Allowance', ''].concat(zeroCells, ['0.00', to2(allow)]));
+              pGross += allow;
+            }
+          } catch (e) { /* no-op if allowance data missing */ }
 
-        gReg += pReg; gOT += pOT; gGross += pGross;
-        dayTotals.forEach((dt,i)=>{ gDayTotals[i].rwh += dt.rwh; gDayTotals[i].oth += dt.oth; });
-        const dayTotalsCells = dayTotals.flatMap(dt=>[to2(dt.rwh), to2(dt.oth)]);
+          try {
+            const aiMap = (additionalIncomeByProject && additionalIncomeByProject[proj]) || {};
+            Object.keys(aiMap).sort((a,b)=>String(a).localeCompare(String(b))).forEach(lbl => {
+              const amt = parseFloat(aiMap[lbl]) || 0;
+              if (amt <= 0) return;
+              const zeroCells = new Array(dates.length).fill('0.00');
+              rows.push([proj, lbl || 'Additional Income', ''].concat(zeroCells, ['0.00', to2(amt)]));
+              pGross += amt;
+            });
+          } catch (e) { /* ignore */ }
+        }
+
+        gHours += pHours; gGross += pGross;
+        dayTotals.forEach((dt,i)=>{ gDayTotals[i] += dt; });
+        const dayTotalsCells = dayTotals.map(dt=>to2(dt));
         rows.push([proj, 'Project Total', ''].concat(
           dayTotalsCells,
-          [to2(pReg), to2(pOT), to2(pReg+pOT), to2(pGross)]
+          [to2(pHours), to2(pGross)]
         ));
       });
 
-      const gDayTotalsCells = gDayTotals.flatMap(dt=>[to2(dt.rwh), to2(dt.oth)]);
+      const gDayTotalsCells = gDayTotals.map(dt=>to2(dt));
       rows.push(['', 'Grand Total', ''].concat(
         gDayTotalsCells,
-        [to2(gReg), to2(gOT), to2(gReg+gOT), to2(gGross)]
+        [to2(gHours), to2(gGross)]
       ));
 
       return { rows, from, to };
@@ -11088,7 +11132,7 @@ rows += `<tr class="allowance">
         if (!__report && typeof window.rebuildReports === 'function'){
           try { window.rebuildReports(); } catch(e){}
         }
-        const bundle = buildDetailedReportRows();
+        const bundle = buildReportRows('rwh');
         if (hasDataRows(bundle)){
           return bundle;
         }
@@ -11098,7 +11142,7 @@ rows += `<tr class="allowance">
           } catch(_){ return 0; }
         })();
         if (renderedRows > 0){
-          const refreshed = buildDetailedReportRows();
+          const refreshed = buildReportRows('rwh');
           if (hasDataRows(refreshed)){
             return refreshed;
           }
@@ -11108,17 +11152,28 @@ rows += `<tr class="allowance">
       if (!__report && typeof window.rebuildReports === 'function'){
         try { window.rebuildReports(); } catch(e){}
       }
-      return buildDetailedReportRows();
+      return buildReportRows('rwh');
     }
 
-    function exportCSVAll(){
-      const bundle = buildDetailedReportRows();
+    function exportCSVDetailed(){
+      const bundle = buildReportRows('rwh');
       if (!bundle){ alert('No report to export yet.'); return; }
       const { rows, from, to } = bundle;
       const csv = rows.map(r=>r.map(csvEscape).join(',')).join('\n');
       const a=document.createElement('a');
       a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'}));
       a.download=`reports_all_${from}_to_${to}.csv`;
+      a.click(); URL.revokeObjectURL(a.href);
+    }
+
+    function exportCSVOvertime(){
+      const bundle = buildReportRows('oth');
+      if (!bundle){ alert('No report to export yet.'); return; }
+      const { rows, from, to } = bundle;
+      const csv = rows.map(r=>r.map(csvEscape).join(',')).join('\n');
+      const a=document.createElement('a');
+      a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'}));
+      a.download=`reports_overtime_${from}_to_${to}.csv`;
       a.click(); URL.revokeObjectURL(a.href);
     }
 
@@ -11449,19 +11504,19 @@ rows += `<tr class="allowance">
         // Helper: build headers
         const dayHeader = dates.map(d=>{
           const lbl = d.toLocaleDateString(undefined,{day:'2-digit',month:'short'});
-          return [`RWH ${lbl}`, `OTH ${lbl}`];
-        }).flat();
-        const header = ['PERSONNEL','RATE'].concat(dayHeader, ['TOTAL REG HRS','TOTAL OT HRS','GRAND TOTAL HOURS','GROSS']);
+          return `RWH ${lbl}`;
+        });
+        const header = ['PERSONNEL','RATE'].concat(dayHeader, ['TOTAL REG HRS','GROSS']);
         // Build one sheet per project
         const projects = Object.keys(data).sort();
-        let gReg=0,gOT=0,gGross=0;
-        const gDayTotals = dates.map(()=>({ rwh:0, oth:0 }));
+        let gReg=0,gGross=0;
+        const gDayTotals = dates.map(()=>0);
         const summaryRows = [['PROJECT'].concat(header)];
         projects.forEach(proj=>{
           const empMap = data[proj];
           const rows = [header.slice()];
-          let pReg=0,pOT=0,pGross=0;
-          const dayTotals = dates.map(()=>({ rwh:0, oth:0 }));
+          let pReg=0,pGross=0;
+          const dayTotals = dates.map(()=>0);
           Object.keys(empMap).sort((a,b)=>{
             const A = (empMap[a].name||a).toUpperCase();
             const B = (empMap[b].name||b).toUpperCase();
@@ -11470,20 +11525,19 @@ rows += `<tr class="allowance">
             const rec = empMap[empId];
             const display = rec.name || empId;
             const rate = getRate(empId, display);
-            let rReg=0,rOT=0;
+            let rReg=0;
             const dayCells = [];
             dates.forEach((d,i)=>{
               const key = d.setHours(0,0,0,0);
               const v = rec.days[key] || { rwh:0, oth:0 };
-              rReg += v.rwh; rOT += v.oth;
-              dayTotals[i].rwh += v.rwh; dayTotals[i].oth += v.oth;
-              dayCells.push(to2(v.rwh), to2(v.oth));
+              rReg += v.rwh;
+              dayTotals[i] += v.rwh;
+              dayCells.push(to2(v.rwh));
             });
-            const otMult = getOvertimeMultiplier();
-            const gross = (rReg * rate) + (rOT * rate * otMult);
-            pReg += rReg; pOT += rOT; pGross += gross;
-            rows.push([display, to2(rate)].concat(dayCells, [to2(rReg), to2(rOT), to2(rReg+rOT), to2(gross)]));
-            summaryRows.push([proj, display, to2(rate)].concat(dayCells, [to2(rReg), to2(rOT), to2(rReg+rOT), to2(gross)]));
+            const gross = (rReg * rate);
+            pReg += rReg; pGross += gross;
+            rows.push([display, to2(rate)].concat(dayCells, [to2(rReg), to2(gross)]));
+            summaryRows.push([proj, display, to2(rate)].concat(dayCells, [to2(rReg), to2(gross)]));
           });
           // Allowance-only row from on-screen report logic
           try{
@@ -11496,23 +11550,23 @@ rows += `<tr class="allowance">
               return (matchesById || matchesByName) ? (sum + amt) : sum;
             }, 0);
             if (allow && allow > 0){
-              const zeros = new Array(dates.length*2).fill('0.00');
-              rows.push(['Allowance',''].concat(zeros, ['0.00','0.00','0.00', to2(allow)]));
-              summaryRows.push([proj, 'Allowance',''].concat(zeros, ['0.00','0.00','0.00', to2(allow)]));
+              const zeros = new Array(dates.length).fill('0.00');
+              rows.push(['Allowance',''].concat(zeros, ['0.00', to2(allow)]));
+              summaryRows.push([proj, 'Allowance',''].concat(zeros, ['0.00', to2(allow)]));
               pGross += allow;
             }
           }catch(e){}
-          gReg += pReg; gOT += pOT; gGross += pGross;
-          dayTotals.forEach((dt,i)=>{ gDayTotals[i].rwh += dt.rwh; gDayTotals[i].oth += dt.oth; });
-          const dayTotalsCells = dayTotals.flatMap(dt=>[to2(dt.rwh), to2(dt.oth)]);
-          rows.push(['Project Total',''].concat(dayTotalsCells, [to2(pReg), to2(pOT), to2(pReg+pOT), to2(pGross)]));
-          summaryRows.push([proj,'Project Total',''].concat(dayTotalsCells,[to2(pReg), to2(pOT), to2(pReg+pOT), to2(pGross)]));
+          gReg += pReg; gGross += pGross;
+          dayTotals.forEach((dt,i)=>{ gDayTotals[i] += dt; });
+          const dayTotalsCells = dayTotals.map(dt=>to2(dt));
+          rows.push(['Project Total',''].concat(dayTotalsCells, [to2(pReg), to2(pGross)]));
+          summaryRows.push([proj,'Project Total',''].concat(dayTotalsCells,[to2(pReg), to2(pGross)]));
           const ws = XLSX.utils.aoa_to_sheet(rows);
           XLSX.utils.book_append_sheet(wb, ws, (proj || 'Project').toString().substring(0,31));
         });
         // Summary sheet with grand totals
-        const gDayTotalsCells = gDayTotals.flatMap(dt=>[to2(dt.rwh), to2(dt.oth)]);
-        summaryRows.push(['','Grand Total',''].concat(gDayTotalsCells, [to2(gReg), to2(gOT), to2(gReg+gOT), to2(gGross)]));
+        const gDayTotalsCells = gDayTotals.map(dt=>to2(dt));
+        summaryRows.push(['','Grand Total',''].concat(gDayTotalsCells, [to2(gReg), to2(gGross)]));
         const wsSummary = XLSX.utils.aoa_to_sheet(summaryRows);
         XLSX.utils.book_append_sheet(wb, wsSummary, 'Summary');
         const fname = `reports_all_${from}_to_${to}.xlsx`;
@@ -11657,15 +11711,15 @@ rows += `<tr class="allowance">
 
       const dayHeader = dates.map(d=>{
         const lbl = d.toLocaleDateString(undefined,{day:'2-digit',month:'short'});
-        return [`RWH ${lbl}`, `OTH ${lbl}`];
-      }).flat();
-      const header = ['PERSONNEL','RATE'].concat(dayHeader, ['TOTAL REG HRS','TOTAL OT HRS','GRAND TOTAL HOURS','GROSS']);
+        return `RWH ${lbl}`;
+      });
+      const header = ['PERSONNEL','RATE'].concat(dayHeader, ['TOTAL REG HRS','GROSS']);
 
       const projects = Object.keys(data).sort();
       projects.forEach(proj=>{
         const empMap = data[proj];
         const rows = [header];
-        let pReg=0,pOT=0,pGross=0;
+        let pReg=0,pGross=0;
 
         Object.keys(empMap).sort((a,b)=>{
           const A = (empMap[a].name||a).toUpperCase();
@@ -11676,25 +11730,24 @@ rows += `<tr class="allowance">
           const display = rec.name || empId;
           const rate = getRate(empId, display);
 
-          let rReg=0,rOT=0;
+          let rReg=0;
           const dayCells = [];
           dates.forEach(d=>{
             const key = d.setHours(0,0,0,0);
             const v = rec.days[key] || { rwh:0, oth:0 };
-            rReg += v.rwh; rOT += v.oth;
-            dayCells.push(to2(v.rwh), to2(v.oth));
+            rReg += v.rwh;
+            dayCells.push(to2(v.rwh));
           });
 
-          const otMult = getOvertimeMultiplier();
-          const gross = (rReg * rate) + (rOT * rate * otMult);
-          pReg += rReg; pOT += rOT; pGross += gross;
+          const gross = (rReg * rate);
+          pReg += rReg; pGross += gross;
 
-          rows.push([display, to2(rate)].concat(dayCells, [to2(rReg), to2(rOT), to2(rReg + rOT), to2(gross)]));
+          rows.push([display, to2(rate)].concat(dayCells, [to2(rReg), to2(gross)]));
         });
 
         rows.push(['Project Total', ''].concat(
-          new Array(dates.length*2).fill(''),
-          [to2(pReg), to2(pOT), to2(pReg+pOT), to2(pGross)]
+          new Array(dates.length).fill(''),
+          [to2(pReg), to2(pGross)]
         ));
 
         const csv = rows.map(r=>r.map(csvEscape).join(',')).join('\n');
@@ -11723,17 +11776,19 @@ rows += `<tr class="allowance">
       btns.forEach(b=>{ if (b._wired) return; b._wired = true; b.addEventListener('click', ()=> show(b.getAttribute('data-subtab'))); });
     })();
 
-    $('#r_csv')?.addEventListener('click', exportCSVAll);const dtr = document.getElementById('resultsTable');
+    $('#r_csv')?.addEventListener('click', exportCSVDetailed);
+    $('#r_ot_csv')?.addEventListener('click', exportCSVOvertime);
+    const dtr = document.getElementById('resultsTable');
     if (dtr && 'MutationObserver' in window){
-      const mo = new MutationObserver(()=> { buildTable(); try{ renderMasterReport(); }catch(e){} });
+      const mo = new MutationObserver(()=> { buildTables(); try{ renderMasterReport(); }catch(e){} });
       mo.observe(dtr, { childList:true, subtree:true });
     }
     // Expose a global rebuild hook so other tabs (e.g., Payroll bantay edits)
     // can refresh the report without a full page reload.
-    try { window.rebuildReports = function(){ try{ buildTable(); }catch(e){} try{ renderMasterReport(); }catch(e){} }; } catch(e){}
+    try { window.rebuildReports = function(){ try{ buildTables(); }catch(e){} try{ renderMasterReport(); }catch(e){} }; } catch(e){}
     if (document.readyState === 'loading'){
-      document.addEventListener('DOMContentLoaded', function(){ buildTable(); try{ renderMasterReport(); }catch(e){} }, { once:true });
-    } else { buildTable(); try{ renderMasterReport(); }catch(e){} }
+      document.addEventListener('DOMContentLoaded', function(){ buildTables(); try{ renderMasterReport(); }catch(e){} }, { once:true });
+    } else { buildTables(); try{ renderMasterReport(); }catch(e){} }
   })();
   </script>
 </section>
@@ -19974,11 +20029,11 @@ document.addEventListener('DOMContentLoaded', async function () {
 // Note: Browser header/footer (date, title, URL) are controlled by the print dialog.
 // To remove them entirely, uncheck "Headers and footers" in the print settings.
 (function(){
-  function printReportsClean(){
+  function printReportsClean(tableId, hintId){
     try{
-      var tbl = document.getElementById('r_table');
+      var tbl = document.getElementById(tableId || 'r_table');
       if (!tbl) return;
-      var hint = document.getElementById('r_range_hint');
+      var hint = document.getElementById(hintId || 'r_range_hint');
       var css = `
         <style>
           html,body{margin:0;padding:10px;font-family:Arial,Helvetica,sans-serif}
@@ -20004,24 +20059,22 @@ document.addEventListener('DOMContentLoaded', async function () {
           table th:nth-child(2), table td:nth-child(2){
             width:70px; min-width:70px; max-width:80px; white-space:nowrap;
           }
-          /* First header row date-group cells (colspan=2 each) => 80px */
-          thead tr:first-child th:nth-child(n+3):not(:nth-last-child(-n+4)){
+          /* First header row date cells */
+          thead tr:first-child th:nth-child(n+3):not(:nth-last-child(-n+2)){
             width: 80px; min-width: 80px; max-width: 80px; white-space: nowrap;
           }
-          /* Uniform date column widths (RWH/OTH pairs), exclude the last 4 total columns */
-          thead tr:nth-child(2) th:not(:nth-last-child(-n+4)){
+          /* Uniform date column widths, exclude the last 2 total columns */
+          thead tr:nth-child(2) th:not(:nth-last-child(-n+2)){
             width: 40px; min-width: 40px; max-width: 40px; white-space: nowrap;
           }
-          tbody td:nth-child(n+3):not(:nth-last-child(-n+4)){
+          tbody td:nth-child(n+3):not(:nth-last-child(-n+2)){
             width: 40px; min-width: 40px; max-width: 40px; white-space: nowrap;
           }
-          /* Totals column widths: Total Reg Hrs, Total OT Hrs, Grand Total Hours, Gross */
-          thead tr:nth-child(2) th:nth-last-child(4),
-          tbody td:nth-last-child(4){ width: 90px; min-width: 90px; max-width: 100px; white-space: nowrap; }
-          thead tr:nth-child(2) th:nth-last-child(3),
-          tbody td:nth-last-child(3){ width: 90px; min-width: 90px; max-width: 100px; white-space: nowrap; }
+          /* Totals column widths */
+          thead tr:first-child th:nth-last-child(2),
           thead tr:nth-child(2) th:nth-last-child(2),
           tbody td:nth-last-child(2){ width: 120px; min-width: 120px; max-width: 140px; white-space: nowrap; }
+          thead tr:first-child th:nth-last-child(1),
           thead tr:nth-child(2) th:nth-last-child(1),
           tbody td:nth-last-child(1){ width: 110px; min-width: 110px; max-width: 120px; white-space: nowrap; }
           @media print{ @page { margin: 10mm; } }
@@ -20098,9 +20151,15 @@ document.addEventListener('DOMContentLoaded', async function () {
 
   function attach(){
     var btn = document.getElementById('r_print');
-    if (!btn || btn.__cleanPrint) return;
-    btn.addEventListener('click', function(ev){ ev.preventDefault(); printReportsClean(); });
-    btn.__cleanPrint = true;
+    if (btn && !btn.__cleanPrint){
+      btn.addEventListener('click', function(ev){ ev.preventDefault(); printReportsClean('r_table', 'r_range_hint'); });
+      btn.__cleanPrint = true;
+    }
+    var otBtn = document.getElementById('r_ot_print');
+    if (otBtn && !otBtn.__cleanPrint){
+      otBtn.addEventListener('click', function(ev){ ev.preventDefault(); printReportsClean('r_ot_table', 'r_ot_range_hint'); });
+      otBtn.__cleanPrint = true;
+    }
   }
   if (document.readyState === 'loading'){ document.addEventListener('DOMContentLoaded', attach, {once:true}); }
   else { attach(); }
