@@ -47,7 +47,7 @@
     if (!window.readKV) {
       window.readKV = async function readKV(key, defaultValue = null) {
         try {
-          if (window.supabase && window.SUPABASE_TABLE) {
+          if (window.supabase && window.SUPABASE_TABLE && window.__supabaseSession && window.__supabaseSession.user) {
             const { data, error } = await window.supabase
               .from(window.SUPABASE_TABLE)
               .select('value')
@@ -74,7 +74,7 @@
       };
       window.writeKV = async function writeKV(key, value) {
         try {
-          if (window.supabase && window.SUPABASE_TABLE) {
+          if (window.supabase && window.SUPABASE_TABLE && window.__supabaseSession && window.__supabaseSession.user) {
             const { error } = await window.supabase
               .from(window.SUPABASE_TABLE)
               .upsert({ key, value }, { onConflict: 'key' });
@@ -177,6 +177,11 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_KEY)
 // provides a simple, predictable global reference.
 window.supabase = supabase;
 window.SUPABASE_TABLE = TABLE;
+window.__supabaseSession = null;
+
+function __kvHasSession() {
+  return !!(window.__supabaseSession && window.__supabaseSession.user);
+}
 
 function markHydrated() {
   try { window.__kv_hydrated = true; } catch {}
@@ -317,6 +322,7 @@ const __origRemoveItem = Storage.prototype.removeItem
 
 async function cloudUpsert(key, value) {
   try {
+    if (!__kvHasSession()) return;
     // Try upsert
     const { error } = await supabase
       .from(TABLE)
@@ -332,6 +338,7 @@ async function cloudUpsert(key, value) {
 }
 async function cloudDelete(key) {
   try {
+    if (!__kvHasSession()) return;
     const { error } = await supabase.from(TABLE).delete().eq("key", key)
     if (error) console.warn("Supabase delete error:", error.message)
   } catch (e) { console.warn("Supabase delete failed", e) }
@@ -384,6 +391,7 @@ Storage.prototype.removeItem = function(k) {
 
 async function __kvHydrateOnce(){
   try {
+    if (!__kvHasSession()) return false;
     __kvHydrating = true;
     const { data, error } = await supabase
       .from(TABLE)
@@ -453,6 +461,22 @@ async function __kvHydrateOnce(){
 
 // Boot hydrate with retry (prevents an empty PC from wiping cloud data if network is slow/offline).
 ;(async function __kvBootHydrate(){
+  if (!__kvHasSession()) {
+    markHydrated();
+    __kvDisableSync();
+    let waiting = 0;
+    const waitForSession = async () => {
+      if (__kvHasSession()) {
+        __kvHydrateOnce();
+        return;
+      }
+      waiting++;
+      if (waiting > 120) return;
+      window.setTimeout(waitForSession, 1000);
+    };
+    window.setTimeout(waitForSession, 1000);
+    return;
+  }
   const ok = await __kvHydrateOnce();
   if (ok) return;
 
@@ -472,6 +496,210 @@ async function __kvHydrateOnce(){
 
 function safeStringify(v){
   try { return typeof v === "string" ? v : JSON.stringify(v) } catch { return null }
+}
+
+function showLoginUI(message) {
+  const overlay = document.getElementById('authOverlay');
+  const loginPanel = document.getElementById('authLoginPanel');
+  const resetPanel = document.getElementById('authResetPanel');
+  if (resetPanel) resetPanel.style.display = 'none';
+  if (loginPanel) loginPanel.style.display = 'block';
+  if (overlay) {
+    overlay.classList.add('is-open');
+    overlay.setAttribute('aria-hidden', 'false');
+  }
+  hideAppUI();
+  setAuthMessage(message || '', false);
+}
+
+function hideLoginUI() {
+  const overlay = document.getElementById('authOverlay');
+  if (overlay) {
+    overlay.classList.remove('is-open');
+    overlay.setAttribute('aria-hidden', 'true');
+  }
+  setAuthMessage('', false);
+}
+
+function showResetPasswordUI(message) {
+  const overlay = document.getElementById('authOverlay');
+  const loginPanel = document.getElementById('authLoginPanel');
+  const resetPanel = document.getElementById('authResetPanel');
+  if (loginPanel) loginPanel.style.display = 'none';
+  if (resetPanel) resetPanel.style.display = 'block';
+  if (overlay) {
+    overlay.classList.add('is-open');
+    overlay.setAttribute('aria-hidden', 'false');
+  }
+  hideAppUI();
+  setAuthMessage(message || '', false);
+}
+
+function showAppUI() {
+  const app = document.getElementById('appRoot');
+  if (app) app.classList.remove('is-hidden');
+  const badge = document.getElementById('authUserBadge');
+  const signOut = document.getElementById('authSignOut');
+  if (badge) badge.style.display = 'inline-flex';
+  if (signOut) signOut.style.display = 'inline-flex';
+}
+
+function hideAppUI() {
+  const app = document.getElementById('appRoot');
+  if (app) app.classList.add('is-hidden');
+  const badge = document.getElementById('authUserBadge');
+  const signOut = document.getElementById('authSignOut');
+  if (badge) badge.style.display = 'none';
+  if (signOut) signOut.style.display = 'none';
+}
+
+function setAuthMessage(message, isError) {
+  const el = document.getElementById('authMessage');
+  if (!el) return;
+  if (!message) {
+    el.style.display = 'none';
+    el.textContent = '';
+    el.classList.remove('error');
+    return;
+  }
+  el.textContent = message;
+  el.style.display = 'block';
+  if (isError) el.classList.add('error');
+  else el.classList.remove('error');
+}
+
+async function loadUserProfile(userId) {
+  const badge = document.getElementById('authUserBadge');
+  const fallbackEmail = (window.__supabaseSession && window.__supabaseSession.user && window.__supabaseSession.user.email) || '';
+  let email = fallbackEmail;
+  let role = '';
+  try {
+    const { data, error } = await supabase
+      .from('profiles')
+      .select('role,email')
+      .eq('id', userId)
+      .maybeSingle();
+    if (error) throw error;
+    if (data && data.email) email = data.email;
+    if (data && data.role) role = data.role;
+  } catch (e) {
+    role = role || '';
+  }
+  if (!role) role = 'No role assigned. Contact admin.';
+  window.currentUserRole = role;
+  window.currentUserEmail = email || '';
+  if (badge) {
+    badge.textContent = `Logged in as: ${email || 'Unknown'} (${role})`;
+  }
+}
+
+async function handleSession(session) {
+  window.__supabaseSession = session || null;
+  if (session && session.user) {
+    hideLoginUI();
+    showAppUI();
+    await loadUserProfile(session.user.id);
+    await __kvHydrateOnce();
+    try { if (typeof setupDtrPunchesRealtime === 'function') setupDtrPunchesRealtime(); } catch (_) {}
+    return;
+  }
+  __kvDisableSync();
+  hideAppUI();
+  showLoginUI('');
+}
+
+async function initAuth() {
+  if (window.__authInit) return;
+  window.__authInit = true;
+
+  hideAppUI();
+
+  const emailInput = document.getElementById('authEmail');
+  const passwordInput = document.getElementById('authPassword');
+  const signInBtn = document.getElementById('authSignInBtn');
+  const forgotBtn = document.getElementById('authForgotBtn');
+  const signOutBtn = document.getElementById('authSignOut');
+  const newPasswordInput = document.getElementById('authNewPassword');
+  const setPasswordBtn = document.getElementById('authSetPasswordBtn');
+
+  if (signInBtn) {
+    signInBtn.addEventListener('click', async () => {
+      const email = (emailInput && emailInput.value || '').trim();
+      const password = (passwordInput && passwordInput.value || '').trim();
+      if (!email || !password) {
+        setAuthMessage('Email and password are required.', true);
+        return;
+      }
+      const { error } = await supabase.auth.signInWithPassword({ email, password });
+      if (error) {
+        setAuthMessage(error.message || 'Sign in failed.', true);
+      } else {
+        setAuthMessage('Signing in...', false);
+      }
+    });
+  }
+
+  if (forgotBtn) {
+    forgotBtn.addEventListener('click', async () => {
+      const email = (emailInput && emailInput.value || '').trim();
+      if (!email) {
+        setAuthMessage('Enter your email to reset your password.', true);
+        return;
+      }
+      const redirectTo = window.AUTH_REDIRECT_URL || (window.location.origin + window.location.pathname);
+      const { error } = await supabase.auth.resetPasswordForEmail(email, { redirectTo });
+      if (error) {
+        setAuthMessage(error.message || 'Reset request failed.', true);
+        return;
+      }
+      setAuthMessage('Reset link sent to email.', false);
+    });
+  }
+
+  if (setPasswordBtn) {
+    setPasswordBtn.addEventListener('click', async () => {
+      const newPassword = (newPasswordInput && newPasswordInput.value || '').trim();
+      if (!newPassword) {
+        setAuthMessage('Enter a new password.', true);
+        return;
+      }
+      const { error } = await supabase.auth.updateUser({ password: newPassword });
+      if (error) {
+        setAuthMessage(error.message || 'Password update failed.', true);
+        return;
+      }
+      setAuthMessage('Password updated. Redirecting to sign in...', false);
+      try { await supabase.auth.signOut(); } catch (_) {}
+      window.setTimeout(() => {
+        window.location.href = window.location.origin + window.location.pathname;
+      }, 800);
+    });
+  }
+
+  if (signOutBtn) {
+    signOutBtn.addEventListener('click', async () => {
+      await supabase.auth.signOut();
+      handleSession(null);
+    });
+  }
+
+  const { data } = await supabase.auth.getSession();
+  await handleSession(data && data.session ? data.session : null);
+
+  supabase.auth.onAuthStateChange(async (event, session) => {
+    if (event === 'PASSWORD_RECOVERY') {
+      window.__supabaseSession = session || null;
+      showResetPasswordUI('Set a new password to complete recovery.');
+      return;
+    }
+    await handleSession(session);
+  });
+}
+
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', initAuth);
+} else {
+  initAuth();
 }
 </script>
 
@@ -2113,6 +2341,104 @@ window.addEventListener('load', dashReports);
   /* Page title icon */
   .page-title > span:first-child { font-size: 0; } .page-title > span:first-child::before { content: "📊"; font-size: 32px; } .page-title > span.icon-emoji { font-size: 32px !important; } .page-title > span.icon-emoji::before { content: none !important; }
 
+  /* Auth UI */
+  .auth-controls {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-left: auto;
+  }
+  .auth-badge {
+    font-size: 12px;
+    color: #0f172a;
+    background: #f1f5f9;
+    border: 1px solid #e2e8f0;
+    padding: 6px 10px;
+    border-radius: 999px;
+    max-width: 320px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .auth-signout {
+    border: 1px solid #cbd5e1;
+    background: #fff;
+    padding: 6px 12px;
+    border-radius: 8px;
+    cursor: pointer;
+    font-weight: 600;
+    font-size: 12px;
+  }
+  .auth-overlay {
+    position: fixed;
+    inset: 0;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    background: rgba(15, 23, 42, 0.55);
+    z-index: 25000;
+    padding: 16px;
+  }
+  .auth-overlay.is-open { display: flex; }
+  .auth-card {
+    width: min(420px, 94vw);
+    background: #fff;
+    border-radius: 12px;
+    padding: 20px;
+    box-shadow: 0 18px 40px rgba(15, 23, 42, 0.3);
+  }
+  .auth-card h2 { margin: 0 0 8px; font-size: 18px; }
+  .auth-card label {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    font-size: 12px;
+    color: #475569;
+    font-weight: 600;
+    margin-bottom: 10px;
+  }
+  .auth-card input {
+    padding: 8px 10px;
+    border: 1px solid #cbd5e1;
+    border-radius: 8px;
+    font-size: 14px;
+  }
+  .auth-actions {
+    display: flex;
+    gap: 8px;
+    justify-content: flex-end;
+    margin-top: 12px;
+  }
+  .auth-actions button {
+    padding: 8px 12px;
+    border-radius: 8px;
+    border: 1px solid #cbd5e1;
+    background: #f8fafc;
+    cursor: pointer;
+    font-weight: 600;
+    font-size: 13px;
+  }
+  .auth-actions .primary {
+    background: #1d4ed8;
+    border-color: #1d4ed8;
+    color: #fff;
+  }
+  .auth-message {
+    font-size: 12px;
+    color: #1e293b;
+    background: #f8fafc;
+    border: 1px solid #e2e8f0;
+    padding: 8px 10px;
+    border-radius: 8px;
+    margin-top: 10px;
+  }
+  .auth-message.error {
+    color: #991b1b;
+    background: #fef2f2;
+    border-color: #fecaca;
+  }
+  .app-container.is-hidden { display: none; }
+
 </style>
 
 <!-- Boot guard to ensure global stored data is available early -->
@@ -2137,6 +2463,7 @@ window.addEventListener('load', dashReports);
         const client = window.supabase;
         const table = window.SUPABASE_TABLE;
         if (!client || !table) return resolve(undefined);
+        if (!window.__supabaseSession || !window.__supabaseSession.user) return resolve(undefined);
         client
           .from(table)
           .select('value')
@@ -2207,7 +2534,7 @@ window.addEventListener('load', dashReports);
 </script>
 
   <!-- Begin App Container with Sidebar and Main Content -->
-  <div class="app-container">
+  <div class="app-container" id="appRoot">
       <!-- Added top navigation header to adapt payroll UI -->
       <header class="header">
         <div class="header-content">
@@ -2228,6 +2555,10 @@ window.addEventListener('load', dashReports);
               <li class="nav-item"><button class="nav-link tab-btn" id="tabSettings" data-page="settings"><span class="nav-icon">⚙️</span> Settings</button></li>
             </ul>
           </nav>
+          <div class="auth-controls">
+            <span id="authUserBadge" class="auth-badge" style="display:none;">Logged in as: --</span>
+            <button id="authSignOut" class="auth-signout" type="button" style="display:none;">Sign Out</button>
+          </div>
         </div>
       </header>
     <aside class="sidebar" id="sidebar">
@@ -19321,6 +19652,7 @@ async function saveDtrToCloudLegacyBlob(records) {
   // - Uses merge + tombstones to resolve concurrent edits
   // - Queues saves until initial hydration completes
   try {
+    if (!window.__supabaseSession || !window.__supabaseSession.user) return;
     const supa = window.supabase || (typeof supabase !== 'undefined' ? supabase : null);
     if (!supa) return;
 
@@ -19506,6 +19838,9 @@ async function uploadDtrFileToCloud(file) {
 async function loadDtrFromCloudLegacyBlob() {
   // Returns { status, records, tombstones, meta?, error? }
   try {
+    if (!window.__supabaseSession || !window.__supabaseSession.user) {
+      return { status: 'error', error: 'Not authenticated', records: null, tombstones: null };
+    }
     const supa = window.supabase || (typeof supabase !== 'undefined' ? supabase : null);
     if (!supa) return { status: 'no_client', records: null, tombstones: null };
     const { data, error } = await supa
@@ -19648,6 +19983,9 @@ async function migrateLegacyDtrToPunches(records){
 
 async function loadDtrFromCloud() {
   // Returns { status, records, tombstones, meta?, error? }
+  if (!window.__supabaseSession || !window.__supabaseSession.user) {
+    return { status: 'error', error: 'Not authenticated', records: null, tombstones: null, meta: { storage: 'punches' } };
+  }
   const supa = window.supabase || (typeof supabase !== 'undefined' ? supabase : null);
   if (!supa) return { status: 'no_client', records: null, tombstones: null, meta: { storage: 'none' } };
 
@@ -19716,6 +20054,7 @@ async function saveDtrToCloud(records) {
   // - Upserts only the affected punch rows, not the entire dataset as a single blob.
   // - Deletes removed punches by primary key.
   try {
+    if (!window.__supabaseSession || !window.__supabaseSession.user) return;
     const supa = window.supabase || (typeof supabase !== 'undefined' ? supabase : null);
     if (!supa) return;
 
@@ -19795,6 +20134,7 @@ async function saveDtrToCloud(records) {
 
 function setupDtrPunchesRealtime(){
   try {
+    if (!window.__supabaseSession || !window.__supabaseSession.user) return;
     const supa = window.supabase || (typeof supabase !== 'undefined' ? supabase : null);
     if (!supa || !supa.channel) return;
     if (window.__dtrPunchesSubscribed) return;
@@ -21379,6 +21719,35 @@ document.addEventListener('DOMContentLoaded', async function () {
   }
 })();
 </script>
+
+  <!-- Auth overlay -->
+  <div id="authOverlay" class="auth-overlay" aria-hidden="true">
+    <div class="auth-card" role="dialog" aria-modal="true" aria-labelledby="authTitle">
+      <div id="authLoginPanel">
+        <h2 id="authTitle">Sign in</h2>
+        <label>Email
+          <input id="authEmail" type="email" autocomplete="email" placeholder="you@example.com">
+        </label>
+        <label>Password
+          <input id="authPassword" type="password" autocomplete="current-password" placeholder="••••••••">
+        </label>
+        <div class="auth-actions">
+          <button id="authForgotBtn" type="button">Forgot Password</button>
+          <button id="authSignInBtn" type="button" class="primary">Sign In</button>
+        </div>
+      </div>
+      <div id="authResetPanel" style="display:none;">
+        <h2>Set New Password</h2>
+        <label>New Password
+          <input id="authNewPassword" type="password" autocomplete="new-password" placeholder="New password">
+        </label>
+        <div class="auth-actions">
+          <button id="authSetPasswordBtn" type="button" class="primary">Update Password</button>
+        </div>
+      </div>
+      <div id="authMessage" class="auth-message" style="display:none;"></div>
+    </div>
+  </div>
 </body>
 <script>
 // === CalculateAll Scheduler: coalesce multiple calls per frame ===
