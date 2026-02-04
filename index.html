@@ -142,8 +142,7 @@ const KNOWN_KEYS = [
   "payrollColumnWidths",
   // additional filter & state keys not previously persisted
   "dtr_filter_from",
-  "dtr_filter_to",
-  "payroll_active_index"
+  "dtr_filter_to"
   ,"payroll_other_deductions_details"
   ,"payroll_other_deductions_total"
   ,"payroll_pagibig_rate"
@@ -240,7 +239,8 @@ const __kvBootCloudFirstPeriodKeys = new Set([
   'payroll_other_deductions_details',
   'payroll_other_deductions_total',
   'payroll_additional_income_details',
-  'payroll_additional_income_total'
+  'payroll_additional_income_total',
+  'payroll_lock_state'
 ]);
 function __kvBootCloudFirstDecision(k, localObj, cloudObj){
   if (!__kvBootCloudFirstPeriodKeys.has(k)) return null;
@@ -407,7 +407,8 @@ async function __kvHydrateOnce(){
         localObj = cur ? JSON.parse(cur) : null;
         const lc = localObj && localObj.__meta && Number(localObj.__meta.lastUpdatedAt);
         const rc = cloudObj && cloudObj.__meta && Number(cloudObj.__meta.lastUpdatedAt);
-        if (lc && rc && lc > rc) preferLocal = true;
+        const localHasMeaningful = __kvHasMeaningfulPeriodMap(localObj);
+        if (localHasMeaningful && lc && rc && lc > rc) preferLocal = true;
       } catch(_) {}
 
       // Safety: never auto-push local over cloud for Loan Tracker during boot hydrate.
@@ -9364,9 +9365,9 @@ document.addEventListener('DOMContentLoaded', () => {
   function loadLockMap() {
     try {
       const raw = localStorage.getItem(PAYROLL_LOCKS_KEY);
-      if (!raw) return { __meta: { lastUpdatedAt: Date.now() } };
+      if (!raw) return { __meta: { lastUpdatedAt: 0 } };
       const parsed = JSON.parse(raw);
-      if (!parsed || typeof parsed !== 'object') return { __meta: { lastUpdatedAt: Date.now() } };
+      if (!parsed || typeof parsed !== 'object') return { __meta: { lastUpdatedAt: 0 } };
       if (!parsed.__meta) parsed.__meta = {};
       return parsed;
     } catch (err) {
@@ -9377,11 +9378,11 @@ document.addEventListener('DOMContentLoaded', () => {
   let payrollLocks = loadLockMap();
   try { window.payrollLocks = payrollLocks; } catch (err) {}
 
-  function persistLocks() {
+  function persistLocks(changed) {
     try {
       if (!payrollLocks || typeof payrollLocks !== 'object') payrollLocks = { __meta: {} };
       if (!payrollLocks.__meta) payrollLocks.__meta = {};
-      payrollLocks.__meta.lastUpdatedAt = Date.now();
+      if (changed) payrollLocks.__meta.lastUpdatedAt = Date.now();
       localStorage.setItem(PAYROLL_LOCKS_KEY, JSON.stringify(payrollLocks));
     } catch (err) {
       console.warn('Unable to persist payroll lock state', err);
@@ -9678,6 +9679,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!start || !end) return;
     if (!payrollLocks || typeof payrollLocks !== 'object') payrollLocks = { __meta: {} };
     const key = periodKey(start, end);
+    const hadEntry = !!(payrollLocks && payrollLocks[key]);
     if (locked) {
       payrollLocks[key] = {
         locked: true,
@@ -9690,7 +9692,8 @@ document.addEventListener('DOMContentLoaded', () => {
     } else {
       delete payrollLocks[key];
     }
-    persistLocks();
+    const changed = locked ? !hadEntry : hadEntry;
+    persistLocks(changed);
     syncHistoryLockState(start, end, locked, meta);
     try { window.payrollLocks = payrollLocks; } catch (err) {}
   }
