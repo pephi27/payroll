@@ -677,6 +677,65 @@ function safeStringify(v){
 function safePrint(win){
   try { (win || window).print(); } catch(e){ console.warn('print failed', e); }
 }
+function normalizePrintLayout(layout){
+  return layout === 'landscape' ? 'landscape' : 'portrait';
+}
+function getPrintLayoutByGroup(group){
+  if (!group) return 'portrait';
+  var sel = document.querySelector('select[data-print-layout-group="' + group + '"]');
+  return normalizePrintLayout(sel && sel.value);
+}
+function getPrintLayoutForElement(el){
+  if (!el) return 'portrait';
+  if (el.id) {
+    var direct = document.querySelector('select[data-print-layout-for="' + el.id + '"]');
+    if (direct) return normalizePrintLayout(direct.value);
+  }
+  var group = el.getAttribute ? el.getAttribute('data-print-layout-group') : '';
+  if (group) return getPrintLayoutByGroup(group);
+  return 'portrait';
+}
+function getLetterPageDimensions(layout){
+  var orientation = normalizePrintLayout(layout);
+  return orientation === 'landscape'
+    ? { width: '11in', height: '8.5in' }
+    : { width: '8.5in', height: '11in' };
+}
+function buildPayslipPrintStyles(layout){
+  var orientation = normalizePrintLayout(layout);
+  var dims = getLetterPageDimensions(orientation);
+  return `@page { size: letter ${orientation}; margin: 0.25in; }
+html, body { width: ${dims.width}; height: ${dims.height}; margin: 0; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+body{font-family:Arial,Helvetica,sans-serif;margin:0;padding:0 0.1in;}
+.payslip-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:0.03in;}
+.payslip-grid.single{grid-template-columns:repeat(1,1fr);max-width:3in;margin:0 auto;}
+.payslip{box-sizing:border-box;padding:0.06in;border:1px solid #475569;height:2.6in;overflow:hidden;border-radius:3px;background:#fff;box-shadow:0 0 0 1px rgba(15,23,42,0.2);}
+.page-break{page-break-after:always;break-after:page;}
+.payslip-header{display:flex;flex-direction:column;gap:2px;margin-bottom:4px;}
+.company-name{font-size:10px;font-weight:700;}
+.header-lines{font-size:7.8px;line-height:1.2;}
+.meta-line{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.meta-label{font-weight:700;}
+.meta-muted{color:#475569;}
+.summary-row{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:3px;margin:2px 0 4px;}
+.summary-box{border:1px solid #e2e8f0;border-radius:2px;padding:3px 2px;text-align:center;background:#f8fafc;}
+.summary-label{font-size:7px;font-weight:700;letter-spacing:0.02em;color:#475569;}
+.summary-value{font-size:10px;font-weight:700;line-height:1.1;}
+.summary-net .summary-value{font-size:11px;font-weight:800;color:#0f172a;}
+.details-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:4px;}
+.details-title{font-size:7.5px;font-weight:700;margin:0 0 2px;}
+.detail-row{display:flex;justify-content:space-between;gap:4px;font-size:8px;line-height:1.2;padding:1px 0;}
+.detail-row span:last-child{font-variant-numeric:tabular-nums;}
+.item-line{font-size:7.3px;color:#475569;padding:0;}
+.detail-more{font-style:italic;}
+.payslip-footer{margin-top:3px;font-size:7px;line-height:1.2;color:#475569;}`;
+}
+try {
+  window.getPrintLayoutByGroup = getPrintLayoutByGroup;
+  window.getPrintLayoutForElement = getPrintLayoutForElement;
+  window.getLetterPageDimensions = getLetterPageDimensions;
+  window.buildPayslipPrintStyles = buildPayslipPrintStyles;
+} catch(e){}
 </script>
 <script>
 (function(){
@@ -960,7 +1019,9 @@ function safePrint(win){
       </div>
     </div>`;
   }
-  var styles = `@page { size: letter portrait; margin: 0.25in; }
+  var styles = (typeof buildPayslipPrintStyles === 'function')
+    ? buildPayslipPrintStyles('portrait')
+    : `@page { size: letter portrait; margin: 0.25in; }
 html, body { width: 8.5in; height: 11in; margin: 0; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
 body{font-family:Arial,Helvetica,sans-serif;margin:0;padding:0 0.1in;}
 .payslip-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:0.03in;}
@@ -1004,10 +1065,15 @@ document.addEventListener('DOMContentLoaded', function() {
     var weEl = document.getElementById('weekEnd');
     var ws = wsEl ? (wsEl.value || '') : '';
     var we = weEl ? (weEl.value || '') : '';
-    var styles = window.PAYSLIP_PRINT_STYLES || '';
+    var layout = (typeof getPrintLayoutForElement === 'function') ? getPrintLayoutForElement(multiBtn) : 'portrait';
+    var styles = (typeof buildPayslipPrintStyles === 'function')
+      ? buildPayslipPrintStyles(layout)
+      : (window.PAYSLIP_PRINT_STYLES || '');
     if (!styles){
-      styles = `@page { size: letter portrait; margin: 0.25in; }
-html, body { width: 8.5in; height: 11in; margin: 0; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+      var dims = (typeof getLetterPageDimensions === 'function') ? getLetterPageDimensions(layout) : { width: '8.5in', height: '11in' };
+      var orientation = (typeof normalizePrintLayout === 'function') ? normalizePrintLayout(layout) : 'portrait';
+      styles = `@page { size: letter ${orientation}; margin: 0.25in; }
+html, body { width: ${dims.width}; height: ${dims.height}; margin: 0; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
 body{font-family:Arial,Helvetica,sans-serif;margin:0;padding:0 0.1in;}
 .payslip-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:0.03in;}
 .payslip-grid.single{grid-template-columns:repeat(1,1fr);max-width:3in;margin:0 auto;}
@@ -2385,8 +2451,15 @@ window.addEventListener('load', dashReports);
      <input accept=".dat,.txt" id="fileInput" multiple="" type="file"/>
     </label>
     <button id="manualDtrBtn">Enter Manual DTR</button>
-    <button id="printDtrRegularBtn" type="button">Print Regular DTR</button>
-    <button id="printDtrOvertimeBtn" type="button">Print Overtime DTR</button>
+    <button id="printDtrRegularBtn" type="button" data-print-layout-group="dtr">Print Regular DTR</button>
+    <button id="printDtrOvertimeBtn" type="button" data-print-layout-group="dtr">Print Overtime DTR</button>
+    <label>
+     Print Layout
+     <select id="printLayoutDtr" data-print-layout-group="dtr">
+      <option value="portrait">Portrait</option>
+      <option value="landscape">Landscape</option>
+     </select>
+    </label>
     <label>
      Project:
      <select id="filterProject" title="Filter by project">
@@ -2858,15 +2931,22 @@ window.addEventListener('load', dashReports);
       <button class="primary" id="downloadPayrollCSV">
        Download Payroll CSV
       </button>
-      <button id="printPayrollBtn" type="button">
+      <button id="printPayrollBtn" type="button" data-print-layout-group="payroll">
        Print Report
       </button>
       <button id="printPayrollExcelBtn" type="button">
        Print Report Excel
       </button>
-      <button id="printAllPayslipsBtn" type="button">
+      <button id="printAllPayslipsBtn" type="button" data-print-layout-group="payroll">
        Print Payslips
       </button>
+      <label>
+       Print Layout
+       <select id="printLayoutPayroll" data-print-layout-group="payroll">
+        <option value="portrait">Portrait</option>
+        <option value="landscape">Landscape</option>
+       </select>
+      </label>
      </div>
      <table id="payrollTable">
       <thead>
@@ -2940,7 +3020,14 @@ window.addEventListener('load', dashReports);
     <div class="tab" id="overtimeTab">
      <div class="controls">
       <div style="flex:1 1 auto"></div>
-      <button type="button" id="printOvertimeBtn">Print</button>
+      <button type="button" id="printOvertimeBtn" data-print-layout-group="overtime">Print</button>
+      <label>
+       Print Layout
+       <select id="printLayoutOvertime" data-print-layout-group="overtime">
+        <option value="portrait">Portrait</option>
+        <option value="landscape">Landscape</option>
+       </select>
+      </label>
      </div>
      <table id="overtimeTable">
       <thead>
@@ -2988,7 +3075,14 @@ window.addEventListener('load', dashReports);
       <label><input type="checkbox" name="deductions_include_total" data-col="total" checked/> Total Deductions</label>
       </div>
       <div style="flex:1 1 auto"></div>
-      <button type="button" id="printDeductionsBtn">Print</button>
+      <button type="button" id="printDeductionsBtn" data-print-layout-group="deductions">Print</button>
+      <label>
+       Print Layout
+       <select id="printLayoutDeductions" data-print-layout-group="deductions">
+        <option value="portrait">Portrait</option>
+        <option value="landscape">Landscape</option>
+       </select>
+      </label>
      </div>
      <div class="section note">
       SSS Loan, Pag-IBIG Loan, and Account are managed in the Loan Tracker below and are <b>read-only</b> in this table. SSS and Cash Advance use <b>Total</b> + <b>Weekly</b> (with auto-stop when fully paid). Pag-IBIG loans use <b>Monthly deduction</b> only (per-payroll amount is computed using the selected divisor). Wed Vale can still be edited here if you use it.
@@ -3082,10 +3176,17 @@ window.addEventListener('load', dashReports);
      <div class="section note">
       Track extra pay items per employee (e.g., Allowance, Bantay, Incentive). Amounts are added to gross pay and cannot be negative.
      </div>
-     <div class="toolbar" id="additionalIncomeControls">
-      <div class="toolbar-left">
-       <button type="button" id="printAdditionalIncomePivotBtn">Print Report</button>
+    <div class="toolbar" id="additionalIncomeControls">
+     <div class="toolbar-left">
+       <button type="button" id="printAdditionalIncomePivotBtn" data-print-layout-group="additionalIncome">Print Report</button>
        <button type="button" id="exportAdditionalIncomePivotExcelBtn">Download Excel</button>
+       <label>
+        Print Layout
+        <select id="printLayoutAdditionalIncome" data-print-layout-group="additionalIncome">
+         <option value="portrait">Portrait</option>
+         <option value="landscape">Landscape</option>
+        </select>
+       </label>
       </div>
      </div>
      <table id="additionalIncomeTable">
@@ -3107,12 +3208,19 @@ window.addEventListener('load', dashReports);
      <div class="section note">
       Track deduction-only line items per employee. Amounts are stored as non-negative values and should not be used for Additional Income.
      </div>
-     <div class="toolbar" id="otherDeductionsControls">
-      <div class="toolbar-left">
+    <div class="toolbar" id="otherDeductionsControls">
+     <div class="toolbar-left">
        <button type="button" id="copyOtherDeductionsBtn">Copy other deductions</button>
        <button type="button" id="restoreOtherDeductionsBtn">Restore other deductions</button>
-             <button type="button" id="printOtherDeductionsPivotBtn">Print Report</button>
+             <button type="button" id="printOtherDeductionsPivotBtn" data-print-layout-group="otherDeductions">Print Report</button>
        <button type="button" id="exportOtherDeductionsPivotExcelBtn">Download Excel</button>
+       <label>
+        Print Layout
+        <select id="printLayoutOtherDeductions" data-print-layout-group="otherDeductions">
+         <option value="portrait">Portrait</option>
+         <option value="landscape">Landscape</option>
+        </select>
+       </label>
 </div>
       <span class="save-indicator" id="otherDeductionsSaveStatus" aria-live="polite">Saved locally</span>
      </div>
@@ -7860,7 +7968,7 @@ function exportAdditionalIncomePivotExcel(report) {
   return true;
 }
 
-function printAdditionalIncomePivot(report) {
+function printAdditionalIncomePivot(report, layout) {
   const formatAmount = (value) => {
     const num = Number(value);
     if (!Number.isFinite(num) || Math.abs(num) < 0.005) return '-';
@@ -7938,7 +8046,8 @@ function printAdditionalIncomePivot(report) {
   const w = window.open('', '', 'width=1100,height=700');
   if (!w) return;
   w.document.write('<html><head><meta charset="utf-8"><title>Additional Income Report</title>');
-  w.document.write('<style>@page{size:letter portrait;margin:8mm} body{font-family:Arial,Helvetica,sans-serif;margin:0} h2{margin:0 0 6px;font-size:13px} table{border-collapse:collapse;width:100%;table-layout:fixed} th,td{border:1pt solid #000;padding:2px 4px;font-size:9px;white-space:nowrap} th{background:#f1f5f9} td.num, th.num{text-align:right} thead{display:table-header-group} tfoot{display:table-footer-group} tfoot td{font-weight:700;background:#fff7ed;border-top:2pt solid #000} .print-scale{transform:scale(0.95);transform-origin:top left} @media print{body{font-size:9px} button,input,select,textarea,nav{display:none !important} #printReportContainer{display:block}} </style>');
+  const printLayout = (typeof normalizePrintLayout === 'function') ? normalizePrintLayout(layout) : 'portrait';
+  w.document.write('<style>@page{size:letter ' + printLayout + ';margin:8mm} body{font-family:Arial,Helvetica,sans-serif;margin:0} h2{margin:0 0 6px;font-size:13px} table{border-collapse:collapse;width:100%;table-layout:fixed} th,td{border:1pt solid #000;padding:2px 4px;font-size:9px;white-space:nowrap} th{background:#f1f5f9} td.num, th.num{text-align:right} thead{display:table-header-group} tfoot{display:table-footer-group} tfoot td{font-weight:700;background:#fff7ed;border-top:2pt solid #000} .print-scale{transform:scale(0.95);transform-origin:top left} @media print{body{font-size:9px} button,input,select,textarea,nav{display:none !important} #printReportContainer{display:block}} </style>');
   w.document.write('</head><body>');
   w.document.write(`<h2>${title}</h2>`);
   w.document.write(html);
@@ -7973,7 +8082,8 @@ document.addEventListener('DOMContentLoaded', () => {
     printBtn.addEventListener('click', () => {
       const report = getReport();
       if (!report) return;
-      printAdditionalIncomePivot(report);
+      const layout = (typeof getPrintLayoutForElement === 'function') ? getPrintLayoutForElement(printBtn) : 'portrait';
+      printAdditionalIncomePivot(report, layout);
     });
   }
   if (exportBtn) {
@@ -8656,6 +8766,8 @@ window.formatDateRange = formatDateRange;
 document.addEventListener('DOMContentLoaded', function(){
   const btn = document.getElementById('printPayrollBtn');
   if (btn) btn.addEventListener('click', function(){
+    const layout = (typeof getPrintLayoutForElement === 'function') ? getPrintLayoutForElement(btn) : 'portrait';
+    const dims = (typeof getLetterPageDimensions === 'function') ? getLetterPageDimensions(layout) : { width: '8.5in', height: '11in' };
     const srcTable = document.getElementById('payrollTable');
     if (!srcTable) {
       alert('Payroll table is missing or empty.');
@@ -8749,7 +8861,7 @@ document.addEventListener('DOMContentLoaded', function(){
     if (!w) return;
     w.document.write('<html><head><meta charset="utf-8"><title>Payroll Report</title>');
     // Basic styles: borders and alignment
-    w.document.write('<style>@page{size:letter landscape;margin:10mm} html,body{-webkit-print-color-adjust:exact;print-color-adjust:exact;width:11in;height:8.5in;margin:0} body{font-family:Arial,Helvetica,sans-serif;margin:0;} .report-header{margin:0 0 8px} .company-name{font-size:14px;font-weight:700} .report-title{font-size:12px;font-weight:600;margin-top:2px} .report-period{font-size:10px;margin-top:2px} table{border-collapse:collapse;width:100%;table-layout:fixed} thead{display:table-header-group} tfoot{display:table-footer-group} th,td{border:1pt solid #000!important;border-style:solid!important;padding:4px;font-size:11px} table,th,td{border-color:#000!important;border-style:solid!important} th{background:#f1f5f9} td.num{text-align:right} th:nth-child(1),td:nth-child(1),th:nth-child(2),td:nth-child(2){text-align:left} tfoot td{font-weight:700;background:#fff7ed;border-top:2pt solid #000!important} #payrollTable{page-break-inside:auto} #payrollTable tr{page-break-inside:avoid;break-inside:avoid-page} #payrollTable th, #payrollTable td { white-space: nowrap !important; page-break-inside: avoid; } #payrollTable th:nth-child(1), #payrollTable td:nth-child(1) { width:30px; min-width:30px; } #payrollTable th:nth-child(2), #payrollTable td:nth-child(2) { width:150px; min-width:150px; } #payrollTable th:nth-child(3), #payrollTable td:nth-child(3) { width:60px; min-width:60px; } #payrollTable th:nth-child(4), #payrollTable td:nth-child(4) { width:60px; min-width:60px; } #payrollTable th:nth-child(5), #payrollTable td:nth-child(5) { width:60px; min-width:60px; } #payrollTable th:nth-child(6), #payrollTable td:nth-child(6) { width:60px; min-width:60px; } #payrollTable th:nth-child(7), #payrollTable td:nth-child(7) { width:60px; min-width:60px; } #payrollTable th:nth-child(8), #payrollTable td:nth-child(8) { width:60px; min-width:60px; } #payrollTable th:nth-child(9), #payrollTable td:nth-child(9) { width:60px; min-width:60px; } #payrollTable th:nth-child(10), #payrollTable td:nth-child(10) { width:60px; min-width:60px; } #payrollTable th:nth-child(11), #payrollTable td:nth-child(11) { width:60px; min-width:60px; } #payrollTable th:nth-child(12), #payrollTable td:nth-child(12) { width:60px; min-width:60px; } #payrollTable th:nth-child(13), #payrollTable td:nth-child(13) { width:60px; min-width:60px; } #payrollTable th:nth-child(14), #payrollTable td:nth-child(14) { width:60px; min-width:60px; } #payrollTable th:nth-child(15), #payrollTable td:nth-child(15) { width:60px; min-width:60px; } #payrollTable th:nth-child(16), #payrollTable td:nth-child(16) { width:60px; min-width:60px; } #payrollTable th:nth-child(17), #payrollTable td:nth-child(17) { width:60px; min-width:60px; } #payrollTable th:nth-child(18), #payrollTable td:nth-child(18) { width:60px; min-width:60px; } #payrollTable th:nth-child(19), #payrollTable td:nth-child(19) { width:60px; min-width:60px; } #payrollTable th:nth-child(20), #payrollTable td:nth-child(20) { width:60px; min-width:60px; } #payrollTable th:nth-child(21), #payrollTable td:nth-child(21) { width:50px; min-width:50px; } #payrollTable th:nth-child(22), #payrollTable td:nth-child(22) { width:75px; min-width:75px; }</style>');
+    w.document.write('<style>@page{size:letter ' + layout + ';margin:10mm} html,body{-webkit-print-color-adjust:exact;print-color-adjust:exact;width:' + dims.width + ';height:' + dims.height + ';margin:0} body{font-family:Arial,Helvetica,sans-serif;margin:0;} .report-header{margin:0 0 8px} .company-name{font-size:14px;font-weight:700} .report-title{font-size:12px;font-weight:600;margin-top:2px} .report-period{font-size:10px;margin-top:2px} table{border-collapse:collapse;width:100%;table-layout:fixed} thead{display:table-header-group} tfoot{display:table-footer-group} th,td{border:1pt solid #000!important;border-style:solid!important;padding:4px;font-size:11px} table,th,td{border-color:#000!important;border-style:solid!important} th{background:#f1f5f9} td.num{text-align:right} th:nth-child(1),td:nth-child(1),th:nth-child(2),td:nth-child(2){text-align:left} tfoot td{font-weight:700;background:#fff7ed;border-top:2pt solid #000!important} #payrollTable{page-break-inside:auto} #payrollTable tr{page-break-inside:avoid;break-inside:avoid-page} #payrollTable th, #payrollTable td { white-space: nowrap !important; page-break-inside: avoid; } #payrollTable th:nth-child(1), #payrollTable td:nth-child(1) { width:30px; min-width:30px; } #payrollTable th:nth-child(2), #payrollTable td:nth-child(2) { width:150px; min-width:150px; } #payrollTable th:nth-child(3), #payrollTable td:nth-child(3) { width:60px; min-width:60px; } #payrollTable th:nth-child(4), #payrollTable td:nth-child(4) { width:60px; min-width:60px; } #payrollTable th:nth-child(5), #payrollTable td:nth-child(5) { width:60px; min-width:60px; } #payrollTable th:nth-child(6), #payrollTable td:nth-child(6) { width:60px; min-width:60px; } #payrollTable th:nth-child(7), #payrollTable td:nth-child(7) { width:60px; min-width:60px; } #payrollTable th:nth-child(8), #payrollTable td:nth-child(8) { width:60px; min-width:60px; } #payrollTable th:nth-child(9), #payrollTable td:nth-child(9) { width:60px; min-width:60px; } #payrollTable th:nth-child(10), #payrollTable td:nth-child(10) { width:60px; min-width:60px; } #payrollTable th:nth-child(11), #payrollTable td:nth-child(11) { width:60px; min-width:60px; } #payrollTable th:nth-child(12), #payrollTable td:nth-child(12) { width:60px; min-width:60px; } #payrollTable th:nth-child(13), #payrollTable td:nth-child(13) { width:60px; min-width:60px; } #payrollTable th:nth-child(14), #payrollTable td:nth-child(14) { width:60px; min-width:60px; } #payrollTable th:nth-child(15), #payrollTable td:nth-child(15) { width:60px; min-width:60px; } #payrollTable th:nth-child(16), #payrollTable td:nth-child(16) { width:60px; min-width:60px; } #payrollTable th:nth-child(17), #payrollTable td:nth-child(17) { width:60px; min-width:60px; } #payrollTable th:nth-child(18), #payrollTable td:nth-child(18) { width:60px; min-width:60px; } #payrollTable th:nth-child(19), #payrollTable td:nth-child(19) { width:60px; min-width:60px; } #payrollTable th:nth-child(20), #payrollTable td:nth-child(20) { width:60px; min-width:60px; } #payrollTable th:nth-child(21), #payrollTable td:nth-child(21) { width:50px; min-width:50px; } #payrollTable th:nth-child(22), #payrollTable td:nth-child(22) { width:75px; min-width:75px; }</style>');
     w.document.write('</head><body>');
     // Header with date range if available
     const ws = document.getElementById('weekStart');
@@ -8843,6 +8955,7 @@ document.addEventListener('DOMContentLoaded', function(){
   const btn = document.getElementById('printDeductionsBtn');
   if (!btn) return;
   btn.addEventListener('click', function(){
+    const layout = (typeof getPrintLayoutForElement === 'function') ? getPrintLayoutForElement(btn) : 'portrait';
     if (!getEmployeeList() || !getEmployeeList().length) {
       alert('No employees available for the deductions report.');
       return;
@@ -8891,7 +9004,7 @@ document.addEventListener('DOMContentLoaded', function(){
     const w = window.open('', '', 'width=1100,height=700');
     if (!w) return;
     w.document.write('<html><head><meta charset="utf-8"><title>Deductions Report</title>');
-    w.document.write('<style>@page{size:letter landscape;margin:10mm} body{font-family:Arial,Helvetica,sans-serif;margin:0} .report-header{margin:0 0 8px} .company-name{font-size:14px;font-weight:700} .report-title{font-size:12px;font-weight:600;margin-top:2px} .report-period{font-size:10px;margin-top:2px} table{border-collapse:collapse;width:100%;table-layout:fixed} th,td{border:1pt solid #000;padding:4px;font-size:10px} th{background:#f1f5f9} td.num, th.num{text-align:right} thead{display:table-header-group} tfoot{display:table-footer-group} tfoot td{font-weight:700;background:#fff7ed;border-top:2pt solid #000}</style>');
+    w.document.write('<style>@page{size:letter ' + layout + ';margin:10mm} body{font-family:Arial,Helvetica,sans-serif;margin:0} .report-header{margin:0 0 8px} .company-name{font-size:14px;font-weight:700} .report-title{font-size:12px;font-weight:600;margin-top:2px} .report-period{font-size:10px;margin-top:2px} table{border-collapse:collapse;width:100%;table-layout:fixed} th,td{border:1pt solid #000;padding:4px;font-size:10px} th{background:#f1f5f9} td.num, th.num{text-align:right} thead{display:table-header-group} tfoot{display:table-footer-group} tfoot td{font-weight:700;background:#fff7ed;border-top:2pt solid #000}</style>');
     w.document.write('</head><body>');
     w.document.write('<div class="report-header">');
     w.document.write(`<div class="company-name">${companyName}</div>`);
@@ -8947,6 +9060,7 @@ document.addEventListener('DOMContentLoaded', function(){
   const btn = document.getElementById('printOvertimeBtn');
   if (!btn) return;
   btn.addEventListener('click', function(){
+    const layout = (typeof getPrintLayoutForElement === 'function') ? getPrintLayoutForElement(btn) : 'portrait';
     if (!getEmployeeList() || !getEmployeeList().length) {
       alert('No employees available for the overtime report.');
       return;
@@ -9005,7 +9119,7 @@ document.addEventListener('DOMContentLoaded', function(){
     const w = window.open('', '', 'width=1000,height=700');
     if (!w) return;
     w.document.write('<html><head><meta charset="utf-8"><title>Overtime Report</title>');
-    w.document.write('<style>@page{size:letter landscape;margin:10mm} body{font-family:Arial,Helvetica,sans-serif;margin:0} .report-header{margin:0 0 8px} .company-name{font-size:14px;font-weight:700} .report-title{font-size:12px;font-weight:600;margin-top:2px} .report-period{font-size:10px;margin-top:2px} table{border-collapse:collapse;width:100%;table-layout:fixed} th,td{border:1pt solid #000;padding:4px;font-size:10px} th{background:#f1f5f9} td.num, th.num{text-align:right} thead{display:table-header-group} tfoot{display:table-footer-group} tfoot td{font-weight:700;background:#fff7ed;border-top:2pt solid #000}</style>');
+    w.document.write('<style>@page{size:letter ' + layout + ';margin:10mm} body{font-family:Arial,Helvetica,sans-serif;margin:0} .report-header{margin:0 0 8px} .company-name{font-size:14px;font-weight:700} .report-title{font-size:12px;font-weight:600;margin-top:2px} .report-period{font-size:10px;margin-top:2px} table{border-collapse:collapse;width:100%;table-layout:fixed} th,td{border:1pt solid #000;padding:4px;font-size:10px} th{background:#f1f5f9} td.num, th.num{text-align:right} thead{display:table-header-group} tfoot{display:table-footer-group} tfoot td{font-weight:700;background:#fff7ed;border-top:2pt solid #000}</style>');
     w.document.write('</head><body>');
     w.document.write('<div class="report-header">');
     w.document.write(`<div class="company-name">${companyName}</div>`);
@@ -10621,8 +10735,15 @@ document.addEventListener('DOMContentLoaded', () => {
     <!-- Detailed (existing) reports view -->
     <div id="reportsDetailedTab" class="subtab-panel active">
       <div class="controls">
-        <button id="r_print">Print</button>
+        <button id="r_print" data-print-layout-group="reportsDetailed">Print</button>
         <button id="r_csv">CSV (All)</button>
+        <label>
+         Print Layout
+         <select id="printLayoutReportsDetailed" data-print-layout-group="reportsDetailed">
+          <option value="portrait">Portrait</option>
+          <option value="landscape">Landscape</option>
+         </select>
+        </label>
         <span id="r_range_hint" style="font-size:12px;color:#64748b;margin-left:auto;"></span>
       </div>
       <div id="r_msg" style="font-size:13px;color:#64748b;display:none;"></div>
@@ -10632,7 +10753,14 @@ document.addEventListener('DOMContentLoaded', () => {
     <!-- New Master Report view -->
     <div id="masterReportTab" class="subtab-panel">
       <div class="controls">
-        <button id="mr_print">Print</button>
+        <button id="mr_print" data-print-layout-group="reportsMaster">Print</button>
+        <label>
+         Print Layout
+         <select id="printLayoutReportsMaster" data-print-layout-group="reportsMaster">
+          <option value="portrait">Portrait</option>
+          <option value="landscape">Landscape</option>
+         </select>
+        </label>
       </div>
       <div id="masterReportContainer" class="mr"></div>
     </div>
@@ -12259,11 +12387,13 @@ rows += `<tr class="allowance">
       ev.preventDefault();
       try{
         const node = document.getElementById('masterReportContainer');
-        if (!node) return; const html = '<!doctype html><html><head><meta charset="utf-8"><title>Master Report</title>'+
-          '<style>body{font-family:Arial,Helvetica,sans-serif;padding:10px} table{width:100%;border-collapse:collapse;font-size:12px} th,td{border:0.6pt solid #000;padding:4px 6px;text-align:left} .mr-num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap} .mr-company th{text-align:center} h2{text-align:center;margin:0 0 10px 0}</style>'+
+        if (!node) return;
+        const layout = (typeof getPrintLayoutForElement === 'function') ? getPrintLayoutForElement(btn) : 'portrait';
+        const html = '<!doctype html><html><head><meta charset="utf-8"><title>Master Report</title>'+
+          '<style>@page{size:letter ' + layout + ';margin:10mm} body{font-family:Arial,Helvetica,sans-serif;padding:10px} table{width:100%;border-collapse:collapse;font-size:12px} th,td{border:0.6pt solid #000;padding:4px 6px;text-align:left} .mr-num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap} .mr-company th{text-align:center} h2{text-align:center;margin:0 0 10px 0}</style>'+
           '</head><body>'+ node.innerHTML +'</body></html>';
-        const w = window.open('', '', 'width=1024,height=768'); if (!w) return; w.document.open(); w.document.write(html); w.document.close(); w.focus(); setTimeout(()=>{ try{ w.print(); }catch(_){} }, 0);
-      }catch(_){ window.print(); }
+        const w = window.open('', '', 'width=1024,height=768'); if (!w) return; w.document.open(); w.document.write(html); w.document.close(); w.focus(); setTimeout(()=>{ try{ safePrint(w); }catch(_){} }, 0);
+      }catch(_){ safePrint(); }
     });
   }
 
@@ -12307,8 +12437,15 @@ rows += `<tr class="allowance">
           <span class="hint">Hold Ctrl (Windows) or ⌘ (macOS) to select multiple periods.</span>
         </label>
         <div class="actions">
-          <button id="contribPrintBtn" type="button">Print</button>
+          <button id="contribPrintBtn" type="button" data-print-layout-group="contribSummary">Print</button>
           <button id="contribExcelBtn" type="button">Download Excel</button>
+          <label>
+           Print Layout
+           <select id="printLayoutContribSummary" data-print-layout-group="contribSummary">
+            <option value="portrait">Portrait</option>
+            <option value="landscape">Landscape</option>
+           </select>
+          </label>
         </div>
       </div>
       <div id="contribSummaryMeta" class="summary-meta">Choose one or more payroll periods to view contribution totals from payroll history.</div>
@@ -13010,7 +13147,7 @@ rows += `<tr class="allowance">
       return Array.from(table.querySelectorAll('tbody tr')).length > 0;
     }
 
-    function printContributionSummary(){
+    function printContributionSummary(layout){
       const tableClone = cloneVisibleTable();
       if (!tableClone || !hasContributionRows(tableClone)){
         alert('Select at least one payroll period with contribution data before printing.');
@@ -13018,8 +13155,9 @@ rows += `<tr class="allowance">
       }
       const metaEl = document.getElementById(META_ID);
       const metaHtml = metaEl ? metaEl.innerHTML : '';
+      const printLayout = (typeof normalizePrintLayout === 'function') ? normalizePrintLayout(layout) : 'portrait';
       const html = `<!doctype html><html><head><meta charset="utf-8"><title>Contribution Summary</title>`+
-        '<style>body{font-family:Arial,Helvetica,sans-serif;padding:16px;color:#0f172a} h2{margin:0 0 10px 0;text-align:center}' +
+        `<style>@page{size:letter ${printLayout};margin:10mm} body{font-family:Arial,Helvetica,sans-serif;padding:16px;color:#0f172a} h2{margin:0 0 10px 0;text-align:center}` +
         '#meta{margin-bottom:12px;font-size:13px;color:#475569} table{width:100%;border-collapse:collapse;font-size:12px}' +
         'th,td{border:1px solid #1f2937;padding:6px 8px;text-align:right;font-variant-numeric:tabular-nums}' +
         'th:first-child,td:first-child{text-align:left;white-space:nowrap}' +
@@ -13037,7 +13175,7 @@ rows += `<tr class="allowance">
       w.document.write(html);
       w.document.close();
       w.focus();
-      setTimeout(()=>{ try{ w.print(); }catch(_){} }, 10);
+      setTimeout(()=>{ try{ safePrint(w); }catch(_){} }, 10);
     }
 
     function exportContributionExcel(){
@@ -13079,7 +13217,10 @@ rows += `<tr class="allowance">
       }
       const printBtn = document.getElementById(PRINT_ID);
       if (printBtn && !printBtn.__wired){
-        printBtn.addEventListener('click', printContributionSummary);
+        printBtn.addEventListener('click', function(){
+          const layout = (typeof getPrintLayoutForElement === 'function') ? getPrintLayoutForElement(printBtn) : 'portrait';
+          printContributionSummary(layout);
+        });
         printBtn.__wired = true;
       }
       const excelBtn = document.getElementById(EXCEL_ID);
@@ -16560,10 +16701,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
 <script>
 // Clean print for per-project sheet (modal) with strong grid lines
-function printProjectReportClean(){
+function printProjectReportClean(layout){
   try{
     var box = document.getElementById('projectReportContent');
     if (!box) return;
+    var printLayout = (typeof normalizePrintLayout === 'function') ? normalizePrintLayout(layout) : 'portrait';
     var css = '<style>'+
       'html,body{margin:0;padding:10px;font-family:Arial,Helvetica,sans-serif}'+
       '*{-webkit-print-color-adjust:exact;print-color-adjust:exact}'+
@@ -16572,7 +16714,7 @@ function printProjectReportClean(){
       'table,th,td{border:0.6pt solid #000 !important}'+
       'th,td{padding:4px 6px;vertical-align:middle}'+
       'th{background:#f1f5f9;text-align:left}'+
-      '@media print{@page{margin:10mm}}'+
+      '@media print{@page{size:letter ' + printLayout + ';margin:10mm}}'+
       '</style>';
     var html = '<!doctype html><html><head><meta charset="utf-8">'+css+'</head><body>'+ box.innerHTML + '</body></html>';
     var w = window.open('', '', 'width=1024,height=768');
@@ -16583,7 +16725,11 @@ function printProjectReportClean(){
 }
 document.addEventListener('DOMContentLoaded', function(){
   var btn = document.getElementById('printProjectTotalsBtn');
-  if (btn) btn.addEventListener('click', function(e){ e.preventDefault(); printProjectReportClean(); });
+  if (btn) btn.addEventListener('click', function(e){
+    e.preventDefault();
+    var layout = (typeof getPrintLayoutForElement === 'function') ? getPrintLayoutForElement(btn) : 'portrait';
+    printProjectReportClean(layout);
+  });
 });
 </script>
 
@@ -16825,7 +16971,7 @@ document.addEventListener('DOMContentLoaded', function(){
     removeEmptyColumns(clone, ['Project']);
     return clone;
   }
-  function printDTR(scope){
+  function printDTR(scope, layout){
     try{
       var activeScope = scope || (typeof getActiveDtrSubtab === 'function' ? getActiveDtrSubtab() : 'regular');
       var clone = buildDtrPrintTable(activeScope);
@@ -16833,10 +16979,11 @@ document.addEventListener('DOMContentLoaded', function(){
       var reportTitle = activeScope === 'overtime' ? 'Overtime DTR' : 'Regular DTR';
       var companyName = getDtrReportCompanyName();
       var periodText = getDtrPeriodText();
+      var printLayout = (typeof normalizePrintLayout === 'function') ? normalizePrintLayout(layout) : 'portrait';
       var w = window.open('', '_blank', 'width=1100,height=700');
       if (!w) return;
       w.document.write('<!DOCTYPE html><html><head><meta charset="utf-8"><title>' + reportTitle + '</title>');
-      w.document.write('<style>@page{size:letter landscape;margin:10mm} body{font-family:Arial,Helvetica,sans-serif;margin:0} .report-header{margin:0 0 8px} .company-name{font-size:14px;font-weight:700} .report-title{font-size:12px;font-weight:600;margin-top:2px} .report-period{font-size:10px;margin-top:2px} table{width:100%;border-collapse:collapse;table-layout:fixed} th,td{border:1pt solid #000;padding:4px;font-size:10px;text-align:center} th{background:#f1f5f9} thead{display:table-header-group} tfoot{display:table-footer-group} td:first-child, th:first-child, td:nth-child(2), th:nth-child(2){text-align:left} #resultsTable th, #resultsTable td { white-space: nowrap; }</style>');
+      w.document.write('<style>@page{size:letter ' + printLayout + ';margin:10mm} body{font-family:Arial,Helvetica,sans-serif;margin:0} .report-header{margin:0 0 8px} .company-name{font-size:14px;font-weight:700} .report-title{font-size:12px;font-weight:600;margin-top:2px} .report-period{font-size:10px;margin-top:2px} table{width:100%;border-collapse:collapse;table-layout:fixed} th,td{border:1pt solid #000;padding:4px;font-size:10px;text-align:center} th{background:#f1f5f9} thead{display:table-header-group} tfoot{display:table-footer-group} td:first-child, th:first-child, td:nth-child(2), th:nth-child(2){text-align:left} #resultsTable th, #resultsTable td { white-space: nowrap; }</style>');
       w.document.write('</head><body>');
       w.document.write('<div class="report-header">');
       w.document.write('<div class="company-name">' + companyName + '</div>');
@@ -16866,10 +17013,12 @@ document.addEventListener('DOMContentLoaded', function(){
   window.printDTR = printDTR;
   document.addEventListener('click', function(ev){
     if (ev.target && ev.target.id === 'printDtrRegularBtn') {
-      printDTR('regular');
+      var layout = (typeof getPrintLayoutForElement === 'function') ? getPrintLayoutForElement(ev.target) : 'portrait';
+      printDTR('regular', layout);
     }
     if (ev.target && ev.target.id === 'printDtrOvertimeBtn') {
-      printDTR('overtime');
+      var layout = (typeof getPrintLayoutForElement === 'function') ? getPrintLayoutForElement(ev.target) : 'portrait';
+      printDTR('overtime', layout);
     }
   });
 })();
@@ -17356,15 +17505,20 @@ document.addEventListener('click', function(e) {
   var ws = (document.getElementById('weekStart') || {}).value || '';
   var we = (document.getElementById('weekEnd')   || {}).value || '';
   var periodText = (typeof window.formatPayslipPeriod === 'function') ? window.formatPayslipPeriod(ws, we) : ((ws && we) ? (ws + ' to ' + we) : (ws || we || ''));
+  var layout = (typeof getPrintLayoutByGroup === 'function') ? getPrintLayoutByGroup('payroll') : 'portrait';
   var html = '';
 
   if (rowData && typeof window.buildCompactPayslip === 'function'){
     var slip = window.buildCompactPayslip(rowData, periodText);
     if (slip){
-      var stylesSingle = window.PAYSLIP_PRINT_STYLES || '';
+      var stylesSingle = (typeof buildPayslipPrintStyles === 'function')
+        ? buildPayslipPrintStyles(layout)
+        : (window.PAYSLIP_PRINT_STYLES || '');
       if (!stylesSingle){
-        stylesSingle = `@page { size: letter portrait; margin: 0.25in; }
-html, body { width: 8.5in; height: 11in; margin: 0; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+        var dims = (typeof getLetterPageDimensions === 'function') ? getLetterPageDimensions(layout) : { width: '8.5in', height: '11in' };
+        var orientation = (typeof normalizePrintLayout === 'function') ? normalizePrintLayout(layout) : 'portrait';
+        stylesSingle = `@page { size: letter ${orientation}; margin: 0.25in; }
+html, body { width: ${dims.width}; height: ${dims.height}; margin: 0; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
 body{font-family:Arial,Helvetica,sans-serif;margin:0;padding:0 0.1in;}
 .payslip-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:0.03in;}
 .payslip-grid.single{grid-template-columns:repeat(1,1fr);max-width:3in;margin:0 auto;}
@@ -19974,11 +20128,12 @@ document.addEventListener('DOMContentLoaded', async function () {
 // Note: Browser header/footer (date, title, URL) are controlled by the print dialog.
 // To remove them entirely, uncheck "Headers and footers" in the print settings.
 (function(){
-  function printReportsClean(){
+  function printReportsClean(layout){
     try{
       var tbl = document.getElementById('r_table');
       if (!tbl) return;
       var hint = document.getElementById('r_range_hint');
+      var printLayout = (typeof normalizePrintLayout === 'function') ? normalizePrintLayout(layout) : 'portrait';
       var css = `
         <style>
           html,body{margin:0;padding:10px;font-family:Arial,Helvetica,sans-serif}
@@ -20024,7 +20179,7 @@ document.addEventListener('DOMContentLoaded', async function () {
           tbody td:nth-last-child(2){ width: 120px; min-width: 120px; max-width: 140px; white-space: nowrap; }
           thead tr:nth-child(2) th:nth-last-child(1),
           tbody td:nth-last-child(1){ width: 110px; min-width: 110px; max-width: 120px; white-space: nowrap; }
-          @media print{ @page { margin: 10mm; } }
+          @media print{ @page { size: letter ${printLayout}; margin: 10mm; } }
         </style>`;
 
       // Build per-project sections with clear headers (strip inline widths)
@@ -20099,7 +20254,11 @@ document.addEventListener('DOMContentLoaded', async function () {
   function attach(){
     var btn = document.getElementById('r_print');
     if (!btn || btn.__cleanPrint) return;
-    btn.addEventListener('click', function(ev){ ev.preventDefault(); printReportsClean(); });
+    btn.addEventListener('click', function(ev){
+      ev.preventDefault();
+      var layout = (typeof getPrintLayoutForElement === 'function') ? getPrintLayoutForElement(btn) : 'portrait';
+      printReportsClean(layout);
+    });
     btn.__cleanPrint = true;
   }
   if (document.readyState === 'loading'){ document.addEventListener('DOMContentLoaded', attach, {once:true}); }
@@ -20654,7 +20813,7 @@ document.addEventListener('DOMContentLoaded', function(){
     return { types: types, includeCustom: includeCustom };
   }
 
-  function od_openPrint(pivot){
+  function od_openPrint(pivot, layout){
     var printable = od_getPrintableTypes(pivot);
     var types = printable.types;
     var includeCustom = printable.includeCustom;
@@ -20682,8 +20841,9 @@ document.addEventListener('DOMContentLoaded', function(){
     var html = '';
     html += '<!doctype html><html><head><meta charset="utf-8">';
     html += '<title>'+title+'</title>';
+    var printLayout = (typeof normalizePrintLayout === 'function') ? normalizePrintLayout(layout) : 'portrait';
     html += '<style>';
-    html += '@page{size:Letter portrait;margin:0.5in;}';
+    html += '@page{size:Letter ' + printLayout + ';margin:0.5in;}';
     html += 'body{font-family:Arial, sans-serif;color:#000;}';
     html += '.hdr{margin-bottom:10px;}';
     html += '.hdr h1{font-size:'+headerSize+'px;margin:0 0 4px 0;}';
@@ -20791,7 +20951,8 @@ document.addEventListener('DOMContentLoaded', function(){
     if (printBtn){
       printBtn.addEventListener('click', function(){
         var pivot = od_buildPivot();
-        od_openPrint(pivot);
+        var layout = (typeof getPrintLayoutForElement === 'function') ? getPrintLayoutForElement(printBtn) : 'portrait';
+        od_openPrint(pivot, layout);
       });
     }
     var excelBtn = document.getElementById('exportOtherDeductionsPivotExcelBtn');
