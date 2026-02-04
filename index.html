@@ -142,7 +142,6 @@ const KNOWN_KEYS = [
   "payroll_vale_wed",
   "payroll_hist",
   "payrollColumnWidths",
-  "payroll_print_fit_one_page",
   // additional filter & state keys not previously persisted
   "dtr_filter_from",
   "dtr_filter_to",
@@ -2862,10 +2861,6 @@ window.addEventListener('load', dashReports);
       <button id="printPayrollBtn" type="button">
        Print Report
       </button>
-      <label style="display:flex;align-items:center;gap:6px;font-size:12px;font-weight:600;">
-       <input id="printPayrollFitToggle" type="checkbox">
-       Fit to 1 page
-      </label>
       <button id="printPayrollExcelBtn" type="button">
        Print Report Excel
       </button>
@@ -3158,7 +3153,6 @@ const LS_DIVISOR='payroll_deduction_divisor', LS_SSS_TABLE='payroll_sss_table';
 const LS_LOAN_SSS='payroll_loan_sss', LS_LOAN_PI='payroll_loan_pagibig';
 const LS_VALE='payroll_vale', LS_VALE_WED='payroll_vale_wed';
 const LS_LOAN_TRACKER='payroll_loan_tracker';
-const LS_PRINT_FIT_ONE_PAGE='payroll_print_fit_one_page';
 // LocalStorage key for per-employee other deductions details and totals
 const LS_OTHER_DEDUCTIONS_DETAILS='payroll_other_deductions_details';
 const LS_OTHER_DEDUCTIONS_TOTAL='payroll_other_deductions_total';
@@ -8661,37 +8655,6 @@ window.formatDateRange = formatDateRange;
 // payslip column is removed to preserve confidentiality.
 document.addEventListener('DOMContentLoaded', function(){
   const btn = document.getElementById('printPayrollBtn');
-  const fitToggle = document.getElementById('printPayrollFitToggle');
-  const landscapeToggle = document.getElementById('printPayrollLandscapeToggle');
-  const normalizeToggleValue = (value) => {
-    if (typeof value === 'boolean') return value;
-    if (typeof value === 'number') return value === 1;
-    if (typeof value === 'string') return value === 'true' || value === '1';
-    return false;
-  };
-  const hydrateFitToggle = async () => {
-    if (!fitToggle) return;
-    let stored = null;
-    try { stored = window.readKV ? await window.readKV(LS_PRINT_FIT_ONE_PAGE, null) : null; } catch (e) {}
-    if (stored === null || stored === undefined) {
-      try {
-        const raw = localStorage.getItem(LS_PRINT_FIT_ONE_PAGE);
-        stored = raw == null ? null : JSON.parse(raw);
-      } catch (e) {
-        stored = localStorage.getItem(LS_PRINT_FIT_ONE_PAGE);
-      }
-    }
-    fitToggle.checked = normalizeToggleValue(stored);
-  };
-  if (fitToggle && !fitToggle.__wired) {
-    fitToggle.__wired = true;
-    hydrateFitToggle();
-    fitToggle.addEventListener('change', () => {
-      const nextValue = !!fitToggle.checked;
-      try { localStorage.setItem(LS_PRINT_FIT_ONE_PAGE, JSON.stringify(nextValue)); } catch (e) {}
-      try { if (window.writeKV) window.writeKV(LS_PRINT_FIT_ONE_PAGE, nextValue); } catch (e) {}
-    });
-  }
   if (btn) btn.addEventListener('click', function(){
     const srcTable = document.getElementById('payrollTable');
     if (!srcTable) {
@@ -8786,29 +8749,17 @@ document.addEventListener('DOMContentLoaded', function(){
     if (!w) return;
     w.document.write('<html><head><meta charset="utf-8"><title>Payroll Report</title>');
     // Basic styles: borders and alignment
-    const fitToPage = !!(fitToggle && fitToggle.checked);
-    const landscapeEnabled = landscapeToggle ? !!landscapeToggle.checked : true;
-    const pageOrientation = landscapeEnabled ? 'landscape' : 'portrait';
-    const pageWidth = landscapeEnabled ? '11in' : '8.5in';
-    const pageHeight = landscapeEnabled ? '8.5in' : '11in';
-    const fitScale = landscapeEnabled ? 0.9 : 0.86;
-    const fitStyles = fitToPage
-      ? `#printWrap.fit-to-page{transform:scale(${fitScale});transform-origin:top left;width:calc(100% / ${fitScale});}
-         #printWrap.fit-to-page table{font-size:10px;}
-         #printWrap.fit-to-page th,#printWrap.fit-to-page td{padding:3px;font-size:10px;}`
-      : '';
-    w.document.write('<style>@page{size:letter ' + pageOrientation + ';margin:10mm} html,body{-webkit-print-color-adjust:exact;print-color-adjust:exact;width:' + pageWidth + ';height:' + pageHeight + ';margin:0} body{font-family:Arial,Helvetica,sans-serif;margin:0;} h2{margin:0 0 6px;font-size:16px} table{border-collapse:collapse;width:100%;table-layout:fixed} thead{display:table-header-group} tfoot{display:table-footer-group} th,td{border:1pt solid #000!important;border-style:solid!important;padding:4px;font-size:11px} table,th,td{border-color:#000!important;border-style:solid!important} th{background:#f1f5f9} td.num{text-align:right} th:nth-child(1),td:nth-child(1),th:nth-child(2),td:nth-child(2){text-align:left} tfoot td{font-weight:700;background:#fff7ed;border-top:2pt solid #000!important} #payrollTable{page-break-inside:auto} #payrollTable tr{page-break-inside:avoid;break-inside:avoid} #payrollTable th, #payrollTable td { white-space: nowrap !important; page-break-inside: avoid; break-inside: avoid; } #payrollTable th:nth-child(1), #payrollTable td:nth-child(1) { width:30px; min-width:30px; } #payrollTable th:nth-child(2), #payrollTable td:nth-child(2) { width:150px; min-width:150px; } #payrollTable th:nth-child(3), #payrollTable td:nth-child(3) { width:60px; min-width:60px; } #payrollTable th:nth-child(4), #payrollTable td:nth-child(4) { width:60px; min-width:60px; } #payrollTable th:nth-child(5), #payrollTable td:nth-child(5) { width:60px; min-width:60px; } #payrollTable th:nth-child(6), #payrollTable td:nth-child(6) { width:60px; min-width:60px; } #payrollTable th:nth-child(7), #payrollTable td:nth-child(7) { width:60px; min-width:60px; } #payrollTable th:nth-child(8), #payrollTable td:nth-child(8) { width:60px; min-width:60px; } #payrollTable th:nth-child(9), #payrollTable td:nth-child(9) { width:60px; min-width:60px; } #payrollTable th:nth-child(10), #payrollTable td:nth-child(10) { width:60px; min-width:60px; } #payrollTable th:nth-child(11), #payrollTable td:nth-child(11) { width:60px; min-width:60px; } #payrollTable th:nth-child(12), #payrollTable td:nth-child(12) { width:60px; min-width:60px; } #payrollTable th:nth-child(13), #payrollTable td:nth-child(13) { width:60px; min-width:60px; } #payrollTable th:nth-child(14), #payrollTable td:nth-child(14) { width:60px; min-width:60px; } #payrollTable th:nth-child(15), #payrollTable td:nth-child(15) { width:60px; min-width:60px; } #payrollTable th:nth-child(16), #payrollTable td:nth-child(16) { width:60px; min-width:60px; } #payrollTable th:nth-child(17), #payrollTable td:nth-child(17) { width:60px; min-width:60px; } #payrollTable th:nth-child(18), #payrollTable td:nth-child(18) { width:60px; min-width:60px; } #payrollTable th:nth-child(19), #payrollTable td:nth-child(19) { width:60px; min-width:60px; } #payrollTable th:nth-child(20), #payrollTable td:nth-child(20) { width:60px; min-width:60px; } #payrollTable th:nth-child(21), #payrollTable td:nth-child(21) { width:50px; min-width:50px; } #payrollTable th:nth-child(22), #payrollTable td:nth-child(22) { width:75px; min-width:75px; } ' + fitStyles + '</style>');
+    w.document.write('<style>@page{size:letter landscape;margin:10mm} html,body{-webkit-print-color-adjust:exact;print-color-adjust:exact;width:11in;height:8.5in;margin:0} body{font-family:Arial,Helvetica,sans-serif;margin:0;} h2{margin:0 0 6px;font-size:16px} table{border-collapse:collapse;width:100%;table-layout:fixed} thead{display:table-header-group} tfoot{display:table-footer-group} th,td{border:1pt solid #000!important;border-style:solid!important;padding:4px;font-size:11px} table,th,td{border-color:#000!important;border-style:solid!important} th{background:#f1f5f9} td.num{text-align:right} th:nth-child(1),td:nth-child(1),th:nth-child(2),td:nth-child(2){text-align:left} tfoot td{font-weight:700;background:#fff7ed;border-top:2pt solid #000!important} #payrollTable{page-break-inside:auto} #payrollTable tr{page-break-inside:avoid;break-inside:avoid-page} #payrollTable th, #payrollTable td { white-space: nowrap !important; page-break-inside: avoid; } #payrollTable th:nth-child(1), #payrollTable td:nth-child(1) { width:30px; min-width:30px; } #payrollTable th:nth-child(2), #payrollTable td:nth-child(2) { width:150px; min-width:150px; } #payrollTable th:nth-child(3), #payrollTable td:nth-child(3) { width:60px; min-width:60px; } #payrollTable th:nth-child(4), #payrollTable td:nth-child(4) { width:60px; min-width:60px; } #payrollTable th:nth-child(5), #payrollTable td:nth-child(5) { width:60px; min-width:60px; } #payrollTable th:nth-child(6), #payrollTable td:nth-child(6) { width:60px; min-width:60px; } #payrollTable th:nth-child(7), #payrollTable td:nth-child(7) { width:60px; min-width:60px; } #payrollTable th:nth-child(8), #payrollTable td:nth-child(8) { width:60px; min-width:60px; } #payrollTable th:nth-child(9), #payrollTable td:nth-child(9) { width:60px; min-width:60px; } #payrollTable th:nth-child(10), #payrollTable td:nth-child(10) { width:60px; min-width:60px; } #payrollTable th:nth-child(11), #payrollTable td:nth-child(11) { width:60px; min-width:60px; } #payrollTable th:nth-child(12), #payrollTable td:nth-child(12) { width:60px; min-width:60px; } #payrollTable th:nth-child(13), #payrollTable td:nth-child(13) { width:60px; min-width:60px; } #payrollTable th:nth-child(14), #payrollTable td:nth-child(14) { width:60px; min-width:60px; } #payrollTable th:nth-child(15), #payrollTable td:nth-child(15) { width:60px; min-width:60px; } #payrollTable th:nth-child(16), #payrollTable td:nth-child(16) { width:60px; min-width:60px; } #payrollTable th:nth-child(17), #payrollTable td:nth-child(17) { width:60px; min-width:60px; } #payrollTable th:nth-child(18), #payrollTable td:nth-child(18) { width:60px; min-width:60px; } #payrollTable th:nth-child(19), #payrollTable td:nth-child(19) { width:60px; min-width:60px; } #payrollTable th:nth-child(20), #payrollTable td:nth-child(20) { width:60px; min-width:60px; } #payrollTable th:nth-child(21), #payrollTable td:nth-child(21) { width:50px; min-width:50px; } #payrollTable th:nth-child(22), #payrollTable td:nth-child(22) { width:75px; min-width:75px; }</style>');
     w.document.write('</head><body>');
     // Header with date range if available
     const ws = document.getElementById('weekStart');
     const we = document.getElementById('weekEnd');
     const startDate = ws && ws.value ? ws.value : '';
     const endDate = we && we.value ? we.value : '';
-    const printWrapClass = fitToPage ? 'fit-to-page' : '';
     if (startDate && endDate) {
-      w.document.write('<div id="printWrap" class="' + printWrapClass + '"><h2>Payroll Report (' + startDate + ' to ' + endDate + ')</h2>');
+      w.document.write('<div id="printWrap"><h2>Payroll Report (' + startDate + ' to ' + endDate + ')</h2>');
     } else {
-      w.document.write('<div id="printWrap" class="' + printWrapClass + '"><h2>Payroll Report</h2>');
+      w.document.write('<div id="printWrap"><h2>Payroll Report</h2>');
     }
     w.document.write(clone.outerHTML);
     w.document.write('</div></body></html>');
