@@ -12441,26 +12441,73 @@ rows += `<tr class="allowance">
   function computeProjectTotalsFromDetailed(){
     const rows = [];
     try{
-      const tbl = document.getElementById('r_table');
-      if (!tbl) return rows;
-      const blocks = Array.from(tbl.querySelectorAll('tbody.proj-page'));
-      blocks.forEach(tb => {
-        const rawName = (tb.querySelector('.proj-break td')?.textContent || '').trim();
-        let tot = tb.querySelector('tr.totals:last-child');
-        if (!tot) {
-          const trs = Array.from(tb.querySelectorAll('tr'));
-          tot = trs.reverse().find(tr => (tr.cells[0]?.textContent||'').trim().toLowerCase() === 'project total');
+      const detailMap = {};
+      const ensure = (name, meta) => {
+        const key = String(name || '').trim().toLowerCase();
+        if (!key) return null;
+        if (!detailMap[key]) {
+          detailMap[key] = {
+            name: name,
+            company: meta?.company || '',
+            regHrs: 0,
+            otHrs: 0,
+            regTotal: 0,
+            otTotal: 0
+          };
+        } else if (meta?.company && !detailMap[key].company) {
+          detailMap[key].company = meta.company;
         }
-        if (!tot) return;
-        const cells = tot.querySelectorAll('td');
-        if (!cells || cells.length < 2) return;
-        const gross = num(cells[cells.length-1].textContent);
-        const hrs   = num(cells[cells.length-2].textContent);
-        const meta = resolveProjectDetails('', rawName);
-        const displayName = meta.name || rawName;
-        const company = meta.company || '';
-        rows.push({ name: displayName, hrs, total: gross, company });
+        return detailMap[key];
+      };
+
+      const harvestTable = (tableId, mode) => {
+        const tbl = document.getElementById(tableId);
+        if (!tbl) return;
+        const blocks = Array.from(tbl.querySelectorAll('tbody.proj-page'));
+        blocks.forEach(tb => {
+          const rawName = (tb.querySelector('.proj-break td')?.textContent || '').trim();
+          let tot = tb.querySelector('tr.totals:last-child');
+          if (!tot) {
+            const trs = Array.from(tb.querySelectorAll('tr'));
+            tot = trs.reverse().find(tr => (tr.cells[0]?.textContent||'').trim().toLowerCase() === 'project total');
+          }
+          if (!tot) return;
+          const cells = tot.querySelectorAll('td');
+          if (!cells || cells.length < 2) return;
+          const gross = num(cells[cells.length-1].textContent);
+          const hrs = num(cells[cells.length-2].textContent);
+          const meta = resolveProjectDetails('', rawName);
+          const displayName = meta.name || rawName;
+          const bucket = ensure(displayName, meta);
+          if (!bucket) return;
+          if (mode === 'ot') {
+            bucket.otHrs += hrs;
+            bucket.otTotal += gross;
+          } else {
+            bucket.regHrs += hrs;
+            bucket.regTotal += gross;
+          }
+        });
+      };
+
+      harvestTable('r_table', 'reg');
+      harvestTable('r_ot_table', 'ot');
+
+      Object.values(detailMap).forEach(entry => {
+        const regHrs = Number(entry.regHrs) || 0;
+        const otHrs = Number(entry.otHrs) || 0;
+        const regTotal = Number(entry.regTotal) || 0;
+        const otTotal = Number(entry.otTotal) || 0;
+        rows.push({
+          name: entry.name,
+          company: entry.company || '',
+          regHrs,
+          otHrs,
+          totalHrs: regHrs + otHrs,
+          total: regTotal + otTotal
+        });
       });
+
       rows.sort((a,b)=>{
         const aComp = (a.company || '').localeCompare(b.company || '');
         if (aComp) return aComp;
@@ -12522,11 +12569,12 @@ rows += `<tr class="allowance">
       const rates = (typeof payrollRates!=='undefined' && payrollRates) ? payrollRates : {};
       const se = (typeof storedEmployees!=='undefined' && storedEmployees) ? storedEmployees : {};
       Object.keys(projMap).forEach(p=>{
-        const rec = projMap[p]; let hrs=0, gross=0;
+        const rec = projMap[p]; let regHrs=0, otHrs=0, gross=0;
         Object.keys(rec.emp).forEach(id=>{
           const e = rec.emp[id];
           const rate = num(se?.[id]?.hourlyRate ?? rates?.[id]);
-          hrs += (e.rwh + e.oth);
+          regHrs += e.rwh;
+          otHrs += e.oth;
           gross += (e.rwh * rate) + (e.oth * rate * otMult);
         });
         try{
@@ -12543,7 +12591,14 @@ rows += `<tr class="allowance">
         const meta = rec.meta || resolveProjectDetails('', p);
         const displayName = meta.name || p;
         const company = meta.company || '';
-        rows.push({ name:displayName, hrs:hrs, total:gross, company });
+        rows.push({
+          name: displayName,
+          company,
+          regHrs: regHrs,
+          otHrs: otHrs,
+          totalHrs: regHrs + otHrs,
+          total: gross
+        });
       });
       rows.sort((a,b)=>{
         const aComp = (a.company || '').localeCompare(b.company || '');
@@ -12565,10 +12620,12 @@ rows += `<tr class="allowance">
     const totalsByCompany = computeContributionTotals();
     const prows = computeProjectTotals();
     const g = prows.reduce((acc,r)=>{
-      acc.h += Number((r && r.hrs != null) ? r.hrs : 0);
+      acc.reg += Number((r && r.regHrs != null) ? r.regHrs : 0);
+      acc.ot += Number((r && r.otHrs != null) ? r.otHrs : 0);
+      acc.h += Number((r && r.totalHrs != null) ? r.totalHrs : 0);
       acc.t += Number((r && r.total != null) ? r.total : 0);
       return acc;
-    }, {h:0,t:0});
+    }, {reg:0, ot:0, h:0, t:0});
     let html = '';
     html += '<h2>PAYROLL REPORT</h2>';
     const [rangeStart, rangeEnd] = getPayrollRange();
@@ -12623,13 +12680,15 @@ rows += `<tr class="allowance">
     const projectGroups = {};
     const ensureProjectGroup = (companyName) => {
       const label = normalizeCompanyLabel(companyName);
-      if (!projectGroups[label]) projectGroups[label] = { label, rows: [], hrs:0, total:0 };
+      if (!projectGroups[label]) projectGroups[label] = { label, rows: [], regHrs:0, otHrs:0, totalHrs:0, total:0 };
       return projectGroups[label];
     };
     prows.forEach(row => {
       const group = ensureProjectGroup(row && row.company);
       group.rows.push(row);
-      group.hrs += Number((row && row.hrs != null) ? row.hrs : 0);
+      group.regHrs += Number((row && row.regHrs != null) ? row.regHrs : 0);
+      group.otHrs += Number((row && row.otHrs != null) ? row.otHrs : 0);
+      group.totalHrs += Number((row && row.totalHrs != null) ? row.totalHrs : 0);
       group.total += Number((row && row.total != null) ? row.total : 0);
     });
     const projectSeen = new Set();
@@ -12654,27 +12713,29 @@ rows += `<tr class="allowance">
 
     html += '<div class="mr-section" style="margin-top:16px;">';
     html += '<h4 class="mr-project-title">PROJECT</h4>';
-    html += '<table class="mr-table"><thead><tr><th class="left">NAME</th><th class="mr-num">HRS</th><th class="mr-num">GRAND TOTAL</th></tr></thead><tbody>';
+    html += '<table class="mr-table"><thead><tr><th class="left">NAME</th><th class="mr-num">REG HRS</th><th class="mr-num">OT HRS</th><th class="mr-num">TOTAL HRS</th><th class="mr-num">GRAND TOTAL</th></tr></thead><tbody>';
     if (!projectOrder.length){
       if (!prows.length){
-        html += '<tr><td class="left" colspan="3">No project totals available.</td></tr>';
+        html += '<tr><td class="left" colspan="5">No project totals available.</td></tr>';
       } else {
-        prows.forEach(r=>{ html += `<tr><td class="left">${safe(r.name)}</td><td class="mr-num">${f2(r.hrs)}</td><td class="mr-num">${f2(r.total)}</td></tr>`; });
+        prows.forEach(r=>{
+          html += `<tr><td class="left">${safe(r.name)}</td><td class="mr-num">${f2(r.regHrs)}</td><td class="mr-num">${f2(r.otHrs)}</td><td class="mr-num">${f2(r.totalHrs)}</td><td class="mr-num">${f2(r.total)}</td></tr>`;
+        });
       }
     } else {
       projectOrder.forEach(companyName => {
         const group = projectGroups[companyName];
         if (!group || !group.rows.length) return;
         const companyLabel = normalizeCompanyLabel(companyName);
-        html += `<tr class="mr-company"><th colspan="3">${safe(companyLabel)}</th></tr>`;
+        html += `<tr class="mr-company"><th colspan="5">${safe(companyLabel)}</th></tr>`;
         const sortedRows = group.rows.slice().sort((a,b)=> safe(a && a.name).localeCompare(safe(b && b.name)));
         sortedRows.forEach(r=>{
-          html += `<tr><td class="left">${safe(r && r.name)}</td><td class="mr-num">${f2(r && r.hrs)}</td><td class="mr-num">${f2(r && r.total)}</td></tr>`;
+          html += `<tr><td class="left">${safe(r && r.name)}</td><td class="mr-num">${f2(r && r.regHrs)}</td><td class="mr-num">${f2(r && r.otHrs)}</td><td class="mr-num">${f2(r && r.totalHrs)}</td><td class="mr-num">${f2(r && r.total)}</td></tr>`;
         });
-        html += `<tr class="mr-subtotal"><td class="left" style="font-weight:600;">Subtotal - ${safe(companyLabel)}</td><td class="mr-num" style="font-weight:600;">${f2(group.hrs)}</td><td class="mr-num" style="font-weight:600;">${f2(group.total)}</td></tr>`;
+        html += `<tr class="mr-subtotal"><td class="left" style="font-weight:600;">Subtotal - ${safe(companyLabel)}</td><td class="mr-num" style="font-weight:600;">${f2(group.regHrs)}</td><td class="mr-num" style="font-weight:600;">${f2(group.otHrs)}</td><td class="mr-num" style="font-weight:600;">${f2(group.totalHrs)}</td><td class="mr-num" style="font-weight:600;">${f2(group.total)}</td></tr>`;
       });
     }
-    html += `</tbody><tfoot><tr><td class="left">Grand Total</td><td class="mr-num">${f2(g.h)}</td><td class="mr-num">${f2(g.t)}</td></tr></tfoot></table>`;
+    html += `</tbody><tfoot><tr><td class="left">Grand Total</td><td class="mr-num">${f2(g.reg)}</td><td class="mr-num">${f2(g.ot)}</td><td class="mr-num">${f2(g.h)}</td><td class="mr-num">${f2(g.t)}</td></tr></tfoot></table>`;
     html += '</div>';
 
     host.innerHTML = html;
