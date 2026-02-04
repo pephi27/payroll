@@ -487,7 +487,7 @@ function safeStringify(v){
   tr.emp-inactive td, tr.proj-inactive td { opacity: 0.6; }
 
 /* === PATCH: Additional Income column width === */
-#payrollTable th:nth-child(6), #payrollTable td:nth-child(6) { width: 100px; min-width: 100px; } /* Additional Income */
+#payrollTable th:nth-child(8), #payrollTable td:nth-child(8) { width: 100px; min-width: 100px; } /* Additional Income */
 /* === END PATCH === */
 
 /* === Additional Income: type selector layout === */
@@ -934,6 +934,8 @@ function printReport(html, options){
       adjustmentHours: '',
       totalHours: readCell(row, '.totalHrs'),
       regPay: readCell(row, '.regPay'),
+      adjHours: readCell(row, '.adjHours'),
+      adjPay: readCell(row, '.adjPay'),
       otPay: readCell(row, '.otPay'),
       gross: readCell(row, '.grossPay'),
       pagibig: readCell(row, '.pagibig'),
@@ -951,8 +953,10 @@ function printReport(html, options){
     if (data.id) {
       const otTotal = getOvertimeHoursTotal(data.id);
       const adj = getOvertimeAdjustmentHours(data.id);
+      const regAdj = getRegularAdjustmentHours(data.id);
       data.otHours = otTotal.toFixed(2);
       data.adjustmentHours = adj.toFixed(2);
+      data.adjRegHours = regAdj.toFixed(2);
     }
     const datasetEffective = key => readRowDeductionDataset(row, key, 'effective');
     const applyDatasetValue = (prop, key) => {
@@ -1006,7 +1010,8 @@ function printReport(html, options){
       var r = toNum(data.regHours);
       var o = toNum(data.otHours);
       var a = toNum(data.adjustmentHours);
-      var total = r + o + a;
+      var regAdj = toNum(data.adjRegHours);
+      var total = r + o + a + regAdj;
       data.totalHours = total ? total.toFixed(2) : '';
     }
     return data;
@@ -1456,6 +1461,8 @@ window.addEventListener('load', dashReports);
 #payrollTable th:nth-child(3), #payrollTable td:nth-child(3) { width: 110px; min-width: 110px; } /* Hourly Rate */
 #payrollTable th:nth-child(4), #payrollTable td:nth-child(4) { width: 120px; min-width: 120px; } /* Regular Hours */
 #payrollTable th:nth-child(5), #payrollTable td:nth-child(5) { width: 120px; min-width: 120px; } /* Regular Pay */
+#payrollTable th:nth-child(6), #payrollTable td:nth-child(6) { width: 110px; min-width: 110px; } /* Adj Hours */
+#payrollTable th:nth-child(7), #payrollTable td:nth-child(7) { width: 120px; min-width: 120px; } /* Adj Pay */
 /* keep inputs filling their cells cleanly */
 #payrollTable td input.cell { width: 100%; box-sizing: border-box; }
 /* === END PATCH === */
@@ -3120,6 +3127,12 @@ window.addEventListener('load', dashReports);
          Regular Pay
         </th>
         <th>
+         Adj Hours
+        </th>
+        <th>
+         Adj Pay
+        </th>
+        <th>
          Additional Income
         </th>
         <th>
@@ -3150,6 +3163,8 @@ window.addEventListener('load', dashReports);
     <td class="num" data-col="rate"></td>
     <td class="num" data-col="regHrs">0.00</td>
       <td class="num" data-col="regPay">0.00</td>
+      <td class="num" data-col="adjHours">0.00</td>
+      <td class="num" data-col="adjPay">0.00</td>
       <td class="num" data-col="adjAmt">0.00</td>
       <td class="num" data-col="grossPay">0.00</td>
       <td class="num" data-col="totalDed">0.00</td>
@@ -3180,7 +3195,7 @@ window.addEventListener('load', dashReports);
         <th>Employee Name</th>
         <th>Hourly Rate</th>
         <th>Total OT Hrs</th>
-        <th>Adjustment OT Hours</th>
+        <th>ADJ OT hours</th>
         <th>Overtime Hours Final</th>
         <th>Overtime Pay</th>
        </tr>
@@ -3188,7 +3203,7 @@ window.addEventListener('load', dashReports);
       <tbody></tbody>
      </table>
      <div class="section note">
-      Overtime hours are sourced from the DTR totals. Adjustment OT hours are managed in the Adjustments subtab and synced here automatically.
+      Overtime hours are sourced from the DTR totals. ADJ OT hours are managed in the Adjustments subtab and synced here automatically.
      </div>
     </div>
     <div class="tab" id="deductionsTab">
@@ -3363,14 +3378,15 @@ window.addEventListener('load', dashReports);
     <!-- Adjustments Tab -->
     <div class="tab" id="adjustmentsTab">
      <div class="section note">
-      Adjustment hours for correcting previous payroll. This affects overtime calculations.
+      Adjustment hours for correcting previous payroll. Regular adjustments affect payroll, ADJ OT hours affect overtime.
      </div>
      <table id="adjustmentHoursTable">
       <thead>
        <tr>
         <th>ID</th>
         <th>Name</th>
-        <th>Adjustment Hrs</th>
+        <th>REG Adj Hrs</th>
+        <th>ADJ OT Hrs</th>
        </tr>
       </thead>
       <tbody></tbody>
@@ -3518,10 +3534,60 @@ function getOvertimeHoursTotal(empId) {
   return Number.isFinite(num) ? num : 0;
 }
 
-function getOvertimeAdjustmentHours(empId) {
-  const raw = adjHrs?.[empId] ?? 0;
+function normalizeAdjustmentType(type) {
+  const norm = String(type || '').trim().toLowerCase();
+  if (!norm) return '';
+  if (norm === 'reg' || norm === 'regular') return 'reg';
+  if (norm === 'ot' || norm === 'adj ot' || norm === 'adjot' || norm === 'adjustment ot') return 'ot';
+  if (norm.includes('ot')) return 'ot';
+  if (norm.includes('reg')) return 'reg';
+  return '';
+}
+
+function extractAdjustmentHours(raw) {
+  const result = { reg: 0, ot: 0 };
+  if (raw == null) return result;
+  if (Array.isArray(raw)) {
+    raw.forEach(entry => {
+      if (!entry) return;
+      const hours = Number(entry.hours ?? entry.value ?? entry.hrs);
+      if (!Number.isFinite(hours)) return;
+      const type = normalizeAdjustmentType(entry.type);
+      if (type === 'reg') result.reg += hours;
+      else if (type === 'ot') result.ot += hours;
+    });
+    return result;
+  }
+  if (typeof raw === 'object') {
+    const reg = Number(raw.reg ?? raw.regular ?? raw.regHrs ?? raw.regHours);
+    const ot = Number(raw.ot ?? raw.adjOt ?? raw.otHrs ?? raw.otHours);
+    if (Number.isFinite(reg)) result.reg += reg;
+    if (Number.isFinite(ot)) result.ot += ot;
+    if (!Number.isFinite(reg) && !Number.isFinite(ot)) {
+      const type = normalizeAdjustmentType(raw.type);
+      const hours = Number(raw.hours ?? raw.value ?? raw.hrs);
+      if (Number.isFinite(hours)) {
+        if (type === 'reg') result.reg += hours;
+        else if (type === 'ot') result.ot += hours;
+      }
+    }
+    return result;
+  }
   const num = Number(raw);
-  return Number.isFinite(num) ? num : 0;
+  if (Number.isFinite(num)) result.ot += num;
+  return result;
+}
+
+function getRegularAdjustmentHours(empId) {
+  const raw = adjHrs?.[empId];
+  const { reg } = extractAdjustmentHours(raw);
+  return Number.isFinite(reg) ? reg : 0;
+}
+
+function getOvertimeAdjustmentHours(empId) {
+  const raw = adjHrs?.[empId];
+  const { ot } = extractAdjustmentHours(raw);
+  return Number.isFinite(ot) ? ot : 0;
 }
 
 function getOvertimeFinalHours(empId) {
@@ -6827,6 +6893,8 @@ function renderTable(){
         <td><input class="cell rate" name="payroll_rate_${emp.id}" title="Non-editable in Payroll" type="number" step="0.01" value="${rate}" disabled></td>
         <td><input class="cell regHrs" name="payroll_reg_hours_${emp.id}" title="Non-editable in Payroll" type="number" step="0.01" value="${rH}" disabled></td>
         <td class="regPay num">0.00</td>
+        <td class="adjHours num">0.00</td>
+        <td class="adjPay num">0.00</td>
         <td class="adjAmt num">0.00</td>
         <td class="grossPay num">0.00</td>
         <td class="totalDed num">0.00</td>
@@ -7438,11 +7506,11 @@ function calculateRow(tr){  const readNum = sel => { const el = tr.querySelector
   const id = tr.cells[0].textContent.trim();
   const reg = Number(tr.querySelector('.regHrs').value)||0;
   const otBase = getOvertimeHoursTotal(id);
-  // Adjustment hours from the adjHrs object (if any)
-  const adjHours = getOvertimeAdjustmentHours(id);
+  const regAdjHours = getRegularAdjustmentHours(id);
+  // Adjustment OT hours from the adjHrs object (if any)
+  const adjOtHours = getOvertimeAdjustmentHours(id);
   // Combined OT hours including adjustments
-  const otTotal = otBase + adjHours;
-  const rate = getEmployeeHourlyRate(id);
+<=======
   const getMappedInputValue = (selector, map) => {
     const input = tr.querySelector(selector);
     const fallback = input ? Number(input.value) || 0 : readNum(selector);
@@ -7480,9 +7548,10 @@ function calculateRow(tr){  const readNum = sel => { const el = tr.querySelector
   const additionalIncomeShown = roundToCents(additionalIncome + bVal);
 
   const regPay = roundToCents(reg * rate);
+  const adjPay = roundToCents(regAdjHours * rate);
   const effectiveOtRate = getEffectiveOvertimeRateForEmployee(id, rate);
   const otPay = roundToCents(otTotal * effectiveOtRate);
-  const gross = roundToCents(regPay + additionalIncomeShown);
+  const gross = roundToCents(regPay + adjPay + additionalIncomeShown);
   // Compute contributions using dynamic tables (employee share).  Determine the
   // appropriate rate based on the monthly income and multiply by regular pay.
   const monthly = rate * 8 * 24;
@@ -7491,7 +7560,7 @@ function calculateRow(tr){  const readNum = sel => { const el = tr.querySelector
   // Check per-employee contribution deduction flags; default to true if not set
   const flags = contribFlags[id] || {};
   const div = Number(divisor) || 1;
-  const hasCompensation = (reg > 0) || (otTotal > 0) || (additionalIncomeShown > 0);
+  const hasCompensation = (reg > 0) || (otTotal > 0) || (regAdjHours > 0) || (additionalIncomeShown > 0);
   const pagibig = (hasCompensation && flags.pagibig !== false ? +((regPay * piRate)).toFixed(2) : 0);
   const philhealth = (hasCompensation && flags.philhealth !== false ? +((regPay * phRate)).toFixed(2) : 0);
   const sssFull = hasCompensation ? sssShareByMonthly(monthly) : 0;
@@ -7518,6 +7587,8 @@ function calculateRow(tr){  const readNum = sel => { const el = tr.querySelector
 
   w('.regPay', regPay);
   w('.otPay', otPay);
+  w('.adjHours', regAdjHours);
+  w('.adjPay', adjPay);
   w('.adjAmt', additionalIncomeShown);
   w('.grossPay', gross);
   const applyDeductionCell = (selector, key) => {
@@ -8544,21 +8615,25 @@ function renderAdjustmentHoursTable(){
   getEmployeeList().forEach(emp => {
     const id = emp.id;
     const name = emp.name;
-    const hrs = adjHrs[id] !== undefined ? adjHrs[id] : '';
+    const stored = extractAdjustmentHours(adjHrs[id]);
+    const regHrs = Number.isFinite(stored.reg) ? stored.reg : '';
+    const otHrs = Number.isFinite(stored.ot) ? stored.ot : '';
     const tr = document.createElement('tr');
     tr.innerHTML = `
       <td>${id}</td>
       <td class="wrap">${name}</td>
-      <td><input type="text" inputmode="decimal" step="0.01" class="adjHrsInput" data-id="${id}" value="${hrs}" /></td>
+      <td><input type="text" inputmode="decimal" step="0.01" class="adjRegInput" data-id="${id}" data-type="reg" value="${regHrs}" /></td>
+      <td><input type="text" inputmode="decimal" step="0.01" class="adjOtInput" data-id="${id}" data-type="ot" value="${otHrs}" /></td>
     `;
     tbody.appendChild(tr);
   });
   const formatAdjustmentHoursInput = (input) => {
     const empId = input.getAttribute('data-id');
+    const type = input.getAttribute('data-type') || 'reg';
     if (!empId) return;
     const hasStored = Object.prototype.hasOwnProperty.call(adjHrs || {}, empId);
-    const stored = hasStored ? adjHrs[empId] : null;
-    const num = Number(stored);
+    const stored = hasStored ? extractAdjustmentHours(adjHrs[empId]) : { reg: 0, ot: 0 };
+    const num = Number(type === 'ot' ? stored.ot : stored.reg);
     if (Number.isFinite(num)) {
       input.dataset.zeroDisplay = num === 0 ? '1' : '0';
       input.value = formatZeroDisplay(num);
@@ -8567,29 +8642,39 @@ function renderAdjustmentHoursTable(){
     input.dataset.zeroDisplay = '0';
     input.value = formatZeroDisplay(0);
   };
+  const updateAdjustmentHoursForEmployee = (empId, type, value) => {
+    const stored = extractAdjustmentHours(adjHrs?.[empId]);
+    if (value === null) {
+      if (type === 'ot') stored.ot = 0;
+      else stored.reg = 0;
+    } else {
+      const rounded = roundToCents(value);
+      if (type === 'ot') stored.ot = rounded;
+      else stored.reg = rounded;
+    }
+    if (Math.abs(stored.reg) < 0.005 && Math.abs(stored.ot) < 0.005) {
+      delete adjHrs[empId];
+    } else {
+      adjHrs[empId] = { reg: stored.reg || 0, ot: stored.ot || 0 };
+    }
+  };
   const stageAdjustmentHoursInput = (input) => {
     const empId = input.getAttribute('data-id');
+    const type = input.getAttribute('data-type') || 'reg';
     if (!empId) return;
     const rounded = parseAdjustmentInputValue(input);
-    if (rounded === null) {
-      delete adjHrs[empId];
-      return;
-    }
-    adjHrs[empId] = rounded;
+    updateAdjustmentHoursForEmployee(empId, type, rounded);
   };
   const commitAdjustmentHoursInput = (input) => {
     const empId = input.getAttribute('data-id');
+    const type = input.getAttribute('data-type') || 'reg';
     if (!empId) return;
     const rounded = parseAdjustmentInputValue(input);
-    if (rounded === null) {
-      delete adjHrs[empId];
-    } else {
-      adjHrs[empId] = rounded;
-    }
+    updateAdjustmentHoursForEmployee(empId, type, rounded);
     adjustmentHoursPersist.flush();
     otherDeductionsRefresh.flush();
   };
-  tbody.querySelectorAll('.adjHrsInput').forEach(inp => {
+  tbody.querySelectorAll('.adjRegInput, .adjOtInput').forEach(inp => {
     inp.addEventListener('focus', () => {
       adjustmentHoursFocusCount += 1;
       if ((inp.value || '').trim() === '-') {
@@ -8768,7 +8853,7 @@ function updateContributionNote() {
 }
   document.getElementById('downloadPayrollCSV').addEventListener('click', ()=>{
   // Include Additional Income column in payroll CSV export
-  const header = ['Week Start','Week End','OT Multiplier','Divisor','ID','Name','Regular Hours','Overtime Hours','Hourly Rate','Regular Pay','Total Overtime Pay','Additional Income','Gross Pay','Total Deductions','Net Pay'];
+  const header = ['Week Start','Week End','OT Multiplier','Divisor','ID','Name','Regular Hours','Overtime Hours','Hourly Rate','Regular Pay','Adj Hours','Adj Pay','Total Overtime Pay','Additional Income','Gross Pay','Total Deductions','Net Pay'];
   const rows=[header];
   const ws = weekStartEl.value||''; const we = weekEndEl.value||''; const otm = String(getOvertimeMultiplier()); const div = String(divisorEl.value||'1');
   document.querySelectorAll('#payrollTable tbody tr').forEach(tr=>{
@@ -8778,11 +8863,13 @@ function updateContributionNote() {
     const otHours = getOvertimeFinalHours(id);
     const regPay = tr.querySelector('.regPay').textContent.trim();
     const otPay = tr.querySelector('.otPay').textContent.trim();
+    const adjHours = tr.querySelector('.adjHours') ? tr.querySelector('.adjHours').textContent.trim() : '';
+    const adjPay = tr.querySelector('.adjPay') ? tr.querySelector('.adjPay').textContent.trim() : '';
     const adj   = tr.querySelector('.adjAmt') ? tr.querySelector('.adjAmt').textContent.trim() : '';
     const grossPay = tr.querySelector('.grossPay').textContent.trim();
     const total = tr.querySelector('.totalDed').textContent.trim();
     const net   = tr.querySelector('.netPay').textContent.trim();
-    rows.push([ws,we,otm,div,id,name,regI.value,otHours.toFixed(2),rateI.value,regPay,otPay,adj,grossPay,total,net]);
+    rows.push([ws,we,otm,div,id,name,regI.value,otHours.toFixed(2),rateI.value,regPay,adjHours,adjPay,otPay,adj,grossPay,total,net]);
   });
   const csv = rows.map(r=>r.map(s=>{
     s = String(s ?? '');
@@ -9014,7 +9101,8 @@ document.addEventListener('DOMContentLoaded', function(){
       var map = new Map([
         ['regular hours','REG HRS'],
         ['ot hours','OT HRS'],
-        ['adjustment hrs','ADJ HRS'],
+        ['adj hours','ADJ HRS'],
+        ['adj pay','ADJ PAY'],
         ['adjustments','OTHER DED'],
         ['total deductions','TOTAL DEDUC.']
       ]);
@@ -9217,7 +9305,7 @@ document.addEventListener('DOMContentLoaded', function(){
     const columns = [
       { key: 'rate', label: 'Hourly Rate', numeric: true },
       { key: 'total', label: 'Total OT Hrs', numeric: true },
-      { key: 'adj', label: 'Adjustment OT Hours', numeric: true },
+      { key: 'adj', label: 'ADJ OT hours', numeric: true },
       { key: 'final', label: 'Overtime Hours Final', numeric: true },
       { key: 'pay', label: 'Overtime Pay', numeric: true }
     ];
@@ -9365,7 +9453,8 @@ document.addEventListener('DOMContentLoaded', function(){
       var map = new Map([
         ['regular hours','REG HRS'],
         ['ot hours','OT HRS'],
-        ['adjustment hrs','ADJ HRS'],
+        ['adj hours','ADJ HRS'],
+        ['adj pay','ADJ PAY'],
         ['adjustments','OTHER DED'],
         ['other deductions','OTHER DED'],
         ['total deductions','TOTAL DEDUC.']
@@ -9637,6 +9726,8 @@ document.addEventListener('DOMContentLoaded', () => {
         <td><input class="cell rate" name="payroll_rate_${empId}" type="number" step="0.01" value="${rate}" disabled></td>
         <td><input class="cell regHrs" name="payroll_reg_hours_${empId}" type="number" step="0.01" value="${regHrs}" disabled></td>
         <td class="regPay num">0.00</td>
+        <td class="adjHours num">0.00</td>
+        <td class="adjPay num">0.00</td>
         <td class="adjAmt num">0.00</td>
         <td class="grossPay num">0.00</td>
         <td class="totalDed num">0.00</td>
@@ -9700,6 +9791,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
       applyText('.regPay', data.regPay);
       applyText('.otPay', data.otPay);
+      applyText('.adjHours', data.adjHours);
+      applyText('.adjPay', data.adjPay);
       applyText('.adjAmt', data.adjAmt);
       applyText('.grossPay', data.grossPay);
       applyText('.pagibig', data.pagibig);
@@ -9724,7 +9817,15 @@ document.addEventListener('DOMContentLoaded', () => {
       if (typeof payrollRates === 'object' && payrollRates) payrollRates[empId] = Number(data.rate) || 0;
       if (typeof regHours === 'object' && regHours) regHours[empId] = Number(data.regHrs) || 0;
       if (typeof otHours === 'object' && otHours) otHours[empId] = Number(data.otHrs) || 0;
-      if (typeof adjHrs === 'object' && adjHrs) adjHrs[empId] = Number(data.adjHrs) || 0;
+      if (typeof adjHrs === 'object' && adjHrs) {
+        const otAdj = Number(data.adjHrs) || 0;
+        const regAdj = Number(data.adjHours) || 0;
+        if (otAdj || regAdj) {
+          adjHrs[empId] = { reg: regAdj, ot: otAdj };
+        } else {
+          delete adjHrs[empId];
+        }
+      }
       if (typeof additionalIncomeTotal === 'object' && additionalIncomeTotal) {
         additionalIncomeTotal[empId] = Number(data.adjAmt) || 0;
       }
@@ -10288,16 +10389,18 @@ document.addEventListener('DOMContentLoaded', () => {
         return readNum(sel, cellIndex);
       };
       // Column index fallbacks aligned with current payrollTable structure
-      // 0:ID, 1:Name, 2:Rate, 3:RegHrs, 4:RegPay, 5:Additional Income,
-      // 6:Gross, 7:Total Ded, 8:Total OT Pay, 9:Net Pay, 10:Payslip
+      // 0:ID, 1:Name, 2:Rate, 3:RegHrs, 4:RegPay, 5:Adj Hours, 6:Adj Pay,
+      // 7:Additional Income, 8:Gross, 9:Total Ded, 10:Total OT Pay, 11:Net Pay, 12:Payslip
       data.rate = readNum('.rate', 2);
       data.regHrs = readNum('.regHrs', 3);
       data.otHrs = getOvertimeHoursTotal(data.id);
       data.adjHrs = getOvertimeAdjustmentHours(data.id);
       data.regPay = readNum('.regPay', 4);
-      data.adjAmt = readNum('.adjAmt', 5);
-      data.grossPay = readNum('.grossPay', 6);
-      data.otPay = readNum('.otPay', 8);
+      data.adjHours = readNum('.adjHours', 5);
+      data.adjPay = readNum('.adjPay', 6);
+      data.adjAmt = readNum('.adjAmt', 7);
+      data.grossPay = readNum('.grossPay', 8);
+      data.otPay = readNum('.otPay', 10);
       data.pagibig = readDeduction('pagibig', '.pagibig');
       data.philhealth = readDeduction('philhealth', '.philhealth');
       data.sss = readDeduction('sss', '.sss');
@@ -10305,8 +10408,8 @@ document.addEventListener('DOMContentLoaded', () => {
       data.loanPI = readDeduction('loanPI', '.loanPI');
       data.vale = readDeduction('vale', '.vale');
       data.valeWed = readDeduction('valeWed', '.valeWed');
-      data.totalDed = readDeduction('total', '.totalDed', 7);
-      data.netPay = readNum('.netPay', 9);
+      data.totalDed = readDeduction('total', '.totalDed', 9);
+      data.netPay = readNum('.netPay', 11);
       try {
         let otherDeductionTotal = row && row.dataset ? row.dataset.otherDeductionsTotal : null;
         if (otherDeductionTotal != null && otherDeductionTotal !== '') {
@@ -10855,7 +10958,7 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   function buildPayrollSectionFromSnapshot(snap) {
-    const headers = ['ID','Name','Hourly Rate','Regular Hours','Overtime Hours','Adjustment OT Hours','Regular Pay','Total Overtime Pay','Additional Income','Gross Pay','Total Deductions','Net Pay','Other Deductions'];
+    const headers = ['ID','Name','Hourly Rate','Regular Hours','Overtime Hours','ADJ OT hours','Regular Pay','Adj Hours','Adj Pay','Total Overtime Pay','Additional Income','Gross Pay','Total Deductions','Net Pay','Other Deductions'];
     const numericCols = headers.map((_, idx) => idx).filter(idx => idx > 1);
     const rows = Array.isArray(snap?.rows) ? snap.rows.map((row) => {
       return [
@@ -10866,6 +10969,8 @@ document.addEventListener('DOMContentLoaded', () => {
         formatNumber(row.otHrs),
         formatNumber(row.adjHrs),
         formatNumber(row.regPay),
+        formatNumber(row.adjHours),
+        formatNumber(row.adjPay),
         formatNumber(row.otPay),
         formatNumber(row.adjAmt),
         formatNumber(row.grossPay),
@@ -10878,7 +10983,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const footer = headers.map((label, idx) => {
       if (idx === 0) return 'Totals';
       if (idx === 1) return '';
-      const keyMap = ['rate','regHrs','otHrs','adjHrs','regPay','otPay','adjAmt','grossPay','totalDed','netPay','otherDeductionsTotal'];
+      const keyMap = ['rate','regHrs','otHrs','adjHrs','regPay','adjHours','adjPay','otPay','adjAmt','grossPay','totalDed','netPay','otherDeductionsTotal'];
       const key = keyMap[idx - 2];
       let val = key ? totals[key] : null;
       if (typeof val === 'undefined' && key === 'otherDeductionsTotal') {
@@ -11830,8 +11935,8 @@ rows += `<tr class="allowance">
       const endDate = document.getElementById('weekEnd')?.value || '';
       const title = (startDate && endDate) ? `Payroll Report (${startDate} to ${endDate})` : 'Payroll Report';
       const header = [
-        'ID','Name','Hourly Rate','Regular Hours','Overtime Hours','Adjustment OT Hours',
-        'Regular Pay','Total Overtime Pay','Additional Income','Gross Pay',
+        'ID','Name','Hourly Rate','Regular Hours','Overtime Hours','ADJ OT hours',
+        'Regular Pay','Adj Hours','Adj Pay','Total Overtime Pay','Additional Income','Gross Pay',
         'Total Deductions','Net Pay'
       ];
 
@@ -11899,7 +12004,7 @@ rows += `<tr class="allowance">
 
           const aoa = [[title], [''], header.slice()];
           const totals = {
-            regHrs:0, otHrs:0, adjHrs:0,
+            regHrs:0, otHrs:0, adjHrs:0, adjHours:0, adjPay:0,
             regPay:0, otPay:0, adjAmt:0, grossPay:0,
             totalDed:0, netPay:0
           };
@@ -11910,6 +12015,8 @@ rows += `<tr class="allowance">
             const otHrsNum = toNum(row.otHrs);
             const adjHrsNum = toNum(row.adjHrs);
             const regPayNum = toNum(row.regPay);
+            const adjHoursNum = toNum(row.adjHours);
+            const adjPayNum = toNum(row.adjPay);
             const otPayNum = toNum(row.otPay);
             const adjAmtNum = toNum(row.adjAmt);
             const grossNum = toNum(row.grossPay);
@@ -11920,6 +12027,8 @@ rows += `<tr class="allowance">
             totals.otHrs += otHrsNum;
             totals.adjHrs += adjHrsNum;
             totals.regPay += regPayNum;
+            totals.adjHours += adjHoursNum;
+            totals.adjPay += adjPayNum;
             totals.otPay += otPayNum;
             totals.adjAmt += adjAmtNum;
             totals.grossPay += grossNum;
@@ -11934,6 +12043,8 @@ rows += `<tr class="allowance">
               fmt(otHrsNum),
               fmt(adjHrsNum),
               fmt(regPayNum),
+              fmt(adjHoursNum),
+              fmt(adjPayNum),
               fmt(otPayNum),
               fmt(adjAmtNum),
               fmt(grossNum),
@@ -11948,6 +12059,8 @@ rows += `<tr class="allowance">
               regHrs: 'regHrs',
               otHrs: 'otHrs',
               adjHrs: 'adjHrs',
+              adjHours: 'adjHours',
+              adjPay: 'adjPay',
               regPay: 'regPay',
               otPay: 'otPay',
               adjAmt: 'adjAmt',
@@ -11974,6 +12087,8 @@ rows += `<tr class="allowance">
               fmt(totals.otHrs),
               fmt(totals.adjHrs),
               fmt(totals.regPay),
+              fmt(totals.adjHours),
+              fmt(totals.adjPay),
               fmt(totals.otPay),
               fmt(totals.adjAmt),
               fmt(totals.grossPay),
@@ -11998,6 +12113,8 @@ rows += `<tr class="allowance">
           const regHrs = toNum(tr.querySelector('.regHrs')?.value);
           const otHrs = getOvertimeHoursTotal(id);
           const adjHrs = getOvertimeAdjustmentHours(id);
+          const adjHours = getRegularAdjustmentHours(id);
+          const adjPay = toNum(tr.querySelector('.adjPay')?.textContent);
           const regPay = toNum(tr.querySelector('.regPay')?.textContent);
           const otPay = toNum(tr.querySelector('.otPay')?.textContent);
           const adjAmt = toNum(tr.querySelector('.adjAmt')?.textContent);
@@ -12012,6 +12129,8 @@ rows += `<tr class="allowance">
             fmt(otHrs),
             fmt(adjHrs),
             fmt(regPay),
+            fmt(adjHours),
+            fmt(adjPay),
             fmt(otPay),
             fmt(adjAmt),
             fmt(gross),
@@ -12542,8 +12661,9 @@ rows += `<tr class="allowance">
         const id = emp.id;
         const rH = num(rHours[id]);
         const oH = (typeof otHours !== 'undefined' && otHours) ? num(otHours[id]) : 0;
-        const adjH = (typeof adjHrs !== 'undefined' && adjHrs) ? num(adjHrs[id]) : 0;
-        const totalHours = rH + oH + Math.abs(adjH);
+        const adjReg = getRegularAdjustmentHours(id);
+        const adjOt = getOvertimeAdjustmentHours(id);
+        const totalHours = rH + oH + Math.abs(adjReg) + Math.abs(adjOt);
         if (totalHours <= 0) return;
         const bucket = ensureBucket(se?.[id]?.company);
         const rate = num(se?.[id]?.hourlyRate ?? rates?.[id]);
@@ -17581,12 +17701,14 @@ document.addEventListener('DOMContentLoaded', function(){
     var tb = document.querySelector('#payrollTable tbody');
     var foot = document.querySelector('#payrollTotalsFoot');
     if (!tb || !foot) return;
-      var t = {regHrs:0, rate:0, regPay:0, otPay:0, adjAmt:0, grossPay:0, pagibig:0, philhealth:0, sss:0, loanSSS:0, loanPI:0, vale:0, valeWed:0, totalDed:0, netPay:0};
+      var t = {regHrs:0, rate:0, regPay:0, adjHours:0, adjPay:0, otPay:0, adjAmt:0, grossPay:0, pagibig:0, philhealth:0, sss:0, loanSSS:0, loanPI:0, vale:0, valeWed:0, totalDed:0, netPay:0};
     var div = Number(divisor) || 1;
     tb.querySelectorAll('tr').forEach(function(tr){
       t.regHrs   += _parse(_val(tr.querySelector('.regHrs')));
       t.rate     += _parse(_val(tr.querySelector('.rate')));
         t.regPay   += _parse(tr.querySelector('.regPay')?.textContent);
+        t.adjHours += _parse(tr.querySelector('.adjHours')?.textContent);
+        t.adjPay   += _parse(tr.querySelector('.adjPay')?.textContent);
         t.otPay    += _parse(tr.querySelector('.otPay')?.textContent);
         t.adjAmt   += _parse(tr.querySelector('.adjAmt')?.textContent);
         t.grossPay += _parse(tr.querySelector('.grossPay')?.textContent);
