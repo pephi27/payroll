@@ -3196,7 +3196,7 @@ window.addEventListener('load', dashReports);
       <button type="button" id="printDeductionsBtn">Print</button>
      </div>
      <div class="section note">
-      SSS Loan, Pag-IBIG Loan, and Account are managed in the Loan Tracker below and are <b>read-only</b> in this table. SSS and Cash Advance use <b>Total</b> + <b>Weekly</b> (with auto-stop when fully paid). Pag-IBIG loans use <b>Monthly deduction</b> only (per-payroll amount is computed using the selected divisor). Wed Vale can still be edited here if you use it.
+      SSS Loan, Pag-IBIG Loan, and Account are managed in the Loan Tracker below and are <b>read-only</b> in this table. SSS and Cash Advance use <b>Total</b> + <b>Weekly</b> (with auto-stop when fully paid). Pag-IBIG loans use <b>Monthly deduction</b> only (per-payroll amount is computed using the selected divisor).
       If you use the Loan Tracker below, you can enter weekly deductions there and the system will auto-fill these fields for each payroll period. Other Deductions are managed in the Other Deductions tab and always stay non-negative. All values are saved
       for the active payroll period and will carry over automatically to newly created periods without altering any historical
       payroll data. Set a field to 0 to clear it for the current period.
@@ -4261,6 +4261,7 @@ function ensureLoanTrackerShape(obj){
   if (!isPlainObject(obj)) obj = {};
   if (!isPlainObject(obj.byEmp)) obj.byEmp = {};
   if (!isPlainObject(obj.applied)) obj.applied = {};
+  if (!isPlainObject(obj.paymentsByPeriod)) obj.paymentsByPeriod = {};
   return obj;
 }
 function migrateLoanTrackerLegacy(obj){
@@ -4673,7 +4674,7 @@ async function loadLoanTrackerFromSupabaseTables(){
     // local cache only
     try { localStorage.setItem(LS_LOAN_TRACKER, JSON.stringify(loanTracker)); } catch(_){}
 
-    try { applyLoanTrackerToPeriod(currentPeriodKey || periodKey(), { createEntries: true }); } catch(_){}
+    try { applyLoanTrackerToPeriod(currentPeriodKey || periodKey(), { createEntries: true, updateMaps: true }); } catch(_){}
     try { saveCurrentPeriodDeductions(); } catch(_){}
 
     return true;
@@ -4770,6 +4771,27 @@ function setLoanTrackerApplied(periodKey, empId, type, amount){
   if (!isPlainObject(loanTracker.applied[periodKey][empId])) loanTracker.applied[periodKey][empId] = {};
   loanTracker.applied[periodKey][empId][type] = roundToCents(amount || 0);
 }
+function getLoanTrackerPayment(periodKey, empId, type){
+  ensureLoanTrackerShape(loanTracker);
+  if (!periodKey || !empId || !type) return null;
+  const period = loanTracker.paymentsByPeriod && loanTracker.paymentsByPeriod[periodKey];
+  if (!isPlainObject(period)) return null;
+  const emp = period[empId];
+  if (!isPlainObject(emp)) return null;
+  const entry = emp[type];
+  return isPlainObject(entry) ? entry : null;
+}
+function setLoanTrackerPayment(periodKey, empId, type, amount, meta){
+  ensureLoanTrackerShape(loanTracker);
+  if (!periodKey || !empId || !type) return;
+  if (!isPlainObject(loanTracker.paymentsByPeriod[periodKey])) loanTracker.paymentsByPeriod[periodKey] = {};
+  if (!isPlainObject(loanTracker.paymentsByPeriod[periodKey][empId])) loanTracker.paymentsByPeriod[periodKey][empId] = {};
+  loanTracker.paymentsByPeriod[periodKey][empId][type] = {
+    amount: roundToCents(amount || 0),
+    timestamp: (meta && meta.timestamp) ? meta.timestamp : new Date().toISOString(),
+    runId: meta && meta.runId ? meta.runId : undefined
+  };
+}
 function sumLoanTrackerAppliedBefore(periodKey, empId, type){
   ensureLoanTrackerShape(loanTracker);
   const keys = Object.keys(loanTracker.applied || {});
@@ -4838,7 +4860,9 @@ function applyLoanTrackerToPeriod(pk, options){
   const opts = options || {};
   const createEntries = opts.createEntries === true;
   const force = opts.force === true;
-  const canWriteMaps = createEntries || force;
+  const updateMaps = opts.updateMaps === true;
+  const commitCashAdvance = opts.commitCashAdvance === true;
+  const canWriteMaps = createEntries || force || updateMaps;
   ensureLoanTrackerShape(loanTracker);
   if (!pk) return;
   const div = Number(divisor) || 1;
@@ -4863,13 +4887,18 @@ function applyLoanTrackerToPeriod(pk, options){
     const principal = roundToCents(entry.principal || 0);
     const weekly = roundToCents(entry.weekly || 0);
     const shouldRun = (entry.active === true) && (principal > 0) && (weekly > 0);
+    const allowCommit = commitCashAdvance === true;
+    const existingApplied = getLoanTrackerApplied(pk, empId, type);
+    const existingPayment = allowCommit ? getLoanTrackerPayment(pk, empId, type) : null;
 
     const clearForThisPeriod = () => {
-      if (!(createEntries || force)) return;
+      if (!allowCommit) return;
       clearLoanTrackerApplied(pk, empId, type);
     };
 
     if (!shouldRun) {
+      if (existingApplied != null) return roundToCents(existingApplied || 0);
+      if (existingPayment) return roundToCents(Number(existingPayment.amount) || 0);
       clearForThisPeriod();
       return 0;
     }
@@ -4882,35 +4911,43 @@ function applyLoanTrackerToPeriod(pk, options){
       return 0;
     }
 
-    let scheduled = getLoanTrackerApplied(pk, empId, type);
+    let scheduled = existingApplied;
     const desired = roundToCents(Math.min(weekly, remainingBefore));
 
-    if (scheduled == null || force){
-      if (!createEntries && scheduled == null && !force) {
-        // navigating backwards / initial load: don't create missing entries
-      } else {
-        if (desired <= 0) {
-          clearForThisPeriod();
-          return 0;
-        }
-        setLoanTrackerApplied(pk, empId, type, desired);
-        scheduled = desired;
-        changed = true;
-      }
-    } else if (createEntries) {
-      const cur = roundToCents(Number(scheduled) || 0);
-      if (cur !== desired) {
-        setLoanTrackerApplied(pk, empId, type, desired);
-        scheduled = desired;
+    if (allowCommit && existingPayment && scheduled == null) {
+      const paidAmount = roundToCents(Number(existingPayment.amount) || 0);
+      if (paidAmount > 0) {
+        setLoanTrackerApplied(pk, empId, type, paidAmount);
+        scheduled = paidAmount;
         changed = true;
       }
     }
 
+    if (scheduled == null) {
+      if (!allowCommit) {
+        return roundToCents(desired || 0);
+      }
+      if (desired <= 0) {
+        clearForThisPeriod();
+        return 0;
+      }
+      setLoanTrackerApplied(pk, empId, type, desired);
+      if (!getLoanTrackerPayment(pk, empId, type)) {
+        setLoanTrackerPayment(pk, empId, type, desired);
+      }
+      scheduled = desired;
+      changed = true;
+    } else if (allowCommit) {
+      // If already applied for this period, do not modify (idempotent finalize).
+    }
+
     if (scheduled == null) return 0;
 
-    const remainingAfter = roundToCents(remainingBefore - roundToCents(scheduled || 0));
-    if (remainingAfter <= 0) {
-      if (entry.active) { entry.active = false; changed = true; }
+    if (allowCommit) {
+      const remainingAfter = roundToCents(remainingBefore - roundToCents(scheduled || 0));
+      if (remainingAfter <= 0) {
+        if (entry.active) { entry.active = false; changed = true; }
+      }
     }
     return roundToCents(scheduled || 0);
   };
@@ -5001,7 +5038,9 @@ function applyLoanTrackerToPeriod(pk, options){
 
     // --- Cash Advance (principal/weekly/balance) ---
     const cashPerPeriod = handlePrincipalWeekly(empId, 'vale');
-    if (canWriteMaps) setMapValue(vale, empId, roundToCents(cashPerPeriod));
+    if (canWriteMaps) {
+      setMapValue(vale, empId, roundToCents(cashPerPeriod));
+    }
   }
 
   if (changed) {
@@ -5192,7 +5231,8 @@ try { window.loanTracker = loanTracker; } catch(_){ }
       obj = ensureLoanTrackerShape(obj);
       const byEmpCount = obj && obj.byEmp ? Object.keys(obj.byEmp).length : 0;
       const appliedCount = obj && obj.applied ? Object.keys(obj.applied).length : 0;
-      return (byEmpCount + appliedCount) > 0;
+      const paymentCount = obj && obj.paymentsByPeriod ? Object.keys(obj.paymentsByPeriod).length : 0;
+      return (byEmpCount + appliedCount + paymentCount) > 0;
     } catch(_){ return false; }
   }
 
@@ -5315,7 +5355,7 @@ function refreshPeriodScopedCachesFromStorage(){
   valeWed = ensurePeriodData(allValeWed, currentPeriodKey);
   loanTracker = loadLoanTrackerFromStorage();
   try { window.loanTracker = loanTracker; } catch(_){ }
-  try { applyLoanTrackerToPeriod(currentPeriodKey, { createEntries: false }); } catch(_){ }
+  try { applyLoanTrackerToPeriod(currentPeriodKey, { createEntries: false, updateMaps: true }); } catch(_){ }
   allOtherDeductionsDetails = loadPeriodScopedMap(LS_OTHER_DEDUCTIONS_DETAILS);
   allOtherDeductionsTotals = loadPeriodScopedMap(LS_OTHER_DEDUCTIONS_TOTAL);
   otherDeductionsDetails = ensurePeriodData(allOtherDeductionsDetails, currentPeriodKey);
@@ -5401,7 +5441,7 @@ function syncPeriodScopedData(){
   loanPI = ensurePeriodData(allLoanPI, pk, tplPI, { allowDefault: carryForward });
   vale = ensurePeriodData(allVale, pk, tplVale, { allowDefault: carryForward });
   valeWed = ensurePeriodData(allValeWed, pk, tplValeWed, { allowDefault: carryForward });
-  try { applyLoanTrackerToPeriod(pk, { createEntries: carryForward }); } catch(_){ }
+  try { applyLoanTrackerToPeriod(pk, { createEntries: carryForward, updateMaps: true }); } catch(_){ }
   try { persistLoanTracker(); } catch(_){ }
   otherDeductionsDetails = ensurePeriodData(allOtherDeductionsDetails, pk, null, { allowDefault: false });
   otherDeductionsTotal = ensurePeriodData(allOtherDeductionsTotals, pk, null, { allowDefault: false });
@@ -5444,7 +5484,7 @@ if (divisorDedsEl) {
     divisor = parseInt(divisorDedsEl.value, 10) || 1;
     divisorEl.value = String(divisor);
     localStorage.setItem(LS_DIVISOR, String(divisor));
-    try { applyLoanTrackerToPeriod(currentPeriodKey || periodKey(), { createEntries: false, force: true }); } catch(_){ }
+    try { applyLoanTrackerToPeriod(currentPeriodKey || periodKey(), { createEntries: false, force: true, updateMaps: true }); } catch(_){ }
     try { persistLoanTracker(); } catch(_){ }
     try { saveCurrentPeriodDeductions(); } catch(_){ }
     calculateAll();
@@ -5460,7 +5500,7 @@ divisorEl.addEventListener('change', () => {
   if (typeof divisorDedsEl !== 'undefined' && divisorDedsEl) {
     divisorDedsEl.value = String(divisor);
   }
-  try { applyLoanTrackerToPeriod(currentPeriodKey || periodKey(), { createEntries: false, force: true }); } catch(_){ }
+  try { applyLoanTrackerToPeriod(currentPeriodKey || periodKey(), { createEntries: false, force: true, updateMaps: true }); } catch(_){ }
   try { persistLoanTracker(); } catch(_){ }
   try { saveCurrentPeriodDeductions(); } catch(_){ }
   calculateAll();
@@ -6259,7 +6299,9 @@ const loanTrackerRefresh = (() => {
   const run = async (opts) => {
     timer = null;
     try {
-      applyLoanTrackerToPeriod(currentPeriodKey || periodKey(), opts || { createEntries: true });
+      const baseOpts = opts || { createEntries: true };
+      baseOpts.updateMaps = true;
+      applyLoanTrackerToPeriod(currentPeriodKey || periodKey(), baseOpts);
     } catch(_) {}
     try { saveCurrentPeriodDeductions(); } catch(_) {}
     try { await persistLoanTracker(); setStatus('Saved locally', 'saved'); } catch(e){ setStatus('Save failed', 'error'); }
@@ -9658,6 +9700,18 @@ document.addEventListener('DOMContentLoaded', () => {
     return true;
   }
 
+  async function finalizeCashAdvancesForPeriod(start, end) {
+    try {
+      const pk = periodKey(start, end);
+      if (!pk) return;
+      applyLoanTrackerToPeriod(pk, { updateMaps: true, commitCashAdvance: true });
+      await persistLoanTracker();
+      await saveCurrentPeriodDeductions();
+    } catch (err) {
+      console.warn('Cash advance finalize failed', err);
+    }
+  }
+
   function syncHistoryLockState(start, end, locked, meta) {
     if (!Array.isArray(payrollHistory) || !start || !end) return;
     let snap = payrollHistory.find(entry => entry && entry.startDate === start && entry.endDate === end);
@@ -9801,6 +9855,7 @@ document.addEventListener('DOMContentLoaded', () => {
       applyLockUI();
       return;
     }
+    await finalizeCashAdvancesForPeriod(start, end);
     try {
       if (typeof calculateAll === 'function') {
         await Promise.resolve(calculateAll());
