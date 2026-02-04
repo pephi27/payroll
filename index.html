@@ -5066,12 +5066,13 @@ function ensurePeriodData(map, key, template, options){
   }
   return map[key];
 }
-function updatePeriodLatest(map, key, data){
+function updatePeriodLatest(map, key, data, options){
   if (!isPlainObject(map) || !key) return;
   const meta = ensurePeriodMeta(map);
   if (!meta.latestKey || comparePeriodKeys(key, meta.latestKey) >= 0) {
     meta.latestKey = key;
-    if (isPlainObject(data)) {
+    const setDefault = !options || options.setDefault !== false;
+    if (setDefault && isPlainObject(data)) {
       map[PERIOD_DEFAULT_KEY] = clonePeriodData(data);
     }
   }
@@ -5281,16 +5282,17 @@ try {
 } catch(_){}
 let allOtherDeductionsDetails = loadPeriodScopedMap(LS_OTHER_DEDUCTIONS_DETAILS);
 let allOtherDeductionsTotals = loadPeriodScopedMap(LS_OTHER_DEDUCTIONS_TOTAL);
-let otherDeductionsDetails = ensurePeriodData(allOtherDeductionsDetails, currentPeriodKey);
-let otherDeductionsTotal = ensurePeriodData(allOtherDeductionsTotals, currentPeriodKey);
+let otherDeductionsDetails = ensurePeriodData(allOtherDeductionsDetails, currentPeriodKey, null, { allowDefault: false });
+let otherDeductionsTotal = ensurePeriodData(allOtherDeductionsTotals, currentPeriodKey, null, { allowDefault: false });
 let allAdjHrs = JSON.parse(localStorage.getItem(LS_ADJ_HRS) || '{}');
-let adjHrs = allAdjHrs[currentPeriodKey] || {};
+let adjHrs = isPlainObject(allAdjHrs[currentPeriodKey]) ? allAdjHrs[currentPeriodKey] : {};
+if (!isPlainObject(allAdjHrs[currentPeriodKey])) allAdjHrs[currentPeriodKey] = adjHrs;
 let allBantay = JSON.parse(localStorage.getItem(LS_BANTAY) || '{}');
 let bantay = allBantay[currentPeriodKey] || {};
 let allAdditionalIncomeDetails = loadPeriodScopedMap(LS_ADDITIONAL_INCOME_DETAILS);
 let allAdditionalIncomeTotals = loadPeriodScopedMap(LS_ADDITIONAL_INCOME_TOTAL);
-let additionalIncomeDetails = ensurePeriodData(allAdditionalIncomeDetails, currentPeriodKey);
-let additionalIncomeTotal = ensurePeriodData(allAdditionalIncomeTotals, currentPeriodKey);
+let additionalIncomeDetails = ensurePeriodData(allAdditionalIncomeDetails, currentPeriodKey, null, { allowDefault: false });
+let additionalIncomeTotal = ensurePeriodData(allAdditionalIncomeTotals, currentPeriodKey, null, { allowDefault: false });
 
 function persistCurrentOtherDeductions(){
   if (!isPlainObject(allOtherDeductionsDetails)) allOtherDeductionsDetails = {};
@@ -5299,8 +5301,8 @@ function persistCurrentOtherDeductions(){
   if (!isPlainObject(otherDeductionsTotal)) otherDeductionsTotal = {};
   allOtherDeductionsDetails[currentPeriodKey] = otherDeductionsDetails;
   allOtherDeductionsTotals[currentPeriodKey] = otherDeductionsTotal;
-  updatePeriodLatest(allOtherDeductionsDetails, currentPeriodKey, otherDeductionsDetails);
-  updatePeriodLatest(allOtherDeductionsTotals, currentPeriodKey, otherDeductionsTotal);
+  updatePeriodLatest(allOtherDeductionsDetails, currentPeriodKey, otherDeductionsDetails, { setDefault: false });
+  updatePeriodLatest(allOtherDeductionsTotals, currentPeriodKey, otherDeductionsTotal, { setDefault: false });
   const tasks = [
     persistPeriodScopedMap(LS_OTHER_DEDUCTIONS_DETAILS, allOtherDeductionsDetails),
     persistPeriodScopedMap(LS_OTHER_DEDUCTIONS_TOTAL, allOtherDeductionsTotals)
@@ -5312,7 +5314,7 @@ function persistCurrentAdjustmentHours(){
   if (!isPlainObject(allAdjHrs)) allAdjHrs = {};
   if (!isPlainObject(adjHrs)) adjHrs = {};
   allAdjHrs[currentPeriodKey] = adjHrs;
-  updatePeriodLatest(allAdjHrs, currentPeriodKey, adjHrs);
+  updatePeriodLatest(allAdjHrs, currentPeriodKey, adjHrs, { setDefault: false });
   persistPeriodScopedMap(LS_ADJ_HRS, allAdjHrs);
 }
 
@@ -5323,8 +5325,8 @@ function persistCurrentAdditionalIncome(){
   if (!isPlainObject(additionalIncomeTotal)) additionalIncomeTotal = {};
   allAdditionalIncomeDetails[currentPeriodKey] = additionalIncomeDetails;
   allAdditionalIncomeTotals[currentPeriodKey] = additionalIncomeTotal;
-  updatePeriodLatest(allAdditionalIncomeDetails, currentPeriodKey, additionalIncomeDetails);
-  updatePeriodLatest(allAdditionalIncomeTotals, currentPeriodKey, additionalIncomeTotal);
+  updatePeriodLatest(allAdditionalIncomeDetails, currentPeriodKey, additionalIncomeDetails, { setDefault: false });
+  updatePeriodLatest(allAdditionalIncomeTotals, currentPeriodKey, additionalIncomeTotal, { setDefault: false });
   const tasks = [
     persistPeriodScopedMap(LS_ADDITIONAL_INCOME_DETAILS, allAdditionalIncomeDetails),
     persistPeriodScopedMap(LS_ADDITIONAL_INCOME_TOTAL, allAdditionalIncomeTotals)
@@ -5346,16 +5348,17 @@ function refreshPeriodScopedCachesFromStorage(){
   try { applyLoanTrackerToPeriod(currentPeriodKey, { createEntries: false, updateMaps: true }); } catch(_){ }
   allOtherDeductionsDetails = loadPeriodScopedMap(LS_OTHER_DEDUCTIONS_DETAILS);
   allOtherDeductionsTotals = loadPeriodScopedMap(LS_OTHER_DEDUCTIONS_TOTAL);
-  otherDeductionsDetails = ensurePeriodData(allOtherDeductionsDetails, currentPeriodKey);
-  otherDeductionsTotal = ensurePeriodData(allOtherDeductionsTotals, currentPeriodKey);
+  otherDeductionsDetails = ensurePeriodData(allOtherDeductionsDetails, currentPeriodKey, null, { allowDefault: false });
+  otherDeductionsTotal = ensurePeriodData(allOtherDeductionsTotals, currentPeriodKey, null, { allowDefault: false });
   allAdjHrs = JSON.parse(localStorage.getItem(LS_ADJ_HRS) || '{}');
-  adjHrs = allAdjHrs[currentPeriodKey] || {};
+  adjHrs = isPlainObject(allAdjHrs[currentPeriodKey]) ? allAdjHrs[currentPeriodKey] : {};
+  if (!isPlainObject(allAdjHrs[currentPeriodKey])) allAdjHrs[currentPeriodKey] = adjHrs;
   allBantay = JSON.parse(localStorage.getItem(LS_BANTAY) || '{}');
   bantay = allBantay[currentPeriodKey] || {};
   allAdditionalIncomeDetails = loadPeriodScopedMap(LS_ADDITIONAL_INCOME_DETAILS);
   allAdditionalIncomeTotals = loadPeriodScopedMap(LS_ADDITIONAL_INCOME_TOTAL);
-  additionalIncomeDetails = ensurePeriodData(allAdditionalIncomeDetails, currentPeriodKey);
-  additionalIncomeTotal = ensurePeriodData(allAdditionalIncomeTotals, currentPeriodKey);
+  additionalIncomeDetails = ensurePeriodData(allAdditionalIncomeDetails, currentPeriodKey, null, { allowDefault: false });
+  additionalIncomeTotal = ensurePeriodData(allAdditionalIncomeTotals, currentPeriodKey, null, { allowDefault: false });
   ensureAdditionalIncomeDetailsMap();
   rebuildAdditionalIncomeTotals();
   ensureOtherDeductionsDetailsMap();
@@ -5433,7 +5436,8 @@ function syncPeriodScopedData(){
   try { persistLoanTracker(); } catch(_){ }
   otherDeductionsDetails = ensurePeriodData(allOtherDeductionsDetails, pk, null, { allowDefault: false });
   otherDeductionsTotal = ensurePeriodData(allOtherDeductionsTotals, pk, null, { allowDefault: false });
-  adjHrs = allAdjHrs[pk] || {};
+  if (!isPlainObject(allAdjHrs[pk])) allAdjHrs[pk] = {};
+  adjHrs = allAdjHrs[pk];
   bantay = allBantay[pk] || {};
   additionalIncomeDetails = ensurePeriodData(allAdditionalIncomeDetails, pk, null, { allowDefault: false });
   additionalIncomeTotal = ensurePeriodData(allAdditionalIncomeTotals, pk, null, { allowDefault: false });
@@ -8647,9 +8651,10 @@ async function restoreOtherDeductionsFromPrompt(){
     if (isPlainObject(parsed.otherDeductionsDetails)) allOtherDeductionsDetails = parsed.otherDeductionsDetails;
     if (isPlainObject(parsed.otherDeductionsTotals)) allOtherDeductionsTotals = parsed.otherDeductionsTotals;
     if (isPlainObject(parsed.adjustmentHours)) allAdjHrs = parsed.adjustmentHours;
-    otherDeductionsDetails = ensurePeriodData(allOtherDeductionsDetails, currentPeriodKey);
-    otherDeductionsTotal = ensurePeriodData(allOtherDeductionsTotals, currentPeriodKey);
-    adjHrs = allAdjHrs[currentPeriodKey] || {};
+    otherDeductionsDetails = ensurePeriodData(allOtherDeductionsDetails, currentPeriodKey, null, { allowDefault: false });
+    otherDeductionsTotal = ensurePeriodData(allOtherDeductionsTotals, currentPeriodKey, null, { allowDefault: false });
+    if (!isPlainObject(allAdjHrs[currentPeriodKey])) allAdjHrs[currentPeriodKey] = {};
+    adjHrs = allAdjHrs[currentPeriodKey];
     ensureOtherDeductionsDetailsMap();
     rebuildOtherDeductionsTotals();
     persistCurrentOtherDeductions();
