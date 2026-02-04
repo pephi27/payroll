@@ -4943,12 +4943,6 @@ function applyLoanTrackerToPeriod(pk, options){
 
     if (scheduled == null) return 0;
 
-    if (allowCommit) {
-      const remainingAfter = roundToCents(remainingBefore - roundToCents(scheduled || 0));
-      if (remainingAfter <= 0) {
-        if (entry.active) { entry.active = false; changed = true; }
-      }
-    }
     return roundToCents(scheduled || 0);
   };
 
@@ -5007,10 +5001,6 @@ function applyLoanTrackerToPeriod(pk, options){
 
     if (scheduled == null) return 0;
 
-    const remainingAfter = roundToCents(remainingBefore - roundToCents(scheduled || 0));
-    if (remainingAfter <= 0) {
-      if (entry.active) { entry.active = false; changed = true; }
-    }
     return roundToCents(scheduled || 0);
   };
 
