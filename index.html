@@ -7510,8 +7510,7 @@ function calculateRow(tr){  const readNum = sel => { const el = tr.querySelector
   // Adjustment OT hours from the adjHrs object (if any)
   const adjOtHours = getOvertimeAdjustmentHours(id);
   // Combined OT hours including adjustments
-  const otTotal = otBase + adjOtHours;
-  const rate = Number(tr.querySelector('.rate').value)||0;
+<=======
   const getMappedInputValue = (selector, map) => {
     const input = tr.querySelector(selector);
     const fallback = input ? Number(input.value) || 0 : readNum(selector);
@@ -14941,6 +14940,7 @@ function renderEmployees(){
     const val = parseFloat(e.target.value) || 0;
     storedEmployees[id].hourlyRate = val; saveEmployeesToLS();
     try { payrollRates[id] = val; localStorage.setItem(LS_RATES, JSON.stringify(payrollRates)); } catch(err) {}
+    try { if (typeof renderTable === 'function') renderTable(); } catch (err) { console.warn('renderTable failed', err); }
     renderResults();
   }));
 document.querySelectorAll('.emp-sel-schedule').forEach(sel=> sel.addEventListener('change', (e)=>{
