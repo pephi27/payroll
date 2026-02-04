@@ -132,8 +132,6 @@ const KNOWN_KEYS = [
   "payroll_ot_hours",
   "payroll_ot_multiplier",
   "settings_payroll",
-  "payroll_week_start",
-  "payroll_week_end",
   "payroll_deduction_divisor",
   "payroll_sss_table",
   "payroll_loan_sss",
@@ -476,13 +474,11 @@ function safeStringify(v){
 }
 </script>
 
-<!-- Style to visually and functionally lock panels when payroll data is locked.
-     When #panelMain has the 'locked' class, pointer events are disabled on
-     all of its children and the panel appears dimmed. This prevents any
-     interaction with DTR fields while still allowing navigation to other tabs. -->
+<!-- Style to visually lock panels when payroll data is locked.
+     When #panelMain has the 'locked' class, the panel appears dimmed while
+     input controls are disabled via JS. -->
 <style>
   #panelMain.locked {
-    pointer-events: none;
     opacity: 0.6;
   }
 
@@ -2281,8 +2277,7 @@ window.addEventListener('load', dashReports);
           <span style="font-weight:600;color:#374151;">Payroll period:</span>
           <select id="activePayrollSelect" class="date-input activeWeekSelect" style="min-width:260px;"></select>
           <button id="newPayrollPeriod" type="button" class="date-input">New period</button>
-          <button id="lockSnapshotBtn" type="button" class="date-input">Lock &amp; Snapshot</button>
-          <button id="unlockPeriodBtn" type="button" class="date-input">Unlock</button>
+          <button id="lockSnapshotBtn" type="button" class="date-input">Finalize &amp; Snapshot</button>
           <span id="dashLockStatus" style="display:none;font-size:12px;color:#111827;font-weight:600;"></span>
         </div>
         <!-- New Period Modal (pre-rendered for instant open) -->
@@ -2363,7 +2358,7 @@ window.addEventListener('load', dashReports);
        <tr>
          <th>Start</th>
          <th>End</th>
-         <th>Locked At</th>
+         <th>Finalized At</th>
          <th>Net Pay</th>
          <th>Actions</th>
        </tr>
@@ -3334,7 +3329,9 @@ window.addEventListener('load', dashReports);
 
     <script>
 const LS_RATES='payroll_rates', LS_REG_HRS='payroll_reg_hours', LS_OT_HRS='payroll_ot_hours';
-const LS_OTMULT='payroll_ot_multiplier', LS_WEEKSTART='payroll_week_start', LS_WEEKEND='payroll_week_end';
+const LS_OTMULT='payroll_ot_multiplier', LS_WEEKSTART='ui_payroll_week_start_local', LS_WEEKEND='ui_payroll_week_end_local';
+const LEGACY_WEEKSTART_KEY = 'payroll_week_start';
+const LEGACY_WEEKEND_KEY = 'payroll_week_end';
 const LS_DIVISOR='payroll_deduction_divisor', LS_SSS_TABLE='payroll_sss_table';
 const LS_LOAN_SSS='payroll_loan_sss', LS_LOAN_PI='payroll_loan_pagibig';
 const LS_VALE='payroll_vale', LS_VALE_WED='payroll_vale_wed';
@@ -4016,7 +4013,23 @@ let otHours = JSON.parse(localStorage.getItem(LS_OT_HRS) || '{}');
 // Per-employee contribution deduction flags. Each entry keyed by employee ID holds booleans {pagibig, philhealth, sss}
 let contribFlags = JSON.parse(localStorage.getItem(LS_CONTRIB_FLAGS) || '{}');
 
+function migrateWeekRangeKeys(){
+  try {
+    if (!localStorage.getItem(LS_WEEKSTART)) {
+      const legacyStart = localStorage.getItem(LEGACY_WEEKSTART_KEY);
+      if (legacyStart) localStorage.setItem(LS_WEEKSTART, legacyStart);
+    }
+    if (!localStorage.getItem(LS_WEEKEND)) {
+      const legacyEnd = localStorage.getItem(LEGACY_WEEKEND_KEY);
+      if (legacyEnd) localStorage.setItem(LS_WEEKEND, legacyEnd);
+    }
+    localStorage.removeItem(LEGACY_WEEKSTART_KEY);
+    localStorage.removeItem(LEGACY_WEEKEND_KEY);
+  } catch (e) {}
+}
+
 otMultiplier = getOvertimeMultiplier();
+migrateWeekRangeKeys();
 let weekStartSaved = localStorage.getItem(LS_WEEKSTART) || '';
 let weekEndSaved = localStorage.getItem(LS_WEEKEND) || '';
 let divisor = parseInt(localStorage.getItem(LS_DIVISOR) || '1', 10);
@@ -8798,7 +8811,7 @@ document.addEventListener('DOMContentLoaded', function() {
   This script defines utilities for managing payroll history snapshots. It is intentionally
   separated from the existing payroll logic to avoid altering core calculations.
   The dashboard allows users to select a date range, generate a snapshot of the current payroll table,
-  lock it to prevent further edits, view past snapshots, and download CSV versions.
+  finalize it to prevent further edits, view past snapshots, and download CSV versions.
 -->
 <script>
 // Shared helpers for formatting dashboard dates in MM-DD-YYYY layout.
@@ -9629,11 +9642,24 @@ document.addEventListener('DOMContentLoaded', () => {
     snap.locked = locked;
     snap.lockedAt = locked ? (meta && meta.lockedAt ? meta.lockedAt : new Date().toISOString()) : '';
     if (locked) {
+      snap.periodKey = meta && meta.periodKey ? meta.periodKey : periodKey(start, end);
+      snap.finalized = (meta && typeof meta.finalized !== 'undefined') ? !!meta.finalized : true;
+      snap.finalizedAt = meta && meta.finalizedAt ? meta.finalizedAt : (meta && meta.lockedAt ? meta.lockedAt : new Date().toISOString());
+      snap.finalizedBy = meta && meta.finalizedBy ? meta.finalizedBy : 'admin';
+      snap.finalizeNote = meta && meta.finalizeNote ? meta.finalizeNote : '';
+    } else {
+      snap.finalized = false;
+      snap.finalizedAt = '';
+      snap.finalizedBy = '';
+      snap.finalizeNote = '';
+    }
+    if (locked) {
       const snapMeta = meta && meta.snapshot && typeof meta.snapshot === 'object' ? meta.snapshot : null;
       if (snapMeta) {
         if (Array.isArray(snapMeta.rows)) snap.rows = snapMeta.rows;
         if (snapMeta.totals && typeof snapMeta.totals === 'object') snap.totals = snapMeta.totals;
         if (typeof snapMeta.divisor !== 'undefined') snap.divisor = snapMeta.divisor;
+        if (snapMeta.settings && typeof snapMeta.settings === 'object') snap.settings = snapMeta.settings;
         if (snapMeta.hash) snap.hash = snapMeta.hash;
       } else if (meta && meta.totals) {
         snap.totals = meta.totals;
@@ -9656,6 +9682,9 @@ document.addEventListener('DOMContentLoaded', () => {
       payrollLocks[key] = {
         locked: true,
         lockedAt: meta.lockedAt || new Date().toISOString(),
+        finalizedAt: meta.finalizedAt || meta.lockedAt || new Date().toISOString(),
+        finalizedBy: meta.finalizedBy || 'admin',
+        finalizeNote: meta.finalizeNote || '',
         totals: meta.totals || null
       };
     } else {
@@ -9673,10 +9702,11 @@ document.addEventListener('DOMContentLoaded', () => {
       dashLockStatus.textContent = '';
       return;
     }
-    const parts = ['Locked'];
-    if (entry.lockedAt) {
+    const parts = ['Finalized'];
+    if (entry.lockedAt || entry.finalizedAt) {
       try {
-        parts.push(new Date(entry.lockedAt).toLocaleString());
+        const stamp = entry.finalizedAt || entry.lockedAt;
+        parts.push(new Date(stamp).toLocaleString());
       } catch (err) {}
     }
     if (entry.totals && entry.totals.netPay) {
@@ -9764,7 +9794,8 @@ document.addEventListener('DOMContentLoaded', () => {
         endDate: end,
         rows: snapshot.rows,
         totals: snapshot.totals,
-        divisor: snapshot.divisor
+        divisor: snapshot.divisor,
+        settings: snapshot.settings || {}
       });
       const hashBuffer = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(payload));
       const hashArray = Array.from(new Uint8Array(hashBuffer));
@@ -9780,25 +9811,37 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     existing.startDate = start;
     existing.endDate = end;
+    existing.periodKey = periodKey(start, end);
     existing.rows = snapshot.rows;
     existing.totals = snapshot.totals;
     existing.divisor = snapshot.divisor;
+    existing.settings = snapshot.settings || {};
     existing.hash = hashHex;
     existing.locked = true;
     existing.lockedAt = lockedAt;
+    existing.finalized = true;
+    existing.finalizedAt = lockedAt;
+    existing.finalizedBy = existing.finalizedBy || 'admin';
+    existing.finalizeNote = existing.finalizeNote || '';
     saveHistory();
     if (typeof renderHistory === 'function') renderHistory();
     if (typeof renderActivePayrolls === 'function') renderActivePayrolls();
     disablePayrollInputs();
     setSnapshotOverride(existing);
     setPeriodLocked(start, end, true, {
+      periodKey: existing.periodKey,
       lockedAt,
+      finalized: true,
+      finalizedAt: lockedAt,
+      finalizedBy: existing.finalizedBy || 'admin',
+      finalizeNote: existing.finalizeNote || '',
       totals: snapshot.totals,
       hash: hashHex,
       snapshot: {
         rows: snapshot.rows,
         totals: snapshot.totals,
         divisor: snapshot.divisor,
+        settings: snapshot.settings || {},
         hash: hashHex
       }
     });
@@ -9939,10 +9982,11 @@ document.addEventListener('DOMContentLoaded', () => {
         // For unlocked snapshots, allow deletion
         actions.push(`<button type="button" class="deleteSnapshot" data-index="${index}">Delete</button>`);
       }
+      const finalizedStamp = snap.finalizedAt || snap.lockedAt;
       tr.innerHTML = `
         <td>${startText}</td>
         <td>${endText}</td>
-        <td>${snap.lockedAt ? new Date(snap.lockedAt).toLocaleString() : ''}</td>
+        <td>${finalizedStamp ? new Date(finalizedStamp).toLocaleString() : ''}</td>
         <td>${netText}</td>
         <td>${actions.join(' ')}</td>
       `;
@@ -10109,7 +10153,14 @@ document.addEventListener('DOMContentLoaded', () => {
     } catch (e) {}
     if (!divisorValue || !isFinite(divisorValue) || divisorValue <= 0) divisorValue = 1;
 
-    return { startDate, endDate, rows, totals, divisor: divisorValue };
+    const settings = {};
+    try {
+      const otm = (typeof getOvertimeMultiplier === 'function') ? getOvertimeMultiplier() : (typeof otMultiplier !== 'undefined' ? otMultiplier : undefined);
+      if (otm != null && otm !== '' && isFinite(Number(otm))) settings.otMultiplier = Number(otm);
+    } catch (e) {}
+    if (divisorValue) settings.deductionDivisor = divisorValue;
+
+    return { startDate, endDate, rows, totals, divisor: divisorValue, settings };
   }
   // Expose buildSnapshot globally so it can be called from other scripts
   window.buildSnapshot = buildSnapshot;
@@ -10126,38 +10177,31 @@ document.addEventListener('DOMContentLoaded', () => {
     document.querySelectorAll('#payrollTable input').forEach(inp => {
       inp.disabled = true;
     });
-    // Disable DTR inputs, buttons and selects (manual DTR, delete buttons, filters, etc.)
-    document.querySelectorAll('#panelMain input, #panelMain button, #panelMain select').forEach(el => {
+    // Disable DTR inputs/selects (manual DTR, project/schedule selectors, overrides, etc.)
+    document.querySelectorAll('#resultsTable input, #resultsTable select, #resultsTable textarea').forEach(el => {
       el.disabled = true;
     });
-    // Additionally disable key DTR controls explicitly by ID. While the generic selector above
-    // should catch most elements, some dynamically inserted controls (or those outside
-    // #panelMain) may escape. Explicitly disabling them ensures search fields, date filters,
-    // project dropdowns and import/export buttons cannot be used once locked. These IDs
-    // correspond to the manual DTR workflow and DTR filtering controls.
-    ['dtrSearchName','dtrDateFrom','dtrDateTo','dtrDateClear','filterProject','fileInput','manualDtrBtn','printDtrRegularBtn','printDtrOvertimeBtn','dtrDateRangeFrom','dtrDateRangeTo'].forEach(id => {
+    // Disable key DTR editing controls explicitly by ID. Keep print/export buttons enabled.
+    ['fileInput','manualDtrBtn'].forEach(id => {
       const el = document.getElementById(id);
       if (el) el.disabled = true;
-    });
-    // Disable all select elements within the results table (project and schedule selectors)
-    document.querySelectorAll('#resultsTable select').forEach(sel => {
-      sel.disabled = true;
     });
     // Disable any DTR delete buttons that may have been added
     document.querySelectorAll('.dtr-del-btn').forEach(btn => {
       btn.disabled = true;
     });
 
-    // Add a locked class to the DTR panel to disable pointer events. This is a
-    // visual and functional safeguard for cases where individual inputs might
-    // get re-enabled by other scripts. The CSS defined above ensures
-    // #panelMain.locked blocks all interaction with its contents.
+    // Add a locked class to the DTR panel for a visual cue. Inputs are disabled
+    // above to enforce the read-only state while keeping print/export available.
     const pm = document.getElementById('panelMain');
     if (pm) pm.classList.add('locked');
     // Also disable inputs and buttons within the manual DTR modal if it exists. The modal is not
     // nested under #panelMain, so we need to explicitly target it. Without this, users could
     // potentially enter a manual record even after locking by using the modal fields directly.
     document.querySelectorAll('#manualDtrModal input, #manualDtrModal button, #manualDtrModal select').forEach(el => {
+      el.disabled = true;
+    });
+    document.querySelectorAll('#dtrPunchModal input, #dtrPunchModal button, #dtrPunchModal select').forEach(el => {
       el.disabled = true;
     });
     // Disable dashboard date range inputs and action buttons
@@ -10167,6 +10211,14 @@ document.addEventListener('DOMContentLoaded', () => {
     if (ws) ws.disabled = true;
     if (we) we.disabled = true;
     if (genBtn) genBtn.disabled = true;
+    // Disable editing buttons in payroll-related tabs while keeping print/export available
+    ['applyLoanTrackerBtn','recalcLoanTrackerBtn','copyOtherDeductionsBtn','restoreOtherDeductionsBtn'].forEach(id => {
+      const el = document.getElementById(id);
+      if (el) el.disabled = true;
+    });
+    document.querySelectorAll('#additionalIncomeTable button, #otherDeductionsTable button, #adjustmentHoursTable button').forEach(btn => {
+      btn.disabled = true;
+    });
     // Ensure the payroll tab reflects the locked state as well
     try { setPayrollLockedUI(true); } catch (err) { /* no-op if helper is unavailable */ }
   }
@@ -10183,21 +10235,14 @@ document.addEventListener('DOMContentLoaded', () => {
     document.querySelectorAll('#payrollTable input').forEach(inp => {
       inp.disabled = false;
     });
-    // Re-enable DTR inputs, buttons and selects
-    document.querySelectorAll('#panelMain input, #panelMain button, #panelMain select').forEach(el => {
+    // Re-enable DTR inputs/selects
+    document.querySelectorAll('#resultsTable input, #resultsTable select, #resultsTable textarea').forEach(el => {
       el.disabled = false;
     });
-    // Re-enable specific DTR controls by ID that were explicitly disabled in
-    // disablePayrollInputs(). This ensures search, date filters, project filter,
-    // and import/export controls become usable again when the payroll is unlocked
-    // or the date range is changed.
-    ['dtrSearchName','dtrDateFrom','dtrDateTo','dtrDateClear','filterProject','fileInput','manualDtrBtn','printDtrRegularBtn','printDtrOvertimeBtn','dtrDateRangeFrom','dtrDateRangeTo'].forEach(id => {
+    // Re-enable specific DTR editing controls that were explicitly disabled
+    ['fileInput','manualDtrBtn'].forEach(id => {
       const el = document.getElementById(id);
       if (el) el.disabled = false;
-    });
-    // Re-enable selects in the results table (project and schedule selectors)
-    document.querySelectorAll('#resultsTable select').forEach(sel => {
-      sel.disabled = false;
     });
     // Re-enable any DTR delete buttons
     document.querySelectorAll('.dtr-del-btn').forEach(btn => {
@@ -10215,6 +10260,9 @@ document.addEventListener('DOMContentLoaded', () => {
     document.querySelectorAll('#manualDtrModal input, #manualDtrModal button, #manualDtrModal select').forEach(el => {
       el.disabled = false;
     });
+    document.querySelectorAll('#dtrPunchModal input, #dtrPunchModal button, #dtrPunchModal select').forEach(el => {
+      el.disabled = false;
+    });
     // Re-enable dashboard date range and action buttons
     const ws = document.getElementById('weekStart');
     const we = document.getElementById('weekEnd');
@@ -10222,6 +10270,14 @@ document.addEventListener('DOMContentLoaded', () => {
     if (ws) ws.disabled = false;
     if (we) we.disabled = false;
     if (genBtn) genBtn.disabled = false;
+    // Re-enable editing buttons in payroll-related tabs
+    ['applyLoanTrackerBtn','recalcLoanTrackerBtn','copyOtherDeductionsBtn','restoreOtherDeductionsBtn'].forEach(id => {
+      const el = document.getElementById(id);
+      if (el) el.disabled = false;
+    });
+    document.querySelectorAll('#additionalIncomeTable button, #otherDeductionsTable button, #adjustmentHoursTable button').forEach(btn => {
+      btn.disabled = false;
+    });
     // Restore interactivity for the payroll tab when unlocked
     try { setPayrollLockedUI(false); } catch (err) { /* no-op if helper is unavailable */ }
   }
@@ -10316,7 +10372,7 @@ document.addEventListener('DOMContentLoaded', () => {
     try {
       await Promise.resolve(lockCurrentPeriod());
     } catch (err) {
-      console.warn('Lock & Snapshot failed', err);
+      console.warn('Finalize & Snapshot failed', err);
     }
   });
 
@@ -10826,8 +10882,10 @@ document.addEventListener('DOMContentLoaded', () => {
         if (ws && we) return [ws,we];
       }catch(e){}
       try{
-        const ls_ws = localStorage.getItem('payroll_week_start');
-        const ls_we = localStorage.getItem('payroll_week_end');
+        const wsKey = (typeof LS_WEEKSTART !== 'undefined') ? LS_WEEKSTART : 'ui_payroll_week_start_local';
+        const weKey = (typeof LS_WEEKEND !== 'undefined') ? LS_WEEKEND : 'ui_payroll_week_end_local';
+        const ls_ws = localStorage.getItem(wsKey);
+        const ls_we = localStorage.getItem(weKey);
         if (ls_ws && ls_we) return [String(ls_ws).replace(/\"/g,''), String(ls_we).replace(/\"/g,'')];
       }catch(e){}
       try{
@@ -14556,8 +14614,10 @@ let __from = '', __to = '';
 try {
   const fEl = document.getElementById('weekStart');
   const tEl = document.getElementById('weekEnd');
-  __from = (fEl && fEl.value) ? fEl.value : (localStorage.getItem('payroll_week_start') || '');
-  __to   = (tEl && tEl.value) ? tEl.value : (localStorage.getItem('payroll_week_end')   || '');
+  const wsKey = (typeof LS_WEEKSTART !== 'undefined') ? LS_WEEKSTART : 'ui_payroll_week_start_local';
+  const weKey = (typeof LS_WEEKEND !== 'undefined') ? LS_WEEKEND : 'ui_payroll_week_end_local';
+  __from = (fEl && fEl.value) ? fEl.value : (localStorage.getItem(wsKey) || '');
+  __to   = (tEl && tEl.value) ? tEl.value : (localStorage.getItem(weKey)   || '');
 } catch(_) {}
 function __inRange(d){
   if (!d) return false;
@@ -18212,7 +18272,7 @@ function updateWeekInputs(snap) {
         const rangeText = typeof window.formatDateRange === 'function'
           ? window.formatDateRange(item.startDate, item.endDate)
           : [item.startDate || '', item.endDate || ''].filter(Boolean).join(' - ');
-        const lockedSuffix = item.locked ? ' (locked)' : '';
+        const lockedSuffix = (item.locked || item.finalized) ? ' (finalized)' : '';
         const label = `${rangeText}${lockedSuffix}`.trim();
         opt.textContent = label;
         selectEl.appendChild(opt);
