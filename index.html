@@ -2302,6 +2302,7 @@ window.addEventListener('load', dashReports);
           <select id="activePayrollSelect" class="date-input activeWeekSelect" style="min-width:260px;"></select>
           <button id="newPayrollPeriod" type="button" class="date-input">New period</button>
           <button id="lockSnapshotBtn" type="button" class="date-input">Finalize &amp; Snapshot</button>
+          <button id="voidPayRunBtn" type="button" class="date-input" disabled>Void Pay Run</button>
           <span id="dashLockStatus" style="display:none;font-size:12px;color:#111827;font-weight:600;"></span>
         </div>
         <!-- New Period Modal (pre-rendered for instant open) -->
@@ -2321,9 +2322,21 @@ window.addEventListener('load', dashReports);
           @keyframes npSpin{to{transform:rotate(360deg)}}
           #newPeriodModal .error{color:#b91c1c;font-size:12px;display:none;margin-top:8px}
           #historyTable tbody tr{cursor:pointer;}
+          #voidPayRunModal{display:none;position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:2001;align-items:center;justify-content:center}
+          #voidPayRunModal .card{background:#fff;padding:18px;border-radius:12px;box-shadow:0 12px 34px rgba(0,0,0,.22);width:520px;max-width:96vw;font-family:inherit;box-sizing:border-box;border:1px solid #e5e7eb}
+          #voidPayRunModal h3{margin:0 0 10px 0;font-size:18px}
+          #voidPayRunModal label{display:block;font-size:13px;color:#374151;margin-top:8px}
+          #voidPayRunModal textarea{width:100%;min-height:90px;margin-top:6px;padding:8px;border:1px solid #D1D5DB;border-radius:8px;box-sizing:border-box;resize:vertical;font-family:inherit}
+          #voidPayRunModal .actions{margin-top:14px;display:flex;gap:8px;justify-content:flex-end}
+          #voidPayRunModal .error{color:#b91c1c;font-size:12px;display:none;margin-top:6px}
+          .status-tag{display:inline-flex;align-items:center;padding:2px 8px;border-radius:999px;font-size:11px;font-weight:600}
+          .status-finalized{background:#dcfce7;color:#166534}
+          .status-voided{background:#fee2e2;color:#b91c1c}
+          .status-active{background:#e2e8f0;color:#334155}
           @media (max-width: 520px){
             #newPeriodModal .card{width:94vw}
             #newPeriodModal .row > div{flex-basis:100%}
+            #voidPayRunModal .card{width:94vw}
           }
         </style>
         <div id="newPeriodModal">
@@ -2346,6 +2359,20 @@ window.addEventListener('load', dashReports);
               <div class="status" id="newPeriodStatus"><span class="spinner" id="newPeriodSpin"></span><span>Creating snapshot…</span></div>
               <button id="cancelNewPeriod" type="button">Cancel</button>
               <button id="saveNewPeriod" type="button" class="primary">Create</button>
+            </div>
+          </div>
+        </div>
+        <div id="voidPayRunModal">
+          <div class="card">
+            <h3>Void Pay Run</h3>
+            <p style="margin:0;font-size:12px;color:#6b7280;">This will mark the finalized run as voided for audit history. You must provide a reason.</p>
+            <label for="voidReasonInput">Void reason (required)
+              <textarea id="voidReasonInput" placeholder="Enter void reason..."></textarea>
+            </label>
+            <div class="error" id="voidReasonError">Please enter a void reason.</div>
+            <div class="actions">
+              <button id="cancelVoidPayRun" type="button">Cancel</button>
+              <button id="confirmVoidPayRun" type="button" class="primary" disabled>Confirm Void</button>
             </div>
           </div>
         </div>
@@ -2383,6 +2410,7 @@ window.addEventListener('load', dashReports);
          <th>Start</th>
          <th>End</th>
          <th>Finalized At</th>
+         <th>Status</th>
          <th>Net Pay</th>
          <th>Actions</th>
        </tr>
@@ -9000,12 +9028,16 @@ document.addEventListener('DOMContentLoaded', function(){
     const we = document.getElementById('weekEnd');
     const startDate = ws && ws.value ? ws.value : '';
     const endDate = we && we.value ? we.value : '';
+    const snapMeta = (typeof window !== 'undefined' && window.__snapshotMeta) ? window.__snapshotMeta : null;
+    const isVoided = !!(snapMeta && (typeof window.isSnapshotVoided === 'function' ? window.isSnapshotVoided(snapMeta) : snapMeta.status === 'voided'));
+    const voidedLabel = isVoided ? '<div class="report-voided">VOIDED</div>' : '';
     const doc = '<html><head><meta charset="utf-8"><title>Payroll Report</title>' +
-      '<style>@page{size:letter landscape;margin:10mm} html,body{-webkit-print-color-adjust:exact;print-color-adjust:exact;width:11in;height:8.5in;margin:0} body{font-family:Arial,Helvetica,sans-serif;margin:0;} .report-header{margin:0 0 8px} .company-name{font-size:14px;font-weight:700} .report-title{font-size:12px;font-weight:600;margin-top:2px} .report-period{font-size:10px;margin-top:2px} table{border-collapse:collapse;width:100%;table-layout:fixed} thead{display:table-header-group} tfoot{display:table-footer-group} th,td{border:1pt solid #000!important;border-style:solid!important;padding:4px;font-size:11px} table,th,td{border-color:#000!important;border-style:solid!important} th{background:#f1f5f9} td.num{text-align:right} th:nth-child(1),td:nth-child(1),th:nth-child(2),td:nth-child(2){text-align:left} tfoot td{font-weight:700;background:#fff7ed;border-top:2pt solid #000!important} #payrollTable{page-break-inside:auto} #payrollTable tr{page-break-inside:avoid;break-inside:avoid-page} #payrollTable th, #payrollTable td { white-space: nowrap !important; page-break-inside: avoid; } #payrollTable th:nth-child(1), #payrollTable td:nth-child(1) { width:30px; min-width:30px; } #payrollTable th:nth-child(2), #payrollTable td:nth-child(2) { width:150px; min-width:150px; } #payrollTable th:nth-child(3), #payrollTable td:nth-child(3) { width:60px; min-width:60px; } #payrollTable th:nth-child(4), #payrollTable td:nth-child(4) { width:60px; min-width:60px; } #payrollTable th:nth-child(5), #payrollTable td:nth-child(5) { width:60px; min-width:60px; } #payrollTable th:nth-child(6), #payrollTable td:nth-child(6) { width:60px; min-width:60px; } #payrollTable th:nth-child(7), #payrollTable td:nth-child(7) { width:60px; min-width:60px; } #payrollTable th:nth-child(8), #payrollTable td:nth-child(8) { width:60px; min-width:60px; } #payrollTable th:nth-child(9), #payrollTable td:nth-child(9) { width:60px; min-width:60px; } #payrollTable th:nth-child(10), #payrollTable td:nth-child(10) { width:60px; min-width:60px; } #payrollTable th:nth-child(11), #payrollTable td:nth-child(11) { width:60px; min-width:60px; } #payrollTable th:nth-child(12), #payrollTable td:nth-child(12) { width:60px; min-width:60px; } #payrollTable th:nth-child(13), #payrollTable td:nth-child(13) { width:60px; min-width:60px; } #payrollTable th:nth-child(14), #payrollTable td:nth-child(14) { width:60px; min-width:60px; } #payrollTable th:nth-child(15), #payrollTable td:nth-child(15) { width:60px; min-width:60px; } #payrollTable th:nth-child(16), #payrollTable td:nth-child(16) { width:60px; min-width:60px; } #payrollTable th:nth-child(17), #payrollTable td:nth-child(17) { width:60px; min-width:60px; } #payrollTable th:nth-child(18), #payrollTable td:nth-child(18) { width:60px; min-width:60px; } #payrollTable th:nth-child(19), #payrollTable td:nth-child(19) { width:60px; min-width:60px; } #payrollTable th:nth-child(20), #payrollTable td:nth-child(20) { width:60px; min-width:60px; } #payrollTable th:nth-child(21), #payrollTable td:nth-child(21) { width:50px; min-width:50px; } #payrollTable th:nth-child(22), #payrollTable td:nth-child(22) { width:75px; min-width:75px; }</style>' +
+      '<style>@page{size:letter landscape;margin:10mm} html,body{-webkit-print-color-adjust:exact;print-color-adjust:exact;width:11in;height:8.5in;margin:0} body{font-family:Arial,Helvetica,sans-serif;margin:0;} .report-header{margin:0 0 8px} .company-name{font-size:14px;font-weight:700} .report-title{font-size:12px;font-weight:600;margin-top:2px} .report-period{font-size:10px;margin-top:2px} .report-voided{display:inline-block;margin-top:4px;padding:2px 8px;border:2px solid #b91c1c;color:#b91c1c;font-weight:700;letter-spacing:1px;font-size:11px} table{border-collapse:collapse;width:100%;table-layout:fixed} thead{display:table-header-group} tfoot{display:table-footer-group} th,td{border:1pt solid #000!important;border-style:solid!important;padding:4px;font-size:11px} table,th,td{border-color:#000!important;border-style:solid!important} th{background:#f1f5f9} td.num{text-align:right} th:nth-child(1),td:nth-child(1),th:nth-child(2),td:nth-child(2){text-align:left} tfoot td{font-weight:700;background:#fff7ed;border-top:2pt solid #000!important} #payrollTable{page-break-inside:auto} #payrollTable tr{page-break-inside:avoid;break-inside:avoid-page} #payrollTable th, #payrollTable td { white-space: nowrap !important; page-break-inside: avoid; } #payrollTable th:nth-child(1), #payrollTable td:nth-child(1) { width:30px; min-width:30px; } #payrollTable th:nth-child(2), #payrollTable td:nth-child(2) { width:150px; min-width:150px; } #payrollTable th:nth-child(3), #payrollTable td:nth-child(3) { width:60px; min-width:60px; } #payrollTable th:nth-child(4), #payrollTable td:nth-child(4) { width:60px; min-width:60px; } #payrollTable th:nth-child(5), #payrollTable td:nth-child(5) { width:60px; min-width:60px; } #payrollTable th:nth-child(6), #payrollTable td:nth-child(6) { width:60px; min-width:60px; } #payrollTable th:nth-child(7), #payrollTable td:nth-child(7) { width:60px; min-width:60px; } #payrollTable th:nth-child(8), #payrollTable td:nth-child(8) { width:60px; min-width:60px; } #payrollTable th:nth-child(9), #payrollTable td:nth-child(9) { width:60px; min-width:60px; } #payrollTable th:nth-child(10), #payrollTable td:nth-child(10) { width:60px; min-width:60px; } #payrollTable th:nth-child(11), #payrollTable td:nth-child(11) { width:60px; min-width:60px; } #payrollTable th:nth-child(12), #payrollTable td:nth-child(12) { width:60px; min-width:60px; } #payrollTable th:nth-child(13), #payrollTable td:nth-child(13) { width:60px; min-width:60px; } #payrollTable th:nth-child(14), #payrollTable td:nth-child(14) { width:60px; min-width:60px; } #payrollTable th:nth-child(15), #payrollTable td:nth-child(15) { width:60px; min-width:60px; } #payrollTable th:nth-child(16), #payrollTable td:nth-child(16) { width:60px; min-width:60px; } #payrollTable th:nth-child(17), #payrollTable td:nth-child(17) { width:60px; min-width:60px; } #payrollTable th:nth-child(18), #payrollTable td:nth-child(18) { width:60px; min-width:60px; } #payrollTable th:nth-child(19), #payrollTable td:nth-child(19) { width:60px; min-width:60px; } #payrollTable th:nth-child(20), #payrollTable td:nth-child(20) { width:60px; min-width:60px; } #payrollTable th:nth-child(21), #payrollTable td:nth-child(21) { width:50px; min-width:50px; } #payrollTable th:nth-child(22), #payrollTable td:nth-child(22) { width:75px; min-width:75px; }</style>' +
       '</head><body>' +
       '<div id="printWrap">' +
       '<div class="report-header">' +
       '<div class="company-name">Edifice Group Corp.</div>' +
+      voidedLabel +
       '<div class="report-title">PAYROLL \u2013 COMPRESSED WORK WEEK</div>' +
       (startDate && endDate ? '<div class="report-period">Payroll Period: ' + startDate + ' to ' + endDate + '</div>' : '') +
       '</div>' +
@@ -9411,12 +9443,17 @@ document.addEventListener('DOMContentLoaded', () => {
   const dashEnd = document.getElementById('weekEnd');
   const dashGenerateBtn = document.getElementById('dashGenerate');
   const dashLockButton = document.getElementById('lockSnapshotBtn');
-  const dashUnlockButton = document.getElementById('unlockPeriodBtn');
+  const dashVoidButton = document.getElementById('voidPayRunBtn');
   const dashLockStatus = document.getElementById('dashLockStatus');
   const historyTableBody = document.querySelector('#historyTable tbody');
   const snapshotView = document.getElementById('snapshotView');
   // Reference to the Active Payrolls table body
   const activeTableBody = document.querySelector('#activePayrollTable tbody');
+  const voidModal = document.getElementById('voidPayRunModal');
+  const voidReasonInput = document.getElementById('voidReasonInput');
+  const voidReasonError = document.getElementById('voidReasonError');
+  const voidCancelBtn = document.getElementById('cancelVoidPayRun');
+  const voidConfirmBtn = document.getElementById('confirmVoidPayRun');
 
   const PAYROLL_LOCKS_KEY = 'payroll_lock_state';
 
@@ -9451,6 +9488,50 @@ document.addEventListener('DOMContentLoaded', () => {
     return `${start || ''}__${end || ''}`;
   }
 
+  function getSnapshotStatus(snap) {
+    if (!snap || typeof snap !== 'object') return 'draft';
+    if (snap.status) return snap.status;
+    if (snap.voidedAt || snap.voidedBy || snap.voidReason) return 'voided';
+    if (snap.locked || snap.finalized) return 'finalized';
+    return 'draft';
+  }
+
+  function isSnapshotVoided(snap) {
+    return getSnapshotStatus(snap) === 'voided';
+  }
+
+  function snapshotTimestamp(snap) {
+    const stamp = snap?.finalizedAt || snap?.lockedAt || snap?.createdAt || '';
+    const parsed = stamp ? new Date(stamp).getTime() : 0;
+    return Number.isFinite(parsed) ? parsed : 0;
+  }
+
+  function findLatestSnapshotForPeriod(start, end, options = {}) {
+    if (!start || !end || !Array.isArray(payrollHistory)) return null;
+    const includeVoided = !!options.includeVoided;
+    const onlyFinalized = !!options.onlyFinalized;
+    const onlyUnlocked = !!options.onlyUnlocked;
+    const matches = payrollHistory.filter(entry => {
+      if (!entry || entry.startDate !== start || entry.endDate !== end) return false;
+      const status = getSnapshotStatus(entry);
+      if (!includeVoided && status === 'voided') return false;
+      if (onlyFinalized && !(entry.locked || entry.finalized)) return false;
+      if (onlyUnlocked && (entry.locked || entry.finalized)) return false;
+      return true;
+    });
+    if (!matches.length) return null;
+    matches.sort((a, b) => {
+      const diff = snapshotTimestamp(b) - snapshotTimestamp(a);
+      if (diff) return diff;
+      return payrollHistory.indexOf(b) - payrollHistory.indexOf(a);
+    });
+    return matches[0] || null;
+  }
+
+  function findLatestFinalizedSnapshot(start, end) {
+    return findLatestSnapshotForPeriod(start, end, { onlyFinalized: true, includeVoided: false });
+  }
+
   function getCurrentPeriodRange() {
     return {
       start: dashStart && dashStart.value ? dashStart.value : '',
@@ -9477,8 +9558,7 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   function findHistorySnapshot(start, end) {
-    if (!start || !end || !Array.isArray(payrollHistory)) return null;
-    return payrollHistory.find(entry => entry && entry.startDate === start && entry.endDate === end) || null;
+    return findLatestFinalizedSnapshot(start, end);
   }
 
   function setSnapshotOverride(snapshot) {
@@ -9490,11 +9570,13 @@ document.addEventListener('DOMContentLoaded', () => {
     };
     try { window.__snapshotPayrollOverride = payload; }
     catch (err) { window.__snapshotPayrollOverride = payload; }
+    try { window.__snapshotMeta = snapshot; } catch (err) { window.__snapshotMeta = snapshot; }
   }
 
   function clearSnapshotOverride() {
     try { delete window.__snapshotPayrollOverride; }
     catch (err) { window.__snapshotPayrollOverride = undefined; }
+    try { delete window.__snapshotMeta; } catch (err) { window.__snapshotMeta = undefined; }
   }
 
   function formatSnapshotNumber(value, options = {}) {
@@ -9702,7 +9784,14 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function syncHistoryLockState(start, end, locked, meta) {
     if (!Array.isArray(payrollHistory) || !start || !end) return;
-    let snap = payrollHistory.find(entry => entry && entry.startDate === start && entry.endDate === end);
+    let snap = null;
+    if (meta && Number.isFinite(meta.targetIndex)) {
+      snap = payrollHistory[meta.targetIndex];
+    }
+    if (!snap) {
+      snap = findLatestSnapshotForPeriod(start, end, { includeVoided: true }) ||
+        payrollHistory.find(entry => entry && entry.startDate === start && entry.endDate === end);
+    }
     if (!snap && locked) {
       snap = { startDate: start, endDate: end };
       payrollHistory.push(snap);
@@ -9716,11 +9805,13 @@ document.addEventListener('DOMContentLoaded', () => {
       snap.finalizedAt = meta && meta.finalizedAt ? meta.finalizedAt : (meta && meta.lockedAt ? meta.lockedAt : new Date().toISOString());
       snap.finalizedBy = meta && meta.finalizedBy ? meta.finalizedBy : 'admin';
       snap.finalizeNote = meta && meta.finalizeNote ? meta.finalizeNote : '';
+      snap.status = 'finalized';
     } else {
       snap.finalized = false;
       snap.finalizedAt = '';
       snap.finalizedBy = '';
       snap.finalizeNote = '';
+      if (snap.status !== 'voided') snap.status = 'draft';
     }
     if (locked) {
       const snapMeta = meta && meta.snapshot && typeof meta.snapshot === 'object' ? meta.snapshot : null;
@@ -9766,6 +9857,17 @@ document.addEventListener('DOMContentLoaded', () => {
     try { window.payrollLocks = payrollLocks; } catch (err) {}
   }
 
+  function clearPeriodLockEntry(start, end) {
+    if (!start || !end) return;
+    if (!payrollLocks || typeof payrollLocks !== 'object') payrollLocks = { __meta: {} };
+    const key = periodKey(start, end);
+    const hadEntry = !!(payrollLocks && payrollLocks[key]);
+    if (!hadEntry) return;
+    delete payrollLocks[key];
+    persistLocks(true);
+    try { window.payrollLocks = payrollLocks; } catch (err) {}
+  }
+
   function updateLockStatusDisplay(entry) {
     if (!dashLockStatus) return;
     if (!entry || !entry.locked) {
@@ -9795,15 +9897,25 @@ document.addEventListener('DOMContentLoaded', () => {
       updateLockStatusDisplay(null);
       clearSnapshotOverride();
       if (dashLockButton) dashLockButton.disabled = true;
-      if (dashUnlockButton) dashUnlockButton.disabled = true;
+      if (dashVoidButton) dashVoidButton.disabled = true;
       return false;
     }
     const entry = getLockEntry(start, end);
-    const locked = !!(entry && entry.locked);
+    let locked = !!(entry && entry.locked);
     if (locked) {
       disablePayrollInputs();
       updateLockStatusDisplay(entry);
       const snap = findHistorySnapshot(start, end);
+      if (!snap) {
+        clearPeriodLockEntry(start, end);
+        locked = false;
+        clearSnapshotOverride();
+        enablePayrollInputs();
+        updateLockStatusDisplay(null);
+        if (dashLockButton) dashLockButton.disabled = false;
+        if (dashVoidButton) dashVoidButton.disabled = true;
+        return false;
+      }
       if (snap) {
         setSnapshotOverride(snap);
         applySnapshotToPayrollTable(snap);
@@ -9811,26 +9923,96 @@ document.addEventListener('DOMContentLoaded', () => {
         clearSnapshotOverride();
       }
       if (dashLockButton) dashLockButton.disabled = true;
-      if (dashUnlockButton) dashUnlockButton.disabled = false;
+      if (dashVoidButton) dashVoidButton.disabled = !(snap && !isSnapshotVoided(snap));
     } else {
       enablePayrollInputs();
       updateLockStatusDisplay(null);
-      clearSnapshotOverride();
+      const explicitSnap = (typeof window !== 'undefined' && window.__snapshotMeta) ? window.__snapshotMeta : null;
+      const keepSnapshot = !!(explicitSnap
+        && explicitSnap.startDate === start
+        && explicitSnap.endDate === end
+        && isSnapshotVoided(explicitSnap));
+      if (!keepSnapshot) {
+        clearSnapshotOverride();
+      }
       const table = document.getElementById('payrollTable');
       if (table) {
-        const snapshotRows = table.querySelectorAll('tbody tr[data-snapshot-row="true"]');
-        if (snapshotRows.length) {
-          snapshotRows.forEach(row => row.remove());
-          try {
-            if (typeof scheduleTotals === 'function') scheduleTotals();
-            else if (typeof updatePayrollGrandTotals === 'function') updatePayrollGrandTotals();
-          } catch (err) {}
+        if (!keepSnapshot) {
+          const snapshotRows = table.querySelectorAll('tbody tr[data-snapshot-row="true"]');
+          if (snapshotRows.length) {
+            snapshotRows.forEach(row => row.remove());
+            try {
+              if (typeof scheduleTotals === 'function') scheduleTotals();
+              else if (typeof updatePayrollGrandTotals === 'function') updatePayrollGrandTotals();
+            } catch (err) {}
+          }
         }
       }
       if (dashLockButton) dashLockButton.disabled = false;
-      if (dashUnlockButton) dashUnlockButton.disabled = true;
+      if (dashVoidButton) dashVoidButton.disabled = true;
     }
     return locked;
+  }
+
+  let pendingVoidIndex = null;
+
+  function setVoidModalState(open) {
+    if (!voidModal) return;
+    voidModal.style.display = open ? 'flex' : 'none';
+    if (open) {
+      try { voidModal.setAttribute('tabindex', '-1'); voidModal.focus(); } catch (err) {}
+    }
+  }
+
+  function updateVoidConfirmState() {
+    if (!voidConfirmBtn || !voidReasonInput) return;
+    const reason = (voidReasonInput.value || '').trim();
+    const ok = reason.length > 0;
+    voidConfirmBtn.disabled = !ok;
+    if (voidReasonError) voidReasonError.style.display = ok ? 'none' : 'block';
+  }
+
+  function openVoidModal(index = null) {
+    pendingVoidIndex = Number.isFinite(index) ? index : null;
+    if (voidReasonInput) voidReasonInput.value = '';
+    if (voidReasonError) voidReasonError.style.display = 'none';
+    if (voidConfirmBtn) voidConfirmBtn.disabled = true;
+    setVoidModalState(true);
+    setTimeout(() => { try { voidReasonInput && voidReasonInput.focus(); } catch (err) {} }, 0);
+  }
+
+  function closeVoidModal() {
+    pendingVoidIndex = null;
+    setVoidModalState(false);
+  }
+
+  function resolveSnapshotToVoid() {
+    if (Number.isFinite(pendingVoidIndex)) {
+      const snap = payrollHistory[pendingVoidIndex];
+      return snap ? { snap, index: pendingVoidIndex } : null;
+    }
+    const { start, end } = getCurrentPeriodRange();
+    const snap = findLatestFinalizedSnapshot(start, end);
+    if (!snap) return null;
+    return { snap, index: payrollHistory.indexOf(snap) };
+  }
+
+  function voidSnapshot(snap, reason) {
+    if (!snap) return;
+    const now = new Date().toISOString();
+    snap.status = 'voided';
+    snap.voidedAt = now;
+    snap.voidedBy = snap.voidedBy || 'admin';
+    snap.voidReason = reason;
+    snap.locked = true;
+    snap.finalized = true;
+    clearPeriodLockEntry(snap.startDate, snap.endDate);
+    saveHistory();
+    if (typeof renderHistory === 'function') renderHistory();
+    if (typeof renderActivePayrolls === 'function') renderActivePayrolls();
+    try { if (typeof window.populatePayrollDropdowns === 'function') window.populatePayrollDropdowns(); } catch (err) {}
+    try { if (typeof window.applyPayrollLockUI === 'function') window.applyPayrollLockUI(); } catch (err) {}
+    try { if (typeof window.checkAndToggleEditState === 'function') window.checkAndToggleEditState(); } catch (err) {}
   }
 
   async function lockCurrentPeriod() {
@@ -9876,9 +10058,9 @@ document.addEventListener('DOMContentLoaded', () => {
       hashHex = '';
     }
     const lockedAt = new Date().toISOString();
-    let existing = findHistorySnapshot(start, end);
+    let existing = findLatestSnapshotForPeriod(start, end, { onlyUnlocked: true, includeVoided: false });
     if (!existing) {
-      existing = { startDate: start, endDate: end };
+      existing = { startDate: start, endDate: end, createdAt: lockedAt };
       payrollHistory.push(existing);
     }
     existing.startDate = start;
@@ -9895,6 +10077,7 @@ document.addEventListener('DOMContentLoaded', () => {
     existing.finalizedAt = lockedAt;
     existing.finalizedBy = existing.finalizedBy || 'admin';
     existing.finalizeNote = existing.finalizeNote || '';
+    existing.status = 'finalized';
     saveHistory();
     if (typeof renderHistory === 'function') renderHistory();
     if (typeof renderActivePayrolls === 'function') renderActivePayrolls();
@@ -9909,6 +10092,7 @@ document.addEventListener('DOMContentLoaded', () => {
       finalizeNote: existing.finalizeNote || '',
       totals: snapshot.totals,
       hash: hashHex,
+      targetIndex: payrollHistory.indexOf(existing),
       snapshot: {
         rows: snapshot.rows,
         totals: snapshot.totals,
@@ -9919,31 +10103,6 @@ document.addEventListener('DOMContentLoaded', () => {
     });
     applySnapshotToPayrollTable(existing);
     applyLockUI();
-  }
-
-  async function unlockCurrentPeriod() {
-    const { start, end } = getCurrentPeriodRange();
-    if (!start || !end) {
-      applyLockUI();
-      return;
-    }
-    if (!getLockEntry(start, end)) {
-      applyLockUI();
-      return;
-    }
-    setPeriodLocked(start, end, false);
-    enablePayrollInputs();
-    applyLockUI();
-    try {
-      if (typeof calculateAll === 'function') {
-        await Promise.resolve(calculateAll());
-      }
-    } catch (err) {}
-    try {
-      if (typeof updatePayrollGrandTotals === 'function') {
-        updatePayrollGrandTotals();
-      }
-    } catch (err) {}
   }
 
   if (dashStart) {
@@ -9958,7 +10117,9 @@ document.addEventListener('DOMContentLoaded', () => {
     window.setPayrollLock = setPeriodLocked;
     window.applyPayrollLockUI = applyLockUI;
     window.lockCurrentPeriod = lockCurrentPeriod;
-    window.unlockCurrentPeriod = unlockCurrentPeriod;
+    window.getSnapshotStatus = getSnapshotStatus;
+    window.isSnapshotVoided = isSnapshotVoided;
+    window.findLatestFinalizedSnapshot = findLatestFinalizedSnapshot;
   } catch (err) {}
 
   /**
@@ -10044,10 +10205,19 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         return String(netSource);
       })();
+      const status = getSnapshotStatus(snap);
+      const statusTag = status === 'voided'
+        ? '<span class="status-tag status-voided">Voided</span>'
+        : (snap.locked || snap.finalized)
+          ? '<span class="status-tag status-finalized">Finalized</span>'
+          : '<span class="status-tag status-active">Active</span>';
       // Build row HTML; note small hash display for brevity
       // Build the actions column depending on lock status.
       const actions = [];
-      if (snap.locked) {
+      if (status === 'finalized') {
+        actions.push(`<button type="button" class="voidSnapshot" data-index="${index}">Void Pay Run</button>`);
+      }
+      if (snap.locked || status === 'voided') {
         // For locked snapshots, show a disabled delete button to indicate it cannot be removed
         actions.push(`<button type="button" class="deleteSnapshot" data-index="${index}" disabled>Delete</button>`);
       } else {
@@ -10059,6 +10229,7 @@ document.addEventListener('DOMContentLoaded', () => {
         <td>${startText}</td>
         <td>${endText}</td>
         <td>${finalizedStamp ? new Date(finalizedStamp).toLocaleString() : ''}</td>
+        <td>${statusTag}</td>
         <td>${netText}</td>
         <td>${actions.join(' ')}</td>
       `;
@@ -10504,7 +10675,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // already exists with this start/end, alert the user and skip creation. This avoids
     // doubleâ€‘entry payroll for the same period.
     const exists = Array.isArray(payrollHistory) && payrollHistory.some(snap =>
-      snap && snap.startDate === start && snap.endDate === end);
+      snap && snap.startDate === start && snap.endDate === end && getSnapshotStatus(snap) !== 'voided');
     if (exists) {
       alert('A payroll snapshot for this date range already exists. Please choose a different range or delete the existing entry.');
       return;
@@ -10527,7 +10698,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const hashArray = Array.from(new Uint8Array(hashBuffer));
     const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
     const now = new Date().toISOString();
-    payrollHistory.push({ startDate: start, endDate: end, rows: snap.rows, totals: snap.totals, hash: hashHex, lockedAt: now, locked: false });
+    payrollHistory.push({ startDate: start, endDate: end, rows: snap.rows, totals: snap.totals, hash: hashHex, lockedAt: now, locked: false, status: 'draft', createdAt: now });
     saveHistory();
     // Update both history and active payroll tables after creating a new snapshot
     renderHistory();
@@ -10542,13 +10713,43 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
 
-  dashUnlockButton && dashUnlockButton.addEventListener('click', async () => {
-    try {
-      await Promise.resolve(unlockCurrentPeriod());
-    } catch (err) {
-      console.warn('Unlock period failed', err);
-    }
+  dashVoidButton && dashVoidButton.addEventListener('click', () => {
+    openVoidModal(null);
   });
+
+  if (voidModal && !voidModal.__bound) {
+    voidModal.__bound = true;
+    voidModal.addEventListener('click', (e) => {
+      if (e.target === voidModal) closeVoidModal();
+    });
+    voidCancelBtn && voidCancelBtn.addEventListener('click', () => closeVoidModal());
+    voidReasonInput && voidReasonInput.addEventListener('input', updateVoidConfirmState);
+    voidConfirmBtn && voidConfirmBtn.addEventListener('click', () => {
+      const reason = (voidReasonInput && voidReasonInput.value ? voidReasonInput.value.trim() : '');
+      if (!reason) {
+        updateVoidConfirmState();
+        return;
+      }
+      const resolved = resolveSnapshotToVoid();
+      if (!resolved || !resolved.snap) {
+        alert('No finalized snapshot found to void for this period.');
+        closeVoidModal();
+        return;
+      }
+      if (isSnapshotVoided(resolved.snap)) {
+        closeVoidModal();
+        return;
+      }
+      voidSnapshot(resolved.snap, reason);
+      closeVoidModal();
+    });
+    voidModal.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Escape') {
+        ev.preventDefault();
+        closeVoidModal();
+      }
+    });
+  }
 
   // Helper: build snapshot storage key matching lockPeriod persistence
   function composeSnapshotStorageKey(segment, startDate, endDate) {
@@ -10687,8 +10888,9 @@ document.addEventListener('DOMContentLoaded', () => {
     });
     const range = formatDateRangeInline(snap?.startDate, snap?.endDate);
     const subtitle = range ? `<div class="report-subtitle">${escapeHtml(range)}</div>` : '';
+    const voidedBadge = isSnapshotVoided(snap) ? '<div class="report-voided">VOIDED</div>' : '';
     const table = buildTableHtml(headers, rows, { numericCols, footerRow: footer });
-    return `<section class="report-block"><h2>Payroll Report</h2>${subtitle}${table}</section>`;
+    return `<section class="report-block"><h2>Payroll Report</h2>${voidedBadge}${subtitle}${table}</section>`;
   }
 
   function buildDtrSectionFromSnapshot(data, startDate, endDate) {
@@ -10774,6 +10976,7 @@ document.addEventListener('DOMContentLoaded', () => {
       .report-subtitle{font-size:12px;color:#475569;margin-bottom:10px;}
       .report-block{margin-bottom:32px;page-break-inside:avoid;}
       .report-block:last-of-type{margin-bottom:0;}
+      .report-voided{display:inline-block;margin:4px 0 8px 0;padding:4px 10px;border:2px solid #b91c1c;color:#b91c1c;font-weight:700;letter-spacing:1px}
       table{width:100%;border-collapse:collapse;font-size:11px;margin-top:8px;}
       th,td{border:0.6pt solid #1e293b;padding:4px 6px;vertical-align:middle;}
       th{background:#e2e8f0;text-align:left;}
@@ -10902,6 +11105,10 @@ document.addEventListener('DOMContentLoaded', () => {
         console.warn('Combined PDF export failed', err);
         alert('Unable to build the combined PDF for this snapshot.');
       }
+      return;
+    }
+    if (actionBtn.classList.contains('voidSnapshot')) {
+      openVoidModal(idx);
       return;
     }
     if (actionBtn.classList.contains('deleteSnapshot')) {
@@ -18475,7 +18682,13 @@ function updateWeekInputs(snap) {
     const history = Array.isArray(hist) ? hist : [];
     // Build list of items with their original indices; sort newest first by start date
     const items = history.map((s, i) => Object.assign({ i: i }, s)).sort((a, b) => {
-      return (b.startDate || '').localeCompare(a.startDate || '');
+      const startCompare = (b.startDate || '').localeCompare(a.startDate || '');
+      if (startCompare) return startCompare;
+      const aStamp = a.finalizedAt || a.lockedAt || a.createdAt || '';
+      const bStamp = b.finalizedAt || b.lockedAt || b.createdAt || '';
+      const aTime = aStamp ? new Date(aStamp).getTime() : 0;
+      const bTime = bStamp ? new Date(bStamp).getTime() : 0;
+      return bTime - aTime;
     });
     const globalSelect = document.getElementById('activePayrollSelect');
     const panelSelects = Array.from(document.querySelectorAll('.activeWeekSelect'));
@@ -18489,8 +18702,13 @@ function updateWeekInputs(snap) {
         const rangeText = typeof window.formatDateRange === 'function'
           ? window.formatDateRange(item.startDate, item.endDate)
           : [item.startDate || '', item.endDate || ''].filter(Boolean).join(' - ');
-        const lockedSuffix = (item.locked || item.finalized) ? ' (finalized)' : '';
-        const label = `${rangeText}${lockedSuffix}`.trim();
+        const status = (typeof window.getSnapshotStatus === 'function') ? window.getSnapshotStatus(item) : (item.status || '');
+        const statusSuffix = status === 'voided'
+          ? ' (voided)'
+          : (status === 'finalized' || item.locked || item.finalized)
+            ? ' (finalized)'
+            : '';
+        const label = `${rangeText}${statusSuffix}`.trim();
         opt.textContent = label;
         selectEl.appendChild(opt);
       });
@@ -18514,6 +18732,7 @@ function updateWeekInputs(snap) {
       updateWeekInputs(snap);
     }
   }
+  try { window.populatePayrollDropdowns = populateDropdowns; } catch (e) {}
 
   function onSelectChange(e) {
     const idx = parseInt(e.target.value, 10);
@@ -18535,7 +18754,11 @@ function updateWeekInputs(snap) {
     if (s && e && s > e) { const t = s; s = e; e = t; }
     // Prevent duplicates
     const hist = Array.isArray(window.payrollHistory) ? window.payrollHistory : loadHistory();
-    const exists = hist.some(x => x && x.startDate === s && x.endDate === e);
+    const exists = hist.some(x => {
+      if (!x || x.startDate !== s || x.endDate !== e) return false;
+      const status = (typeof window.getSnapshotStatus === 'function') ? window.getSnapshotStatus(x) : (x.status || '');
+      return status !== 'voided';
+    });
     if (exists) { alert('A payroll snapshot for this date range already exists.'); return; }
     if (typeof buildSnapshot !== 'function') { alert('buildSnapshot function not available.'); return; }
     const snap = await buildSnapshot(s, e);
@@ -18545,7 +18768,7 @@ function updateWeekInputs(snap) {
     const hashArray = Array.from(new Uint8Array(hashBuffer));
     const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
     const now = new Date().toISOString();
-    const newSnap = { startDate: s, endDate: e, rows: snap.rows, totals: snap.totals, hash: hashHex, lockedAt: now, locked: false };
+    const newSnap = { startDate: s, endDate: e, rows: snap.rows, totals: snap.totals, hash: hashHex, lockedAt: now, locked: false, status: 'draft', createdAt: now };
     if (Array.isArray(window.payrollHistory)) {
       window.payrollHistory.push(newSnap);
       if (typeof saveHistory === 'function') saveHistory();
@@ -20914,15 +21137,6 @@ document.addEventListener('DOMContentLoaded', async function () {
       console.warn('lockPeriod failed', err);
     }
   }
-  async function unlockPeriod(){
-    try {
-      if (typeof window.unlockCurrentPeriod === 'function') {
-        await Promise.resolve(window.unlockCurrentPeriod());
-      }
-    } catch (err) {
-      console.warn('unlockPeriod failed', err);
-    }
-  }
   const ALLOW_WHEN_LOCKED = new Set([
     'renderResults',          // Needed to display the DTR grid while locked
     'rebuildReports',         // Allows read-only report refreshes
@@ -20991,7 +21205,7 @@ document.addEventListener('DOMContentLoaded', async function () {
     try { var we = document.getElementById('weekEnd'); if (we && !we.__lockBind){ we.addEventListener('change', function(){ markPeriodChanged(); scheduleUiReeval(); }); we.__lockBind = true; } } catch(e){}
     try { var sel = document.getElementById('activePayrollSelect'); if (sel && !sel.__lockBind){ sel.addEventListener('change', function(){ markPeriodChanged(); scheduleUiReeval(); }); sel.__lockBind = true; } } catch(e){}
   });
-  try { window.lockPeriod = lockPeriod; window.unlockPeriod = unlockPeriod; } catch (err) {}
+  try { window.lockPeriod = lockPeriod; } catch (err) {}
 })();
 // Toggle Payroll table inputs read-only state based on lock
 function setPayrollLockedUI(locked){
