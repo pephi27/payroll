@@ -662,6 +662,29 @@ function safeStringify(v){
 #loanTrackerTable input[type="number"] { width: 110px; }
 #loanTrackerTable input[type="checkbox"] { transform: scale(1.15); }
 #loanTrackerControls { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 8px; }
+#loanTrackerControls .money-locked-control,
+#loanTrackerTable .money-locked-control,
+#deductionsTable .money-locked-control { opacity: 0.55; cursor: not-allowed; }
+#loanTrackerControls .money-locked-control { pointer-events: auto; }
+#deductionsTable .editable-deduction.money-locked-cell { cursor: not-allowed; }
+
+#moneyLockToast {
+  position: fixed;
+  bottom: 18px;
+  right: 18px;
+  background: rgba(17, 24, 39, 0.96);
+  color: #fff;
+  padding: 8px 12px;
+  font-size: 12px;
+  border-radius: 6px;
+  box-shadow: 0 6px 18px rgba(0,0,0,0.18);
+  opacity: 0;
+  transform: translateY(6px);
+  transition: opacity 0.2s ease, transform 0.2s ease;
+  z-index: 99999;
+  pointer-events: none;
+}
+#moneyLockToast.show { opacity: 1; transform: translateY(0); }
 
 /* Print orientation modal */
 #printOrientationModal {
@@ -6219,6 +6242,7 @@ function renderLoanTrackerTable(){
 
     tbody.appendChild(tr);
   });
+  try { setMoneyChangerLockedUI(isSelectedPeriodLocked()); } catch (_) {}
 }
 
 const loanTrackerRefresh = (() => {
@@ -6294,6 +6318,7 @@ function renderDeductionsTable(){
   syncPeriodScopedData();
   const dtbody = document.querySelector('#deductionsTable tbody');
   if (!dtbody) return;
+  const isLocked = (typeof isSelectedPeriodLocked === 'function') ? isSelectedPeriodLocked() : false;
   dtbody.innerHTML = '';
   getEmployeeList().forEach(emp => {
     const rH = Number(regHours[emp.id] ?? 0);
@@ -6352,7 +6377,7 @@ function renderDeductionsTable(){
       td.setAttribute('data-col', key);
       const raw = Object.prototype.hasOwnProperty.call(rowRaw, key) ? rowRaw[key] : 0;
       const effective = Object.prototype.hasOwnProperty.call(rowEffective, key) ? rowEffective[key] : 0;
-      if (DEDUCTION_EDITABLE_KEYS.has(key)) {
+      if (DEDUCTION_EDITABLE_KEYS.has(key) && !isLocked) {
         td.classList.add('editable-deduction');
         const input = document.createElement('input');
         input.type = 'number';
@@ -6376,6 +6401,7 @@ function renderDeductionsTable(){
   });
   applyDeductionColumnState();
   try { renderLoanTrackerTable(); } catch(_) {}
+  try { setMoneyChangerLockedUI(isLocked); } catch (_) {}
 }
 document.addEventListener('DOMContentLoaded', function(){
   try {
@@ -10175,6 +10201,97 @@ document.addEventListener('DOMContentLoaded', () => {
    * centralizes the logic so both global and per-row lock actions can reuse
    * it. Date range controls and Generate/Lock buttons are also disabled.
    */
+  const MONEY_LOCK_MESSAGE = 'This payroll period is finalized. Create an Adjustment in the current period to correct values.';
+  let moneyLockToastTimer = null;
+  function showMoneyLockToast() {
+    let toast = document.getElementById('moneyLockToast');
+    if (!toast) {
+      toast = document.createElement('div');
+      toast.id = 'moneyLockToast';
+      document.body.appendChild(toast);
+    }
+    toast.textContent = MONEY_LOCK_MESSAGE;
+    toast.classList.add('show');
+    if (moneyLockToastTimer) window.clearTimeout(moneyLockToastTimer);
+    moneyLockToastTimer = window.setTimeout(() => {
+      toast.classList.remove('show');
+    }, 2600);
+  }
+
+  function setMoneyChangerLockedUI(locked) {
+    const loanButtons = document.querySelectorAll('#loanTrackerControls button');
+    loanButtons.forEach((btn) => {
+      btn.setAttribute('aria-disabled', locked ? 'true' : 'false');
+      btn.classList.toggle('money-locked-control', locked);
+      btn.dataset.moneyLocked = locked ? 'true' : '';
+      if (locked) {
+        btn.tabIndex = -1;
+      } else {
+        btn.removeAttribute('tabindex');
+      }
+    });
+    const loanInputs = document.querySelectorAll('#loanTrackerTable input');
+    loanInputs.forEach((input) => {
+      if (input.type === 'checkbox') {
+        input.dataset.lockedChecked = String(!!input.checked);
+      } else {
+        input.readOnly = !!locked;
+      }
+      input.setAttribute('aria-disabled', locked ? 'true' : 'false');
+      input.classList.toggle('money-locked-control', locked);
+      input.dataset.moneyLocked = locked ? 'true' : '';
+      if (locked) {
+        input.tabIndex = -1;
+      } else {
+        input.removeAttribute('tabindex');
+      }
+    });
+    const deductionInputs = document.querySelectorAll('#deductionsTable input.deduction-input');
+    deductionInputs.forEach((input) => {
+      input.readOnly = !!locked;
+      input.setAttribute('aria-disabled', locked ? 'true' : 'false');
+      input.classList.toggle('money-locked-control', locked);
+      input.dataset.moneyLocked = locked ? 'true' : '';
+      if (locked) {
+        input.tabIndex = -1;
+      } else {
+        input.removeAttribute('tabindex');
+      }
+    });
+    document.querySelectorAll('#deductionsTable td.editable-deduction').forEach((cell) => {
+      cell.classList.toggle('money-locked-cell', locked);
+    });
+  }
+  window.setMoneyChangerLockedUI = setMoneyChangerLockedUI;
+
+  function shouldBlockMoneyChangerInteraction(target) {
+    if (!target || typeof target.closest !== 'function') return false;
+    if (!isSelectedPeriodLocked()) return false;
+    if (target.closest('#loanTrackerControls') || target.closest('#loanTrackerTable')) return true;
+    if (target.closest('#deductionsTable')) {
+      if (target.matches('input.deduction-input')) return true;
+      const cell = target.closest('td[data-col="valeWed"]');
+      if (cell) return true;
+    }
+    return false;
+  }
+
+  function handleMoneyChangerLockedEvent(event) {
+    const target = event && event.target;
+    if (!shouldBlockMoneyChangerInteraction(target)) return;
+    if (event.cancelable) event.preventDefault();
+    event.stopImmediatePropagation();
+    if (target && target.matches && target.matches('input[type="checkbox"]')) {
+      const lockedChecked = target.dataset.lockedChecked;
+      if (lockedChecked !== undefined) target.checked = lockedChecked === 'true';
+    }
+    showMoneyLockToast();
+  }
+
+  document.addEventListener('click', handleMoneyChangerLockedEvent, true);
+  document.addEventListener('change', handleMoneyChangerLockedEvent, true);
+  document.addEventListener('input', handleMoneyChangerLockedEvent, true);
+
   function disablePayrollInputs() {
     // Disable all editable fields in the payroll table
     document.querySelectorAll('#payrollTable input').forEach(inp => {
@@ -10224,6 +10341,8 @@ document.addEventListener('DOMContentLoaded', () => {
     });
     // Ensure the payroll tab reflects the locked state as well
     try { setPayrollLockedUI(true); } catch (err) { /* no-op if helper is unavailable */ }
+    try { setMoneyChangerLockedUI(true); } catch (err) { /* no-op if helper is unavailable */ }
+    try { if (typeof renderDeductionsTable === 'function') renderDeductionsTable(); } catch (err) { /* no-op */ }
   }
   // Expose helper globally so other scripts can disable editing
   window.disablePayrollInputs = disablePayrollInputs;
@@ -10283,6 +10402,8 @@ document.addEventListener('DOMContentLoaded', () => {
     });
     // Restore interactivity for the payroll tab when unlocked
     try { setPayrollLockedUI(false); } catch (err) { /* no-op if helper is unavailable */ }
+    try { setMoneyChangerLockedUI(false); } catch (err) { /* no-op if helper is unavailable */ }
+    try { if (typeof renderDeductionsTable === 'function') renderDeductionsTable(); } catch (err) { /* no-op */ }
   }
   // Expose helper globally so other scripts can enable editing
   window.enablePayrollInputs = enablePayrollInputs;
