@@ -13263,6 +13263,42 @@ rows += `<tr class="allowance">
       </div>
     </div>
     <div class="card">
+      <h3 style="margin:0 0 12px 0;">Supabase Auth Setup (Admin-created accounts)</h3>
+      <div class="settings-section" style="margin-bottom:12px;">
+        <h4 style="margin-bottom:6px;">A) Enable Email/Password Auth</h4>
+        <ol class="hint" style="margin:0;padding-left:18px;line-height:1.6;">
+          <li>Supabase Dashboard â†’ Authentication â†’ Providers (Email).</li>
+          <li>Ensure <strong>Email (password)</strong> is enabled.</li>
+          <li>Recommended for admin-created accounts: turn off <strong>Confirm email</strong>, or keep it on and mark users as confirmed when you create them.</li>
+        </ol>
+      </div>
+      <div class="settings-section" style="margin-bottom:12px;">
+        <h4 style="margin-bottom:6px;">B) Set Site URL + Redirect URLs</h4>
+        <ol class="hint" style="margin:0;padding-left:18px;line-height:1.6;">
+          <li>Authentication â†’ URL Configuration.</li>
+          <li>Set <strong>Site URL</strong> to your GitHub Pages base URL (e.g., https://yourname.github.io/yourrepo).</li>
+          <li>Add redirect URLs for password reset landing (e.g., https://yourname.github.io/yourrepo/#/reset or /reset.html).</li>
+        </ol>
+      </div>
+      <div class="settings-section" style="margin-bottom:12px;">
+        <h4 style="margin-bottom:6px;">C) SMTP for Auth Emails (recommended)</h4>
+        <ol class="hint" style="margin:0;padding-left:18px;line-height:1.6;">
+          <li>Authentication â†’ SMTP Settings.</li>
+          <li>Enable custom SMTP and add your provider details (Resend/Postmark/Gmail Workspace).</li>
+          <li>Without custom SMTP, deliverability and rate limits can be an issue.</li>
+        </ol>
+      </div>
+      <div class="settings-section">
+        <h4 style="margin-bottom:6px;">D) Create Accounts (Admin)</h4>
+        <ol class="hint" style="margin:0;padding-left:18px;line-height:1.6;">
+          <li>Authentication â†’ Users â†’ Add user.</li>
+          <li>Enter employee email + temporary password.</li>
+          <li>Mark <strong>Email confirmed</strong> if they should log in immediately.</li>
+          <li>Send the temp password and ask them to change it after first login.</li>
+        </ol>
+      </div>
+    </div>
+    <div class="card">
       <h3 style="margin:0 0 12px 0;">Government Contributions</h3>
       <div id="contributionsTab">
         <div class="contrib-hero">
