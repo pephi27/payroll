@@ -3196,7 +3196,7 @@ window.addEventListener('load', dashReports);
       <button type="button" id="printDeductionsBtn">Print</button>
      </div>
      <div class="section note">
-      SSS Loan, Pag-IBIG Loan, Account, and Wed Vale are managed in the Loan Tracker below and are <b>read-only</b> in this table. SSS and Cash Advance use <b>Total</b> + <b>Weekly</b> (with auto-stop when fully paid). Pag-IBIG loans use <b>Monthly deduction</b> only (per-payroll amount is computed using the selected divisor).
+      SSS Loan, Pag-IBIG Loan, and Account are managed in the Loan Tracker below and are <b>read-only</b> in this table. SSS and Cash Advance use <b>Total</b> + <b>Weekly</b> (with auto-stop when fully paid). Pag-IBIG loans use <b>Monthly deduction</b> only (per-payroll amount is computed using the selected divisor).
       If you use the Loan Tracker below, you can enter weekly deductions there and the system will auto-fill these fields for each payroll period. Other Deductions are managed in the Other Deductions tab and always stay non-negative. All values are saved
       for the active payroll period and will carry over automatically to newly created periods without altering any historical
       payroll data. Set a field to 0 to clear it for the current period.
@@ -3241,7 +3241,7 @@ window.addEventListener('load', dashReports);
        Track loan deductions per employee:
        <b>SSS Salary Loan</b> and <b>SSS Calamity Loan</b> use <b>Total</b> + <b>Monthly</b> (per-payroll is computed using the selected divisor; balance is tracked and auto-stops when fully paid).
        <b>Pag-IBIG Salary Loan</b> and <b>Pag-IBIG Calamity Loan</b> use <b>Monthly deduction</b> only (per-payroll is computed using the selected divisor).
-       <b>Cash Advance</b> and <b>Wed Cash Advance</b> use <b>Total</b> + <b>Weekly</b> (balance tracked).
+       <b>Cash Advance</b> uses <b>Total</b> + <b>Weekly</b> (balance tracked).
       </div>
       <div class="toolbar" id="loanTrackerControls">
        <button type="button" id="applyLoanTrackerBtn">Apply tracker to current period</button>
@@ -3273,10 +3273,6 @@ window.addEventListener('load', dashReports);
           <th>Cash Advance Total</th>
           <th>Cash Weekly</th>
           <th>Cash Balance</th>
-          <th>Active</th>
-          <th>Wed Cash Total</th>
-          <th>Wed Cash Weekly</th>
-          <th>Wed Cash Balance</th>
           <th>Active</th>
          </tr>
         </thead>
@@ -4158,7 +4154,7 @@ function loadPeriodScopedMap(lsKey){
 // and Pag-IBIG monthly deductions (no total/balance; per-payroll is computed via the divisor).
 const LOAN_TYPES_SSS = ['loanSSS_salary','loanSSS_calamity'];
 const LOAN_TYPES_PI  = ['loanPI_salary','loanPI_calamity'];
-const LOAN_TYPES_CASH = ['vale','vale_wed'];
+const LOAN_TYPES_CASH = ['vale'];
 
 function isLoanTypeSSS(type){
   return type === 'loanSSS_salary' || type === 'loanSSS_calamity' || type === 'loanSSS';
@@ -5042,10 +5038,8 @@ function applyLoanTrackerToPeriod(pk, options){
 
     // --- Cash Advance (principal/weekly/balance) ---
     const cashPerPeriod = handlePrincipalWeekly(empId, 'vale');
-    const cashWedPerPeriod = handlePrincipalWeekly(empId, 'vale_wed');
     if (canWriteMaps) {
       setMapValue(vale, empId, roundToCents(cashPerPeriod));
-      setMapValue(valeWed, empId, roundToCents(cashWedPerPeriod));
     }
   }
 
@@ -5856,7 +5850,7 @@ function migrateLegacyAdjustmentsToOtherDeductions(){
 migrateLegacyAdjustmentsToOtherDeductions();
 
 const DEDUCTION_COLUMN_KEYS = ['pagibig','philhealth','sss','loanSSS','loanPI','vale','adjustments','valeWed','total'];
-const DEDUCTION_EDITABLE_KEYS = new Set(); // Loan/vale deductions are managed in Loan Tracker
+const DEDUCTION_EDITABLE_KEYS = new Set(['valeWed']); // SSS Loan, Pag-IBIG Loan, and Account are managed in Loan Tracker
 const DEDUCTION_DATASET_SUFFIX = {
   pagibig: 'Pagibig',
   philhealth: 'Philhealth',
@@ -6285,7 +6279,6 @@ function renderLoanTrackerTable(){
 
     // Cash Advance (weekly-based)
     addPrincipalWeeklyCells('vale');
-    addPrincipalWeeklyCells('vale_wed');
 
     tbody.appendChild(tr);
   });
