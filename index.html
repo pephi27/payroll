@@ -164,6 +164,7 @@ const KNOWN_KEYS = [
   ,"incomeTypeOptions"
   ,"deductionTypeOptions"
   ,"payroll_loan_tracker"
+  ,"payroll_print_orientation"
 ]
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY)
@@ -665,6 +666,60 @@ function safeStringify(v){
 #loanTrackerTable input[type="checkbox"] { transform: scale(1.15); }
 #loanTrackerControls { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 8px; }
 
+/* Print orientation modal */
+#printOrientationModal {
+  position: fixed;
+  inset: 0;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  background: rgba(15, 23, 42, 0.45);
+  z-index: 20000;
+}
+#printOrientationModal .print-orientation-dialog {
+  background: #fff;
+  border-radius: 12px;
+  padding: 16px 18px;
+  width: min(360px, 92vw);
+  box-shadow: 0 16px 40px rgba(15, 23, 42, 0.25);
+}
+#printOrientationModal h3 {
+  margin: 0 0 10px 0;
+  font-size: 16px;
+}
+#printOrientationModal label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+  color: #334155;
+  font-weight: 600;
+}
+#printOrientationModal select {
+  padding: 6px 10px;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  font-size: 14px;
+}
+#printOrientationModal .print-orientation-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-top: 14px;
+}
+#printOrientationModal .print-orientation-actions button {
+  padding: 7px 12px;
+  border-radius: 8px;
+  border: 1px solid #cbd5e1;
+  background: #f8fafc;
+  cursor: pointer;
+  font-weight: 600;
+}
+#printOrientationModal .print-orientation-actions .primary {
+  background: #1d4ed8;
+  border-color: #1d4ed8;
+  color: #fff;
+}
 </style>
 <!-- === / Supabase KV Sync Adapter === -->
 
@@ -675,6 +730,119 @@ function safeStringify(v){
 // "Failed to execute 'print' on 'Window': The provided callback is no longer runnable."
 function safePrint(win){
   try { (win || window).print(); } catch(e){ console.warn('print failed', e); }
+}
+var PRINT_ORIENTATION_KEY = 'payroll_print_orientation';
+function normalizePrintOrientation(value){
+  var val = String(value || '').toLowerCase();
+  return val === 'landscape' ? 'landscape' : 'portrait';
+}
+function getStoredPrintOrientation(){
+  try {
+    return normalizePrintOrientation(localStorage.getItem(PRINT_ORIENTATION_KEY));
+  } catch (e) {
+    return 'portrait';
+  }
+}
+function setStoredPrintOrientation(orientation){
+  try {
+    localStorage.setItem(PRINT_ORIENTATION_KEY, normalizePrintOrientation(orientation));
+  } catch (e) {}
+}
+function ensurePrintOrientationModal(){
+  var modal = document.getElementById('printOrientationModal');
+  if (modal) return modal;
+  modal = document.createElement('div');
+  modal.id = 'printOrientationModal';
+  modal.innerHTML = '' +
+    '<div class="print-orientation-dialog" role="dialog" aria-modal="true" aria-labelledby="printOrientationTitle">' +
+      '<h3 id="printOrientationTitle">Choose print layout</h3>' +
+      '<label>Layout' +
+        '<select id="printOrientationSelect">' +
+          '<option value="portrait">Portrait</option>' +
+          '<option value="landscape">Landscape</option>' +
+        '</select>' +
+      '</label>' +
+      '<div class="print-orientation-actions">' +
+        '<button type="button" data-action="cancel">Cancel</button>' +
+        '<button type="button" class="primary" data-action="confirm">Print</button>' +
+      '</div>' +
+    '</div>';
+  document.body.appendChild(modal);
+  var select = modal.querySelector('#printOrientationSelect');
+  var confirmBtn = modal.querySelector('[data-action="confirm"]');
+  var cancelBtn = modal.querySelector('[data-action="cancel"]');
+  function close(result){
+    modal.style.display = 'none';
+    modal.setAttribute('aria-hidden', 'true');
+    var resolver = modal.__resolver;
+    modal.__resolver = null;
+    if (typeof resolver === 'function') resolver(result);
+  }
+  modal.addEventListener('click', function(e){
+    if (e.target === modal) close(null);
+  });
+  confirmBtn.addEventListener('click', function(){
+    var orientation = normalizePrintOrientation(select.value);
+    setStoredPrintOrientation(orientation);
+    close(orientation);
+  });
+  cancelBtn.addEventListener('click', function(){
+    close(null);
+  });
+  document.addEventListener('keydown', function(e){
+    if (modal.style.display !== 'flex') return;
+    if (e.key === 'Escape') close(null);
+  });
+  return modal;
+}
+function requestPrintOrientation(){
+  var modal = ensurePrintOrientationModal();
+  var select = modal.querySelector('#printOrientationSelect');
+  var current = getStoredPrintOrientation();
+  if (select) select.value = current;
+  modal.style.display = 'flex';
+  modal.setAttribute('aria-hidden', 'false');
+  try { if (select) select.focus(); } catch (e) {}
+  return new Promise(function(resolve){
+    if (modal.__resolver) modal.__resolver(null);
+    modal.__resolver = resolve;
+  });
+}
+function withPrintOrientation(action){
+  requestPrintOrientation().then(function(orientation){
+    if (!orientation) return;
+    action(orientation);
+  });
+}
+function injectPrintOrientation(html, orientation){
+  var rule = '@page { size: ' + normalizePrintOrientation(orientation) + '; }';
+  var styleTag = '<style id="printOrientationStyle">' + rule + '</style>';
+  if (/<\/head>/i.test(html)) {
+    return html.replace(/<\/head>/i, styleTag + '</head>');
+  }
+  return html + styleTag;
+}
+function printReport(html, options){
+  var opts = options || {};
+  var orientation = normalizePrintOrientation(opts.orientation);
+  var doc = injectPrintOrientation(html, orientation);
+  var target = opts.targetWindow;
+  var w = target || window.open('', opts.name || '_blank', opts.features || 'width=1024,height=768');
+  if (!w) {
+    alert('Popup blocked. Please allow popups to print.');
+    return null;
+  }
+  w.document.open();
+  w.document.write(doc);
+  w.document.close();
+  try {
+    w.addEventListener('load', function(){
+      try { safePrint(w); } catch(e){}
+    }, { once: true });
+  } catch (e) {
+    try { safePrint(w); } catch(_) {}
+  }
+  return w;
 }
 </script>
 <script>
@@ -1045,10 +1213,9 @@ body{font-family:Arial,Helvetica,sans-serif;margin:0;padding:0 0.1in;}
       }
     });
     html += `</div></body></html>`;
-    var w = window.open('', '', 'width=800,height=900');
-    if (!w) return;
-    w.document.open(); w.document.write(html); w.document.close();
-    w.focus(); setTimeout(function(){ try { safePrint(w); } catch(e){} }, 0);
+    withPrintOrientation(function(orientation){
+      printReport(html, { orientation: orientation, features: 'width=800,height=900' });
+    });
   });
 });
 </script>
@@ -7879,7 +8046,7 @@ function exportAdditionalIncomePivotExcel(report) {
   return true;
 }
 
-function printAdditionalIncomePivot(report) {
+function printAdditionalIncomePivot(report, orientation) {
   const formatAmount = (value) => {
     const num = Number(value);
     if (!Number.isFinite(num) || Math.abs(num) < 0.005) return '-';
@@ -7954,22 +8121,13 @@ function printAdditionalIncomePivot(report) {
   let grandTotal = 0;
   report.rows.forEach(row => { grandTotal = roundToCents(grandTotal + (row.total || 0)); });
   html += `<td class="num">${formatAmount(grandTotal)}</td></tr></tfoot></table></div>`;
-  const w = window.open('', '', 'width=1100,height=700');
-  if (!w) return;
-  w.document.write('<html><head><meta charset="utf-8"><title>Additional Income Report</title>');
-  w.document.write('<style>@page{size:letter portrait;margin:8mm} body{font-family:Arial,Helvetica,sans-serif;margin:0} h2{margin:0 0 6px;font-size:13px} table{border-collapse:collapse;width:100%;table-layout:fixed} th,td{border:1pt solid #000;padding:2px 4px;font-size:9px;white-space:nowrap} th{background:#f1f5f9} td.num, th.num{text-align:right} thead{display:table-header-group} tfoot{display:table-footer-group} tfoot td{font-weight:700;background:#fff7ed;border-top:2pt solid #000} .print-scale{transform:scale(0.95);transform-origin:top left} @media print{body{font-size:9px} button,input,select,textarea,nav{display:none !important} #printReportContainer{display:block}} </style>');
-  w.document.write('</head><body>');
-  w.document.write(`<h2>${title}</h2>`);
-  w.document.write(html);
-  w.document.write('</body></html>');
-  w.document.close();
-  try {
-    w.addEventListener('load', function(){
-      try { safePrint(w); } catch(e){}
-    }, { once: true });
-  } catch (e) {
-    try { safePrint(w); } catch(_) {}
-  }
+  const doc = '<html><head><meta charset="utf-8"><title>Additional Income Report</title>' +
+    '<style>@page{size:letter portrait;margin:8mm} body{font-family:Arial,Helvetica,sans-serif;margin:0} h2{margin:0 0 6px;font-size:13px} table{border-collapse:collapse;width:100%;table-layout:fixed} th,td{border:1pt solid #000;padding:2px 4px;font-size:9px;white-space:nowrap} th{background:#f1f5f9} td.num, th.num{text-align:right} thead{display:table-header-group} tfoot{display:table-footer-group} tfoot td{font-weight:700;background:#fff7ed;border-top:2pt solid #000} .print-scale{transform:scale(0.95);transform-origin:top left} @media print{body{font-size:9px} button,input,select,textarea,nav{display:none !important} #printReportContainer{display:block}} </style>' +
+    '</head><body>' +
+    `<h2>${title}</h2>` +
+    html +
+    '</body></html>';
+  printReport(doc, { orientation: orientation, features: 'width=1100,height=700' });
 }
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -7992,7 +8150,9 @@ document.addEventListener('DOMContentLoaded', () => {
     printBtn.addEventListener('click', () => {
       const report = getReport();
       if (!report) return;
-      printAdditionalIncomePivot(report);
+      withPrintOrientation(function(orientation){
+        printAdditionalIncomePivot(report, orientation);
+      });
     });
   }
   if (exportBtn) {
@@ -8763,37 +8923,25 @@ document.addEventListener('DOMContentLoaded', function(){
         if (map.has(key)) th.textContent = map.get(key);
       });
     })();
-    // Build a new window for printing
-    const w = window.open('', '', 'width=900,height=700');
-    if (!w) return;
-    w.document.write('<html><head><meta charset="utf-8"><title>Payroll Report</title>');
-    // Basic styles: borders and alignment
-    w.document.write('<style>@page{size:letter landscape;margin:10mm} html,body{-webkit-print-color-adjust:exact;print-color-adjust:exact;width:11in;height:8.5in;margin:0} body{font-family:Arial,Helvetica,sans-serif;margin:0;} .report-header{margin:0 0 8px} .company-name{font-size:14px;font-weight:700} .report-title{font-size:12px;font-weight:600;margin-top:2px} .report-period{font-size:10px;margin-top:2px} table{border-collapse:collapse;width:100%;table-layout:fixed} thead{display:table-header-group} tfoot{display:table-footer-group} th,td{border:1pt solid #000!important;border-style:solid!important;padding:4px;font-size:11px} table,th,td{border-color:#000!important;border-style:solid!important} th{background:#f1f5f9} td.num{text-align:right} th:nth-child(1),td:nth-child(1),th:nth-child(2),td:nth-child(2){text-align:left} tfoot td{font-weight:700;background:#fff7ed;border-top:2pt solid #000!important} #payrollTable{page-break-inside:auto} #payrollTable tr{page-break-inside:avoid;break-inside:avoid-page} #payrollTable th, #payrollTable td { white-space: nowrap !important; page-break-inside: avoid; } #payrollTable th:nth-child(1), #payrollTable td:nth-child(1) { width:30px; min-width:30px; } #payrollTable th:nth-child(2), #payrollTable td:nth-child(2) { width:150px; min-width:150px; } #payrollTable th:nth-child(3), #payrollTable td:nth-child(3) { width:60px; min-width:60px; } #payrollTable th:nth-child(4), #payrollTable td:nth-child(4) { width:60px; min-width:60px; } #payrollTable th:nth-child(5), #payrollTable td:nth-child(5) { width:60px; min-width:60px; } #payrollTable th:nth-child(6), #payrollTable td:nth-child(6) { width:60px; min-width:60px; } #payrollTable th:nth-child(7), #payrollTable td:nth-child(7) { width:60px; min-width:60px; } #payrollTable th:nth-child(8), #payrollTable td:nth-child(8) { width:60px; min-width:60px; } #payrollTable th:nth-child(9), #payrollTable td:nth-child(9) { width:60px; min-width:60px; } #payrollTable th:nth-child(10), #payrollTable td:nth-child(10) { width:60px; min-width:60px; } #payrollTable th:nth-child(11), #payrollTable td:nth-child(11) { width:60px; min-width:60px; } #payrollTable th:nth-child(12), #payrollTable td:nth-child(12) { width:60px; min-width:60px; } #payrollTable th:nth-child(13), #payrollTable td:nth-child(13) { width:60px; min-width:60px; } #payrollTable th:nth-child(14), #payrollTable td:nth-child(14) { width:60px; min-width:60px; } #payrollTable th:nth-child(15), #payrollTable td:nth-child(15) { width:60px; min-width:60px; } #payrollTable th:nth-child(16), #payrollTable td:nth-child(16) { width:60px; min-width:60px; } #payrollTable th:nth-child(17), #payrollTable td:nth-child(17) { width:60px; min-width:60px; } #payrollTable th:nth-child(18), #payrollTable td:nth-child(18) { width:60px; min-width:60px; } #payrollTable th:nth-child(19), #payrollTable td:nth-child(19) { width:60px; min-width:60px; } #payrollTable th:nth-child(20), #payrollTable td:nth-child(20) { width:60px; min-width:60px; } #payrollTable th:nth-child(21), #payrollTable td:nth-child(21) { width:50px; min-width:50px; } #payrollTable th:nth-child(22), #payrollTable td:nth-child(22) { width:75px; min-width:75px; }</style>');
-    w.document.write('</head><body>');
     // Header with date range if available
     const ws = document.getElementById('weekStart');
     const we = document.getElementById('weekEnd');
     const startDate = ws && ws.value ? ws.value : '';
     const endDate = we && we.value ? we.value : '';
-    w.document.write('<div id="printWrap">');
-    w.document.write('<div class="report-header">');
-    w.document.write('<div class="company-name">Edifice Group Corp.</div>');
-    w.document.write('<div class="report-title">PAYROLL \u2013 COMPRESSED WORK WEEK</div>');
-    if (startDate && endDate) {
-      w.document.write('<div class="report-period">Payroll Period: ' + startDate + ' to ' + endDate + '</div>');
-    }
-    w.document.write('</div>');
-    w.document.write(clone.outerHTML);
-    w.document.write('</div></body></html>');
-    w.document.close();
-    // Print without auto-scaling
-    try {
-      w.addEventListener('load', function(){
-        try { safePrint(w); } catch(e){}
-      }, { once: true });
-    } catch(e) { try { safePrint(w); } catch(_){} }
-    // Optionally close after printing (comment out if you don't want auto-close)
-    // w.close();
+    const doc = '<html><head><meta charset="utf-8"><title>Payroll Report</title>' +
+      '<style>@page{size:letter landscape;margin:10mm} html,body{-webkit-print-color-adjust:exact;print-color-adjust:exact;width:11in;height:8.5in;margin:0} body{font-family:Arial,Helvetica,sans-serif;margin:0;} .report-header{margin:0 0 8px} .company-name{font-size:14px;font-weight:700} .report-title{font-size:12px;font-weight:600;margin-top:2px} .report-period{font-size:10px;margin-top:2px} table{border-collapse:collapse;width:100%;table-layout:fixed} thead{display:table-header-group} tfoot{display:table-footer-group} th,td{border:1pt solid #000!important;border-style:solid!important;padding:4px;font-size:11px} table,th,td{border-color:#000!important;border-style:solid!important} th{background:#f1f5f9} td.num{text-align:right} th:nth-child(1),td:nth-child(1),th:nth-child(2),td:nth-child(2){text-align:left} tfoot td{font-weight:700;background:#fff7ed;border-top:2pt solid #000!important} #payrollTable{page-break-inside:auto} #payrollTable tr{page-break-inside:avoid;break-inside:avoid-page} #payrollTable th, #payrollTable td { white-space: nowrap !important; page-break-inside: avoid; } #payrollTable th:nth-child(1), #payrollTable td:nth-child(1) { width:30px; min-width:30px; } #payrollTable th:nth-child(2), #payrollTable td:nth-child(2) { width:150px; min-width:150px; } #payrollTable th:nth-child(3), #payrollTable td:nth-child(3) { width:60px; min-width:60px; } #payrollTable th:nth-child(4), #payrollTable td:nth-child(4) { width:60px; min-width:60px; } #payrollTable th:nth-child(5), #payrollTable td:nth-child(5) { width:60px; min-width:60px; } #payrollTable th:nth-child(6), #payrollTable td:nth-child(6) { width:60px; min-width:60px; } #payrollTable th:nth-child(7), #payrollTable td:nth-child(7) { width:60px; min-width:60px; } #payrollTable th:nth-child(8), #payrollTable td:nth-child(8) { width:60px; min-width:60px; } #payrollTable th:nth-child(9), #payrollTable td:nth-child(9) { width:60px; min-width:60px; } #payrollTable th:nth-child(10), #payrollTable td:nth-child(10) { width:60px; min-width:60px; } #payrollTable th:nth-child(11), #payrollTable td:nth-child(11) { width:60px; min-width:60px; } #payrollTable th:nth-child(12), #payrollTable td:nth-child(12) { width:60px; min-width:60px; } #payrollTable th:nth-child(13), #payrollTable td:nth-child(13) { width:60px; min-width:60px; } #payrollTable th:nth-child(14), #payrollTable td:nth-child(14) { width:60px; min-width:60px; } #payrollTable th:nth-child(15), #payrollTable td:nth-child(15) { width:60px; min-width:60px; } #payrollTable th:nth-child(16), #payrollTable td:nth-child(16) { width:60px; min-width:60px; } #payrollTable th:nth-child(17), #payrollTable td:nth-child(17) { width:60px; min-width:60px; } #payrollTable th:nth-child(18), #payrollTable td:nth-child(18) { width:60px; min-width:60px; } #payrollTable th:nth-child(19), #payrollTable td:nth-child(19) { width:60px; min-width:60px; } #payrollTable th:nth-child(20), #payrollTable td:nth-child(20) { width:60px; min-width:60px; } #payrollTable th:nth-child(21), #payrollTable td:nth-child(21) { width:50px; min-width:50px; } #payrollTable th:nth-child(22), #payrollTable td:nth-child(22) { width:75px; min-width:75px; }</style>' +
+      '</head><body>' +
+      '<div id="printWrap">' +
+      '<div class="report-header">' +
+      '<div class="company-name">Edifice Group Corp.</div>' +
+      '<div class="report-title">PAYROLL \u2013 COMPRESSED WORK WEEK</div>' +
+      (startDate && endDate ? '<div class="report-period">Payroll Period: ' + startDate + ' to ' + endDate + '</div>' : '') +
+      '</div>' +
+      clone.outerHTML +
+      '</div></body></html>';
+    withPrintOrientation(function(orientation){
+      printReport(doc, { orientation: orientation, features: 'width=900,height=700' });
+    });
   });
 });
 
@@ -8907,28 +9055,19 @@ document.addEventListener('DOMContentLoaded', function(){
     const periodText = (startDate && endDate) ? `${startDate} to ${endDate}` : (startDate || endDate || '');
     const companyName = getDeductionsReportCompanyName();
 
-    const w = window.open('', '', 'width=1100,height=700');
-    if (!w) return;
-    w.document.write('<html><head><meta charset="utf-8"><title>Deductions Report</title>');
-    w.document.write('<style>@page{size:letter landscape;margin:10mm} body{font-family:Arial,Helvetica,sans-serif;margin:0} .report-header{margin:0 0 8px} .company-name{font-size:14px;font-weight:700} .report-title{font-size:12px;font-weight:600;margin-top:2px} .report-period{font-size:10px;margin-top:2px} table{border-collapse:collapse;width:100%;table-layout:fixed} th,td{border:1pt solid #000;padding:4px;font-size:10px} th{background:#f1f5f9} td.num, th.num{text-align:right} thead{display:table-header-group} tfoot{display:table-footer-group} tfoot td{font-weight:700;background:#fff7ed;border-top:2pt solid #000}</style>');
-    w.document.write('</head><body>');
-    w.document.write('<div class="report-header">');
-    w.document.write(`<div class="company-name">${companyName}</div>`);
-    w.document.write('<div class="report-title">Deductions Report</div>');
-    if (periodText) {
-      w.document.write(`<div class="report-period">Period: ${periodText}</div>`);
-    }
-    w.document.write('</div>');
-    w.document.write(html);
-    w.document.write('</body></html>');
-    w.document.close();
-    try {
-      w.addEventListener('load', function(){
-        try { safePrint(w); } catch(e){}
-      }, { once: true });
-    } catch (e) {
-      try { safePrint(w); } catch(_) {}
-    }
+    const doc = '<html><head><meta charset="utf-8"><title>Deductions Report</title>' +
+      '<style>@page{size:letter landscape;margin:10mm} body{font-family:Arial,Helvetica,sans-serif;margin:0} .report-header{margin:0 0 8px} .company-name{font-size:14px;font-weight:700} .report-title{font-size:12px;font-weight:600;margin-top:2px} .report-period{font-size:10px;margin-top:2px} table{border-collapse:collapse;width:100%;table-layout:fixed} th,td{border:1pt solid #000;padding:4px;font-size:10px} th{background:#f1f5f9} td.num, th.num{text-align:right} thead{display:table-header-group} tfoot{display:table-footer-group} tfoot td{font-weight:700;background:#fff7ed;border-top:2pt solid #000}</style>' +
+      '</head><body>' +
+      '<div class="report-header">' +
+      `<div class="company-name">${companyName}</div>` +
+      '<div class="report-title">Deductions Report</div>' +
+      (periodText ? `<div class="report-period">Period: ${periodText}</div>` : '') +
+      '</div>' +
+      html +
+      '</body></html>';
+    withPrintOrientation(function(orientation){
+      printReport(doc, { orientation: orientation, features: 'width=1100,height=700' });
+    });
   });
 });
 
@@ -9021,28 +9160,19 @@ document.addEventListener('DOMContentLoaded', function(){
     const periodText = (startDate && endDate) ? `${startDate} to ${endDate}` : (startDate || endDate || '');
     const companyName = getOvertimeReportCompanyName();
 
-    const w = window.open('', '', 'width=1000,height=700');
-    if (!w) return;
-    w.document.write('<html><head><meta charset="utf-8"><title>Overtime Report</title>');
-    w.document.write('<style>@page{size:letter landscape;margin:10mm} body{font-family:Arial,Helvetica,sans-serif;margin:0} .report-header{margin:0 0 8px} .company-name{font-size:14px;font-weight:700} .report-title{font-size:12px;font-weight:600;margin-top:2px} .report-period{font-size:10px;margin-top:2px} table{border-collapse:collapse;width:100%;table-layout:fixed} th,td{border:1pt solid #000;padding:4px;font-size:10px} th{background:#f1f5f9} td.num, th.num{text-align:right} thead{display:table-header-group} tfoot{display:table-footer-group} tfoot td{font-weight:700;background:#fff7ed;border-top:2pt solid #000}</style>');
-    w.document.write('</head><body>');
-    w.document.write('<div class="report-header">');
-    w.document.write(`<div class="company-name">${companyName}</div>`);
-    w.document.write('<div class="report-title">Overtime Report</div>');
-    if (periodText) {
-      w.document.write(`<div class="report-period">Period: ${periodText}</div>`);
-    }
-    w.document.write('</div>');
-    w.document.write(html);
-    w.document.write('</body></html>');
-    w.document.close();
-    try {
-      w.addEventListener('load', function(){
-        try { safePrint(w); } catch(e){}
-      }, { once: true });
-    } catch (e) {
-      try { safePrint(w); } catch(_) {}
-    }
+    const doc = '<html><head><meta charset="utf-8"><title>Overtime Report</title>' +
+      '<style>@page{size:letter landscape;margin:10mm} body{font-family:Arial,Helvetica,sans-serif;margin:0} .report-header{margin:0 0 8px} .company-name{font-size:14px;font-weight:700} .report-title{font-size:12px;font-weight:600;margin-top:2px} .report-period{font-size:10px;margin-top:2px} table{border-collapse:collapse;width:100%;table-layout:fixed} th,td{border:1pt solid #000;padding:4px;font-size:10px} th{background:#f1f5f9} td.num, th.num{text-align:right} thead{display:table-header-group} tfoot{display:table-footer-group} tfoot td{font-weight:700;background:#fff7ed;border-top:2pt solid #000}</style>' +
+      '</head><body>' +
+      '<div class="report-header">' +
+      `<div class="company-name">${companyName}</div>` +
+      '<div class="report-title">Overtime Report</div>' +
+      (periodText ? `<div class="report-period">Period: ${periodText}</div>` : '') +
+      '</div>' +
+      html +
+      '</body></html>';
+    withPrintOrientation(function(orientation){
+      printReport(doc, { orientation: orientation, features: 'width=1000,height=700' });
+    });
   });
 });
 
@@ -10367,7 +10497,7 @@ document.addEventListener('DOMContentLoaded', () => {
     return `<section class="report-block"><h2>Master Report</h2>${subtitle}<div class="master-wrapper">${inner}</div></section>`;
   }
 
-  async function exportCombinedPdfForSnapshot(snap) {
+  async function exportCombinedPdfForSnapshot(snap, orientation) {
     if (!snap) return;
     const w = window.open('', '_blank', 'width=1024,height=768');
     if (!w) {
@@ -10433,13 +10563,7 @@ document.addEventListener('DOMContentLoaded', () => {
       .master-wrapper table{border-color:#1e293b;}
     </style></head><body>${filteredSections}</body></html>`;
 
-    w.document.open();
-    w.document.write(doc);
-    w.document.close();
-    setTimeout(() => {
-      try { safePrint(w); }
-      catch (err) { try { w.print(); } catch (_) {} }
-    }, 100);
+    printReport(doc, { orientation: orientation, targetWindow: w });
   }
 
   // Delegate open/download actions on history table
@@ -10547,7 +10671,11 @@ document.addEventListener('DOMContentLoaded', () => {
     if (actionBtn.classList.contains('exportAllPdf')) {
       try {
         if (typeof exportCombinedPdfForSnapshot === 'function') {
-          await exportCombinedPdfForSnapshot(snap);
+          await new Promise((resolve) => {
+            withPrintOrientation(function(orientation){
+              Promise.resolve(exportCombinedPdfForSnapshot(snap, orientation)).then(resolve).catch(resolve);
+            });
+          });
         }
       } catch (err) {
         console.warn('Combined PDF export failed', err);
@@ -12337,7 +12465,9 @@ rows += `<tr class="allowance">
         if (!node) return; const html = '<!doctype html><html><head><meta charset="utf-8"><title>Master Report</title>'+
           '<style>body{font-family:Arial,Helvetica,sans-serif;padding:10px} table{width:100%;border-collapse:collapse;font-size:12px} th,td{border:0.6pt solid #000;padding:4px 6px;text-align:left} .mr-num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap} .mr-company th{text-align:center} h2{text-align:center;margin:0 0 10px 0}</style>'+
           '</head><body>'+ node.innerHTML +'</body></html>';
-        const w = window.open('', '', 'width=1024,height=768'); if (!w) return; w.document.open(); w.document.write(html); w.document.close(); w.focus(); setTimeout(()=>{ try{ w.print(); }catch(_){} }, 0);
+        withPrintOrientation(function(orientation){
+          printReport(html, { orientation: orientation, features: 'width=1024,height=768' });
+        });
       }catch(_){ window.print(); }
     });
   }
@@ -13085,7 +13215,7 @@ rows += `<tr class="allowance">
       return Array.from(table.querySelectorAll('tbody tr')).length > 0;
     }
 
-    function printContributionSummary(){
+    function printContributionSummary(orientation){
       const tableClone = cloneVisibleTable();
       if (!tableClone || !hasContributionRows(tableClone)){
         alert('Select at least one payroll period with contribution data before printing.');
@@ -13106,13 +13236,7 @@ rows += `<tr class="allowance">
         (metaHtml ? `<div id="meta">${metaHtml}</div>` : '') +
         tableClone.outerHTML +
         '</body></html>';
-      const w = window.open('', '', 'width=1024,height=768');
-      if (!w) return;
-      w.document.open();
-      w.document.write(html);
-      w.document.close();
-      w.focus();
-      setTimeout(()=>{ try{ w.print(); }catch(_){} }, 10);
+      printReport(html, { orientation: orientation, features: 'width=1024,height=768' });
     }
 
     function exportContributionExcel(){
@@ -13154,7 +13278,11 @@ rows += `<tr class="allowance">
       }
       const printBtn = document.getElementById(PRINT_ID);
       if (printBtn && !printBtn.__wired){
-        printBtn.addEventListener('click', printContributionSummary);
+        printBtn.addEventListener('click', function(){
+          withPrintOrientation(function(orientation){
+            printContributionSummary(orientation);
+          });
+        });
         printBtn.__wired = true;
       }
       const excelBtn = document.getElementById(EXCEL_ID);
@@ -16635,7 +16763,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
 <script>
 // Clean print for per-project sheet (modal) with strong grid lines
-function printProjectReportClean(){
+function printProjectReportClean(orientation){
   try{
     var box = document.getElementById('projectReportContent');
     if (!box) return;
@@ -16650,15 +16778,17 @@ function printProjectReportClean(){
       '@media print{@page{margin:10mm}}'+
       '</style>';
     var html = '<!doctype html><html><head><meta charset="utf-8">'+css+'</head><body>'+ box.innerHTML + '</body></html>';
-    var w = window.open('', '', 'width=1024,height=768');
-    if (!w) return;
-    w.document.open(); w.document.write(html); try{ w.document.title=' '; }catch(e){}; w.document.close();
-    w.focus(); setTimeout(function(){ try{ safePrint(w); }catch(e){} }, 0);
+    printReport(html, { orientation: orientation, features: 'width=1024,height=768' });
   }catch(e){ console.warn('Project report clean print failed', e); }
 }
 document.addEventListener('DOMContentLoaded', function(){
   var btn = document.getElementById('printProjectTotalsBtn');
-  if (btn) btn.addEventListener('click', function(e){ e.preventDefault(); printProjectReportClean(); });
+  if (btn) btn.addEventListener('click', function(e){
+    e.preventDefault();
+    withPrintOrientation(function(orientation){
+      printProjectReportClean(orientation);
+    });
+  });
 });
 </script>
 
@@ -16900,7 +17030,7 @@ document.addEventListener('DOMContentLoaded', function(){
     removeEmptyColumns(clone, ['Project']);
     return clone;
   }
-  function printDTR(scope){
+  function printDTR(scope, orientation){
     try{
       var activeScope = scope || (typeof getActiveDtrSubtab === 'function' ? getActiveDtrSubtab() : 'regular');
       var clone = buildDtrPrintTable(activeScope);
@@ -16908,32 +17038,19 @@ document.addEventListener('DOMContentLoaded', function(){
       var reportTitle = activeScope === 'overtime' ? 'Overtime DTR' : 'Regular DTR';
       var companyName = getDtrReportCompanyName();
       var periodText = getDtrPeriodText();
-      var w = window.open('', '_blank', 'width=1100,height=700');
-      if (!w) return;
-      w.document.write('<!DOCTYPE html><html><head><meta charset="utf-8"><title>' + reportTitle + '</title>');
-      w.document.write('<style>@page{size:letter landscape;margin:10mm} body{font-family:Arial,Helvetica,sans-serif;margin:0} .report-header{margin:0 0 8px} .company-name{font-size:14px;font-weight:700} .report-title{font-size:12px;font-weight:600;margin-top:2px} .report-period{font-size:10px;margin-top:2px} table{width:100%;border-collapse:collapse;table-layout:fixed} th,td{border:1pt solid #000;padding:4px;font-size:10px;text-align:center} th{background:#f1f5f9} thead{display:table-header-group} tfoot{display:table-footer-group} td:first-child, th:first-child, td:nth-child(2), th:nth-child(2){text-align:left} #resultsTable th, #resultsTable td { white-space: nowrap; } #resultsTable th:nth-child(2), #resultsTable td:nth-child(2) { white-space: normal; overflow-wrap: anywhere; word-break: break-word; max-width: 200px; vertical-align: top; } #resultsTable th:nth-child(3), #resultsTable td:nth-child(3) { white-space: normal; overflow-wrap: anywhere; word-break: break-word; max-width: 240px; vertical-align: top; }</style>');
-      w.document.write('</head><body>');
-      w.document.write('<div class="report-header">');
-      w.document.write('<div class="company-name">' + companyName + '</div>');
-      w.document.write('<div class="report-title">' + reportTitle + '</div>');
-      if (periodText) {
-        w.document.write('<div class="report-period">Period: ' + periodText + '</div>');
-      }
       var projectText = getDtrProjectText();
-      if (projectText) {
-        w.document.write('<div class="report-period">Project: ' + projectText + '</div>');
-      }
-      w.document.write('</div>');
-      w.document.write(clone.outerHTML);
-      w.document.write('</body></html>');
-      w.document.close();
-      try {
-        w.addEventListener('load', function(){
-          try { safePrint(w); } catch(e){}
-        }, { once: true });
-      } catch (e) {
-        try { safePrint(w); } catch(_) {}
-      }
+      var doc = '<!DOCTYPE html><html><head><meta charset="utf-8"><title>' + reportTitle + '</title>' +
+        '<style>@page{size:letter landscape;margin:10mm} body{font-family:Arial,Helvetica,sans-serif;margin:0} .report-header{margin:0 0 8px} .company-name{font-size:14px;font-weight:700} .report-title{font-size:12px;font-weight:600;margin-top:2px} .report-period{font-size:10px;margin-top:2px} table{width:100%;border-collapse:collapse;table-layout:fixed} th,td{border:1pt solid #000;padding:4px;font-size:10px;text-align:center} th{background:#f1f5f9} thead{display:table-header-group} tfoot{display:table-footer-group} td:first-child, th:first-child, td:nth-child(2), th:nth-child(2){text-align:left} #resultsTable th, #resultsTable td { white-space: nowrap; } #resultsTable th:nth-child(2), #resultsTable td:nth-child(2) { white-space: normal; overflow-wrap: anywhere; word-break: break-word; max-width: 200px; vertical-align: top; } #resultsTable th:nth-child(3), #resultsTable td:nth-child(3) { white-space: normal; overflow-wrap: anywhere; word-break: break-word; max-width: 240px; vertical-align: top; }</style>' +
+        '</head><body>' +
+        '<div class="report-header">' +
+        '<div class="company-name">' + companyName + '</div>' +
+        '<div class="report-title">' + reportTitle + '</div>' +
+        (periodText ? '<div class="report-period">Period: ' + periodText + '</div>' : '') +
+        (projectText ? '<div class="report-period">Project: ' + projectText + '</div>' : '') +
+        '</div>' +
+        clone.outerHTML +
+        '</body></html>';
+      printReport(doc, { orientation: orientation, features: 'width=1100,height=700' });
     }catch(err){
       alert('Unable to print DTR: ' + err);
     }
@@ -16941,10 +17058,14 @@ document.addEventListener('DOMContentLoaded', function(){
   window.printDTR = printDTR;
   document.addEventListener('click', function(ev){
     if (ev.target && ev.target.id === 'printDtrRegularBtn') {
-      printDTR('regular');
+      withPrintOrientation(function(orientation){
+        printDTR('regular', orientation);
+      });
     }
     if (ev.target && ev.target.id === 'printDtrOvertimeBtn') {
-      printDTR('overtime');
+      withPrintOrientation(function(orientation){
+        printDTR('overtime', orientation);
+      });
     }
   });
 })();
@@ -17527,14 +17648,9 @@ body{font-family:Arial,Helvetica,sans-serif;margin:0;padding:0 0.1in;}
 </body></html>`;
   }
 
-  var w = window.open('', '', 'width=800,height=900');
-  if (!w) return;
-  w.document.open();
-  w.document.write(html);
-  try{ w.document.title = ' '; }catch(e){}
-  w.document.close();
-  w.focus();
-  try{ safePrint(w); }catch(e){}
+  withPrintOrientation(function(orientation){
+    printReport(html, { orientation: orientation, features: 'width=800,height=900' });
+  });
 });
 var LS_FROM = (typeof window.LS_FROM !== 'undefined') ? window.LS_FROM : 'dtrDateFrom';
 var LS_TO   = (typeof window.LS_TO   !== 'undefined') ? window.LS_TO   : 'dtrDateTo';
@@ -20049,7 +20165,7 @@ document.addEventListener('DOMContentLoaded', async function () {
 // Note: Browser header/footer (date, title, URL) are controlled by the print dialog.
 // To remove them entirely, uncheck "Headers and footers" in the print settings.
 (function(){
-  function printReportsClean(tableId, hintId){
+  function printReportsClean(tableId, hintId, orientation){
     try{
       var tbl = document.getElementById(tableId || 'r_table');
       if (!tbl) return;
@@ -20157,27 +20273,29 @@ document.addEventListener('DOMContentLoaded', async function () {
       });
       if (!blocks) { blocks = '<div>No project data to print.</div>'; }
       var html = '<!doctype html><html><head><meta charset="utf-8">' + css + '</head><body>' + blocks + '</body></html>';
-      var w = window.open('', '', 'width=1024,height=768');
-      if (!w) return;
-      w.document.open();
-      w.document.write(html);
-      // Set a blank title to avoid printing the original long page title in some browsers
-      try{ w.document.title = ' '; }catch(e){}
-      w.document.close();
-      w.focus();
-      setTimeout(function(){ try{ safePrint(w); }catch(e){} }, 0);
+      printReport(html, { orientation: orientation, features: 'width=1024,height=768' });
     }catch(e){ console.warn('Clean print failed', e); }
   }
 
   function attach(){
     var btn = document.getElementById('r_print');
     if (btn && !btn.__cleanPrint){
-      btn.addEventListener('click', function(ev){ ev.preventDefault(); printReportsClean('r_table', 'r_range_hint'); });
+      btn.addEventListener('click', function(ev){
+        ev.preventDefault();
+        withPrintOrientation(function(orientation){
+          printReportsClean('r_table', 'r_range_hint', orientation);
+        });
+      });
       btn.__cleanPrint = true;
     }
     var otBtn = document.getElementById('r_ot_print');
     if (otBtn && !otBtn.__cleanPrint){
-      otBtn.addEventListener('click', function(ev){ ev.preventDefault(); printReportsClean('r_ot_table', 'r_ot_range_hint'); });
+      otBtn.addEventListener('click', function(ev){
+        ev.preventDefault();
+        withPrintOrientation(function(orientation){
+          printReportsClean('r_ot_table', 'r_ot_range_hint', orientation);
+        });
+      });
       otBtn.__cleanPrint = true;
     }
   }
@@ -20733,7 +20851,7 @@ document.addEventListener('DOMContentLoaded', function(){
     return { types: types, includeCustom: includeCustom };
   }
 
-  function od_openPrint(pivot){
+  function od_openPrint(pivot, orientation){
     var printable = od_getPrintableTypes(pivot);
     var types = printable.types;
     var includeCustom = printable.includeCustom;
@@ -20754,9 +20872,6 @@ document.addEventListener('DOMContentLoaded', function(){
     var title = 'Other Deductions Pivot Report';
     var periodText = (pivot.start && pivot.end) ? (pivot.start + ' to ' + pivot.end) : pivot.periodKey;
     var generated = new Date().toLocaleString();
-
-    var w = window.open('', '_blank');
-    if (!w){ alert('Popup blocked. Please allow popups to print.'); return; }
 
     var html = '';
     html += '<!doctype html><html><head><meta charset="utf-8">';
@@ -20805,12 +20920,8 @@ document.addEventListener('DOMContentLoaded', function(){
     html += '<td>'+od_formatMoney(pivot.grandTotal||0)+'</td>';
     html += '</tr></tfoot></table>';
 
-    html += '<script>window.onload=function(){window.print();};<\/script>';
     html += '</body></html>';
-
-    w.document.open();
-    w.document.write(html);
-    w.document.close();
+    printReport(html, { orientation: orientation });
   }
 
   function od_exportExcel(pivot){
@@ -20870,7 +20981,9 @@ document.addEventListener('DOMContentLoaded', function(){
     if (printBtn){
       printBtn.addEventListener('click', function(){
         var pivot = od_buildPivot();
-        od_openPrint(pivot);
+        withPrintOrientation(function(orientation){
+          od_openPrint(pivot, orientation);
+        });
       });
     }
     var excelBtn = document.getElementById('exportOtherDeductionsPivotExcelBtn');
