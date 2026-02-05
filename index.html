@@ -11761,14 +11761,13 @@ document.addEventListener('DOMContentLoaded', () => {
       const pid = String(projectId || '').trim();
       if (!pid) return '__unassigned__';
       const sp = (typeof storedProjects !== 'undefined' && storedProjects) || {};
-      return Object.prototype.hasOwnProperty.call(sp, pid) ? pid : '__unknown__';
+      return Object.prototype.hasOwnProperty.call(sp, pid) ? pid : null;
     }
 
     function getReportProjectLabel(bucket){
       if (bucket === '__unassigned__') return 'Unassigned';
-      if (bucket === '__unknown__') return 'Unknown Project';
       const sp = (typeof storedProjects !== 'undefined' && storedProjects) || {};
-      return (sp[bucket] && sp[bucket].name) ? sp[bucket].name : 'Unknown Project';
+      return (sp[bucket] && sp[bucket].name) ? sp[bucket].name : 'Unassigned';
     }
 
     function readProjectFromRow(tr){
@@ -11796,7 +11795,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const date = (tr.cells[4]?.textContent||'').trim();
         const rwh = toNum(tr.cells[11]?.textContent) || toNum(tr.querySelector('.regHrs')?.value);
         const oth = toNum(tr.cells[12]?.textContent) || toNum(tr.querySelector('.otHrs')?.value);
-        if(!id || !date) return;
+        if(!id || !date || !proj) return;
         const d = new Date(date).setHours(0,0,0,0);
         if(fromStr){ const f = new Date(fromStr).setHours(0,0,0,0); if(d < f) return; }
         if(toStr){ const t = new Date(toStr).setHours(0,0,0,0); if(d > t) return; }
@@ -11827,6 +11826,7 @@ document.addEventListener('DOMContentLoaded', () => {
           if (!regHours && !otHours) return;
           const assignedPid = resolveProjectIdValue(getAdjustmentProjectType(empId));
           const bucket = getReportProjectBucket(assignedPid);
+          if (!bucket) return;
           const rate = Number(getEmployeeHourlyRate(empId) || 0);
           const otMult = Number(getOvertimeMultiplier() || 0);
           if (!adjustmentsByProjectEmp[bucket]) adjustmentsByProjectEmp[bucket] = {};
@@ -11852,6 +11852,7 @@ document.addEventListener('DOMContentLoaded', () => {
           if (!assigned) return;
           const projId = resolveProjectIdValue(assigned, sp);
           const bucket = getReportProjectBucket(projId);
+          if (!bucket) return;
           allowByProj[bucket] = (allowByProj[bucket] || 0) + amt;
         });
         Object.keys(allowByProj).forEach(pn => { if (!data[pn]) data[pn] = {}; });
@@ -11871,6 +11872,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const assigned = String((it && (it.projectId != null ? it.projectId : (it.project != null ? it.project : ''))) || '').trim();
             const projId = resolveProjectIdValue(assigned, sp);
             const bucket = getReportProjectBucket(projId);
+            if (!bucket) return;
             let label = '';
             try { if (typeof getAdditionalIncomeLabel === 'function') label = getAdditionalIncomeLabel(it); } catch (e) {}
             if (!label) label = String((it && (it.label != null ? it.label : it.type)) || 'Additional Income').trim() || 'Additional Income';
