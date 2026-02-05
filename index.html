@@ -13431,6 +13431,15 @@ rows += `<tr class="allowance">
     return computeProjectTotalsFromDTR();
   }
 
+  function readPayrollGrandTotalValue(key){
+    try {
+      const cell = document.querySelector('#payrollTotalsFoot [data-col="'+key+'"]');
+      if (!cell) return null;
+      const parsed = Number(String(cell.textContent || '').replace(/,/g, '').trim());
+      return Number.isFinite(parsed) ? parsed : null;
+    } catch (_){ return null; }
+  }
+
   function renderMasterReport(){
     const host = document.getElementById('masterReportContainer'); if(!host) return;
     const prows = computeProjectTotals().filter(row => safe(row && row.company).trim().length);
@@ -13440,6 +13449,10 @@ rows += `<tr class="allowance">
       acc.t += Number((r && r.total != null) ? r.total : 0);
       return acc;
     }, {regTotal:0, otTotal:0, t:0});
+    const payrollGrandOtPay = readPayrollGrandTotalValue('otPay');
+    if (payrollGrandOtPay != null) {
+      g.otTotal = payrollGrandOtPay;
+    }
     let html = '';
     html += '<h2>PAYROLL REPORT</h2>';
     const [rangeStart, rangeEnd] = getPayrollRange();
