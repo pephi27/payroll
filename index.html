@@ -3392,6 +3392,7 @@ window.addEventListener('load', dashReports);
        <tr>
         <th>ID</th>
         <th>Name</th>
+        <th>Type</th>
         <th>REG Adj Hrs</th>
         <th>ADJ OT Hrs</th>
        </tr>
@@ -3596,11 +3597,39 @@ function setAdjustmentTotalsForEmployee(empId, regValue, otValue) {
   const otNum = Number(otValue);
   const reg = Number.isFinite(regNum) ? roundToCents(regNum) : 0;
   const ot = Number.isFinite(otNum) ? roundToCents(otNum) : 0;
-  if (!reg && !ot) {
+  const existingType = getAdjustmentProjectType(empId);
+  if (!reg && !ot && !existingType) {
     delete adjHrs[empId];
     return;
   }
   adjHrs[empId] = { reg, ot };
+  if (existingType) adjHrs[empId].projectType = existingType;
+}
+
+function getAdjustmentProjectType(empId) {
+  if (!empId || !isPlainObject(adjHrs)) return '';
+  const raw = adjHrs?.[empId];
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return '';
+  const hasTotals = Object.prototype.hasOwnProperty.call(raw, 'reg')
+    || Object.prototype.hasOwnProperty.call(raw, 'ot');
+  const typeValue = raw.projectType ?? raw.project ?? raw.projectId;
+  if (typeValue != null) return String(typeValue || '').trim();
+  if (hasTotals && raw.type != null) return String(raw.type || '').trim();
+  return '';
+}
+
+function setAdjustmentProjectType(empId, value) {
+  if (!empId || !isPlainObject(adjHrs)) return;
+  const totals = getAdjustmentTotalsForEmployee(empId);
+  const reg = totals.reg;
+  const ot = totals.ot;
+  const projectType = String(value || '').trim();
+  if (!reg && !ot && !projectType) {
+    delete adjHrs[empId];
+    return;
+  }
+  adjHrs[empId] = { reg, ot };
+  if (projectType) adjHrs[empId].projectType = projectType;
 }
 
 function getRegularAdjustmentHours(empId) {
@@ -8719,6 +8748,21 @@ function renderAdjustmentHoursTable(){
   }
   adjustmentHoursRenderPending = false;
   syncPeriodScopedData();
+  const projectMap = (typeof storedProjects !== 'undefined' && storedProjects) || {};
+  const projectEntries = Object.entries(projectMap || {}).sort((a,b)=>{
+    const A = (a[1]?.name || a[0]).toUpperCase();
+    const B = (b[1]?.name || b[0]).toUpperCase();
+    return A.localeCompare(B);
+  });
+  const resolveProjectId = (value) => {
+    const v = String(value || '').trim();
+    if (!v) return '';
+    try {
+      if (projectMap && Object.prototype.hasOwnProperty.call(projectMap, v)) return v;
+    } catch(e){}
+    const hit = projectEntries.find(([pid, proj]) => (proj && proj.name ? String(proj.name) : String(pid)) === v);
+    return hit ? hit[0] : v;
+  };
   const tbody = document.querySelector('#adjustmentHoursTable tbody');
   if (!tbody) return;
   tbody.innerHTML = '';
@@ -8785,15 +8829,60 @@ function renderAdjustmentHoursTable(){
     tr.innerHTML = `
       <td>${id}</td>
       <td class="wrap">${name}</td>
+      <td class="adjTypeCell"></td>
       <td><input type="text" inputmode="decimal" step="0.01" class="adjHrsInput" data-id="${id}" data-type="reg" value="${regValue}" /></td>
       <td><input type="text" inputmode="decimal" step="0.01" class="adjHrsInput" data-id="${id}" data-type="ot" value="${otValue}" /></td>
     `;
+    const typeCell = tr.querySelector('.adjTypeCell');
+    if (typeCell) {
+      const select = document.createElement('select');
+      select.className = 'adjTypeSelect';
+      select.dataset.id = id;
+      const opt0 = document.createElement('option');
+      opt0.value = '';
+      opt0.textContent = '(none)';
+      select.appendChild(opt0);
+      projectEntries.forEach(([pid, proj]) => {
+        const o = document.createElement('option');
+        o.value = pid;
+        o.textContent = (proj && proj.name) ? proj.name : pid;
+        select.appendChild(o);
+      });
+      const currentRaw = getAdjustmentProjectType(id);
+      const currentResolved = resolveProjectId(currentRaw);
+      if (currentResolved && !Object.prototype.hasOwnProperty.call(projectMap, currentResolved)) {
+        const o = document.createElement('option');
+        o.value = currentResolved;
+        o.textContent = currentResolved;
+        select.appendChild(o);
+      }
+      select.value = currentResolved || '';
+      select.addEventListener('focus', () => { adjustmentHoursFocusCount += 1; });
+      select.addEventListener('blur', () => {
+        adjustmentHoursFocusCount = Math.max(0, adjustmentHoursFocusCount - 1);
+        setTimeout(() => {
+          if (adjustmentHoursFocusCount === 0 && adjustmentHoursRenderPending) queueOtherDeductionsRerender();
+          if (adjustmentHoursFocusCount === 0 && window.__otherDeductionsHydratePending) {
+            window.__otherDeductionsHydratePending = false;
+            try {
+              if (typeof window.queueHydrateRerender === 'function') window.queueHydrateRerender();
+            } catch (_) {}
+          }
+        }, 0);
+      });
+      select.addEventListener('change', () => {
+        setAdjustmentProjectType(id, String(select.value || '').trim());
+        adjustmentHoursPersist.flush();
+      });
+      typeCell.appendChild(select);
+    }
     tbody.appendChild(tr);
   });
   const totalRow = document.createElement('tr');
   totalRow.className = 'grand-total-row';
   totalRow.innerHTML = `
     <td>Grand Total</td>
+    <td></td>
     <td></td>
     <td class="num" data-col="regHours">${formatZeroDisplay(grandRegTotal)}</td>
     <td class="num" data-col="otHours">${formatZeroDisplay(grandOtTotal)}</td>
@@ -11731,13 +11820,14 @@ document.addEventListener('DOMContentLoaded', () => {
       showMsg('', msgId);
 
       const { data, from, to, dates, additionalIncomeByProject } = report;
-      const totalCols = 2 + dates.length + 2;
+      const totalCols = 2 + dates.length + 3;
       const hint = document.getElementById(hintId);
       if (hint) hint.textContent = `Range: ${from} - ${to}`;
 
       const dayLabel = isOvertime ? 'OTH' : 'RWH';
       const totalLabel = isOvertime ? 'TOTAL OT HRS' : 'TOTAL REG HRS';
       const grossLabel = isOvertime ? 'OT GROSS' : 'GROSS';
+      const adjLabel = 'Adj Hrs';
 
       // THEAD
       let thead1 = `<tr><th class="left" rowspan="2">PERSONNEL</th><th rowspan="2">RATE</th>`;
@@ -11745,18 +11835,18 @@ document.addEventListener('DOMContentLoaded', () => {
         const lbl = d.toLocaleDateString(undefined,{day:'2-digit',month:'short'});
         thead1 += `<th>${lbl}</th>`;
       });
-      thead1 += `<th rowspan="2">${totalLabel}</th><th rowspan="2">${grossLabel}</th></tr>`;
+      thead1 += `<th rowspan="2">${totalLabel}</th><th rowspan="2">${adjLabel}</th><th rowspan="2">${grossLabel}</th></tr>`;
       let thead2 = `<tr>${dates.map(()=>`<th>${dayLabel}</th>`).join('')}</tr>`;
 
       // Per-project TBODY blocks
       const tbodies = [];
-      let gHours=0,gGross=0;
+      let gHours=0,gAdj=0,gGross=0;
       const gDayTotals = dates.map(() => 0);
       const projects = Object.keys(data).sort();
 
       projects.forEach(proj=>{
         const empMap = data[proj];
-        let pHours=0,pGross=0;
+        let pHours=0,pAdj=0,pGross=0;
         const dayTotals = dates.map(() => 0);
         let rows='';
 
@@ -11781,9 +11871,13 @@ document.addEventListener('DOMContentLoaded', () => {
             return `<td class="num">${f2(hours)}</td>`;
           }).join('');
 
+          const adjHours = isOvertime
+            ? getOvertimeAdjustmentHours(empId)
+            : getRegularAdjustmentHours(empId);
           const otMult = getOvertimeMultiplier();
           const gross = isOvertime ? (rowHours * rate * otMult) : (rowHours * rate);
           pHours += rowHours;
+          pAdj += adjHours;
           pGross += gross;
 
           rows += `<tr>
@@ -11791,6 +11885,7 @@ document.addEventListener('DOMContentLoaded', () => {
             <td class="num">${f2(rate)}</td>
             ${cells}
             <td class="num">${f2(rowHours)}</td>
+            <td class="num">${f2(adjHours)}</td>
             <td class="num">${f2(gross)}</td>
           </tr>`;
         });
@@ -11810,6 +11905,7 @@ rows += `<tr class="allowance">
   <td class="left">Allowance</td>
   <td class="num">-</td>
   ${dates.map(()=>`<td class="num">-</td>`).join('')}
+  <td class="num">-</td>
   <td class="num">-</td>
   <td class="num">${f2(allow)}</td>
 </tr>`;
@@ -11831,6 +11927,7 @@ rows += `<tr class="allowance">
   <td class="num">-</td>
   ${dates.map(()=>`<td class="num">-</td>`).join('')}
   <td class="num">-</td>
+  <td class="num">-</td>
   <td class="num">${f2(amt)}</td>
 </tr>`;
         pGross += amt;
@@ -11843,10 +11940,11 @@ rows += `<tr class="allowance">
             <td class="num">-</td>
             ${dayTotals.map(dt => `<td class="num">${f2(dt)}</td>`).join('')}
             <td class="num">${f2(pHours)}</td>
+            <td class="num">${f2(pAdj)}</td>
             <td class="num">${f2(pGross)}</td>
           </tr>`;
 
-          gHours += pHours; gGross += pGross;
+          gHours += pHours; gAdj += pAdj; gGross += pGross;
           dayTotals.forEach((dt,i)=>{ gDayTotals[i] += dt; });
 
           tbodies.push(`<tbody class="proj-page">${rows}</tbody>`);
@@ -11857,6 +11955,7 @@ rows += `<tr class="allowance">
           <td class="num">-</td>
           ${gDayTotals.map(dt => `<td class="num">${f2(dt)}</td>`).join('')}
           <td class="num">${f2(gHours)}</td>
+          <td class="num">${f2(gAdj)}</td>
           <td class="num">${f2(gGross)}</td>
         </tr>`;
 
@@ -11901,16 +12000,16 @@ rows += `<tr class="allowance">
 
       const header = ['PROJECT','PERSONNEL','RATE']
         .concat(dayHeader)
-        .concat([isOvertime ? 'TOTAL OT HRS' : 'TOTAL REG HRS', isOvertime ? 'OT GROSS' : 'GROSS']);
+        .concat([isOvertime ? 'TOTAL OT HRS' : 'TOTAL REG HRS', 'ADJ HRS', isOvertime ? 'OT GROSS' : 'GROSS']);
       const rows = [header];
 
       const projects = Object.keys(data).sort();
-      let gHours=0,gGross=0;
+      let gHours=0,gAdj=0,gGross=0;
       const gDayTotals = dates.map(() => 0);
 
       projects.forEach(proj=>{
         const empMap = data[proj];
-        let pHours=0,pGross=0;
+        let pHours=0,pAdj=0,pGross=0;
         const dayTotals = dates.map(() => 0);
 
         Object.keys(empMap).sort((a,b)=>{
@@ -11934,11 +12033,14 @@ rows += `<tr class="allowance">
             dayCells.push(to2(hours));
           });
 
+          const adjHours = isOvertime
+            ? getOvertimeAdjustmentHours(empId)
+            : getRegularAdjustmentHours(empId);
           const otMult = getOvertimeMultiplier();
           const gross = isOvertime ? (rowHours * rate * otMult) : (rowHours * rate);
-          pHours += rowHours; pGross += gross;
+          pHours += rowHours; pAdj += adjHours; pGross += gross;
 
-          rows.push([proj, display, to2(rate)].concat(dayCells, [to2(rowHours), to2(gross)]));
+          rows.push([proj, display, to2(rate)].concat(dayCells, [to2(rowHours), to2(adjHours), to2(gross)]));
         });
 
         if (!isOvertime) {
@@ -11954,7 +12056,7 @@ rows += `<tr class="allowance">
             }, 0);
             if (allow && allow > 0) {
               const zeroCells = new Array(dates.length).fill('0.00');
-              rows.push([proj, 'Allowance', ''].concat(zeroCells, ['0.00', to2(allow)]));
+              rows.push([proj, 'Allowance', ''].concat(zeroCells, ['0.00', '0.00', to2(allow)]));
               pGross += allow;
             }
           } catch (e) { /* no-op if allowance data missing */ }
@@ -11965,25 +12067,25 @@ rows += `<tr class="allowance">
               const amt = parseFloat(aiMap[lbl]) || 0;
               if (amt <= 0) return;
               const zeroCells = new Array(dates.length).fill('0.00');
-              rows.push([proj, lbl || 'Additional Income', ''].concat(zeroCells, ['0.00', to2(amt)]));
+              rows.push([proj, lbl || 'Additional Income', ''].concat(zeroCells, ['0.00', '0.00', to2(amt)]));
               pGross += amt;
             });
           } catch (e) { /* ignore */ }
         }
 
-        gHours += pHours; gGross += pGross;
+        gHours += pHours; gAdj += pAdj; gGross += pGross;
         dayTotals.forEach((dt,i)=>{ gDayTotals[i] += dt; });
         const dayTotalsCells = dayTotals.map(dt=>to2(dt));
         rows.push([proj, 'Project Total', ''].concat(
           dayTotalsCells,
-          [to2(pHours), to2(pGross)]
+          [to2(pHours), to2(pAdj), to2(pGross)]
         ));
       });
 
       const gDayTotalsCells = gDayTotals.map(dt=>to2(dt));
       rows.push(['', 'Grand Total', ''].concat(
         gDayTotalsCells,
-        [to2(gHours), to2(gGross)]
+        [to2(gHours), to2(gAdj), to2(gGross)]
       ));
 
       return { rows, from, to };
