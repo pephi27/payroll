@@ -11708,6 +11708,26 @@ document.addEventListener('DOMContentLoaded', () => {
       return out;
     }
 
+    function getPayrollTotalOvertimePay(){
+      const readCellAmount = (cell) => {
+        if (!cell) return 0;
+        const raw = String(cell.textContent || '').replace(/,/g, '').trim();
+        if (!raw || raw === '-') return 0;
+        const num = Number(raw);
+        return Number.isFinite(num) ? num : 0;
+      };
+
+      const footerCell = document.querySelector('#payrollTotalsFoot [data-col="otPay"]');
+      const footerValue = readCellAmount(footerCell);
+      if (footerValue > 0) return roundToCents(footerValue);
+
+      let sum = 0;
+      document.querySelectorAll('#payrollTable tbody tr').forEach(tr => {
+        sum += readCellAmount(tr.querySelector('.otPay'));
+      });
+      return roundToCents(sum);
+    }
+
     // --- Robust rate lookup ---
     function getRateById(id){
       try{
@@ -12119,7 +12139,12 @@ rows += `<tr class="allowance">
           tbodies.push(`<tbody class="proj-page">${rows}</tbody>`);
         });
 
-        const foot = `<tr class="totals">
+      if (isOvertime) {
+        // Keep Reports overtime grand total exactly aligned with Payroll tab.
+        gGross = getPayrollTotalOvertimePay();
+      }
+
+      const foot = `<tr class="totals">
           <td class="left">Grand Total</td>
           <td class="num">-</td>
           ${gDayTotals.map(dt => `<td class="num">${f2(dt)}</td>`).join('')}
