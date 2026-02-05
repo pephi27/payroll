@@ -3738,6 +3738,11 @@ function updatePayrollSettings(partial, options = {}) {
   if (options.recalculate !== false && typeof calculateAll === 'function') {
     calculateAll();
   }
+  try {
+    if (typeof window !== 'undefined' && typeof window.rebuildReports === 'function') {
+      window.rebuildReports();
+    }
+  } catch (_) {}
 }
 
 async function loadPayrollSettings() {
@@ -3750,6 +3755,11 @@ async function loadPayrollSettings() {
     otMultiplier = getOvertimeMultiplier();
     syncPayrollSettingsInputs();
     if (typeof calculateAll === 'function') calculateAll();
+    try {
+      if (typeof window !== 'undefined' && typeof window.rebuildReports === 'function') {
+        window.rebuildReports();
+      }
+    } catch (_) {}
   } catch (err) {
     console.warn('Loading payroll settings failed', err);
   }
@@ -11749,12 +11759,46 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     function getRate(id, name){ return getRateById(id) || getRateByName(name); }
 
+
     function getEmployeeDisplayName(empId){
       try {
         const nm = storedEmployees && storedEmployees[empId] && storedEmployees[empId].name;
         if (nm) return String(nm);
       } catch (e) {}
       return String(empId || '');
+    }
+
+    function resolveReportEmployeeId(empId, fallbackName){
+      const rawId = String(empId || '').trim();
+      try {
+        const se = window.storedEmployees || {};
+        if (rawId && Object.prototype.hasOwnProperty.call(se, rawId)) return rawId;
+
+        if (rawId) {
+          const rawNum = Number(rawId);
+          if (Number.isFinite(rawNum)) {
+            for (const id of Object.keys(se)) {
+              const idNum = Number(id);
+              if (Number.isFinite(idNum) && idNum === rawNum) return id;
+            }
+          }
+        }
+
+        const name = String(fallbackName || '').trim().toUpperCase();
+        if (name) {
+          for (const [id, rec] of Object.entries(se)) {
+            if (String(rec?.name || '').trim().toUpperCase() === name) return id;
+          }
+        }
+      } catch (e) {}
+      return rawId;
+    }
+
+    function getReportEmployeeRate(empId, fallbackName){
+      const canonicalId = resolveReportEmployeeId(empId, fallbackName);
+      const payrollRate = Number(getEmployeeHourlyRate(canonicalId) || 0);
+      if (payrollRate > 0) return payrollRate;
+      return getRate(canonicalId || empId, fallbackName);
     }
 
     function getReportProjectBucket(projectId){
@@ -11788,8 +11832,9 @@ document.addEventListener('DOMContentLoaded', () => {
       const M = {};
       const trs = $$('#resultsTable tbody tr');
       trs.forEach(tr=>{
-        const id   = (tr.cells[0]?.textContent||'').trim();
+        const rawId = (tr.cells[0]?.textContent||'').trim();
         const name = (tr.cells[1]?.textContent||'').trim();
+        const id = resolveReportEmployeeId(rawId, name);
         const projId = readProjectFromRow(tr);
         const proj = getReportProjectBucket(projId);
         const date = (tr.cells[4]?.textContent||'').trim();
@@ -11828,13 +11873,13 @@ document.addEventListener('DOMContentLoaded', () => {
           const bucket = getReportProjectBucket(assignedPid);
           if (!bucket) return;
           const rate = Number(getEmployeeHourlyRate(empId) || 0);
-          const otMult = Number(getOvertimeMultiplier() || 0);
+          const effectiveOtRate = getEffectiveOvertimeRateForEmployee(empId, rate);
           if (!adjustmentsByProjectEmp[bucket]) adjustmentsByProjectEmp[bucket] = {};
           adjustmentsByProjectEmp[bucket][empId] = {
             regHours,
             otHours,
             regPay: regHours * rate,
-            otPay: otHours * rate * otMult
+            otPay: roundToCents(otHours * effectiveOtRate)
           };
         });
       } catch (e) { /* ignore */ }
@@ -11950,7 +11995,9 @@ document.addEventListener('DOMContentLoaded', () => {
         projectEmpIds.forEach(empId=>{
           const rec = empMap[empId] || { name: getEmployeeDisplayName(empId), days:{} };
           const display = rec.name || getEmployeeDisplayName(empId) || empId;
-          const rate = getRate(empId, display);
+          const canonicalEmpId = resolveReportEmployeeId(empId, display);
+          const rate = getReportEmployeeRate(canonicalEmpId, display);
+          const effectiveOtRate = getEffectiveOvertimeRateForEmployee(canonicalEmpId, rate);
           let rowHours=0;
 
           const cells = dates.map((d,i)=>{
@@ -11964,10 +12011,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
           const adj = adjustmentMap[empId] || { regHours: 0, otHours: 0, regPay: 0, otPay: 0 };
           const adjHours = isOvertime ? Number(adj.otHours || 0) : Number(adj.regHours || 0);
-          const otMult = getOvertimeMultiplier();
-          const baseGross = isOvertime ? (rowHours * rate * otMult) : (rowHours * rate);
-          const adjPay = isOvertime ? Number(adj.otPay || 0) : Number(adj.regPay || 0);
-          const gross = baseGross + adjPay;
+          const gross = isOvertime
+            ? roundToCents((rowHours + adjHours) * effectiveOtRate)
+            : roundToCents((rowHours * rate) + Number(adj.regPay || 0));
           pHours += rowHours;
           pAdj += adjHours;
           pGross += gross;
@@ -12118,7 +12164,9 @@ rows += `<tr class="allowance">
           const rec = empMap[empId] || { name: getEmployeeDisplayName(empId), days:{} };
           const display = rec.name || getEmployeeDisplayName(empId) || empId;
 
-          const rate = getRate(empId, display);
+          const canonicalEmpId = resolveReportEmployeeId(empId, display);
+          const rate = getReportEmployeeRate(canonicalEmpId, display);
+          const effectiveOtRate = getEffectiveOvertimeRateForEmployee(canonicalEmpId, rate);
 
           let rowHours=0;
           const dayCells = [];
@@ -12133,10 +12181,9 @@ rows += `<tr class="allowance">
 
           const adj = adjustmentMap[empId] || { regHours: 0, otHours: 0, regPay: 0, otPay: 0 };
           const adjHours = isOvertime ? Number(adj.otHours || 0) : Number(adj.regHours || 0);
-          const otMult = getOvertimeMultiplier();
-          const baseGross = isOvertime ? (rowHours * rate * otMult) : (rowHours * rate);
-          const adjPay = isOvertime ? Number(adj.otPay || 0) : Number(adj.regPay || 0);
-          const gross = baseGross + adjPay;
+          const gross = isOvertime
+            ? roundToCents((rowHours + adjHours) * effectiveOtRate)
+            : roundToCents((rowHours * rate) + Number(adj.regPay || 0));
           pHours += rowHours; pAdj += adjHours; pGross += gross;
 
           rows.push([projectLabel, display, to2(rate)].concat(dayCells, [to2(rowHours), to2(adjHours), to2(gross)]));
