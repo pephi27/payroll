@@ -13327,16 +13327,13 @@ rows += `<tr class="allowance">
 
   function renderMasterReport(){
     const host = document.getElementById('masterReportContainer'); if(!host) return;
-    const prows = computeProjectTotals();
+    const prows = computeProjectTotals().filter(row => safe(row && row.company).trim().length);
     const g = prows.reduce((acc,r)=>{
-      acc.reg += Number((r && r.regHrs != null) ? r.regHrs : 0);
-      acc.ot += Number((r && r.otHrs != null) ? r.otHrs : 0);
       acc.regTotal += Number((r && r.regTotal != null) ? r.regTotal : 0);
       acc.otTotal += Number((r && r.otTotal != null) ? r.otTotal : 0);
-      acc.h += Number((r && r.totalHrs != null) ? r.totalHrs : 0);
       acc.t += Number((r && r.total != null) ? r.total : 0);
       return acc;
-    }, {reg:0, ot:0, regTotal:0, otTotal:0, h:0, t:0});
+    }, {regTotal:0, otTotal:0, t:0});
     let html = '';
     html += '<h2>PAYROLL REPORT</h2>';
     const [rangeStart, rangeEnd] = getPayrollRange();
@@ -13352,7 +13349,7 @@ rows += `<tr class="allowance">
       : ['Edifice','Portafolio'];
     const normalizeCompanyLabel = (val) => {
       const label = safe(val).trim();
-      return label.length ? label : 'Unassigned';
+      return label.length ? label : '';
     };
     const projectGroups = {};
     const ensureProjectGroup = (companyName) => {
@@ -13382,23 +13379,17 @@ rows += `<tr class="allowance">
     };
     const defaultOrder = (defaults.length ? defaults : ['Edifice','Portafolio']).map(normalizeCompanyLabel);
     defaultOrder.forEach(pushProjectCompany);
-    Object.keys(projectGroups).sort((a,b)=>{
-      const aUn = (a === 'Unassigned');
-      const bUn = (b === 'Unassigned');
-      if (aUn && !bUn) return 1;
-      if (!aUn && bUn) return -1;
-      return a.localeCompare(b);
-    }).forEach(pushProjectCompany);
+    Object.keys(projectGroups).sort((a,b)=> a.localeCompare(b)).forEach(pushProjectCompany);
 
     html += '<div class="mr-section" style="margin-top:16px;">';
     html += '<h4 class="mr-project-title">PROJECT</h4>';
-    html += '<table class="mr-table"><thead><tr><th class="left">NAME</th><th class="mr-num">REGULAR (HOURS)</th><th class="mr-num">REGULAR GROSS</th><th class="mr-num">OVERTIME (HOURS)</th><th class="mr-num">OVERTIME GROSS</th><th class="mr-num">TOTAL HRS</th><th class="mr-num">GRAND TOTAL</th></tr></thead><tbody>';
+    html += '<table class="mr-table"><thead><tr><th class="left">NAME</th><th class="mr-num">REGULAR PAY</th><th class="mr-num">OVERTIME PAY</th><th class="mr-num">GRAND TOTAL</th></tr></thead><tbody>';
     if (!projectOrder.length){
       if (!prows.length){
-        html += '<tr><td class="left" colspan="7">No project totals available.</td></tr>';
+        html += '<tr><td class="left" colspan="4">No project totals available.</td></tr>';
       } else {
         prows.forEach(r=>{
-          html += `<tr><td class="left">${safe(r.name)}</td><td class="mr-num">${f2(r.regHrs)}</td><td class="mr-num">${f2(r.regTotal)}</td><td class="mr-num">${f2(r.otHrs)}</td><td class="mr-num">${f2(r.otTotal)}</td><td class="mr-num">${f2(r.totalHrs)}</td><td class="mr-num">${f2(r.total)}</td></tr>`;
+          html += `<tr><td class="left">${safe(r.name)}</td><td class="mr-num">${f2(r.regTotal)}</td><td class="mr-num">${f2(r.otTotal)}</td><td class="mr-num">${f2(r.total)}</td></tr>`;
         });
       }
     } else {
@@ -13406,15 +13397,15 @@ rows += `<tr class="allowance">
         const group = projectGroups[companyName];
         if (!group || !group.rows.length) return;
         const companyLabel = normalizeCompanyLabel(companyName);
-        html += `<tr class="mr-company"><th colspan="7">${safe(companyLabel)}</th></tr>`;
+        html += `<tr class="mr-company"><th colspan="4">${safe(companyLabel)}</th></tr>`;
         const sortedRows = group.rows.slice().sort((a,b)=> safe(a && a.name).localeCompare(safe(b && b.name)));
         sortedRows.forEach(r=>{
-          html += `<tr><td class="left">${safe(r && r.name)}</td><td class="mr-num">${f2(r && r.regHrs)}</td><td class="mr-num">${f2(r && r.regTotal)}</td><td class="mr-num">${f2(r && r.otHrs)}</td><td class="mr-num">${f2(r && r.otTotal)}</td><td class="mr-num">${f2(r && r.totalHrs)}</td><td class="mr-num">${f2(r && r.total)}</td></tr>`;
+          html += `<tr><td class="left">${safe(r && r.name)}</td><td class="mr-num">${f2(r && r.regTotal)}</td><td class="mr-num">${f2(r && r.otTotal)}</td><td class="mr-num">${f2(r && r.total)}</td></tr>`;
         });
-        html += `<tr class="mr-subtotal"><td class="left" style="font-weight:600;">Subtotal - ${safe(companyLabel)}</td><td class="mr-num" style="font-weight:600;">${f2(group.regHrs)}</td><td class="mr-num" style="font-weight:600;">${f2(group.regTotal)}</td><td class="mr-num" style="font-weight:600;">${f2(group.otHrs)}</td><td class="mr-num" style="font-weight:600;">${f2(group.otTotal)}</td><td class="mr-num" style="font-weight:600;">${f2(group.totalHrs)}</td><td class="mr-num" style="font-weight:600;">${f2(group.total)}</td></tr>`;
+        html += `<tr class="mr-subtotal"><td class="left" style="font-weight:600;">Subtotal - ${safe(companyLabel)}</td><td class="mr-num" style="font-weight:600;">${f2(group.regTotal)}</td><td class="mr-num" style="font-weight:600;">${f2(group.otTotal)}</td><td class="mr-num" style="font-weight:600;">${f2(group.total)}</td></tr>`;
       });
     }
-    html += `</tbody><tfoot><tr><td class="left">Grand Total</td><td class="mr-num">${f2(g.reg)}</td><td class="mr-num">${f2(g.regTotal)}</td><td class="mr-num">${f2(g.ot)}</td><td class="mr-num">${f2(g.otTotal)}</td><td class="mr-num">${f2(g.h)}</td><td class="mr-num">${f2(g.t)}</td></tr></tfoot></table>`;
+    html += `</tbody><tfoot><tr><td class="left">Grand Total</td><td class="mr-num">${f2(g.regTotal)}</td><td class="mr-num">${f2(g.otTotal)}</td><td class="mr-num">${f2(g.t)}</td></tr></tfoot></table>`;
     html += '</div>';
 
     host.innerHTML = html;
