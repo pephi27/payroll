@@ -11820,64 +11820,27 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function collect(fromStr, toStr){
       const M = {};
-      const searchInput = document.getElementById('dtrSearchName');
-      const filterSelect = document.getElementById('filterProject');
-      const dtrStartEl = document.getElementById('filterStart') || document.getElementById('dtrDateFrom');
-      const dtrEndEl = document.getElementById('filterEnd') || document.getElementById('dtrDateTo');
-      const original = {
-        search: searchInput ? searchInput.value : '',
-        project: filterSelect ? filterSelect.value : 'all',
-        from: dtrStartEl ? dtrStartEl.value : '',
-        to: dtrEndEl ? dtrEndEl.value : '',
-        lsProject: null
-      };
-      try {
-        try { original.lsProject = localStorage.getItem(LS_FILTER_PROJECT); } catch(_) {}
-        if (searchInput) searchInput.value = '';
-        if (filterSelect) {
-          filterSelect.value = 'all';
-          if (typeof currentProjectFilter !== 'undefined') currentProjectFilter = 'all';
-          try { localStorage.setItem(LS_FILTER_PROJECT, 'all'); } catch(_) {}
-        }
-        if (dtrStartEl && fromStr) dtrStartEl.value = fromStr;
-        if (dtrEndEl && toStr) dtrEndEl.value = toStr;
-        if (typeof renderResults === 'function') renderResults();
+      const trs = $$('#resultsTable tbody tr');
+      trs.forEach(tr=>{
+        const rawId = (tr.cells[0]?.textContent||'').trim();
+        const name = (tr.cells[1]?.textContent||'').trim();
+        const id = resolveReportEmployeeId(rawId, name);
+        const projId = readProjectFromRow(tr);
+        const proj = getReportProjectBucket(projId);
+        const date = (tr.cells[4]?.textContent||'').trim();
+        const rwh = toNum(tr.cells[11]?.textContent) || toNum(tr.querySelector('.regHrs')?.value);
+        const oth = toNum(tr.cells[12]?.textContent) || toNum(tr.querySelector('.otHrs')?.value);
+        if(!id || !date || !proj) return;
+        const d = new Date(date).setHours(0,0,0,0);
+        if(fromStr){ const f = new Date(fromStr).setHours(0,0,0,0); if(d < f) return; }
+        if(toStr){ const t = new Date(toStr).setHours(0,0,0,0); if(d > t) return; }
 
-        const trs = $$('#resultsTable tbody tr');
-        trs.forEach(tr=>{
-          const rawId = (tr.cells[0]?.textContent||'').trim();
-          const name = (tr.cells[1]?.textContent||'').trim();
-          const id = resolveReportEmployeeId(rawId, name);
-          const projId = readProjectFromRow(tr);
-          const proj = getReportProjectBucket(projId);
-          const date = (tr.cells[4]?.textContent||'').trim();
-          const rwh = toNum(tr.cells[11]?.textContent) || toNum(tr.querySelector('.regHrs')?.value);
-          const oth = toNum(tr.cells[12]?.textContent) || toNum(tr.querySelector('.otHrs')?.value);
-          if(!id || !date || !proj) return;
-          const d = new Date(date).setHours(0,0,0,0);
-          if(fromStr){ const f = new Date(fromStr).setHours(0,0,0,0); if(d < f) return; }
-          if(toStr){ const t = new Date(toStr).setHours(0,0,0,0); if(d > t) return; }
-
-          (M[proj] = M[proj]||{});
-          (M[proj][id] = M[proj][id]||{ name, days:{} });
-          const slot = M[proj][id].days[d] || { rwh:0, oth:0 };
-          slot.rwh += rwh; slot.oth += oth;
-          M[proj][id].days[d] = slot;
-        });
-      } finally {
-        if (searchInput) searchInput.value = original.search;
-        if (filterSelect) {
-          filterSelect.value = original.project;
-          if (typeof currentProjectFilter !== 'undefined') currentProjectFilter = original.project;
-          try {
-            if (original.lsProject !== null && original.lsProject !== undefined) localStorage.setItem(LS_FILTER_PROJECT, original.lsProject);
-            else localStorage.removeItem(LS_FILTER_PROJECT);
-          } catch(_) {}
-        }
-        if (dtrStartEl) dtrStartEl.value = original.from;
-        if (dtrEndEl) dtrEndEl.value = original.to;
-        if (typeof renderResults === 'function') renderResults();
-      }
+        (M[proj] = M[proj]||{});
+        (M[proj][id] = M[proj][id]||{ name, days:{} });
+        const slot = M[proj][id].days[d] || { rwh:0, oth:0 };
+        slot.rwh += rwh; slot.oth += oth;
+        M[proj][id].days[d] = slot;
+      });
       return M;
     }
 
