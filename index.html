@@ -11828,13 +11828,13 @@ document.addEventListener('DOMContentLoaded', () => {
           const bucket = getReportProjectBucket(assignedPid);
           if (!bucket) return;
           const rate = Number(getEmployeeHourlyRate(empId) || 0);
-          const otMult = Number(getOvertimeMultiplier() || 0);
+          const effectiveOtRate = getEffectiveOvertimeRateForEmployee(empId, rate);
           if (!adjustmentsByProjectEmp[bucket]) adjustmentsByProjectEmp[bucket] = {};
           adjustmentsByProjectEmp[bucket][empId] = {
             regHours,
             otHours,
             regPay: regHours * rate,
-            otPay: otHours * rate * otMult
+            otPay: roundToCents(otHours * effectiveOtRate)
           };
         });
       } catch (e) { /* ignore */ }
@@ -11950,7 +11950,9 @@ document.addEventListener('DOMContentLoaded', () => {
         projectEmpIds.forEach(empId=>{
           const rec = empMap[empId] || { name: getEmployeeDisplayName(empId), days:{} };
           const display = rec.name || getEmployeeDisplayName(empId) || empId;
-          const rate = getRate(empId, display);
+          const payrollRate = Number(getEmployeeHourlyRate(empId) || 0);
+          const rate = payrollRate || getRate(empId, display);
+          const effectiveOtRate = getEffectiveOvertimeRateForEmployee(empId, rate);
           let rowHours=0;
 
           const cells = dates.map((d,i)=>{
@@ -11964,10 +11966,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
           const adj = adjustmentMap[empId] || { regHours: 0, otHours: 0, regPay: 0, otPay: 0 };
           const adjHours = isOvertime ? Number(adj.otHours || 0) : Number(adj.regHours || 0);
-          const otMult = getOvertimeMultiplier();
-          const baseGross = isOvertime ? (rowHours * rate * otMult) : (rowHours * rate);
-          const adjPay = isOvertime ? Number(adj.otPay || 0) : Number(adj.regPay || 0);
-          const gross = baseGross + adjPay;
+          const gross = isOvertime
+            ? roundToCents((rowHours + adjHours) * effectiveOtRate)
+            : roundToCents((rowHours * rate) + Number(adj.regPay || 0));
           pHours += rowHours;
           pAdj += adjHours;
           pGross += gross;
@@ -12118,7 +12119,9 @@ rows += `<tr class="allowance">
           const rec = empMap[empId] || { name: getEmployeeDisplayName(empId), days:{} };
           const display = rec.name || getEmployeeDisplayName(empId) || empId;
 
-          const rate = getRate(empId, display);
+          const payrollRate = Number(getEmployeeHourlyRate(empId) || 0);
+          const rate = payrollRate || getRate(empId, display);
+          const effectiveOtRate = getEffectiveOvertimeRateForEmployee(empId, rate);
 
           let rowHours=0;
           const dayCells = [];
@@ -12133,10 +12136,9 @@ rows += `<tr class="allowance">
 
           const adj = adjustmentMap[empId] || { regHours: 0, otHours: 0, regPay: 0, otPay: 0 };
           const adjHours = isOvertime ? Number(adj.otHours || 0) : Number(adj.regHours || 0);
-          const otMult = getOvertimeMultiplier();
-          const baseGross = isOvertime ? (rowHours * rate * otMult) : (rowHours * rate);
-          const adjPay = isOvertime ? Number(adj.otPay || 0) : Number(adj.regPay || 0);
-          const gross = baseGross + adjPay;
+          const gross = isOvertime
+            ? roundToCents((rowHours + adjHours) * effectiveOtRate)
+            : roundToCents((rowHours * rate) + Number(adj.regPay || 0));
           pHours += rowHours; pAdj += adjHours; pGross += gross;
 
           rows.push([projectLabel, display, to2(rate)].concat(dayCells, [to2(rowHours), to2(adjHours), to2(gross)]));
