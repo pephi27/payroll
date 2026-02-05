@@ -13009,6 +13009,8 @@ rows += `<tr class="allowance">
           company: entry.company || '',
           regHrs,
           otHrs,
+          regTotal,
+          otTotal,
           totalHrs: regHrs + otHrs,
           total: regTotal + otTotal
         });
@@ -13075,13 +13077,14 @@ rows += `<tr class="allowance">
       const rates = (typeof payrollRates!=='undefined' && payrollRates) ? payrollRates : {};
       const se = (typeof storedEmployees!=='undefined' && storedEmployees) ? storedEmployees : {};
       Object.keys(projMap).forEach(p=>{
-        const rec = projMap[p]; let regHrs=0, otHrs=0, gross=0;
+        const rec = projMap[p]; let regHrs=0, otHrs=0, regTotal=0, otTotal=0;
         Object.keys(rec.emp).forEach(id=>{
           const e = rec.emp[id];
           const rate = num(se?.[id]?.hourlyRate ?? rates?.[id]);
           regHrs += e.rwh;
           otHrs += e.oth;
-          gross += (e.rwh * rate) + (e.oth * rate * otMult);
+          regTotal += (e.rwh * rate);
+          otTotal += (e.oth * rate * otMult);
         });
         try{
           const allow = Object.keys((window.bantay||{})).reduce((sum, empId)=>{
@@ -13092,16 +13095,19 @@ rows += `<tr class="allowance">
             const amt = num((window.bantay||{})[empId]);
             return (matchesById || matchesByName) ? (sum + amt) : sum;
           }, 0);
-          gross += allow;
+          regTotal += allow;
         }catch(_){ }
         const meta = rec.meta || resolveProjectDetails('', p);
         const displayName = meta.name || p;
         const company = meta.company || '';
+        const gross = regTotal + otTotal;
         rows.push({
           name: displayName,
           company,
           regHrs: regHrs,
           otHrs: otHrs,
+          regTotal: regTotal,
+          otTotal: otTotal,
           totalHrs: regHrs + otHrs,
           total: gross
         });
@@ -13123,15 +13129,16 @@ rows += `<tr class="allowance">
 
   function renderMasterReport(){
     const host = document.getElementById('masterReportContainer'); if(!host) return;
-    const totalsByCompany = computeContributionTotals();
     const prows = computeProjectTotals();
     const g = prows.reduce((acc,r)=>{
       acc.reg += Number((r && r.regHrs != null) ? r.regHrs : 0);
       acc.ot += Number((r && r.otHrs != null) ? r.otHrs : 0);
+      acc.regTotal += Number((r && r.regTotal != null) ? r.regTotal : 0);
+      acc.otTotal += Number((r && r.otTotal != null) ? r.otTotal : 0);
       acc.h += Number((r && r.totalHrs != null) ? r.totalHrs : 0);
       acc.t += Number((r && r.total != null) ? r.total : 0);
       return acc;
-    }, {reg:0, ot:0, h:0, t:0});
+    }, {reg:0, ot:0, regTotal:0, otTotal:0, h:0, t:0});
     let html = '';
     html += '<h2>PAYROLL REPORT</h2>';
     const [rangeStart, rangeEnd] = getPayrollRange();
@@ -13141,7 +13148,6 @@ rows += `<tr class="allowance">
     } else {
       html += '<div class="mr-period">Payroll Period: <span class="mr-period-missing">Not set</span></div>';
     }
-    const makeBucket = makeContributionBucket;
     const hasCompanyOptions = (typeof COMPANY_OPTIONS !== 'undefined') && Array.isArray(COMPANY_OPTIONS);
     const defaults = hasCompanyOptions
       ? COMPANY_OPTIONS.filter(name => typeof name === 'string' && name.trim().length)
@@ -13150,43 +13156,10 @@ rows += `<tr class="allowance">
       const label = safe(val).trim();
       return label.length ? label : 'Unassigned';
     };
-    const seen = new Set();
-    const orderedCompanies = [];
-    const pushCompany = (name) => {
-      const label = (typeof name === 'string' && name.trim().length) ? name.trim() : 'Unassigned';
-      if (seen.has(label)) return;
-      seen.add(label);
-      orderedCompanies.push(label);
-    };
-    (defaults.length ? defaults : ['Edifice','Portafolio']).forEach(pushCompany);
-    Object.keys(totalsByCompany || {}).forEach(pushCompany);
-    if (!orderedCompanies.length) pushCompany('Unassigned');
-    const sitePayrollTable = renderSitePayrollTable(orderedCompanies, totalsByCompany, { makeBucket, safe });
-    html += '<div class="mr-section">';
-    html += sitePayrollTable;
-    html += '</div>';
-
-    const allCompanyBuckets = (totalsByCompany && typeof totalsByCompany === 'object')
-      ? Object.values(totalsByCompany)
-      : [];
-    const overallBucket = allCompanyBuckets.reduce((acc, bucket) => {
-      CONTRIBUTION_FIELDS.forEach(key => {
-        const val = Number(bucket && bucket[key] != null ? bucket[key] : 0);
-        acc[key] += val;
-      });
-      return acc;
-    }, makeBucket());
-    if (orderedCompanies.length){
-      html += '<div class="mr-section mr-grand-contributions">';
-      html += '<h4>GRAND TOTAL - CONTRIBUTIONS</h4>';
-      html += renderContributionTable(overallBucket, { bold: true, combineEEER: true });
-      html += '</div>';
-    }
-
     const projectGroups = {};
     const ensureProjectGroup = (companyName) => {
       const label = normalizeCompanyLabel(companyName);
-      if (!projectGroups[label]) projectGroups[label] = { label, rows: [], regHrs:0, otHrs:0, totalHrs:0, total:0 };
+      if (!projectGroups[label]) projectGroups[label] = { label, rows: [], regHrs:0, otHrs:0, regTotal:0, otTotal:0, totalHrs:0, total:0 };
       return projectGroups[label];
     };
     prows.forEach(row => {
@@ -13194,6 +13167,8 @@ rows += `<tr class="allowance">
       group.rows.push(row);
       group.regHrs += Number((row && row.regHrs != null) ? row.regHrs : 0);
       group.otHrs += Number((row && row.otHrs != null) ? row.otHrs : 0);
+      group.regTotal += Number((row && row.regTotal != null) ? row.regTotal : 0);
+      group.otTotal += Number((row && row.otTotal != null) ? row.otTotal : 0);
       group.totalHrs += Number((row && row.totalHrs != null) ? row.totalHrs : 0);
       group.total += Number((row && row.total != null) ? row.total : 0);
     });
@@ -13219,13 +13194,13 @@ rows += `<tr class="allowance">
 
     html += '<div class="mr-section" style="margin-top:16px;">';
     html += '<h4 class="mr-project-title">PROJECT</h4>';
-    html += '<table class="mr-table"><thead><tr><th class="left">NAME</th><th class="mr-num">REG HRS</th><th class="mr-num">OT HRS</th><th class="mr-num">TOTAL HRS</th><th class="mr-num">GRAND TOTAL</th></tr></thead><tbody>';
+    html += '<table class="mr-table"><thead><tr><th class="left">NAME</th><th class="mr-num">REGULAR (HOURS)</th><th class="mr-num">REGULAR GROSS</th><th class="mr-num">OVERTIME (HOURS)</th><th class="mr-num">OVERTIME GROSS</th><th class="mr-num">TOTAL HRS</th><th class="mr-num">GRAND TOTAL</th></tr></thead><tbody>';
     if (!projectOrder.length){
       if (!prows.length){
-        html += '<tr><td class="left" colspan="5">No project totals available.</td></tr>';
+        html += '<tr><td class="left" colspan="7">No project totals available.</td></tr>';
       } else {
         prows.forEach(r=>{
-          html += `<tr><td class="left">${safe(r.name)}</td><td class="mr-num">${f2(r.regHrs)}</td><td class="mr-num">${f2(r.otHrs)}</td><td class="mr-num">${f2(r.totalHrs)}</td><td class="mr-num">${f2(r.total)}</td></tr>`;
+          html += `<tr><td class="left">${safe(r.name)}</td><td class="mr-num">${f2(r.regHrs)}</td><td class="mr-num">${f2(r.regTotal)}</td><td class="mr-num">${f2(r.otHrs)}</td><td class="mr-num">${f2(r.otTotal)}</td><td class="mr-num">${f2(r.totalHrs)}</td><td class="mr-num">${f2(r.total)}</td></tr>`;
         });
       }
     } else {
@@ -13233,15 +13208,15 @@ rows += `<tr class="allowance">
         const group = projectGroups[companyName];
         if (!group || !group.rows.length) return;
         const companyLabel = normalizeCompanyLabel(companyName);
-        html += `<tr class="mr-company"><th colspan="5">${safe(companyLabel)}</th></tr>`;
+        html += `<tr class="mr-company"><th colspan="7">${safe(companyLabel)}</th></tr>`;
         const sortedRows = group.rows.slice().sort((a,b)=> safe(a && a.name).localeCompare(safe(b && b.name)));
         sortedRows.forEach(r=>{
-          html += `<tr><td class="left">${safe(r && r.name)}</td><td class="mr-num">${f2(r && r.regHrs)}</td><td class="mr-num">${f2(r && r.otHrs)}</td><td class="mr-num">${f2(r && r.totalHrs)}</td><td class="mr-num">${f2(r && r.total)}</td></tr>`;
+          html += `<tr><td class="left">${safe(r && r.name)}</td><td class="mr-num">${f2(r && r.regHrs)}</td><td class="mr-num">${f2(r && r.regTotal)}</td><td class="mr-num">${f2(r && r.otHrs)}</td><td class="mr-num">${f2(r && r.otTotal)}</td><td class="mr-num">${f2(r && r.totalHrs)}</td><td class="mr-num">${f2(r && r.total)}</td></tr>`;
         });
-        html += `<tr class="mr-subtotal"><td class="left" style="font-weight:600;">Subtotal - ${safe(companyLabel)}</td><td class="mr-num" style="font-weight:600;">${f2(group.regHrs)}</td><td class="mr-num" style="font-weight:600;">${f2(group.otHrs)}</td><td class="mr-num" style="font-weight:600;">${f2(group.totalHrs)}</td><td class="mr-num" style="font-weight:600;">${f2(group.total)}</td></tr>`;
+        html += `<tr class="mr-subtotal"><td class="left" style="font-weight:600;">Subtotal - ${safe(companyLabel)}</td><td class="mr-num" style="font-weight:600;">${f2(group.regHrs)}</td><td class="mr-num" style="font-weight:600;">${f2(group.regTotal)}</td><td class="mr-num" style="font-weight:600;">${f2(group.otHrs)}</td><td class="mr-num" style="font-weight:600;">${f2(group.otTotal)}</td><td class="mr-num" style="font-weight:600;">${f2(group.totalHrs)}</td><td class="mr-num" style="font-weight:600;">${f2(group.total)}</td></tr>`;
       });
     }
-    html += `</tbody><tfoot><tr><td class="left">Grand Total</td><td class="mr-num">${f2(g.reg)}</td><td class="mr-num">${f2(g.ot)}</td><td class="mr-num">${f2(g.h)}</td><td class="mr-num">${f2(g.t)}</td></tr></tfoot></table>`;
+    html += `</tbody><tfoot><tr><td class="left">Grand Total</td><td class="mr-num">${f2(g.reg)}</td><td class="mr-num">${f2(g.regTotal)}</td><td class="mr-num">${f2(g.ot)}</td><td class="mr-num">${f2(g.otTotal)}</td><td class="mr-num">${f2(g.h)}</td><td class="mr-num">${f2(g.t)}</td></tr></tfoot></table>`;
     html += '</div>';
 
     host.innerHTML = html;
