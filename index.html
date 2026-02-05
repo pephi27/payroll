@@ -11771,6 +11771,12 @@ document.addEventListener('DOMContentLoaded', () => {
       return (sp[bucket] && sp[bucket].name) ? sp[bucket].name : 'Unknown Project';
     }
 
+    function getFilteredReportProjects(data){
+      return Object.keys(data || {})
+        .filter(proj => proj !== '__unknown__')
+        .sort((a,b)=>getReportProjectLabel(a).localeCompare(getReportProjectLabel(b)));
+    }
+
     function readProjectFromRow(tr){
       const sel = tr.cells[2]?.querySelector('select');
       if (sel){
@@ -11924,7 +11930,7 @@ document.addEventListener('DOMContentLoaded', () => {
       const tbodies = [];
       let gHours=0,gAdj=0,gGross=0;
       const gDayTotals = dates.map(() => 0);
-      const projects = Object.keys(data).sort((a,b)=>getReportProjectLabel(a).localeCompare(getReportProjectLabel(b)));
+      const projects = getFilteredReportProjects(data);
 
       projects.forEach(proj=>{
         const empMap = data[proj] || {};
@@ -12092,7 +12098,7 @@ rows += `<tr class="allowance">
         .concat([isOvertime ? 'TOTAL OT HRS' : 'TOTAL REG HRS', 'ADJ HRS', isOvertime ? 'OT GROSS' : 'GROSS']);
       const rows = [header];
 
-      const projects = Object.keys(data).sort((a,b)=>getReportProjectLabel(a).localeCompare(getReportProjectLabel(b)));
+      const projects = getFilteredReportProjects(data);
       let gHours=0,gAdj=0,gGross=0;
       const gDayTotals = dates.map(() => 0);
 
@@ -13327,7 +13333,11 @@ rows += `<tr class="allowance">
 
   function renderMasterReport(){
     const host = document.getElementById('masterReportContainer'); if(!host) return;
-    const prows = computeProjectTotals();
+    const isUnassignedProject = (row) => {
+      const label = String((row && row.name) || '').trim().toLowerCase();
+      return !label || label === 'unassigned';
+    };
+    const prows = computeProjectTotals().filter(row => !isUnassignedProject(row));
     const g = prows.reduce((acc,r)=>{
       acc.regTotal += Number((r && r.regTotal != null) ? r.regTotal : 0);
       acc.otTotal += Number((r && r.otTotal != null) ? r.otTotal : 0);
