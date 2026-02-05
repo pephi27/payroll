@@ -21835,23 +21835,19 @@ document.addEventListener('DOMContentLoaded', async function () {
 // Toggle Payroll table inputs read-only state based on lock
 function setPayrollLockedUI(locked){
   try {
-    // 1) Toggle only editable payroll grids; keep period controls and tab navigation clickable.
+    // 1) Toggle form controls (inputs only) inside Payroll panel; leave tab buttons enabled
     var panel = document.getElementById('panelPayroll');
     if (panel){
-      var editableFields = panel.querySelectorAll(
-        '#payrollTable input, #payrollTable select, #payrollTable textarea,' +
-        '#deductionsTable input.deduction-input, #deductionsTable select, #deductionsTable textarea,' +
-        '#overtimeTable input, #overtimeTable select, #overtimeTable textarea,' +
-        '#additionalIncomeTable input, #additionalIncomeTable select, #additionalIncomeTable textarea,' +
-        '#loanTrackerTable input, #loanTrackerTable select, #loanTrackerTable textarea'
-      );
-      editableFields.forEach(function(el){ el.disabled = !!locked; });
+      var inputs = panel.querySelectorAll('input, select, textarea');
+      inputs.forEach(function(el){ el.disabled = !!locked; });
       // Explicitly disable file-import fields when locked
       if (locked){
         panel.querySelectorAll('#importSss').forEach(function(el){ el.disabled = true; });
       }
     }
-    // 2) Re-assert on DOM mutations while locked (payroll table only)
+    // 2) Also toggle just the payroll grid controls for safety
+    document.querySelectorAll('#payrollTable input, #payrollTable select, #payrollTable textarea').forEach(function(el){ el.disabled = !!locked; });
+    // 3) Re-assert on DOM mutations while locked (payroll table only)
     var tbl = document.getElementById('payrollTable');
     if (tbl){
       if (locked && !tbl.__lockObs){
