@@ -15715,6 +15715,18 @@ function toMins(hm){
 }
 function minsToDecimal(mins){ return (mins/60).toFixed(2); }
 
+function queueDtrDropdownRender(){
+  const run = () => {
+    const active = document.activeElement;
+    if (active && active.closest && active.closest('#resultsTable') && active.tagName === 'SELECT') {
+      setTimeout(run, 120);
+      return;
+    }
+    renderResults();
+  };
+  setTimeout(run, 0);
+}
+
 function buildScheduleDropdown(empId, date, currentScheduleId){
   const sel = document.createElement('select');
   Object.keys(storedSchedules).forEach(sid => {
@@ -15724,10 +15736,11 @@ function buildScheduleDropdown(empId, date, currentScheduleId){
     if(sid === currentScheduleId) o.selected = true;
     sel.appendChild(o);
   });
+  sel.addEventListener('click', (ev) => ev.stopPropagation());
   sel.addEventListener('change', ()=>{
     overridesSchedules[empId + '___' + date] = sel.value;
     saveOverrides();
-    renderResults();
+    queueDtrDropdownRender();
   });
   return sel;
 }
@@ -15751,10 +15764,11 @@ function buildProjectDropdown(empId, date, currentProjectId){
     o.selected = true;
     sel.appendChild(o);
   }
+  sel.addEventListener('click', (ev) => ev.stopPropagation());
   sel.addEventListener('change', ()=>{
     overridesProjects[empId + '___' + date] = sel.value;
     saveOverrides();
-    renderResults();
+    queueDtrDropdownRender();
   });
   return sel;
 }
@@ -15783,12 +15797,13 @@ function buildProjectDropdownHalf(empId, date, half, currentProjectId){
     o.selected = true;
     sel.appendChild(o);
   }
+  sel.addEventListener('click', (ev) => ev.stopPropagation());
   sel.addEventListener('change', () => {
     // Persist override keyed by empId + date + half
     overridesProjects[empId + '___' + date + '___' + half] = sel.value;
     saveOverrides();
     // Re-render to apply changes
-    renderResults();
+    queueDtrDropdownRender();
   });
   return sel;
 }
@@ -15804,10 +15819,11 @@ function buildScheduleDropdownHalf(empId, date, half, currentScheduleId){
     if(sid === currentScheduleId) o.selected = true;
     sel.appendChild(o);
   });
+  sel.addEventListener('click', (ev) => ev.stopPropagation());
   sel.addEventListener('change', () => {
     overridesSchedules[empId + '___' + date + '___' + half] = sel.value;
     saveOverrides();
-    renderResults();
+    queueDtrDropdownRender();
   });
   return sel;
 }
