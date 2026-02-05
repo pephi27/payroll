@@ -3536,33 +3536,7 @@ function getEmployeeHourlyRate(empId) {
   return Number.isFinite(rate) ? rate : 0;
 }
 
-function getSnapshotPayrollRow(empId) {
-  if (!empId) return null;
-  try {
-    const snap = (typeof window !== 'undefined') ? window.__snapshotPayrollOverride : null;
-    if (!snap || !Array.isArray(snap.rows)) return null;
-    const target = String(empId).trim();
-    return snap.rows.find(row => row && String(row.id || '').trim() === target) || null;
-  } catch (_) {
-    return null;
-  }
-}
-
-function getSnapshotPayrollNumber(empId, keys) {
-  const row = getSnapshotPayrollRow(empId);
-  if (!row) return null;
-  const list = Array.isArray(keys) ? keys : [keys];
-  for (const key of list) {
-    if (key == null) continue;
-    const num = Number(row[key]);
-    if (Number.isFinite(num)) return num;
-  }
-  return null;
-}
-
 function getOvertimeHoursTotal(empId) {
-  const snapshotValue = getSnapshotPayrollNumber(empId, 'otHrs');
-  if (snapshotValue != null) return snapshotValue;
   const raw = otHours?.[empId] ?? 0;
   const num = Number(raw);
   return Number.isFinite(num) ? num : 0;
@@ -3596,7 +3570,7 @@ function getAdjustmentTotalsForEmployee(empId) {
   }
   if (typeof raw === 'number' || typeof raw === 'string') {
     const num = Number(raw);
-    if (Number.isFinite(num)) totals.reg = roundToCents(num);
+    if (Number.isFinite(num)) totals.ot = roundToCents(num);
     return totals;
   }
   if (typeof raw === 'object') {
@@ -3630,34 +3604,6 @@ function setAdjustmentTotalsForEmployee(empId, regValue, otValue) {
   }
   adjHrs[empId] = { reg, ot };
   if (existingType) adjHrs[empId].projectType = existingType;
-}
-
-function migrateLegacyAdjustmentHoursStructureInPlace(source) {
-  if (!isPlainObject(source)) return false;
-  let changed = false;
-  Object.keys(source).forEach(empId => {
-    const raw = source[empId];
-    if (raw == null) return;
-    if (typeof raw === 'number' || typeof raw === 'string') {
-      const legacy = Number(raw);
-      source[empId] = { reg: Number.isFinite(legacy) ? roundToCents(legacy) : 0, ot: 0 };
-      changed = true;
-      return;
-    }
-    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return;
-    const hasTyped = Object.prototype.hasOwnProperty.call(raw, 'reg') || Object.prototype.hasOwnProperty.call(raw, 'ot');
-    if (!hasTyped) return;
-    const reg = Number(raw.reg);
-    const ot = Number(raw.ot);
-    const nextReg = Number.isFinite(reg) ? roundToCents(reg) : 0;
-    const nextOt = Number.isFinite(ot) ? roundToCents(ot) : 0;
-    if (raw.reg !== nextReg || raw.ot !== nextOt) {
-      raw.reg = nextReg;
-      raw.ot = nextOt;
-      changed = true;
-    }
-  });
-  return changed;
 }
 
 function getAdjustmentProjectType(empId) {
@@ -3721,14 +3667,10 @@ function normalizeAdjustmentProjectIdsInPlace() {
 }
 
 function getRegularAdjustmentHours(empId) {
-  const snapshotValue = getSnapshotPayrollNumber(empId, ['adjRegHrs', 'adjHours']);
-  if (snapshotValue != null) return snapshotValue;
   return getAdjustmentTotalsForEmployee(empId).reg;
 }
 
 function getOvertimeAdjustmentHours(empId) {
-  const snapshotValue = getSnapshotPayrollNumber(empId, ['adjHrs', 'adjOtHrs']);
-  if (snapshotValue != null) return snapshotValue;
   return getAdjustmentTotalsForEmployee(empId).ot;
 }
 
@@ -3745,19 +3687,10 @@ function getEffectiveOvertimeRateForEmployee(empId, rateOverride) {
 }
 
 function getOvertimePayForEmployee(empId, rateOverride) {
-  const snapshotValue = getSnapshotPayrollNumber(empId, 'otPay');
-  if (snapshotValue != null) return roundToCents(snapshotValue);
   const rate = getEffectiveOvertimeRateForEmployee(empId, rateOverride);
   const pay = getOvertimeFinalHours(empId) * rate;
   if (typeof roundToCents === 'function') return roundToCents(pay);
   return Math.round(pay * 100) / 100;
-}
-
-function getRegularAdjustmentPayForEmployee(empId, rateOverride) {
-  const snapshotValue = getSnapshotPayrollNumber(empId, 'adjPay');
-  if (snapshotValue != null) return roundToCents(snapshotValue);
-  const baseRate = Number.isFinite(Number(rateOverride)) ? Number(rateOverride) : getEmployeeHourlyRate(empId);
-  return roundToCents(getRegularAdjustmentHours(empId) * baseRate);
 }
 
 async function persistPayrollSettings() {
@@ -3802,9 +3735,8 @@ function updatePayrollSettings(partial, options = {}) {
   if (options.persist !== false) {
     persistPayrollSettings();
   }
-  if (options.recalculate !== false) {
-    if (typeof recalcAllViews === 'function') recalcAllViews();
-    else if (typeof calculateAll === 'function') calculateAll();
+  if (options.recalculate !== false && typeof calculateAll === 'function') {
+    calculateAll();
   }
 }
 
@@ -3817,8 +3749,7 @@ async function loadPayrollSettings() {
     payrollSettings = normalizePayrollSettings(stored);
     otMultiplier = getOvertimeMultiplier();
     syncPayrollSettingsInputs();
-    if (typeof recalcAllViews === 'function') recalcAllViews();
-    else if (typeof calculateAll === 'function') calculateAll();
+    if (typeof calculateAll === 'function') calculateAll();
   } catch (err) {
     console.warn('Loading payroll settings failed', err);
   }
@@ -4080,6 +4011,8 @@ function initPayrollSettingsUI() {
   if (otInput && !otInput.__settingsBound) {
     otInput.addEventListener('input', () => {
       updatePayrollSettings({ overtime: { multiplier: parseFloat(otInput.value) || 0 } });
+      try { renderOvertimeTable(); } catch (_) {}
+      try { calculateAll(); } catch (_) {}
     });
     otInput.__settingsBound = true;
   }
@@ -4087,6 +4020,7 @@ function initPayrollSettingsUI() {
   if (settingsOt && !settingsOt.__settingsBound) {
     settingsOt.addEventListener('input', () => {
       updatePayrollSettings({ overtime: { multiplier: parseFloat(settingsOt.value) || 0 } });
+      try { renderOvertimeTable(); } catch (_) {}
     });
     settingsOt.__settingsBound = true;
   }
@@ -5531,10 +5465,6 @@ let otherDeductionsTotal = ensurePeriodData(allOtherDeductionsTotals, currentPer
 let allAdjHrs = JSON.parse(localStorage.getItem(LS_ADJ_HRS) || '{}');
 let adjHrs = isPlainObject(allAdjHrs[currentPeriodKey]) ? allAdjHrs[currentPeriodKey] : {};
 if (!isPlainObject(allAdjHrs[currentPeriodKey])) allAdjHrs[currentPeriodKey] = adjHrs;
-if (migrateLegacyAdjustmentHoursStructureInPlace(adjHrs)) {
-  allAdjHrs[currentPeriodKey] = adjHrs;
-  persistCurrentAdjustmentHours();
-}
 let allBantay = JSON.parse(localStorage.getItem(LS_BANTAY) || '{}');
 let bantay = allBantay[currentPeriodKey] || {};
 let allAdditionalIncomeDetails = loadPeriodScopedMap(LS_ADDITIONAL_INCOME_DETAILS);
@@ -5601,10 +5531,6 @@ function refreshPeriodScopedCachesFromStorage(){
   allAdjHrs = JSON.parse(localStorage.getItem(LS_ADJ_HRS) || '{}');
   adjHrs = isPlainObject(allAdjHrs[currentPeriodKey]) ? allAdjHrs[currentPeriodKey] : {};
   if (!isPlainObject(allAdjHrs[currentPeriodKey])) allAdjHrs[currentPeriodKey] = adjHrs;
-  if (migrateLegacyAdjustmentHoursStructureInPlace(adjHrs)) {
-    allAdjHrs[currentPeriodKey] = adjHrs;
-    persistCurrentAdjustmentHours();
-  }
   allBantay = JSON.parse(localStorage.getItem(LS_BANTAY) || '{}');
   bantay = allBantay[currentPeriodKey] || {};
   allAdditionalIncomeDetails = loadPeriodScopedMap(LS_ADDITIONAL_INCOME_DETAILS);
@@ -5690,7 +5616,6 @@ function syncPeriodScopedData(){
   otherDeductionsTotal = ensurePeriodData(allOtherDeductionsTotals, pk, null, { allowDefault: false });
   if (!isPlainObject(allAdjHrs[pk])) allAdjHrs[pk] = {};
   adjHrs = allAdjHrs[pk];
-  if (migrateLegacyAdjustmentHoursStructureInPlace(adjHrs)) allAdjHrs[pk] = adjHrs;
   bantay = allBantay[pk] || {};
   additionalIncomeDetails = ensurePeriodData(allAdditionalIncomeDetails, pk, null, { allowDefault: false });
   additionalIncomeTotal = ensurePeriodData(allAdditionalIncomeTotals, pk, null, { allowDefault: false });
@@ -7151,7 +7076,7 @@ function renderOvertimeTable(){
     const rate = getEffectiveOvertimeRateForEmployee(id, baseRate);
     const otTotal = getOvertimeHoursTotal(id);
     const adj = getOvertimeAdjustmentHours(id);
-    const otFinal = getOvertimeFinalHours(id);
+    const otFinal = otTotal + adj;
     const otPay = getOvertimePayForEmployee(id, baseRate);
     totalOtHours = roundToCents(totalOtHours + otTotal);
     totalAdjHours = roundToCents(totalAdjHours + adj);
@@ -7188,7 +7113,7 @@ function renderOvertimeTable(){
     const rate = getEffectiveOvertimeRateForEmployee(empId, baseRate);
     const otTotal = getOvertimeHoursTotal(empId);
     const adj = getOvertimeAdjustmentHours(empId);
-    const otFinal = getOvertimeFinalHours(empId);
+    const otFinal = otTotal + adj;
     const otPay = getOvertimePayForEmployee(empId, baseRate);
     const rateCell = tr.querySelector('.otRate');
     if (rateCell) rateCell.textContent = formatZeroDisplay(rate);
@@ -7217,7 +7142,7 @@ function updateOvertimeGrandTotals() {
     const baseRate = getEmployeeHourlyRate(emp.id);
     const otTotal = getOvertimeHoursTotal(emp.id);
     const adj = getOvertimeAdjustmentHours(emp.id);
-    const otFinal = getOvertimeFinalHours(emp.id);
+    const otFinal = otTotal + adj;
     const otPay = getOvertimePayForEmployee(emp.id, baseRate);
     totalOtHours = roundToCents(totalOtHours + otTotal);
     totalAdjHours = roundToCents(totalAdjHours + adj);
@@ -7780,7 +7705,7 @@ function calculateRow(tr){  const readNum = sel => { const el = tr.querySelector
   const regAdjHours = getRegularAdjustmentHours(id);
   const adjOtHours = getOvertimeAdjustmentHours(id);
   // Combined OT hours including adjustments
-  const otTotal = getOvertimeFinalHours(id);
+  const otTotal = otBase + adjOtHours;
   const rate = getEmployeeHourlyRate(id);
   const getMappedInputValue = (selector, map) => {
     const input = tr.querySelector(selector);
@@ -7819,9 +7744,9 @@ function calculateRow(tr){  const readNum = sel => { const el = tr.querySelector
   const additionalIncomeShown = roundToCents(additionalIncome + bVal);
 
   const regPay = roundToCents(reg * rate);
-  const adjPay = getRegularAdjustmentPayForEmployee(id, rate);
+  const adjPay = roundToCents(regAdjHours * rate);
   const effectiveOtRate = getEffectiveOvertimeRateForEmployee(id, rate);
-  const otPay = getOvertimePayForEmployee(id, rate);
+  const otPay = roundToCents(otTotal * effectiveOtRate);
   const gross = roundToCents(regPay + adjPay + additionalIncomeShown);
   // Compute contributions using dynamic tables (employee share).  Determine the
   // appropriate rate based on the monthly income and multiply by regular pay.
@@ -7938,18 +7863,6 @@ function calculateAll(){
   document.querySelectorAll('#payrollTable tbody tr').forEach(tr=> calculateRow(tr));
   renderDeductionsTable();
 }
-
-function recalcAllViews(){
-  try { if (typeof syncPeriodScopedData === 'function') syncPeriodScopedData(); } catch(_) {}
-  try {
-    if (typeof calculatePayrollFromResultsTable === 'function') calculatePayrollFromResultsTable();
-    else if (typeof calculatePayrollFromRecords === 'function') calculatePayrollFromRecords();
-  } catch(_) {}
-  try { if (typeof calculateAll === 'function') calculateAll(); } catch(_) {}
-  try { if (typeof renderOvertimeTable === 'function') renderOvertimeTable(); } catch(_) {}
-  try { if (typeof window.rebuildReports === 'function') window.rebuildReports(); } catch(_) {}
-}
-try { window.recalcAllViews = recalcAllViews; } catch(_) {}
 
 let otherDeductionsRenderPending = false;
 let otherDeductionsFocusCount = 0;
@@ -9070,7 +8983,8 @@ function renderAdjustmentHoursTable(){
       updateAdjustmentHoursGrandTotalRow();
       const empId = inp.getAttribute('data-id');
       if (empId) {
-        if (typeof recalcAllViews === 'function') recalcAllViews();
+        updateOvertimeRowForEmployee(empId);
+        updatePayrollRowForEmployee(empId);
       }
       otherDeductionsRefresh.flush();
       setTimeout(() => {
@@ -9093,7 +9007,8 @@ function renderAdjustmentHoursTable(){
       updateAdjustmentHoursGrandTotalRow();
       const empId = inp.getAttribute('data-id');
       if (empId) {
-        if (typeof recalcAllViews === 'function') recalcAllViews();
+        updateOvertimeRowForEmployee(empId);
+        updatePayrollRowForEmployee(empId);
       }
     });
     inp.addEventListener('change', () => {
@@ -9102,7 +9017,8 @@ function renderAdjustmentHoursTable(){
       updateAdjustmentHoursGrandTotalRow();
       const empId = inp.getAttribute('data-id');
       if (empId) {
-        if (typeof recalcAllViews === 'function') recalcAllViews();
+        updateOvertimeRowForEmployee(empId);
+        updatePayrollRowForEmployee(empId);
       }
     });
     formatAdjustmentHoursInput(inp);
@@ -11912,12 +11828,13 @@ document.addEventListener('DOMContentLoaded', () => {
           const assignedPid = resolveProjectIdValue(getAdjustmentProjectType(empId));
           const bucket = getReportProjectBucket(assignedPid);
           const rate = Number(getEmployeeHourlyRate(empId) || 0);
+          const otMult = Number(getOvertimeMultiplier() || 0);
           if (!adjustmentsByProjectEmp[bucket]) adjustmentsByProjectEmp[bucket] = {};
           adjustmentsByProjectEmp[bucket][empId] = {
             regHours,
             otHours,
-            regPay: getRegularAdjustmentPayForEmployee(empId, rate),
-            otPay: getOvertimePayForEmployee(empId, rate) - roundToCents(getOvertimeHoursTotal(empId) * getEffectiveOvertimeRateForEmployee(empId, rate))
+            regPay: regHours * rate,
+            otPay: otHours * rate * otMult
           };
         });
       } catch (e) { /* ignore */ }
@@ -12044,13 +11961,11 @@ document.addEventListener('DOMContentLoaded', () => {
           }).join('');
 
           const adj = adjustmentMap[empId] || { regHours: 0, otHours: 0, regPay: 0, otPay: 0 };
-          const overtimeBaseHours = getOvertimeHoursTotal(empId);
-          const overtimeAdjHours = getOvertimeAdjustmentHours(empId);
-          const adjHours = isOvertime ? overtimeAdjHours : Number(adj.regHours || 0);
-          if (isOvertime) rowHours = overtimeBaseHours;
-          const gross = isOvertime
-            ? getOvertimePayForEmployee(empId, rate)
-            : ((rowHours * rate) + Number(adj.regPay || 0));
+          const adjHours = isOvertime ? Number(adj.otHours || 0) : Number(adj.regHours || 0);
+          const otMult = getOvertimeMultiplier();
+          const baseGross = isOvertime ? (rowHours * rate * otMult) : (rowHours * rate);
+          const adjPay = isOvertime ? Number(adj.otPay || 0) : Number(adj.regPay || 0);
+          const gross = baseGross + adjPay;
           pHours += rowHours;
           pAdj += adjHours;
           pGross += gross;
@@ -12215,13 +12130,11 @@ rows += `<tr class="allowance">
           });
 
           const adj = adjustmentMap[empId] || { regHours: 0, otHours: 0, regPay: 0, otPay: 0 };
-          const overtimeBaseHours = getOvertimeHoursTotal(empId);
-          const overtimeAdjHours = getOvertimeAdjustmentHours(empId);
-          const adjHours = isOvertime ? overtimeAdjHours : Number(adj.regHours || 0);
-          if (isOvertime) rowHours = overtimeBaseHours;
-          const gross = isOvertime
-            ? getOvertimePayForEmployee(empId, rate)
-            : ((rowHours * rate) + Number(adj.regPay || 0));
+          const adjHours = isOvertime ? Number(adj.otHours || 0) : Number(adj.regHours || 0);
+          const otMult = getOvertimeMultiplier();
+          const baseGross = isOvertime ? (rowHours * rate * otMult) : (rowHours * rate);
+          const adjPay = isOvertime ? Number(adj.otPay || 0) : Number(adj.regPay || 0);
+          const gross = baseGross + adjPay;
           pHours += rowHours; pAdj += adjHours; pGross += gross;
 
           rows.push([projectLabel, display, to2(rate)].concat(dayCells, [to2(rowHours), to2(adjHours), to2(gross)]));
@@ -16915,8 +16828,6 @@ function calculatePayrollFromRecords(){
       } catch (err) {}
       // Rebuild the payroll table using the computed hours
       if (typeof renderTable === 'function') renderTable();
-      try { if (typeof renderOvertimeTable === 'function') renderOvertimeTable(); } catch (_) {}
-      try { if (typeof window.rebuildReports === 'function') window.rebuildReports(); } catch (_) {}
     } catch (err) {
       console.warn('calculatePayrollFromResultsTable failed', err);
     }
@@ -16924,24 +16835,48 @@ function calculatePayrollFromRecords(){
 
 weekStartEl.addEventListener('change', () => {
   if (dtrStartEl) dtrStartEl.value = weekStartEl.value;
-  if (typeof recalcAllViews === 'function') recalcAllViews();
+  syncPeriodScopedData();
+  try {
+    if (typeof calculatePayrollFromResultsTable === 'function') calculatePayrollFromResultsTable();
+    else if (typeof calculatePayrollFromRecords === 'function') calculatePayrollFromRecords();
+  } catch (e) {}
+  if (typeof renderTable === 'function') renderTable();
+  if (typeof renderOtherDeductionsTable === 'function') renderOtherDeductionsTable();
+  if (typeof renderAdjustmentHoursTable === 'function') renderAdjustmentHoursTable();
+  calculateAll();
 });
 weekEndEl.addEventListener('change', () => {
   if (dtrEndEl) dtrEndEl.value = weekEndEl.value;
-  if (typeof recalcAllViews === 'function') recalcAllViews();
+  syncPeriodScopedData();
+  try {
+    if (typeof calculatePayrollFromResultsTable === 'function') calculatePayrollFromResultsTable();
+    else if (typeof calculatePayrollFromRecords === 'function') calculatePayrollFromRecords();
+  } catch (e) {}
+  if (typeof renderTable === 'function') renderTable();
+  if (typeof renderOtherDeductionsTable === 'function') renderOtherDeductionsTable();
+  if (typeof renderAdjustmentHoursTable === 'function') renderAdjustmentHoursTable();
+  calculateAll();
 });
 if (dtrStartEl) {
   dtrStartEl.addEventListener('change', () => {
     weekStartEl.value = dtrStartEl.value;
-    // When editing the DTR date range directly, recompute all payroll views together
-    if (typeof recalcAllViews === 'function') recalcAllViews();
+    // When editing the DTR date range directly, recompute payroll hours from the DTR table
+    syncPeriodScopedData();
+    try {
+      if (typeof calculatePayrollFromResultsTable === 'function') calculatePayrollFromResultsTable();
+      else if (typeof calculatePayrollFromRecords === 'function') calculatePayrollFromRecords();
+    } catch (e) {}
   });
 }
 if (dtrEndEl) {
   dtrEndEl.addEventListener('change', () => {
     weekEndEl.value = dtrEndEl.value;
-    // When editing the DTR date range directly, recompute all payroll views together
-    if (typeof recalcAllViews === 'function') recalcAllViews();
+    // When editing the DTR date range directly, recompute payroll hours from the DTR table
+    syncPeriodScopedData();
+    try {
+      if (typeof calculatePayrollFromResultsTable === 'function') calculatePayrollFromResultsTable();
+      else if (typeof calculatePayrollFromRecords === 'function') calculatePayrollFromRecords();
+    } catch (e) {}
   });
 }
 
