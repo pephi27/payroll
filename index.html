@@ -13228,6 +13228,20 @@ rows += `<tr class="allowance">
     const rows = [];
     try{
       const projMap = {};
+      const ensureProjectRecord = (projectKey, projectNameHint, projectIdHint) => {
+        const safeKey = String(projectKey || '').trim();
+        if (!safeKey) return null;
+        const meta = resolveProjectDetails(projectIdHint, projectNameHint || safeKey);
+        const rec = (projMap[safeKey] = projMap[safeKey] || { emp:{}, meta:null });
+        if (!rec.meta){
+          rec.meta = { ...meta };
+        } else {
+          if (meta.company && !rec.meta.company) rec.meta.company = meta.company;
+          if (meta.id && !rec.meta.id) rec.meta.id = meta.id;
+          if (meta.name && (!rec.meta.name || rec.meta.name === safeKey || rec.meta.name === rec.meta.id)) rec.meta.name = meta.name;
+        }
+        return rec;
+      };
       const trs = Array.from(document.querySelectorAll('#resultsTable tbody tr'));
       trs.forEach(tr=>{
         const id = (tr.cells[0]?.textContent||'').trim();
@@ -13259,18 +13273,28 @@ rows += `<tr class="allowance">
         const rwh = num(tr.cells[11]?.textContent) || num(tr.querySelector('.regHrs')?.value);
         const oth = num(tr.cells[12]?.textContent) || num(tr.querySelector('.otHrs')?.value);
         if (!proj) return;
-        const meta = resolveProjectDetails(projIdHint, proj);
-        const rec = (projMap[proj] = projMap[proj] || { emp:{}, meta:null });
-        if (!rec.meta){
-          rec.meta = { ...meta };
-        } else {
-          if (meta.company && !rec.meta.company) rec.meta.company = meta.company;
-          if (meta.id && !rec.meta.id) rec.meta.id = meta.id;
-          if (meta.name && (!rec.meta.name || rec.meta.name === proj || rec.meta.name === rec.meta.id)) rec.meta.name = meta.name;
-        }
+        const rec = ensureProjectRecord(proj, proj, projIdHint);
+        if (!rec) return;
         const er = (rec.emp[id] = rec.emp[id] || { name, rwh:0, oth:0 });
         er.rwh += rwh; er.oth += oth;
       });
+      try {
+        const empIds = Object.keys((typeof adjHrs !== 'undefined' && adjHrs) || {});
+        empIds.forEach(empId => {
+          const otAdj = Number(getOvertimeAdjustmentHours(empId) || 0);
+          const regAdj = Number(getRegularAdjustmentHours(empId) || 0);
+          if (!otAdj && !regAdj) return;
+          const assignedPid = resolveProjectIdValue(getAdjustmentProjectType(empId));
+          const projectBucket = getReportProjectBucket(assignedPid);
+          if (!projectBucket) return;
+          const displayName = getEmployeeDisplayName(empId) || empId;
+          const rec = ensureProjectRecord(projectBucket, projectBucket, assignedPid);
+          if (!rec) return;
+          const er = (rec.emp[empId] = rec.emp[empId] || { name: displayName, rwh:0, oth:0, regAdj:0, otAdj:0 });
+          er.regAdj = Number(er.regAdj || 0) + regAdj;
+          er.otAdj = Number(er.otAdj || 0) + otAdj;
+        });
+      } catch (_) {}
       const otMult = getOvertimeMultiplier();
       const rates = (typeof payrollRates!=='undefined' && payrollRates) ? payrollRates : {};
       const se = (typeof storedEmployees!=='undefined' && storedEmployees) ? storedEmployees : {};
@@ -13279,10 +13303,16 @@ rows += `<tr class="allowance">
         Object.keys(rec.emp).forEach(id=>{
           const e = rec.emp[id];
           const rate = num(se?.[id]?.hourlyRate ?? rates?.[id]);
-          regHrs += e.rwh;
-          otHrs += e.oth;
-          regTotal += (e.rwh * rate);
-          otTotal += (e.oth * rate * otMult);
+          const baseReg = Number(e.rwh || 0);
+          const baseOt = Number(e.oth || 0);
+          const regAdj = Number(e.regAdj || 0);
+          const otAdj = Number(e.otAdj || 0);
+          const finalReg = baseReg + regAdj;
+          const finalOt = baseOt + otAdj;
+          regHrs += finalReg;
+          otHrs += finalOt;
+          regTotal += (finalReg * rate);
+          otTotal += (finalOt * rate * otMult);
         });
         try{
           const allow = Object.keys((window.bantay||{})).reduce((sum, empId)=>{
@@ -13327,7 +13357,7 @@ rows += `<tr class="allowance">
 
   function renderMasterReport(){
     const host = document.getElementById('masterReportContainer'); if(!host) return;
-    const prows = computeProjectTotals().filter(row => safe(row && row.company).trim().length);
+    const prows = computeProjectTotals();
     const g = prows.reduce((acc,r)=>{
       acc.regTotal += Number((r && r.regTotal != null) ? r.regTotal : 0);
       acc.otTotal += Number((r && r.otTotal != null) ? r.otTotal : 0);
@@ -13349,7 +13379,7 @@ rows += `<tr class="allowance">
       : ['Edifice','Portafolio'];
     const normalizeCompanyLabel = (val) => {
       const label = safe(val).trim();
-      return label.length ? label : '';
+      return label.length ? label : 'Unassigned';
     };
     const projectGroups = {};
     const ensureProjectGroup = (companyName) => {
