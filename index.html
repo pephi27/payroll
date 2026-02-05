@@ -13440,6 +13440,9 @@ rows += `<tr class="allowance">
       acc.t += Number((r && r.total != null) ? r.total : 0);
       return acc;
     }, {regTotal:0, otTotal:0, t:0});
+    // Keep Master Report overtime grand total exactly aligned with Payroll.
+    g.otTotal = getPayrollTotalOvertimePay();
+    g.t = roundToCents(g.regTotal + g.otTotal);
     let html = '';
     html += '<h2>PAYROLL REPORT</h2>';
     const [rangeStart, rangeEnd] = getPayrollRange();
