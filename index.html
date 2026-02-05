@@ -3738,11 +3738,6 @@ function updatePayrollSettings(partial, options = {}) {
   if (options.recalculate !== false && typeof calculateAll === 'function') {
     calculateAll();
   }
-  try {
-    if (typeof window !== 'undefined' && typeof window.rebuildReports === 'function') {
-      window.rebuildReports();
-    }
-  } catch (_) {}
 }
 
 async function loadPayrollSettings() {
@@ -3755,11 +3750,6 @@ async function loadPayrollSettings() {
     otMultiplier = getOvertimeMultiplier();
     syncPayrollSettingsInputs();
     if (typeof calculateAll === 'function') calculateAll();
-    try {
-      if (typeof window !== 'undefined' && typeof window.rebuildReports === 'function') {
-        window.rebuildReports();
-      }
-    } catch (_) {}
   } catch (err) {
     console.warn('Loading payroll settings failed', err);
   }
