@@ -3612,8 +3612,8 @@ function getAdjustmentProjectType(empId) {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return '';
   const hasTotals = Object.prototype.hasOwnProperty.call(raw, 'reg')
     || Object.prototype.hasOwnProperty.call(raw, 'ot');
-  const typeValue = raw.projectType ?? raw.project ?? raw.projectId;
-  if (typeValue != null) return String(typeValue || '').trim();
+  const typeValue = raw.projectType ?? raw.projectId ?? raw.project;
+  if (typeValue != null) return resolveProjectIdValue(typeValue);
   if (hasTotals && raw.type != null) return String(raw.type || '').trim();
   return '';
 }
@@ -3623,13 +3623,47 @@ function setAdjustmentProjectType(empId, value) {
   const totals = getAdjustmentTotalsForEmployee(empId);
   const reg = totals.reg;
   const ot = totals.ot;
-  const projectType = String(value || '').trim();
+  const projectType = resolveProjectIdValue(value);
   if (!reg && !ot && !projectType) {
     delete adjHrs[empId];
     return;
   }
   adjHrs[empId] = { reg, ot };
-  if (projectType) adjHrs[empId].projectType = projectType;
+  if (projectType) {
+    adjHrs[empId].projectId = projectType;
+    adjHrs[empId].projectType = projectType;
+    adjHrs[empId].project = projectType;
+  }
+}
+
+function normalizeAdjustmentProjectIdsInPlace() {
+  if (!isPlainObject(adjHrs)) return false;
+  const projectMap = (typeof storedProjects !== 'undefined' && storedProjects) || {};
+  let changed = false;
+  Object.keys(adjHrs).forEach(empId => {
+    const raw = adjHrs[empId];
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return;
+    const originalValue = raw.projectId ?? raw.projectType ?? raw.project;
+    const resolved = resolveProjectIdValue(originalValue, projectMap);
+    if ((originalValue == null || String(originalValue).trim() === '') && !resolved) {
+      if (raw.projectType || raw.project || raw.projectId) {
+        delete raw.projectType;
+        delete raw.project;
+        delete raw.projectId;
+        changed = true;
+      }
+      return;
+    }
+    if (resolved) {
+      if (raw.projectId !== resolved || raw.projectType !== resolved || raw.project !== resolved) {
+        raw.projectId = resolved;
+        raw.projectType = resolved;
+        raw.project = resolved;
+        changed = true;
+      }
+    }
+  });
+  return changed;
 }
 
 function getRegularAdjustmentHours(empId) {
@@ -5687,6 +5721,59 @@ function roundToCents(value){
   const num = Number(value);
   if (!Number.isFinite(num)) return 0;
   return Math.round(num * 100) / 100;
+}
+
+function getProjectEntriesSorted(projectMapOverride){
+  const projectMap = projectMapOverride || ((typeof storedProjects !== 'undefined' && storedProjects) || {});
+  return Object.entries(projectMap || {}).sort((a,b)=>{
+    const A = String(a[1]?.name || a[0] || '').toUpperCase();
+    const B = String(b[1]?.name || b[0] || '').toUpperCase();
+    return A.localeCompare(B);
+  });
+}
+
+function resolveProjectIdValue(rawValue, projectMapOverride){
+  const projectMap = projectMapOverride || ((typeof storedProjects !== 'undefined' && storedProjects) || {});
+  const value = String(rawValue || '').trim();
+  if (!value) return '';
+  if (Object.prototype.hasOwnProperty.call(projectMap, value)) return value;
+  const target = value.toLowerCase();
+  const projectEntries = getProjectEntriesSorted(projectMap);
+  const byName = projectEntries.find(([pid, proj]) => String(proj?.name || pid || '').trim().toLowerCase() === target);
+  return byName ? byName[0] : value;
+}
+
+function populateProjectSelectWithActiveOptions(selectEl, currentValue, options = {}){
+  if (!selectEl) return '';
+  const projectMap = options.projectMap || ((typeof storedProjects !== 'undefined' && storedProjects) || {});
+  const noneLabel = options.noneLabel || '(none)';
+  const includeNone = options.includeNone !== false;
+  const resolvedCurrent = resolveProjectIdValue(currentValue, projectMap);
+  const activeEntries = getProjectEntriesSorted(projectMap).filter(([pid, proj]) => !(proj && proj.active === false));
+
+  selectEl.innerHTML = '';
+  if (includeNone) {
+    const opt0 = document.createElement('option');
+    opt0.value = '';
+    opt0.textContent = noneLabel;
+    selectEl.appendChild(opt0);
+  }
+  activeEntries.forEach(([pid, proj]) => {
+    const o = document.createElement('option');
+    o.value = pid;
+    o.textContent = (proj && proj.name) ? proj.name : pid;
+    selectEl.appendChild(o);
+  });
+
+  if (resolvedCurrent && Object.prototype.hasOwnProperty.call(projectMap, resolvedCurrent) && projectMap[resolvedCurrent]?.active === false) {
+    const inactiveOpt = document.createElement('option');
+    inactiveOpt.value = resolvedCurrent;
+    inactiveOpt.textContent = `${projectMap[resolvedCurrent]?.name || resolvedCurrent} (inactive)`;
+    inactiveOpt.selected = true;
+    selectEl.appendChild(inactiveOpt);
+  }
+  selectEl.value = resolvedCurrent || '';
+  return resolvedCurrent;
 }
 
 function formatDeductionInputValue(value){
@@ -7901,20 +7988,6 @@ function renderAdditionalIncomeTable(){
   const incomeOptions = getIncomeTypeOptions();
   const defaultType = incomeOptions[0] || CUSTOM_INCOME_TYPE_VALUE;
   const projectMap = (typeof storedProjects !== 'undefined' && storedProjects) || {};
-  const projectEntries = Object.entries(projectMap || {}).sort((a,b)=>{
-    const A = (a[1]?.name || a[0]).toUpperCase();
-    const B = (b[1]?.name || b[0]).toUpperCase();
-    return A.localeCompare(B);
-  });
-  const resolveProjectId = (value) => {
-    const v = String(value || '').trim();
-    if (!v) return '';
-    try {
-      if (projectMap && Object.prototype.hasOwnProperty.call(projectMap, v)) return v;
-    } catch(e){}
-    const hit = projectEntries.find(([pid, proj]) => (proj && proj.name ? String(proj.name) : String(pid)) === v);
-    return hit ? hit[0] : v;
-  };
   const handleBlur = () => {
     additionalIncomeFocusCount = Math.max(0, additionalIncomeFocusCount - 1);
     setTimeout(() => {
@@ -8027,28 +8100,18 @@ function renderAdditionalIncomeTable(){
         projectSelect.dataset.emp = empId;
         projectSelect.dataset.index = String(idx);
 
-        const opt0 = document.createElement('option');
-        opt0.value = '';
-        opt0.textContent = 'Select project';
-        projectSelect.appendChild(opt0);
-
-        projectEntries.forEach(([pid, proj]) => {
-          const o = document.createElement('option');
-          o.value = pid;
-          o.textContent = (proj && proj.name) ? proj.name : pid;
-          projectSelect.appendChild(o);
-        });
-
         const currentRaw = isPlaceholder ? '' : String((normalizedItem && (normalizedItem.project || normalizedItem.projectId)) || '').trim();
-        const currentResolved = resolveProjectId(currentRaw);
-        // Preserve unknown/legacy project values
-        if (currentResolved && !Object.prototype.hasOwnProperty.call(projectMap, currentResolved)) {
-          const o = document.createElement('option');
-          o.value = currentResolved;
-          o.textContent = currentResolved;
-          projectSelect.appendChild(o);
+        const currentResolved = populateProjectSelectWithActiveOptions(projectSelect, currentRaw, {
+          projectMap,
+          noneLabel: 'Select project'
+        });
+        if (!isPlaceholder && currentResolved !== currentRaw) {
+          if (!Array.isArray(additionalIncomeDetails[empId])) additionalIncomeDetails[empId] = [];
+          if (!additionalIncomeDetails[empId][idx]) additionalIncomeDetails[empId][idx] = {};
+          additionalIncomeDetails[empId][idx].project = currentResolved;
+          additionalIncomeDetails[empId][idx].projectId = currentResolved;
+          additionalIncomePersist.schedule();
         }
-        projectSelect.value = currentResolved || '';
         projectCell.appendChild(projectSelect);
       }
       const setCustomVisibility = (show) => {
@@ -8748,21 +8811,9 @@ function renderAdjustmentHoursTable(){
   }
   adjustmentHoursRenderPending = false;
   syncPeriodScopedData();
+  const normalizedProjectsChanged = normalizeAdjustmentProjectIdsInPlace();
+  if (normalizedProjectsChanged) adjustmentHoursPersist.schedule();
   const projectMap = (typeof storedProjects !== 'undefined' && storedProjects) || {};
-  const projectEntries = Object.entries(projectMap || {}).sort((a,b)=>{
-    const A = (a[1]?.name || a[0]).toUpperCase();
-    const B = (b[1]?.name || b[0]).toUpperCase();
-    return A.localeCompare(B);
-  });
-  const resolveProjectId = (value) => {
-    const v = String(value || '').trim();
-    if (!v) return '';
-    try {
-      if (projectMap && Object.prototype.hasOwnProperty.call(projectMap, v)) return v;
-    } catch(e){}
-    const hit = projectEntries.find(([pid, proj]) => (proj && proj.name ? String(proj.name) : String(pid)) === v);
-    return hit ? hit[0] : v;
-  };
   const tbody = document.querySelector('#adjustmentHoursTable tbody');
   if (!tbody) return;
   tbody.innerHTML = '';
@@ -8838,25 +8889,11 @@ function renderAdjustmentHoursTable(){
       const select = document.createElement('select');
       select.className = 'adjTypeSelect';
       select.dataset.id = id;
-      const opt0 = document.createElement('option');
-      opt0.value = '';
-      opt0.textContent = '(none)';
-      select.appendChild(opt0);
-      projectEntries.forEach(([pid, proj]) => {
-        const o = document.createElement('option');
-        o.value = pid;
-        o.textContent = (proj && proj.name) ? proj.name : pid;
-        select.appendChild(o);
-      });
       const currentRaw = getAdjustmentProjectType(id);
-      const currentResolved = resolveProjectId(currentRaw);
-      if (currentResolved && !Object.prototype.hasOwnProperty.call(projectMap, currentResolved)) {
-        const o = document.createElement('option');
-        o.value = currentResolved;
-        o.textContent = currentResolved;
-        select.appendChild(o);
-      }
-      select.value = currentResolved || '';
+      const currentResolved = populateProjectSelectWithActiveOptions(select, currentRaw, {
+        projectMap,
+        noneLabel: '(none)'
+      });
       select.addEventListener('focus', () => { adjustmentHoursFocusCount += 1; });
       select.addEventListener('blur', () => {
         adjustmentHoursFocusCount = Math.max(0, adjustmentHoursFocusCount - 1);
@@ -11712,16 +11749,32 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     function getRate(id, name){ return getRateById(id) || getRateByName(name); }
 
+    function getReportProjectBucket(projectId){
+      const pid = String(projectId || '').trim();
+      if (!pid) return '__unassigned__';
+      const sp = (typeof storedProjects !== 'undefined' && storedProjects) || {};
+      return Object.prototype.hasOwnProperty.call(sp, pid) ? pid : '__unknown__';
+    }
+
+    function getReportProjectLabel(bucket){
+      if (bucket === '__unassigned__') return 'Unassigned';
+      if (bucket === '__unknown__') return 'Unknown Project';
+      const sp = (typeof storedProjects !== 'undefined' && storedProjects) || {};
+      return (sp[bucket] && sp[bucket].name) ? sp[bucket].name : 'Unknown Project';
+    }
+
     function readProjectFromRow(tr){
       const sel = tr.cells[2]?.querySelector('select');
       if (sel){
+        const raw = String(sel.value || '').trim();
+        if (raw) return resolveProjectIdValue(raw);
         const opt = sel.options[sel.selectedIndex];
-        const txt = (opt && (opt.textContent||opt.label)) || sel.value;
-        return (txt||'').trim();
+        const txt = (opt && (opt.textContent||opt.label)) || '';
+        return resolveProjectIdValue(txt);
       }
       const dp = tr.cells[2]?.dataset?.project;
-      if (dp) return String(dp).trim();
-      return (tr.cells[2]?.textContent||'').trim();
+      if (dp) return resolveProjectIdValue(dp);
+      return resolveProjectIdValue((tr.cells[2]?.textContent||'').trim());
     }
 
     function collect(fromStr, toStr){
@@ -11730,13 +11783,12 @@ document.addEventListener('DOMContentLoaded', () => {
       trs.forEach(tr=>{
         const id   = (tr.cells[0]?.textContent||'').trim();
         const name = (tr.cells[1]?.textContent||'').trim();
-        const proj = readProjectFromRow(tr);
+        const projId = readProjectFromRow(tr);
+        const proj = getReportProjectBucket(projId);
         const date = (tr.cells[4]?.textContent||'').trim();
         const rwh = toNum(tr.cells[11]?.textContent) || toNum(tr.querySelector('.regHrs')?.value);
         const oth = toNum(tr.cells[12]?.textContent) || toNum(tr.querySelector('.otHrs')?.value);
         if(!id || !date) return;
-        if(!isRealProject(proj)) return;
-
         const d = new Date(date).setHours(0,0,0,0);
         if(fromStr){ const f = new Date(fromStr).setHours(0,0,0,0); if(d < f) return; }
         if(toStr){ const t = new Date(toStr).setHours(0,0,0,0); if(d > t) return; }
@@ -11758,22 +11810,43 @@ document.addEventListener('DOMContentLoaded', () => {
       const dates = eachDate(new Date(from).setHours(0,0,0,0), new Date(to).setHours(0,0,0,0));
       const data = collect(from, to) || {};
 
+      const adjustmentsByProjectEmp = {};
+      try {
+        const empIds = Object.keys((typeof adjHrs !== 'undefined' && adjHrs) || {});
+        empIds.forEach(empId => {
+          const regHours = Number(getRegularAdjustmentHours(empId) || 0);
+          const otHours = Number(getOvertimeAdjustmentHours(empId) || 0);
+          if (!regHours && !otHours) return;
+          const assignedPid = resolveProjectIdValue(getAdjustmentProjectType(empId));
+          const bucket = getReportProjectBucket(assignedPid);
+          const rate = Number(getEmployeeHourlyRate(empId) || 0);
+          const otMult = Number(getOvertimeMultiplier() || 0);
+          if (!adjustmentsByProjectEmp[bucket]) adjustmentsByProjectEmp[bucket] = {};
+          adjustmentsByProjectEmp[bucket][empId] = {
+            regHours,
+            otHours,
+            regPay: regHours * rate,
+            otPay: otHours * rate * otMult
+          };
+        });
+      } catch (e) { /* ignore */ }
+
       // Ensure projects that only have Bantay allowance (no DTR rows) appear as their own blocks
       try {
         const bp = (typeof bantayProj !== 'undefined' && bantayProj) || {};
         const b  = (typeof bantay !== 'undefined' && bantay) || {};
         const sp = (typeof storedProjects !== 'undefined' && storedProjects) || {};
-        const allowByProjName = {};
+        const allowByProj = {};
         Object.keys(b).forEach(empId => {
           const amt = parseFloat((b[empId]) || 0) || 0;
           if (amt <= 0) return;
           const assigned = bp[empId];
           if (!assigned) return;
-          const projName = (sp[assigned] && sp[assigned].name) ? sp[assigned].name : assigned;
-          if (!isRealProject(projName)) return;
-          allowByProjName[projName] = (allowByProjName[projName] || 0) + amt;
+          const projId = resolveProjectIdValue(assigned, sp);
+          const bucket = getReportProjectBucket(projId);
+          allowByProj[bucket] = (allowByProj[bucket] || 0) + amt;
         });
-        Object.keys(allowByProjName).forEach(pn => { if (!data[pn]) data[pn] = {}; });
+        Object.keys(allowByProj).forEach(pn => { if (!data[pn]) data[pn] = {}; });
       } catch (e) { /* ignore */ }
 
       // Additional Income per project (assigned in Additional Income tab)
@@ -11787,21 +11860,22 @@ document.addEventListener('DOMContentLoaded', () => {
           items.forEach(it => {
             const amt = parseFloat((it && it.amount) || 0) || 0;
             if (amt <= 0) return;
-            const assigned = String((it && (it.project != null ? it.project : (it.projectId != null ? it.projectId : ''))) || '').trim();
-            if (!assigned) return;
-            const projName = (sp[assigned] && sp[assigned].name) ? sp[assigned].name : assigned;
-            if (!isRealProject(projName)) return;
+            const assigned = String((it && (it.projectId != null ? it.projectId : (it.project != null ? it.project : ''))) || '').trim();
+            const projId = resolveProjectIdValue(assigned, sp);
+            const bucket = getReportProjectBucket(projId);
             let label = '';
             try { if (typeof getAdditionalIncomeLabel === 'function') label = getAdditionalIncomeLabel(it); } catch (e) {}
             if (!label) label = String((it && (it.label != null ? it.label : it.type)) || 'Additional Income').trim() || 'Additional Income';
-            if (!additionalIncomeByProject[projName]) additionalIncomeByProject[projName] = {};
-            additionalIncomeByProject[projName][label] = (additionalIncomeByProject[projName][label] || 0) + amt;
+            if (!additionalIncomeByProject[bucket]) additionalIncomeByProject[bucket] = {};
+            additionalIncomeByProject[bucket][label] = (additionalIncomeByProject[bucket][label] || 0) + amt;
           });
         });
         Object.keys(additionalIncomeByProject).forEach(pn => { if (!data[pn]) data[pn] = {}; });
       } catch (e) { additionalIncomeByProject = {}; }
 
-      return { data, from, to, dates, additionalIncomeByProject };
+      Object.keys(adjustmentsByProjectEmp).forEach(pid => { if (!data[pid]) data[pid] = {}; });
+
+      return { data, from, to, dates, additionalIncomeByProject, adjustmentsByProjectEmp };
     }
 
     function buildReportTable(mode, report){
@@ -11819,7 +11893,7 @@ document.addEventListener('DOMContentLoaded', () => {
       }
       showMsg('', msgId);
 
-      const { data, from, to, dates, additionalIncomeByProject } = report;
+      const { data, from, to, dates, additionalIncomeByProject, adjustmentsByProjectEmp } = report;
       const totalCols = 2 + dates.length + 3;
       const hint = document.getElementById(hintId);
       if (hint) hint.textContent = `Range: ${from} - ${to}`;
@@ -11842,15 +11916,17 @@ document.addEventListener('DOMContentLoaded', () => {
       const tbodies = [];
       let gHours=0,gAdj=0,gGross=0;
       const gDayTotals = dates.map(() => 0);
-      const projects = Object.keys(data).sort();
+      const projects = Object.keys(data).sort((a,b)=>getReportProjectLabel(a).localeCompare(getReportProjectLabel(b)));
 
       projects.forEach(proj=>{
-        const empMap = data[proj];
+        const empMap = data[proj] || {};
+        const projectLabel = getReportProjectLabel(proj);
+        const adjustmentMap = (adjustmentsByProjectEmp && adjustmentsByProjectEmp[proj]) || {};
         let pHours=0,pAdj=0,pGross=0;
         const dayTotals = dates.map(() => 0);
         let rows='';
 
-        rows += `<tr class="proj-break"><td colspan="${totalCols}">${proj}</td></tr>`;
+        rows += `<tr class="proj-break"><td colspan="${totalCols}">${projectLabel}</td></tr>`;
 
         Object.keys(empMap).sort((a,b)=>{
           const A = (empMap[a].name||a).toUpperCase();
@@ -11871,11 +11947,12 @@ document.addEventListener('DOMContentLoaded', () => {
             return `<td class="num">${f2(hours)}</td>`;
           }).join('');
 
-          const adjHours = isOvertime
-            ? getOvertimeAdjustmentHours(empId)
-            : getRegularAdjustmentHours(empId);
+          const adj = adjustmentMap[empId] || { regHours: 0, otHours: 0, regPay: 0, otPay: 0 };
+          const adjHours = isOvertime ? Number(adj.otHours || 0) : Number(adj.regHours || 0);
           const otMult = getOvertimeMultiplier();
-          const gross = isOvertime ? (rowHours * rate * otMult) : (rowHours * rate);
+          const baseGross = isOvertime ? (rowHours * rate * otMult) : (rowHours * rate);
+          const adjPay = isOvertime ? Number(adj.otPay || 0) : Number(adj.regPay || 0);
+          const gross = baseGross + adjPay;
           pHours += rowHours;
           pAdj += adjHours;
           pGross += gross;
@@ -11894,9 +11971,8 @@ document.addEventListener('DOMContentLoaded', () => {
 const allow = isOvertime ? 0 : Object.keys(bantay || {}).reduce((sum, empId) => {
   const assigned = (bantayProj || {})[empId];
   if (!assigned) return sum;
-  const matchesById   = (assigned === proj);
-  const matchesByName = ((storedProjects && storedProjects[assigned]?.name) === proj);
-  return (matchesById || matchesByName) ? sum + (parseFloat(bantay[empId]) || 0) : sum;
+  const matchesProject = getReportProjectBucket(resolveProjectIdValue(assigned)) === proj;
+  return matchesProject ? sum + (parseFloat(bantay[empId]) || 0) : sum;
 }, 0);
 
 // Render Allowance row (amount in Gross column)
@@ -11991,7 +12067,7 @@ rows += `<tr class="allowance">
     function buildReportRows(mode){
       if (!__report) return null;
       const isOvertime = mode === 'oth';
-      const { data, dates, from, to, additionalIncomeByProject } = __report;
+      const { data, dates, from, to, additionalIncomeByProject, adjustmentsByProjectEmp } = __report;
 
       const dayHeader = dates.map(d=>{
         const lbl = d.toLocaleDateString(undefined,{day:'2-digit',month:'short'});
@@ -12003,12 +12079,14 @@ rows += `<tr class="allowance">
         .concat([isOvertime ? 'TOTAL OT HRS' : 'TOTAL REG HRS', 'ADJ HRS', isOvertime ? 'OT GROSS' : 'GROSS']);
       const rows = [header];
 
-      const projects = Object.keys(data).sort();
+      const projects = Object.keys(data).sort((a,b)=>getReportProjectLabel(a).localeCompare(getReportProjectLabel(b)));
       let gHours=0,gAdj=0,gGross=0;
       const gDayTotals = dates.map(() => 0);
 
       projects.forEach(proj=>{
-        const empMap = data[proj];
+        const empMap = data[proj] || {};
+        const projectLabel = getReportProjectLabel(proj);
+        const adjustmentMap = (adjustmentsByProjectEmp && adjustmentsByProjectEmp[proj]) || {};
         let pHours=0,pAdj=0,pGross=0;
         const dayTotals = dates.map(() => 0);
 
@@ -12033,14 +12111,15 @@ rows += `<tr class="allowance">
             dayCells.push(to2(hours));
           });
 
-          const adjHours = isOvertime
-            ? getOvertimeAdjustmentHours(empId)
-            : getRegularAdjustmentHours(empId);
+          const adj = adjustmentMap[empId] || { regHours: 0, otHours: 0, regPay: 0, otPay: 0 };
+          const adjHours = isOvertime ? Number(adj.otHours || 0) : Number(adj.regHours || 0);
           const otMult = getOvertimeMultiplier();
-          const gross = isOvertime ? (rowHours * rate * otMult) : (rowHours * rate);
+          const baseGross = isOvertime ? (rowHours * rate * otMult) : (rowHours * rate);
+          const adjPay = isOvertime ? Number(adj.otPay || 0) : Number(adj.regPay || 0);
+          const gross = baseGross + adjPay;
           pHours += rowHours; pAdj += adjHours; pGross += gross;
 
-          rows.push([proj, display, to2(rate)].concat(dayCells, [to2(rowHours), to2(adjHours), to2(gross)]));
+          rows.push([projectLabel, display, to2(rate)].concat(dayCells, [to2(rowHours), to2(adjHours), to2(gross)]));
         });
 
         if (!isOvertime) {
@@ -12049,14 +12128,13 @@ rows += `<tr class="allowance">
             const allow = Object.keys(bantay || {}).reduce((sum, empId) => {
               const assigned = (bantayProj || {})[empId];
               if (!assigned) return sum;
-              const matchesById   = (assigned === proj);
-              const matchesByName = ((typeof storedProjects !== 'undefined' && storedProjects && storedProjects[assigned]?.name) === proj);
               const amt = parseFloat((bantay && bantay[empId]) || 0) || 0;
-              return (matchesById || matchesByName) ? (sum + amt) : sum;
+              const matchesProject = getReportProjectBucket(resolveProjectIdValue(assigned)) === proj;
+              return matchesProject ? (sum + amt) : sum;
             }, 0);
             if (allow && allow > 0) {
               const zeroCells = new Array(dates.length).fill('0.00');
-              rows.push([proj, 'Allowance', ''].concat(zeroCells, ['0.00', '0.00', to2(allow)]));
+              rows.push([projectLabel, 'Allowance', ''].concat(zeroCells, ['0.00', '0.00', to2(allow)]));
               pGross += allow;
             }
           } catch (e) { /* no-op if allowance data missing */ }
@@ -12067,7 +12145,7 @@ rows += `<tr class="allowance">
               const amt = parseFloat(aiMap[lbl]) || 0;
               if (amt <= 0) return;
               const zeroCells = new Array(dates.length).fill('0.00');
-              rows.push([proj, lbl || 'Additional Income', ''].concat(zeroCells, ['0.00', '0.00', to2(amt)]));
+              rows.push([projectLabel, lbl || 'Additional Income', ''].concat(zeroCells, ['0.00', '0.00', to2(amt)]));
               pGross += amt;
             });
           } catch (e) { /* ignore */ }
@@ -12076,7 +12154,7 @@ rows += `<tr class="allowance">
         gHours += pHours; gAdj += pAdj; gGross += pGross;
         dayTotals.forEach((dt,i)=>{ gDayTotals[i] += dt; });
         const dayTotalsCells = dayTotals.map(dt=>to2(dt));
-        rows.push([proj, 'Project Total', ''].concat(
+        rows.push([projectLabel, 'Project Total', ''].concat(
           dayTotalsCells,
           [to2(pHours), to2(pAdj), to2(pGross)]
         ));
@@ -14984,6 +15062,8 @@ function saveProjectsToLS(options = {}){
   }
   renderProjectDropdowns();
   renderProjectFilterOptions();
+  try { if (typeof renderAdditionalIncomeTable === 'function') renderAdditionalIncomeTable(); } catch (_) {}
+  try { if (typeof renderAdjustmentHoursTable === 'function') renderAdjustmentHoursTable(); } catch (_) {}
   renderResults();
 }
 function renderProjects(){
