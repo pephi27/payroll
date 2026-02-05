@@ -13327,7 +13327,8 @@ rows += `<tr class="allowance">
 
   function renderMasterReport(){
     const host = document.getElementById('masterReportContainer'); if(!host) return;
-
+    const prows = computeProjectTotals();
+    const g = prows.reduce((acc,r)=>{
       acc.regTotal += Number((r && r.regTotal != null) ? r.regTotal : 0);
       acc.otTotal += Number((r && r.otTotal != null) ? r.otTotal : 0);
       acc.t += Number((r && r.total != null) ? r.total : 0);
@@ -13348,7 +13349,7 @@ rows += `<tr class="allowance">
       : ['Edifice','Portafolio'];
     const normalizeCompanyLabel = (val) => {
       const label = safe(val).trim();
-      return label.length ? label : '';
+      return label.length ? label : 'Unassigned';
     };
     const projectGroups = {};
     const ensureProjectGroup = (companyName) => {
@@ -13378,7 +13379,13 @@ rows += `<tr class="allowance">
     };
     const defaultOrder = (defaults.length ? defaults : ['Edifice','Portafolio']).map(normalizeCompanyLabel);
     defaultOrder.forEach(pushProjectCompany);
-    Object.keys(projectGroups).sort((a,b)=> a.localeCompare(b)).forEach(pushProjectCompany);
+    Object.keys(projectGroups).sort((a,b)=>{
+      const aUn = (a === 'Unassigned');
+      const bUn = (b === 'Unassigned');
+      if (aUn && !bUn) return 1;
+      if (!aUn && bUn) return -1;
+      return a.localeCompare(b);
+    }).forEach(pushProjectCompany);
 
     html += '<div class="mr-section" style="margin-top:16px;">';
     html += '<h4 class="mr-project-title">PROJECT</h4>';
