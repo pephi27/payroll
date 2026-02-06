@@ -6371,6 +6371,12 @@ function renderLoanTrackerTable(){
   if (!tbody) return;
   const pk = currentPeriodKey || periodKey();
   const div = Number(divisor) || 1;
+
+  // Keep loan statuses in sync when opening the app directly on a new payroll
+  // period (e.g., after rollover). Without this pass, fully paid cash advances
+  // can remain checked until another event triggers a recalculation.
+  try { applyLoanTrackerToPeriod(pk, { createEntries: true, updateMaps: true }); } catch(_) {}
+
   tbody.innerHTML = '';
 
   (getEmployeeList() || []).forEach(emp => {
