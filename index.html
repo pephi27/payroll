@@ -17964,10 +17964,19 @@ document.addEventListener('DOMContentLoaded', function(){
     var end = (document.getElementById('weekEnd') || {}).value || '';
     var smallFrom = (document.getElementById('dtrDateRangeFrom')||{}).value || (document.getElementById('dtrDateFrom')||{}).value || '';
     var smallTo   = (document.getElementById('dtrDateRangeTo')||{}).value   || (document.getElementById('dtrDateTo')||{}).value   || '';
+    var formatWithWeekday = function(value){
+      var raw = String(value || '').trim();
+      if (!raw) return '';
+      var dt = new Date(raw + 'T00:00:00');
+      if (isNaN(dt.getTime())) return raw;
+      return raw + ' (' + dt.toLocaleDateString(undefined, { weekday: 'long' }) + ')';
+    };
     var s = smallFrom || start;
     var e = smallTo   || end;
-    if (s && e) return s + ' to ' + e;
-    return s || e || '';
+    var formattedStart = formatWithWeekday(s);
+    var formattedEnd = formatWithWeekday(e);
+    if (formattedStart && formattedEnd) return formattedStart + ' to ' + formattedEnd;
+    return formattedStart || formattedEnd || '';
   }
   function getDtrProjectText(){
     var projectEl = document.getElementById('filterProject');
