@@ -10437,9 +10437,20 @@ document.addEventListener('DOMContentLoaded', () => {
       alert('Please select both start and end dates.');
       return;
     }
-    if (getLockEntry(start, end)?.locked) {
-      applyLockUI();
-      return;
+    const existingLock = getLockEntry(start, end);
+    if (existingLock?.locked) {
+      const latestFinalized = findHistorySnapshot(start, end);
+      if (latestFinalized && !isSnapshotVoided(latestFinalized)) {
+        applyLockUI();
+        return;
+      }
+      const latestIncludingVoided = findLatestSnapshotForPeriod(start, end, { includeVoided: true });
+      if (latestIncludingVoided && isSnapshotVoided(latestIncludingVoided)) {
+        clearPeriodLockEntry(start, end);
+      } else {
+        applyLockUI();
+        return;
+      }
     }
     await finalizeCashAdvancesForPeriod(start, end);
     try {
