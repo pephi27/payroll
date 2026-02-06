@@ -250,6 +250,19 @@ function __kvBootCloudFirstDecision(k, localObj, cloudObj){
   if (localHas) return true;  // seed cloud if cloud empty/missing
   return false;
 }
+function __kvPayrollHistoryLatestTs(list){
+  try{
+    if (!Array.isArray(list) || !list.length) return 0;
+    let maxTs = 0;
+    for (const item of list){
+      if (!item || typeof item !== 'object') continue;
+      const stamp = item.finalizedAt || item.lockedAt || item.createdAt || item.voidedAt || '';
+      const ts = stamp ? new Date(stamp).getTime() : 0;
+      if (Number.isFinite(ts) && ts > maxTs) maxTs = ts;
+    }
+    return maxTs;
+  }catch(_){ return 0; }
+}
 try { window.queueHydrateRerender = queueHydrateRerender; } catch (_) {}
 
 if (!window.__kvSubscribed) {
@@ -419,6 +432,15 @@ async function __kvHydrateOnce(){
         const decision = __kvBootCloudFirstDecision(k, localObj, cloudObj);
         if (typeof decision === 'boolean') preferLocal = decision;
       } catch(_) {}
+
+      // Payroll history is append-heavy and does not carry __meta timestamps.
+      // Prefer the side with the newer snapshot timeline so a newly finalized run
+      // is not lost after refresh when cloud replication is delayed.
+      if (k === 'payroll_hist') {
+        const localTs = __kvPayrollHistoryLatestTs(localObj);
+        const cloudTs = __kvPayrollHistoryLatestTs(cloudObj);
+        if (localTs > cloudTs) preferLocal = true;
+      }
 
       if (preferLocal) {
         try { await supabase.from(TABLE).upsert({ key: k, value: JSON.parse(cur) }, { onConflict: 'key' }); } catch(_){}
