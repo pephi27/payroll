@@ -2674,6 +2674,12 @@ window.addEventListener('load', dashReports);
        OT Hrs
       </th>
       <th>Total Hours</th>
+      <th>
+       Split
+      </th>
+      <th class="punches-header">
+       Punches
+      </th>
       <!-- Added explicit Actions column to ensure consistent header structure -->
       <th class="actions-header">
        Actions
@@ -15785,7 +15791,7 @@ function buildScheduleDropdownHalf(empId, date, half, currentScheduleId){
 
 function formatHours(value){
   const num = parseFloat(value);
- main
+  return (!isFinite(num) || num === 0) ? '-' : num.toFixed(2);
 }
 
 function renderResults(){
@@ -16184,6 +16190,8 @@ let otMins = 0;
           htmlSeg += '<td>' + formatHours(regDecSeg) + '</td>';
           htmlSeg += '<td>' + formatHours(otDecSeg) + '</td>';
           htmlSeg += '<td>' + formatHours(String((parseFloat(regDecSeg)||0)+(parseFloat(otDecSeg)||0))) + '</td>';
+          htmlSeg += '<td><button type="button" class="btn-unsplit" data-key="' + splitKey + '" onclick="unsplitRecord(this.dataset.key)">Unsplit</button></td>';
+          htmlSeg += '<td class="punches-cell"><button type="button" class="dtr-punch-btn">✏ Edit Punches</button></td>';
           // Ensure Actions column always has a Delete button for split rows
           htmlSeg += '<td class="actions-cell"><button type="button" class="dtr-del-btn">Delete</button></td>';
           trSeg.innerHTML = htmlSeg;
@@ -16247,6 +16255,8 @@ let otMins = 0;
           (merged.otIn ? '<td>'+__fmt12Clock(merged.otIn)+'</td>' : '<td class="missing">-</td>') +
           (merged.otOut ? '<td>'+__fmt12Clock(merged.otOut)+'</td>' : '<td class="missing">-</td>') +
           '<td>'+formatHours(regDec)+'</td><td>'+formatHours(otDec)+'</td><td>'+formatHours(minsToDecimal(merged.regMins + merged.otMins))+'</td>' +
+          '<td><button type="button" class="btn-split" data-key="'+splitKey+'" onclick="splitRecord(this.dataset.key)">Split</button></td>' +
+          '<td class="punches-cell"><button type="button" class="dtr-punch-btn">✏ Edit Punches</button></td>' +
           '<td class="actions-cell"><button type="button" class="dtr-del-btn">Delete</button></td>';
         if(overridesSchedules[overrideKey] || overridesProjects[overrideKeyProj] !== undefined){ tr.style.backgroundColor='#fff3cd'; }
         try{
@@ -16292,6 +16302,9 @@ let otMins = 0;
       (otInCalc ? '<td>' + __fmt12Clock(otInCalc) + '</td>' : '<td class=\"missing\">-</td>') +
       (otOutCalc ? '<td>' + __fmt12Clock(otOutCalc) + '</td>' : '<td class=\"missing\">-</td>') +
       '<td>'+formatHours(totalRegularDecimal)+'</td><td>'+formatHours(otDecimal)+'</td><td>'+formatHours(__tot)+'</td>' +
+      // Use a named handler with a data-key attribute instead of an inline IIFE.
+      '<td><button type="button" class="btn-split" data-key="' + empId + '___' + date + '" onclick="splitRecord(this.dataset.key)">Split</button></td>' +
+      '<td class="punches-cell"><button type="button" class="dtr-punch-btn">✏ Edit Punches</button></td>' +
       // Ensure Actions column always has a Delete button for unsplit rows
       '<td class="actions-cell"><button type="button" class="dtr-del-btn">Delete</button></td>';
     if(overridesSchedules[overrideKey] || overridesProjects[overrideKeyProj] !== undefined){
@@ -17117,6 +17130,22 @@ function restoreData(file) {
       }
     });
   }
+  function ensurePunchesHeader(){
+    const table = document.getElementById('resultsTable');
+    if(!table) return;
+    const theadRow = table.querySelector('thead tr');
+    if(theadRow && !theadRow.querySelector('.punches-header')){
+      const th = document.createElement('th');
+      th.textContent = 'Punches';
+      th.classList.add('punches-header');
+      const actionsHeader = theadRow.querySelector('.actions-header');
+      if (actionsHeader) {
+        theadRow.insertBefore(th, actionsHeader);
+      } else {
+        theadRow.appendChild(th);
+      }
+    }
+  }
   function ensureActionsHeader(){
     const table = document.getElementById('resultsTable');
     if(!table) return;
@@ -17178,14 +17207,46 @@ function restoreData(file) {
     });
     table.__dtrDelBound = true;
   }
- main
+  function setupDtrPunchDelegation(){
+    const table = document.getElementById('resultsTable');
+    if (!table || table.__dtrPunchBound) return;
+    table.__dtrPunchBound = true;
+    table.addEventListener('click', function(ev){
+      const btn = ev.target && ev.target.closest ? ev.target.closest('.dtr-punch-btn') : null;
+      if (!btn) return;
+      const tr = btn.closest('tr');
+      if (!tr) return;
+      const empId = tr.dataset.empId || (tr.cells[0] ? tr.cells[0].textContent.trim() : '');
+      const date = tr.dataset.date || (tr.cells[4] ? tr.cells[4].textContent.trim() : '');
+      if (!empId || !date) return;
+      const emp = storedEmployees && storedEmployees[empId];
+      const name = emp && emp.name ? emp.name : (tr.cells[1] ? tr.cells[1].textContent.trim() : '');
+      openPunchEditor({ empId, date, name, scope: 'all' });
+    });
+  }
   function addDtrDeleteButtons(){
     const table = document.getElementById('resultsTable');
     if(!table) return;
+    ensurePunchesHeader();
     ensureActionsHeader();
     const rows = table.querySelectorAll('tbody tr');
     rows.forEach(tr => {
+      const hasPunch = !!tr.querySelector('.dtr-punch-btn');
       const hasDelete = !!tr.querySelector('.dtr-del-btn');
+      if (!hasPunch) {
+        const punchTd = document.createElement('td');
+        punchTd.className = 'punches-cell';
+        const editBtn = document.createElement('button');
+        editBtn.textContent = '✏ Edit Punches';
+        editBtn.className = 'dtr-punch-btn';
+        punchTd.appendChild(editBtn);
+        const actionsCell = tr.querySelector('.actions-cell');
+        if (actionsCell) {
+          tr.insertBefore(punchTd, actionsCell);
+        } else {
+          tr.appendChild(punchTd);
+        }
+      }
       if (hasDelete) return;
 
       const actionTd = document.createElement('td');
@@ -17268,6 +17329,7 @@ function restoreData(file) {
       const res = original.apply(this, arguments);
       try { addDtrDeleteButtons(); } catch(e){}
       try { setupDtrDeleteDelegation(); } catch(e){}
+      try { setupDtrPunchDelegation(); } catch(e){}
       try { wirePunchEditor(); } catch(e){}
       // After rendering results, always check whether the selected payroll period is
       // locked and toggle editing accordingly. This ensures that dynamic
@@ -17286,6 +17348,7 @@ function restoreData(file) {
     wireManualDTR();
     wirePunchEditor();
     setupDtrDeleteDelegation();
+    setupDtrPunchDelegation();
     if(!patchRenderResults()){
       const iv = setInterval(() => {
         if(patchRenderResults()) clearInterval(iv);
@@ -17890,21 +17953,6 @@ document.addEventListener('DOMContentLoaded', function(){
       });
     });
   }
-  function collectColumnIndexesByCellClass(table, className){
-    var headerRow = table.querySelector('thead tr');
-    if (!headerRow) return [];
-    var cells = Array.from(headerRow.children || []);
-    var indexes = new Set();
-    if (!cells.length) return [];
-    table.querySelectorAll('tbody tr').forEach(function(row){
-      Array.from(row.children || []).forEach(function(cell, idx){
-        if (cell && cell.classList && cell.classList.contains(className)) {
-          indexes.add(idx + 1);
-        }
-      });
-    });
-    return Array.from(indexes);
-  }
   function syncFormControlValues(sourceTable, cloneTable){
     if (!sourceTable || !cloneTable) return;
     var sourceControls = sourceTable.querySelectorAll('input, select, textarea');
@@ -17988,26 +18036,25 @@ document.addEventListener('DOMContentLoaded', function(){
       if (!isNaN(num) && num === 0) td.textContent = '-';
     });
   }
-  function removeEmptyProjectColumn(table){
+  function removeEmptyColumns(table, preserveLabels){
     var bodyRows = Array.from((table.tBodies && table.tBodies[0] && table.tBodies[0].rows) || []);
     var headerRow = table.tHead && table.tHead.rows && table.tHead.rows[0];
     if (!headerRow || !bodyRows.length) return;
-    var projectIdx = -1;
-    for (var i = 0; i < headerRow.cells.length; i += 1) {
-      if (normalizeHeader(headerRow.cells[i].textContent) === 'project') {
-        projectIdx = i;
-        break;
+    var preserve = Array.isArray(preserveLabels)
+      ? preserveLabels.map(function(label){ return normalizeHeader(label); })
+      : [];
+    for (var idx = headerRow.cells.length - 1; idx >= 0; idx -= 1) {
+      var headerText = headerRow.cells[idx] ? normalizeHeader(headerRow.cells[idx].textContent) : '';
+      if (preserve.indexOf(headerText) !== -1) continue;
+      var hasContent = bodyRows.some(function(row){
+        var cell = row.cells[idx];
+        if (!cell) return false;
+        var text = (cell.textContent || '').trim();
+        return text && text !== '-';
+      });
+      if (!hasContent) {
+        removeColumnsByIndex(table, [idx + 1]);
       }
-    }
-    if (projectIdx < 0) return;
-    var hasContent = bodyRows.some(function(row){
-      var cell = row.cells[projectIdx];
-      if (!cell) return false;
-      var text = (cell.textContent || '').trim();
-      return text && text !== '-';
-    });
-    if (!hasContent) {
-      removeColumnsByIndex(table, [projectIdx + 1]);
     }
   }
   function buildDtrPrintTable(){
@@ -18019,11 +18066,9 @@ document.addEventListener('DOMContentLoaded', function(){
     fillProjectNames(clone);
     var removeLabels = ['Punches', 'Actions'];
     var removeIdx = collectHeaderIndexes(clone, removeLabels);
-    var actionsIdx = collectColumnIndexesByCellClass(clone, 'actions-cell');
-    removeIdx = removeIdx.concat(actionsIdx);
     removeColumnsByIndex(clone, removeIdx);
     replaceZeroWithDash(clone);
-    removeEmptyProjectColumn(clone);
+    removeEmptyColumns(clone, ['Project']);
     return clone;
   }
   function printDTR(orientation){
