@@ -18036,25 +18036,26 @@ document.addEventListener('DOMContentLoaded', function(){
       if (!isNaN(num) && num === 0) td.textContent = '-';
     });
   }
-  function removeEmptyColumns(table, preserveLabels){
+  function removeEmptyProjectColumn(table){
     var bodyRows = Array.from((table.tBodies && table.tBodies[0] && table.tBodies[0].rows) || []);
     var headerRow = table.tHead && table.tHead.rows && table.tHead.rows[0];
     if (!headerRow || !bodyRows.length) return;
-    var preserve = Array.isArray(preserveLabels)
-      ? preserveLabels.map(function(label){ return normalizeHeader(label); })
-      : [];
-    for (var idx = headerRow.cells.length - 1; idx >= 0; idx -= 1) {
-      var headerText = headerRow.cells[idx] ? normalizeHeader(headerRow.cells[idx].textContent) : '';
-      if (preserve.indexOf(headerText) !== -1) continue;
-      var hasContent = bodyRows.some(function(row){
-        var cell = row.cells[idx];
-        if (!cell) return false;
-        var text = (cell.textContent || '').trim();
-        return text && text !== '-';
-      });
-      if (!hasContent) {
-        removeColumnsByIndex(table, [idx + 1]);
+    var projectIdx = -1;
+    for (var i = 0; i < headerRow.cells.length; i += 1) {
+      if (normalizeHeader(headerRow.cells[i].textContent) === 'project') {
+        projectIdx = i;
+        break;
       }
+    }
+    if (projectIdx < 0) return;
+    var hasContent = bodyRows.some(function(row){
+      var cell = row.cells[projectIdx];
+      if (!cell) return false;
+      var text = (cell.textContent || '').trim();
+      return text && text !== '-';
+    });
+    if (!hasContent) {
+      removeColumnsByIndex(table, [projectIdx + 1]);
     }
   }
   function buildDtrPrintTable(){
@@ -18068,7 +18069,7 @@ document.addEventListener('DOMContentLoaded', function(){
     var removeIdx = collectHeaderIndexes(clone, removeLabels);
     removeColumnsByIndex(clone, removeIdx);
     replaceZeroWithDash(clone);
-    removeEmptyColumns(clone, ['Project']);
+    removeEmptyProjectColumn(clone);
     return clone;
   }
   function printDTR(orientation){
