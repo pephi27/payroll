@@ -15785,8 +15785,7 @@ function buildScheduleDropdownHalf(empId, date, half, currentScheduleId){
 
 function formatHours(value){
   const num = parseFloat(value);
-  if (!isFinite(num) || num === 0) return '-';
-  return num.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+ main
 }
 
 function renderResults(){
@@ -17179,6 +17178,7 @@ function restoreData(file) {
     });
     table.__dtrDelBound = true;
   }
+ main
   function addDtrDeleteButtons(){
     const table = document.getElementById('resultsTable');
     if(!table) return;
