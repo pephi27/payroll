@@ -14543,10 +14543,9 @@ function normalizeOverrideValue(value) {
 function stripNextDaySuffix(value) {
   return String(value || '').replace(/\s*\+\s*\d+\s*$/, '');
 }
-function getPunchOptions(empId, dateStr, fieldKey) {
+function getPunchOptions(empId, dateStr) {
   const options = [];
   const seen = new Set();
-  const allowNextDay = fieldKey === 'otIn' || fieldKey === 'otOut';
   const addOption = (timeValue, isNextDay) => {
     if (!timeValue) return;
     const baseTime = padHM(stripNextDaySuffix(timeValue));
@@ -14568,9 +14567,7 @@ function getPunchOptions(empId, dateStr, fieldKey) {
     dt.setDate(dt.getDate() + 1);
     return dt.toISOString().slice(0, 10);
   })();
-  if (allowNextDay && nextDate) {
-    // (+1) generation for OT selectors: include only real punches from the
-    // next calendar day, and only up to the configured overnight cutoff hour.
+  if (nextDate) {
     (storedRecords || [])
       .filter(r => String(r.empId) === String(empId) && r.date === nextDate)
       .forEach(r => {
@@ -14597,14 +14594,7 @@ function openPunchEditor(rowContext) {
   modal.dataset.empId = empId;
   modal.dataset.date = date;
   modal.dataset.scope = scope;
-  const optionsByField = {
-    amIn: getPunchOptions(empId, date, 'amIn'),
-    amOut: getPunchOptions(empId, date, 'amOut'),
-    pmIn: getPunchOptions(empId, date, 'pmIn'),
-    pmOut: getPunchOptions(empId, date, 'pmOut'),
-    otIn: getPunchOptions(empId, date, 'otIn'),
-    otOut: getPunchOptions(empId, date, 'otOut')
-  };
+  const options = getPunchOptions(empId, date);
   const overrideKey = `${empId}___${date}`;
   const overrides = dtrOverrides[overrideKey] || {};
   const selectMap = {
@@ -14623,7 +14613,6 @@ function openPunchEditor(rowContext) {
     autoOpt.value = '';
     autoOpt.textContent = '(Auto)';
     select.appendChild(autoOpt);
-    const options = optionsByField[key] || [];
     options.forEach(opt => {
       const optionEl = document.createElement('option');
       optionEl.value = opt.value;
@@ -14632,15 +14621,6 @@ function openPunchEditor(rowContext) {
     });
     const stored = normalizeOverrideValue(overrides[key]);
     if (stored) {
-      // Preserve persisted +1 values in case punches were later removed.
-      if (![...select.options].some(opt => opt.value === stored)) {
-        const storedOption = document.createElement('option');
-        storedOption.value = stored;
-        storedOption.textContent = /\+\d+$/.test(stored)
-          ? `${stripNextDaySuffix(stored)} (+${stored.split('+')[1]})`
-          : stored;
-        select.appendChild(storedOption);
-      }
       select.value = stored;
     } else {
       select.value = '';
@@ -16113,10 +16093,12 @@ let otMins = 0;
       if (otInM !== null && otOutM !== null) {
         let rangeStart = toMins(__isSaturday ? (__satEnd || rangesForEmp.otIn.start) : rangesForEmp.otIn.start);
         let rangeEnd = toMins(__isSaturday ? '23:59' : (rangesForEmp.otOut.end || rangesForEmp.otIn.end));
-        // OT duration now always uses toMins(..) values (supports HH:MM+N).
+        if (otOutM < otInM) otOutM += 24 * 60;
+        if (otOutM >= 24 * 60 && rangeEnd < 24 * 60) rangeEnd += 24 * 60;
+        if (otInM >= 24 * 60 && rangeStart < 24 * 60) rangeStart += 24 * 60;
         const otStartClamp = Math.max(otInM, rangeStart);
         const otEndClamp = Math.min(otOutM, rangeEnd);
-        otMins = Math.max(0, otEndClamp - otStartClamp);
+        if(otEndClamp > otStartClamp) otMins = otEndClamp - otStartClamp;
       }
     }
     
@@ -16212,7 +16194,7 @@ let otMins = 0;
         const otOutCands = times.filter(t=>{ const m=toMins(t); return m>pmOutRef && m>=toMins(isSat?satEnd:rng.otOut.start) && m<=toMins(isSat?'23:59':rng.otOut.end); }).filter(t=>!otIn||toMins(t)>=toMins(otIn));
         otOut = otOutCands.length ? otOutCands[otOutCands.length-1] : null;
         if (isSat && satEnd) { const lastOut=pmOutActual||amOutActual||null; const lastOutM=lastOut?toMins(lastOut):null; const satEndM=toMins(satEnd); if (lastOutM!==null&&lastOutM>satEndM){ if(!otIn) otIn=satEnd; if(!otOut) otOut=lastOut; } }
-        if (otIn && otOut) { const startClamp=Math.max(toMins(otIn), toMins(isSat?(satEnd||rng.otIn.start):rng.otIn.start)); const endClamp=Math.min(toMins(otOut), toMins(isSat?'23:59':(rng.otOut.end||rng.otIn.end))); otM=Math.max(0,endClamp-startClamp); }
+        if (otIn && otOut) { const startClamp=Math.max(toMins(otIn), toMins(isSat?(satEnd||rng.otIn.start):rng.otIn.start)); const endClamp=Math.min(toMins(otOut), toMins(isSat?'23:59':(rng.otOut.end||rng.otIn.end))); if(endClamp>startClamp) otM=endClamp-startClamp; }
         return { mins: otM, otIn: otIn, otOut: otOut };
       };
       const hasBridge = !!(amInActual && !amOutActual && !pmInActual && pmOutActual);
@@ -16703,12 +16685,10 @@ function computeHoursForDateRange(startDate, endDate) {
     let dayOTMins = 0;
     if (overridePunches) {
       if (otInActual && otOutActual) {
-        // OT duration relies on toMins so stored +1 values are interpreted correctly.
-        const otInM = toMins(otInActual);
-        const otOutM = toMins(otOutActual);
-        dayOTMins = (otInM !== null && otOutM !== null)
-          ? Math.max(0, otOutM - otInM)
-          : 0;
+        let otInM = toMins(otInActual);
+        let otOutM = toMins(otOutActual);
+        if (otOutM < otInM) otOutM += 1440;
+        dayOTMins = Math.max(0, otOutM - otInM);
       }
     } else if (__isSaturday) {
       // Saturday override: sum minutes worked after the Saturday end for
@@ -16731,12 +16711,10 @@ function computeHoursForDateRange(startDate, endDate) {
     } else {
       // Nonâ€‘Saturday: prefer explicit OT punches when they exist
       if (otInActual && otOutActual && toMins(otInActual) > pmOutRefMins) {
-        // OT duration relies on toMins so stored +1 values are interpreted correctly.
-        const otInM = toMins(otInActual);
-        const otOutM = toMins(otOutActual);
-        dayOTMins = (otInM !== null && otOutM !== null)
-          ? Math.max(0, otOutM - otInM)
-          : 0;
+        let otInM = toMins(otInActual);
+        let otOutM = toMins(otOutActual);
+        if (otOutM < otInM) otOutM += 1440;
+        dayOTMins = Math.max(0, otOutM - otInM);
       } else {
         // Fallback: no explicit OT punches.  Check the last clockâ€‘out and
         // count any minutes worked after the scheduled end as OT.  Only
@@ -16750,8 +16728,10 @@ function computeHoursForDateRange(startDate, endDate) {
           if (lastOutM === null || outM > lastOutM) lastOutM = outM;
         }
         if (lastOutM != null) {
-          if (lastOutM > pmOutRefMins) {
-            dayOTMins = lastOutM - pmOutRefMins;
+          let adjLastOut = lastOutM;
+          if (adjLastOut < pmOutRefMins) adjLastOut += 1440;
+          if (adjLastOut > pmOutRefMins) {
+            dayOTMins = adjLastOut - pmOutRefMins;
           }
         }
       }
@@ -17063,7 +17043,6 @@ function restoreData(file) {
       </label>
       <label class="dtr-punch-field" data-field-group="ot">OT Out
         <select id="dtrPunchOtOut"></select>
-        <small class="dtr-punch-hint">If OT ends after midnight, choose the time with (+1).</small>
       </label>
     </div>
     <div class="dtr-modal-actions">
@@ -17450,13 +17429,7 @@ function restoreData(file) {
 <script>
 (function(){
   function q(id){ return document.getElementById(id); }
-  function toMins(hm){
-    if(!hm) return null;
-    var m = String(hm).trim().match(/^(\d{1,2})\s*:\s*(\d{2})(?:\s*\+\s*(\d+))?$/);
-    if(!m) return null;
-    var h = +m[1]||0, mm = +m[2]||0, d = m[3] ? (+m[3]||0) : 0;
-    return (h*60)+mm+(d*1440);
-  }
+  function toMins(hm){ if(!hm) return null; var p=hm.split(':'), h=+p[0]||0, m=+p[1]||0; return h*60+m; }
   function minsToDec(mins){ return Math.round((mins/60)*100)/100; }
   function uniqSort(arr){ var seen={}, out=[]; for(var i=0;i<arr.length;i++){ var v=arr[i]; if(!seen[v]){ seen[v]=1; out.push(v);} } out.sort(); return out; }
   function max0(x){ return x>0?x:0; }
@@ -17668,7 +17641,7 @@ function restoreData(file) {
       if (otIn && otOut){
         var startClamp = Math.max(toMins(otIn), toMins(win.otIn.start));
         var endClamp   = Math.min(toMins(otOut), toMins(win.otOut.end));
-        otMins = Math.max(0, endClamp - startClamp);
+        if (endClamp > startClamp) otMins = endClamp - startClamp;
       }
 
       var regDec = minsToDec(regMins);
