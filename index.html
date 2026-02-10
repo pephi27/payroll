@@ -619,9 +619,15 @@ function safeStringify(v){
 #r_ot_table th:nth-last-child(1), #r_ot_table td:nth-last-child(1),
 #projectTotalsTable th:nth-last-child(1), #projectTotalsTable td:nth-last-child(1) { width: 110px; min-width: 110px; max-width: 120px; }
 /* Make first (personnel) column robust but constrained */
-#r_table th:first-child, #r_table td:first-child,
-#r_ot_table th:first-child, #r_ot_table td:first-child,
-#projectTotalsTable th:first-child, #projectTotalsTable td:first-child {
+#r_table td:first-child,
+#r_table thead tr:first-child th:first-child,
+#r_table tfoot tr:first-child td:first-child,
+#r_ot_table td:first-child,
+#r_ot_table thead tr:first-child th:first-child,
+#r_ot_table tfoot tr:first-child td:first-child,
+#projectTotalsTable td:first-child,
+#projectTotalsTable thead tr:first-child th:first-child,
+#projectTotalsTable tfoot tr:first-child td:first-child {
   text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   width: 170px; min-width: 170px; max-width: 170px;
 }
@@ -11635,7 +11641,6 @@ document.addEventListener('DOMContentLoaded', () => {
     <h3 style="margin:0 0 8px 0;">Reports</h3>
     <div class="subtab-nav">
       <button class="tab-btn subtab-btn active" data-subtab="reportsDetailedTab" id="btnReportsDetailed">Detailed</button>
-      <button class="tab-btn subtab-btn" data-subtab="reportsOvertimeTab" id="btnReportsOvertime">Overtime</button>
       <button class="tab-btn subtab-btn" data-subtab="masterReportTab" id="btnMasterReport">Master Report</button>
     </div>
 
@@ -11648,17 +11653,6 @@ document.addEventListener('DOMContentLoaded', () => {
       </div>
       <div id="r_msg" style="font-size:13px;color:#64748b;display:none;"></div>
       <table id="r_table" aria-live="polite"></table>
-    </div>
-
-    <!-- Overtime reports view -->
-    <div id="reportsOvertimeTab" class="subtab-panel">
-      <div class="controls">
-        <button id="r_ot_print">Print</button>
-        <button id="r_ot_csv">CSV (All)</button>
-        <span id="r_ot_range_hint" style="font-size:12px;color:#64748b;margin-left:auto;"></span>
-      </div>
-      <div id="r_ot_msg" style="font-size:13px;color:#64748b;display:none;"></div>
-      <table id="r_ot_table" aria-live="polite"></table>
     </div>
 
     <!-- New Master Report view -->
@@ -11966,52 +11960,46 @@ document.addEventListener('DOMContentLoaded', () => {
       return { data, from, to, dates, additionalIncomeByProject, adjustmentsByProjectEmp };
     }
 
-    function buildReportTable(mode, report){
-      const isOvertime = mode === 'oth';
-      const tableId = isOvertime ? 'r_ot_table' : 'r_table';
-      const msgId = isOvertime ? 'r_ot_msg' : 'r_msg';
-      const hintId = isOvertime ? 'r_ot_range_hint' : 'r_range_hint';
-      const table = document.getElementById(tableId);
+    function buildReportTable(report){
+      const table = document.getElementById('r_table');
       if (!table) return;
 
       if (!report){
-        showMsg('No DTR rows found. Import DTR or open a period first.', msgId);
+        showMsg('No DTR rows found. Import DTR or open a period first.', 'r_msg');
         table.innerHTML = '';
         return;
       }
-      showMsg('', msgId);
+      showMsg('', 'r_msg');
 
       const { data, from, to, dates, additionalIncomeByProject, adjustmentsByProjectEmp } = report;
-      const totalCols = 2 + dates.length + 3;
-      const hint = document.getElementById(hintId);
-      if (hint) hint.textContent = `Range: ${from} - ${to}`;
+      const totalCols = 2 + (dates.length * 2) + 5;
+      const hint = document.getElementById('r_range_hint');
+      if (hint) {
+        const fromDay = new Date(from).toLocaleDateString(undefined,{weekday:'long'}).toUpperCase();
+        const toDay = new Date(to).toLocaleDateString(undefined,{weekday:'long'}).toUpperCase();
+        hint.textContent = `Range: ${fromDay} - ${toDay} (${from} - ${to})`;
+      }
 
-      const dayLabel = isOvertime ? 'OTH' : 'RWH';
-      const totalLabel = isOvertime ? 'TOTAL OT HRS' : 'TOTAL REG HRS';
-      const grossLabel = isOvertime ? 'OT GROSS' : 'GROSS';
-      const adjLabel = 'Adj Hrs';
-
-      // THEAD
-      let thead1 = `<tr><th class="left" rowspan="2">PERSONNEL</th><th rowspan="2">RATE</th>`;
+      let thead1 = `<tr><th class="left" rowspan="3">PERSONNEL</th><th rowspan="3">RATE</th>`;
       dates.forEach(d=>{
-        const lbl = d.toLocaleDateString(undefined,{day:'2-digit',month:'short'});
-        thead1 += `<th>${lbl}</th>`;
+        const lbl = d.toLocaleDateString(undefined,{day:'2-digit',month:'short',year:'numeric'});
+        thead1 += `<th colspan="2">${lbl}</th>`;
       });
-      thead1 += `<th rowspan="2">${totalLabel}</th><th rowspan="2">${adjLabel}</th><th rowspan="2">${grossLabel}</th></tr>`;
-      let thead2 = `<tr>${dates.map(()=>`<th>${dayLabel}</th>`).join('')}</tr>`;
+      thead1 += `<th rowspan="3">TOTAL REG HRS</th><th rowspan="3">TT OT HRS</th><th rowspan="3">RWH GROSS</th><th rowspan="3">OT GROSS</th><th rowspan="3">TOTAL GROSS</th></tr>`;
+      let thead2 = `<tr>${dates.map(d=>`<th colspan="2">${d.toLocaleDateString(undefined,{weekday:'long'}).toUpperCase()}</th>`).join('')}</tr>`;
+      let thead3 = `<tr>${dates.map(()=>`<th>RWH</th><th>OT</th>`).join('')}</tr>`;
 
-      // Per-project TBODY blocks
       const tbodies = [];
-      let gHours=0,gAdj=0,gGross=0;
-      const gDayTotals = dates.map(() => 0);
+      let gRegHours=0, gOtHours=0, gRegGross=0, gOtGross=0, gTotalGross=0;
+      const gDayTotals = dates.map(() => ({ rwh:0, oth:0 }));
       const projects = Object.keys(data).sort((a,b)=>getReportProjectLabel(a).localeCompare(getReportProjectLabel(b)));
 
       projects.forEach(proj=>{
         const empMap = data[proj] || {};
         const projectLabel = getReportProjectLabel(proj);
         const adjustmentMap = (adjustmentsByProjectEmp && adjustmentsByProjectEmp[proj]) || {};
-        let pHours=0,pAdj=0,pGross=0;
-        const dayTotals = dates.map(() => 0);
+        let pRegHours=0, pOtHours=0, pRegGross=0, pOtGross=0, pTotalGross=0;
+        const dayTotals = dates.map(() => ({ rwh:0, oth:0 }));
         let rows='';
 
         rows += `<tr class="proj-break"><td colspan="${totalCols}">${projectLabel}</td></tr>`;
@@ -12031,112 +12019,116 @@ document.addEventListener('DOMContentLoaded', () => {
           const canonicalEmpId = resolveReportEmployeeId(empId, display);
           const rate = getReportEmployeeRate(canonicalEmpId, display);
           const effectiveOtRate = getEffectiveOvertimeRateForEmployee(canonicalEmpId, rate);
-          let rowHours=0;
+          let rowRegHours=0;
+          let rowOtHours=0;
 
           const cells = dates.map((d,i)=>{
             const key = d.setHours(0,0,0,0);
             const v = rec.days[key] || { rwh:0, oth:0 };
-            const hours = isOvertime ? v.oth : v.rwh;
-            rowHours += hours;
-            dayTotals[i] += hours;
-            return `<td class="num">${f2(hours)}</td>`;
+            rowRegHours += v.rwh;
+            rowOtHours += v.oth;
+            dayTotals[i].rwh += v.rwh;
+            dayTotals[i].oth += v.oth;
+            return `<td class="num">${f2(v.rwh)}</td><td class="num">${f2(v.oth)}</td>`;
           }).join('');
 
-          const adj = adjustmentMap[empId] || { regHours: 0, otHours: 0, regPay: 0, otPay: 0 };
-          const adjHours = isOvertime ? Number(adj.otHours || 0) : Number(adj.regHours || 0);
-          const gross = isOvertime
-            ? roundToCents((rowHours + adjHours) * effectiveOtRate)
-            : roundToCents((rowHours * rate) + Number(adj.regPay || 0));
-          pHours += rowHours;
-          pAdj += adjHours;
-          pGross += gross;
+          const adj = adjustmentMap[empId] || { regPay: 0, otPay: 0 };
+          const regGross = roundToCents((rowRegHours * rate) + Number(adj.regPay || 0));
+          const otGross = roundToCents((rowOtHours * effectiveOtRate) + Number(adj.otPay || 0));
+          const totalGross = roundToCents(regGross + otGross);
+          pRegHours += rowRegHours;
+          pOtHours += rowOtHours;
+          pRegGross += regGross;
+          pOtGross += otGross;
+          pTotalGross += totalGross;
 
           rows += `<tr>
             <td class="left">${display}</td>
             <td class="num">${f2(rate)}</td>
             ${cells}
-            <td class="num">${f2(rowHours)}</td>
-            <td class="num">${f2(adjHours)}</td>
-            <td class="num">${f2(gross)}</td>
+            <td class="num">${f2(rowRegHours)}</td>
+            <td class="num">${f2(rowOtHours)}</td>
+            <td class="num">${f2(regGross)}</td>
+            <td class="num">${f2(otGross)}</td>
+            <td class="num">${f2(totalGross)}</td>
           </tr>`;
         });
 
-// Compute per-project Bantay allowance (Supabase-backed)
-const allow = isOvertime ? 0 : Object.keys(bantay || {}).reduce((sum, empId) => {
+const allow = Object.keys(bantay || {}).reduce((sum, empId) => {
   const assigned = (bantayProj || {})[empId];
   if (!assigned) return sum;
   const matchesProject = getReportProjectBucket(resolveProjectIdValue(assigned)) === proj;
   return matchesProject ? sum + (parseFloat(bantay[empId]) || 0) : sum;
 }, 0);
 
-// Render Allowance row (amount in Gross column)
-if (!isOvertime && allow && allow > 0) {
+if (allow && allow > 0) {
 rows += `<tr class="allowance">
   <td class="left">Allowance</td>
   <td class="num">-</td>
-  ${dates.map(()=>`<td class="num">-</td>`).join('')}
+  ${dates.map(()=>`<td class="num">-</td><td class="num">-</td>`).join('')}
+  <td class="num">-</td>
+  <td class="num">-</td>
   <td class="num">-</td>
   <td class="num">-</td>
   <td class="num">${f2(allow)}</td>
 </tr>`;
-
-  // Include allowance in project gross
-  pGross += allow;
+  pTotalGross += allow;
 }
 
-  // Additional Income rows assigned to this project
-  if (!isOvertime) {
-    try {
-      const aiMap = (additionalIncomeByProject && additionalIncomeByProject[proj]) || {};
-      Object.keys(aiMap).sort((a,b)=>String(a).localeCompare(String(b))).forEach(lbl => {
-        const amt = parseFloat(aiMap[lbl]) || 0;
-        if (amt <= 0) return;
-        const safeLbl = String(lbl || 'Additional Income').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-        rows += `<tr class="add-income">
+  try {
+    const aiMap = (additionalIncomeByProject && additionalIncomeByProject[proj]) || {};
+    Object.keys(aiMap).sort((a,b)=>String(a).localeCompare(String(b))).forEach(lbl => {
+      const amt = parseFloat(aiMap[lbl]) || 0;
+      if (amt <= 0) return;
+      const safeLbl = String(lbl || 'Additional Income').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+      rows += `<tr class="add-income">
   <td class="left">${safeLbl}</td>
   <td class="num">-</td>
-  ${dates.map(()=>`<td class="num">-</td>`).join('')}
+  ${dates.map(()=>`<td class="num">-</td><td class="num">-</td>`).join('')}
+  <td class="num">-</td>
+  <td class="num">-</td>
   <td class="num">-</td>
   <td class="num">-</td>
   <td class="num">${f2(amt)}</td>
 </tr>`;
-        pGross += amt;
-      });
-    } catch (e) { /* ignore */ }
-  }
+      pTotalGross += amt;
+    });
+  } catch (e) { /* ignore */ }
 
   rows += `<tr class="totals">
             <td class="left">Project Total</td>
             <td class="num">-</td>
-            ${dayTotals.map(dt => `<td class="num">${f2(dt)}</td>`).join('')}
-            <td class="num">${f2(pHours)}</td>
-            <td class="num">${f2(pAdj)}</td>
-            <td class="num">${f2(pGross)}</td>
+            ${dayTotals.map(dt => `<td class="num">${f2(dt.rwh)}</td><td class="num">${f2(dt.oth)}</td>`).join('')}
+            <td class="num">${f2(pRegHours)}</td>
+            <td class="num">${f2(pOtHours)}</td>
+            <td class="num">${f2(pRegGross)}</td>
+            <td class="num">${f2(pOtGross)}</td>
+            <td class="num">${f2(pTotalGross)}</td>
           </tr>`;
 
-          gHours += pHours; gAdj += pAdj; gGross += pGross;
-          dayTotals.forEach((dt,i)=>{ gDayTotals[i] += dt; });
+          gRegHours += pRegHours;
+          gOtHours += pOtHours;
+          gRegGross += pRegGross;
+          gOtGross += pOtGross;
+          gTotalGross += pTotalGross;
+          dayTotals.forEach((dt,i)=>{ gDayTotals[i].rwh += dt.rwh; gDayTotals[i].oth += dt.oth; });
 
           tbodies.push(`<tbody class="proj-page">${rows}</tbody>`);
         });
 
-      if (isOvertime) {
-        // Keep Reports overtime grand total exactly aligned with Payroll tab.
-        gGross = getPayrollTotalOvertimePay();
-      }
-
       const foot = `<tr class="totals">
           <td class="left">Grand Total</td>
           <td class="num">-</td>
-          ${gDayTotals.map(dt => `<td class="num">${f2(dt)}</td>`).join('')}
-          <td class="num">${f2(gHours)}</td>
-          <td class="num">${f2(gAdj)}</td>
-          <td class="num">${f2(gGross)}</td>
+          ${gDayTotals.map(dt => `<td class="num">${f2(dt.rwh)}</td><td class="num">${f2(dt.oth)}</td>`).join('')}
+          <td class="num">${f2(gRegHours)}</td>
+          <td class="num">${f2(gOtHours)}</td>
+          <td class="num">${f2(gRegGross)}</td>
+          <td class="num">${f2(gOtGross)}</td>
+          <td class="num">${f2(gTotalGross)}</td>
         </tr>`;
 
-      table.innerHTML = `<thead>${thead1}${thead2}</thead>${tbodies.join('')}<tfoot>${foot}</tfoot>`;
+      table.innerHTML = `<thead>${thead1}${thead2}${thead3}</thead>${tbodies.join('')}<tfoot>${foot}</tfoot>`;
 
-      // Commas for numeric cells
       (function applyCommas(){
         const fmt = (v)=>{
           const n = parseFloat(String(v||'').replace(/,/g,''));
@@ -12151,8 +12143,7 @@ rows += `<tr class="allowance">
     function buildTables(){
       const report = buildReportData();
       __report = report;
-      buildReportTable('rwh', report);
-      buildReportTable('oth', report);
+      buildReportTable(report);
     }
 
     function csvEscape(s){
@@ -12165,29 +12156,28 @@ rows += `<tr class="allowance">
 
     function buildReportRows(mode){
       if (!__report) return null;
-      const isOvertime = mode === 'oth';
       const { data, dates, from, to, additionalIncomeByProject, adjustmentsByProjectEmp } = __report;
 
-      const dayHeader = dates.map(d=>{
-        const lbl = d.toLocaleDateString(undefined,{day:'2-digit',month:'short'});
-        return `${isOvertime ? 'OTH' : 'RWH'} ${lbl}`;
+      const dayHeader = dates.flatMap(d=>{
+        const lbl = d.toLocaleDateString(undefined,{day:'2-digit',month:'short',year:'numeric'});
+        return [`RWH ${lbl}`, `OT ${lbl}`];
       });
 
       const header = ['PROJECT','PERSONNEL','RATE']
         .concat(dayHeader)
-        .concat([isOvertime ? 'TOTAL OT HRS' : 'TOTAL REG HRS', 'ADJ HRS', isOvertime ? 'OT GROSS' : 'GROSS']);
+        .concat(['TOTAL REG HRS', 'TT OT HRS', 'RWH GROSS', 'OT GROSS', 'TOTAL GROSS']);
       const rows = [header];
 
       const projects = Object.keys(data).sort((a,b)=>getReportProjectLabel(a).localeCompare(getReportProjectLabel(b)));
-      let gHours=0,gAdj=0,gGross=0;
-      const gDayTotals = dates.map(() => 0);
+      let gRegHours=0, gOtHours=0, gRegGross=0, gOtGross=0, gTotalGross=0;
+      const gDayTotals = dates.map(() => ({ rwh:0, oth:0 }));
 
       projects.forEach(proj=>{
         const empMap = data[proj] || {};
         const projectLabel = getReportProjectLabel(proj);
         const adjustmentMap = (adjustmentsByProjectEmp && adjustmentsByProjectEmp[proj]) || {};
-        let pHours=0,pAdj=0,pGross=0;
-        const dayTotals = dates.map(() => 0);
+        let pRegHours=0, pOtHours=0, pRegGross=0, pOtGross=0, pTotalGross=0;
+        const dayTotals = dates.map(() => ({ rwh:0, oth:0 }));
 
         const projectEmpIds = Array.from(new Set([
           ...Object.keys(empMap),
@@ -12206,69 +12196,75 @@ rows += `<tr class="allowance">
           const rate = getReportEmployeeRate(canonicalEmpId, display);
           const effectiveOtRate = getEffectiveOvertimeRateForEmployee(canonicalEmpId, rate);
 
-          let rowHours=0;
+          let rowRegHours=0;
+          let rowOtHours=0;
           const dayCells = [];
           dates.forEach((d,i)=>{
             const key = d.setHours(0,0,0,0);
             const v = rec.days[key] || { rwh:0, oth:0 };
-            const hours = isOvertime ? v.oth : v.rwh;
-            rowHours += hours;
-            dayTotals[i] += hours;
-            dayCells.push(to2(hours));
+            rowRegHours += v.rwh;
+            rowOtHours += v.oth;
+            dayTotals[i].rwh += v.rwh;
+            dayTotals[i].oth += v.oth;
+            dayCells.push(to2(v.rwh), to2(v.oth));
           });
 
-          const adj = adjustmentMap[empId] || { regHours: 0, otHours: 0, regPay: 0, otPay: 0 };
-          const adjHours = isOvertime ? Number(adj.otHours || 0) : Number(adj.regHours || 0);
-          const gross = isOvertime
-            ? roundToCents((rowHours + adjHours) * effectiveOtRate)
-            : roundToCents((rowHours * rate) + Number(adj.regPay || 0));
-          pHours += rowHours; pAdj += adjHours; pGross += gross;
+          const adj = adjustmentMap[empId] || { regPay: 0, otPay: 0 };
+          const regGross = roundToCents((rowRegHours * rate) + Number(adj.regPay || 0));
+          const otGross = roundToCents((rowOtHours * effectiveOtRate) + Number(adj.otPay || 0));
+          const totalGross = roundToCents(regGross + otGross);
+          pRegHours += rowRegHours;
+          pOtHours += rowOtHours;
+          pRegGross += regGross;
+          pOtGross += otGross;
+          pTotalGross += totalGross;
 
-          rows.push([projectLabel, display, to2(rate)].concat(dayCells, [to2(rowHours), to2(adjHours), to2(gross)]));
+          rows.push([projectLabel, display, to2(rate)].concat(dayCells, [to2(rowRegHours), to2(rowOtHours), to2(regGross), to2(otGross), to2(totalGross)]));
         });
 
-        if (!isOvertime) {
-          // Add per-project Allowance row (amount placed in GROSS column)
-          try {
-            const allow = Object.keys(bantay || {}).reduce((sum, empId) => {
-              const assigned = (bantayProj || {})[empId];
-              if (!assigned) return sum;
-              const amt = parseFloat((bantay && bantay[empId]) || 0) || 0;
-              const matchesProject = getReportProjectBucket(resolveProjectIdValue(assigned)) === proj;
-              return matchesProject ? (sum + amt) : sum;
-            }, 0);
-            if (allow && allow > 0) {
-              const zeroCells = new Array(dates.length).fill('0.00');
-              rows.push([projectLabel, 'Allowance', ''].concat(zeroCells, ['0.00', '0.00', to2(allow)]));
-              pGross += allow;
-            }
-          } catch (e) { /* no-op if allowance data missing */ }
+        try {
+          const allow = Object.keys(bantay || {}).reduce((sum, empId) => {
+            const assigned = (bantayProj || {})[empId];
+            if (!assigned) return sum;
+            const amt = parseFloat((bantay && bantay[empId]) || 0) || 0;
+            const matchesProject = getReportProjectBucket(resolveProjectIdValue(assigned)) === proj;
+            return matchesProject ? (sum + amt) : sum;
+          }, 0);
+          if (allow && allow > 0) {
+            const zeroCells = new Array(dates.length * 2).fill('0.00');
+            rows.push([projectLabel, 'Allowance', ''].concat(zeroCells, ['0.00', '0.00', '0.00', '0.00', to2(allow)]));
+            pTotalGross += allow;
+          }
+        } catch (e) { /* no-op if allowance data missing */ }
 
-          try {
-            const aiMap = (additionalIncomeByProject && additionalIncomeByProject[proj]) || {};
-            Object.keys(aiMap).sort((a,b)=>String(a).localeCompare(String(b))).forEach(lbl => {
-              const amt = parseFloat(aiMap[lbl]) || 0;
-              if (amt <= 0) return;
-              const zeroCells = new Array(dates.length).fill('0.00');
-              rows.push([projectLabel, lbl || 'Additional Income', ''].concat(zeroCells, ['0.00', '0.00', to2(amt)]));
-              pGross += amt;
-            });
-          } catch (e) { /* ignore */ }
-        }
+        try {
+          const aiMap = (additionalIncomeByProject && additionalIncomeByProject[proj]) || {};
+          Object.keys(aiMap).sort((a,b)=>String(a).localeCompare(String(b))).forEach(lbl => {
+            const amt = parseFloat(aiMap[lbl]) || 0;
+            if (amt <= 0) return;
+            const zeroCells = new Array(dates.length * 2).fill('0.00');
+            rows.push([projectLabel, lbl || 'Additional Income', ''].concat(zeroCells, ['0.00', '0.00', '0.00', '0.00', to2(amt)]));
+            pTotalGross += amt;
+          });
+        } catch (e) { /* ignore */ }
 
-        gHours += pHours; gAdj += pAdj; gGross += pGross;
-        dayTotals.forEach((dt,i)=>{ gDayTotals[i] += dt; });
-        const dayTotalsCells = dayTotals.map(dt=>to2(dt));
+        gRegHours += pRegHours;
+        gOtHours += pOtHours;
+        gRegGross += pRegGross;
+        gOtGross += pOtGross;
+        gTotalGross += pTotalGross;
+        dayTotals.forEach((dt,i)=>{ gDayTotals[i].rwh += dt.rwh; gDayTotals[i].oth += dt.oth; });
+        const dayTotalsCells = dayTotals.flatMap(dt=>[to2(dt.rwh), to2(dt.oth)]);
         rows.push([projectLabel, 'Project Total', ''].concat(
           dayTotalsCells,
-          [to2(pHours), to2(pAdj), to2(pGross)]
+          [to2(pRegHours), to2(pOtHours), to2(pRegGross), to2(pOtGross), to2(pTotalGross)]
         ));
       });
 
-      const gDayTotalsCells = gDayTotals.map(dt=>to2(dt));
+      const gDayTotalsCells = gDayTotals.flatMap(dt=>[to2(dt.rwh), to2(dt.oth)]);
       rows.push(['', 'Grand Total', ''].concat(
         gDayTotalsCells,
-        [to2(gHours), to2(gAdj), to2(gGross)]
+        [to2(gRegHours), to2(gOtHours), to2(gRegGross), to2(gOtGross), to2(gTotalGross)]
       ));
 
       return { rows, from, to };
@@ -12668,7 +12664,7 @@ rows += `<tr class="allowance">
         const wb = XLSX.utils.book_new();
         // Helper: build headers
         const dayHeader = dates.map(d=>{
-          const lbl = d.toLocaleDateString(undefined,{day:'2-digit',month:'short'});
+          const lbl = d.toLocaleDateString(undefined,{day:'2-digit',month:'short',year:'numeric'});
           return `RWH ${lbl}`;
         });
         const header = ['PERSONNEL','RATE'].concat(dayHeader, ['TOTAL REG HRS','GROSS']);
@@ -12875,7 +12871,7 @@ rows += `<tr class="allowance">
       const { data, dates, from, to } = __report;
 
       const dayHeader = dates.map(d=>{
-        const lbl = d.toLocaleDateString(undefined,{day:'2-digit',month:'short'});
+        const lbl = d.toLocaleDateString(undefined,{day:'2-digit',month:'short',year:'numeric'});
         return `RWH ${lbl}`;
       });
       const header = ['PERSONNEL','RATE'].concat(dayHeader, ['TOTAL REG HRS','GROSS']);
@@ -12942,7 +12938,6 @@ rows += `<tr class="allowance">
     })();
 
     $('#r_csv')?.addEventListener('click', exportCSVDetailed);
-    $('#r_ot_csv')?.addEventListener('click', exportCSVOvertime);
     const dtr = document.getElementById('resultsTable');
     if (dtr && 'MutationObserver' in window){
       const mo = new MutationObserver(()=> { buildTables(); try{ renderMasterReport(); }catch(e){} });
