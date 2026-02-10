@@ -265,50 +265,105 @@ function __kvPayrollHistoryLatestTs(list){
 }
 try { window.queueHydrateRerender = queueHydrateRerender; } catch (_) {}
 
-if (!window.__kvSubscribed) {
+async function __kvPeriodicHydrate() {
   try {
+    if (typeof __kvHydrateOnce === 'function') await __kvHydrateOnce();
+  } catch (_) {}
+}
+
+function __kvScheduleRealtimeReconnect(delayMs = 1500) {
+  try {
+    if (window.__kvReconnectTimer) return;
+    window.__kvReconnectTimer = window.setTimeout(() => {
+      window.__kvReconnectTimer = null;
+      try { __kvSetupRealtimeChannel(true); } catch (_) {}
+    }, Math.max(400, Number(delayMs) || 1500));
+  } catch (_) {}
+}
+
+function __kvSetupRealtimeChannel(force = false) {
+  try {
+    if (!force && window.__kvSubscribed && window.__kvChannel) return;
+    if (window.__kvChannel) {
+      try {
+        if (typeof window.__kvChannel.unsubscribe === 'function') {
+          window.__kvChannel.unsubscribe();
+        } else if (window.supabase && typeof window.supabase.removeChannel === 'function') {
+          window.supabase.removeChannel(window.__kvChannel);
+        }
+      } catch (_) {}
+      window.__kvChannel = null;
+    }
+
     const channel = supabase.channel('kv_store_sync');
     window.__kvSubscribed = true;
     window.__kvChannel = channel;
 
     channel.on('postgres_changes', { event: '*', schema: 'public', table: TABLE }, (payload) => {
-        try {
-          const eventType = payload && payload.eventType;
-          const key = (payload && payload.new && payload.new.key) || (payload && payload.old && payload.old.key);
-          if (!key || !KNOWN_KEYS.includes(key)) return;
-          if (eventType === 'INSERT' || eventType === 'UPDATE') {
-            const serialized = safeStringify(payload && payload.new ? payload.new.value : undefined);
-            const nextValue = serialized == null ? 'null' : String(serialized);
-            const current = localStorage.getItem(key);
-            if (nextValue !== current) {
-              try { __origSetItem.call(localStorage, key, nextValue); } catch {}
-              queueHydrateRerender();
-            }
-          } else if (eventType === 'DELETE') {
-            if (localStorage.getItem(key) !== null) {
-              try { __origRemoveItem.call(localStorage, key); } catch {}
-              queueHydrateRerender();
-            }
+      try {
+        const eventType = payload && payload.eventType;
+        const key = (payload && payload.new && payload.new.key) || (payload && payload.old && payload.old.key);
+        if (!key || !KNOWN_KEYS.includes(key)) return;
+        if (eventType === 'INSERT' || eventType === 'UPDATE') {
+          const serialized = safeStringify(payload && payload.new ? payload.new.value : undefined);
+          const nextValue = serialized == null ? 'null' : String(serialized);
+          const current = localStorage.getItem(key);
+          if (nextValue !== current) {
+            try { __origSetItem.call(localStorage, key, nextValue); } catch {}
+            queueHydrateRerender();
           }
-        } catch (err) {
-          console.warn('Supabase realtime sync failed', err);
+        } else if (eventType === 'DELETE') {
+          if (localStorage.getItem(key) !== null) {
+            try { __origRemoveItem.call(localStorage, key); } catch {}
+            queueHydrateRerender();
+          }
         }
-      });
+      } catch (err) {
+        console.warn('Supabase realtime sync failed', err);
+      }
+    });
 
     const subscribeResult = channel.subscribe((status) => {
-        if (status === 'CHANNEL_ERROR') {
-          console.warn('Supabase channel subscribe failed');
-        }
-      });
+      if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
+        console.warn('Supabase channel status issue:', status);
+        __kvScheduleRealtimeReconnect(1800);
+      }
+    });
 
     if (subscribeResult && typeof subscribeResult.catch === 'function') {
       subscribeResult.catch((err) => {
         console.warn('Supabase channel subscribe promise rejected', err);
+        __kvScheduleRealtimeReconnect(1800);
       });
     }
+
+    if (!window.__kvRealtimeVisibilityHooked) {
+      document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible') {
+          __kvPeriodicHydrate();
+          __kvSetupRealtimeChannel(true);
+        }
+      });
+      window.__kvRealtimeVisibilityHooked = true;
+    }
+
+    if (!window.__kvRealtimeFallbackTimer) {
+      window.__kvRealtimeFallbackTimer = window.setInterval(() => {
+        __kvPeriodicHydrate();
+      }, 25000);
+    }
+
     if (!window.__kvUnloadCleanup) {
       window.addEventListener('beforeunload', () => {
         try {
+          if (window.__kvReconnectTimer) {
+            window.clearTimeout(window.__kvReconnectTimer);
+            window.__kvReconnectTimer = null;
+          }
+          if (window.__kvRealtimeFallbackTimer) {
+            window.clearInterval(window.__kvRealtimeFallbackTimer);
+            window.__kvRealtimeFallbackTimer = null;
+          }
           if (window.__kvChannel) {
             if (typeof window.__kvChannel.unsubscribe === 'function') {
               window.__kvChannel.unsubscribe();
@@ -322,8 +377,11 @@ if (!window.__kvSubscribed) {
     }
   } catch (err) {
     console.warn('Supabase realtime channel setup failed', err);
+    __kvScheduleRealtimeReconnect(2200);
   }
 }
+
+if (!window.__kvSubscribed) __kvSetupRealtimeChannel();
 
 const __origSetItem = Storage.prototype.setItem
 const __origRemoveItem = Storage.prototype.removeItem
