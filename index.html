@@ -14543,9 +14543,74 @@ function normalizeOverrideValue(value) {
 function stripNextDaySuffix(value) {
   return String(value || '').replace(/\s*\+\s*\d+\s*$/, '');
 }
-function getPunchOptions(empId, dateStr) {
+function getPreviousDate(dateStr) {
+  const dt = new Date(String(dateStr || '') + 'T00:00');
+  if (isNaN(dt)) return null;
+  dt.setDate(dt.getDate() - 1);
+  return dt.toISOString().slice(0, 10);
+}
+function isPunchClaimedByPreviousDayOt(empId, dateStr, timeValue) {
+  const prevDate = getPreviousDate(dateStr);
+  if (!prevDate || !dtrOverrides) return false;
+  const key = `${empId}___${prevDate}`;
+  const prevOverride = dtrOverrides[key];
+  if (!prevOverride || typeof prevOverride !== 'object') return false;
+  const base = padHM(stripNextDaySuffix(timeValue));
+  const tagged = `${base}+1`;
+  const prevOtIn = normalizeOverrideValue(prevOverride.otIn);
+  const prevOtOut = normalizeOverrideValue(prevOverride.otOut);
+  return prevOtIn === tagged || prevOtOut === tagged;
+}
+function getNextDayOtTaggedTimes(empId, dateStr) {
+  const out = [];
+  const nextDate = (function(){
+    const dt = new Date(String(dateStr || '') + 'T00:00');
+    if (isNaN(dt)) return null;
+    dt.setDate(dt.getDate() + 1);
+    return dt.toISOString().slice(0, 10);
+  })();
+  if (!nextDate) return out;
+  (storedRecords || [])
+    .filter(r => String(r.empId) === String(empId) && r.date === nextDate)
+    .forEach(r => {
+      const base = padHM(r.time);
+      const mins = toMins(base);
+      if (mins !== null && mins <= OVERNIGHT_CUTOFF_HOUR * 60) out.push(`${base}+1`);
+    });
+  return out;
+}
+function getOtCandidateTimes(empId, dateStr, dayTimes) {
+  const seen = new Set();
+  const out = [];
+  (dayTimes || []).forEach(t => {
+    const base = padHM(stripNextDaySuffix(t));
+    if (!base || seen.has(base)) return;
+    seen.add(base);
+    out.push(base);
+  });
+  // Include real next-day punches as +1 so OT Out auto-detection can attach
+  // overnight work to the previous date row.
+  getNextDayOtTaggedTimes(empId, dateStr).forEach(t => {
+    if (seen.has(t)) return;
+    seen.add(t);
+    out.push(t);
+  });
+  out.sort((a,b)=>(toMins(a)||0)-(toMins(b)||0));
+  return out;
+}
+function isInOtWindowWithOvernight(mins, startMins, endMins) {
+  if (mins == null || startMins == null || endMins == null) return false;
+  if (mins >= startMins && mins <= endMins) return true;
+  if (mins >= 1440) {
+    const nextDayMins = mins - 1440;
+    return nextDayMins <= OVERNIGHT_CUTOFF_HOUR * 60;
+  }
+  return false;
+}
+function getPunchOptions(empId, dateStr, fieldKey) {
   const options = [];
   const seen = new Set();
+  const allowNextDay = fieldKey === 'otIn' || fieldKey === 'otOut';
   const addOption = (timeValue, isNextDay) => {
     if (!timeValue) return;
     const baseTime = padHM(stripNextDaySuffix(timeValue));
@@ -14567,7 +14632,9 @@ function getPunchOptions(empId, dateStr) {
     dt.setDate(dt.getDate() + 1);
     return dt.toISOString().slice(0, 10);
   })();
-  if (nextDate) {
+  if (allowNextDay && nextDate) {
+    // (+1) generation for OT selectors: include only real punches from the
+    // next calendar day, and only up to the configured overnight cutoff hour.
     (storedRecords || [])
       .filter(r => String(r.empId) === String(empId) && r.date === nextDate)
       .forEach(r => {
@@ -14594,7 +14661,14 @@ function openPunchEditor(rowContext) {
   modal.dataset.empId = empId;
   modal.dataset.date = date;
   modal.dataset.scope = scope;
-  const options = getPunchOptions(empId, date);
+  const optionsByField = {
+    amIn: getPunchOptions(empId, date, 'amIn'),
+    amOut: getPunchOptions(empId, date, 'amOut'),
+    pmIn: getPunchOptions(empId, date, 'pmIn'),
+    pmOut: getPunchOptions(empId, date, 'pmOut'),
+    otIn: getPunchOptions(empId, date, 'otIn'),
+    otOut: getPunchOptions(empId, date, 'otOut')
+  };
   const overrideKey = `${empId}___${date}`;
   const overrides = dtrOverrides[overrideKey] || {};
   const selectMap = {
@@ -14613,6 +14687,7 @@ function openPunchEditor(rowContext) {
     autoOpt.value = '';
     autoOpt.textContent = '(Auto)';
     select.appendChild(autoOpt);
+    const options = optionsByField[key] || [];
     options.forEach(opt => {
       const optionEl = document.createElement('option');
       optionEl.value = opt.value;
@@ -14621,6 +14696,15 @@ function openPunchEditor(rowContext) {
     });
     const stored = normalizeOverrideValue(overrides[key]);
     if (stored) {
+      // Preserve persisted +1 values in case punches were later removed.
+      if (![...select.options].some(opt => opt.value === stored)) {
+        const storedOption = document.createElement('option');
+        storedOption.value = stored;
+        storedOption.textContent = /\+\d+$/.test(stored)
+          ? `${stripNextDaySuffix(stored)} (+${stored.split('+')[1]})`
+          : stored;
+        select.appendChild(storedOption);
+      }
       select.value = stored;
     } else {
       select.value = '';
@@ -15893,6 +15977,7 @@ const groups = {};
   for(const r of storedRecords){
     if(startDate && r.date < startDate) continue;
     if(endDate && r.date > endDate) continue;
+    if (isPunchClaimedByPreviousDayOt(r.empId, r.date, r.time)) continue;
     const key = r.date + '___' + r.empId;
     if(!groups[key]) groups[key]=[];
     groups[key].push(r.time);
@@ -15939,9 +16024,12 @@ if(!_passes && typeof splits !== 'undefined' && splits && splits[empId + '___' +
 if(!_passes) continue;
 
     const times = Array.from(new Set(groups[key])).sort();
+    const otTimes = getOtCandidateTimes(empId, date, times);
 
     const pickEarliest = (win) => times.find(t => t >= win.start && t <= win.end) || null;
     const pickLatest = (win) => { const arr = times.filter(t => t >= win.start && t <= win.end); return arr.length ? arr[arr.length-1] : null; };
+    const pickEarliestOt = (win) => { const sM = toMins(win.start), eM = toMins(win.end); return otTimes.find(t => isInOtWindowWithOvernight(toMins(t), sM, eM)) || null; };
+    const pickLatestOt = (win) => { const sM = toMins(win.start), eM = toMins(win.end); const arr = otTimes.filter(t => isInOtWindowWithOvernight(toMins(t), sM, eM)); return arr.length ? arr[arr.length-1] : null; };
 
     let scheduleIdForEmp = emp && emp.scheduleId ? emp.scheduleId : defaultScheduleId;
     const overrideKey = empId + '___' + date;
@@ -16007,16 +16095,16 @@ if(!_passes) continue;
         return mins > pmOutRefMins && mins >= toMins(rangesForEmp.otIn.start) && mins <= toMins(rangesForEmp.otIn.end);
       });
       // --- Patched OT In/Out picking (DTR) ---
-      const otInCandidates = times.filter(t => {
+      const otInCandidates = otTimes.filter(t => {
         const m = toMins(t);
-        return m > pmOutRefMins && m >= toMins(__isSaturday ? __satEnd : rangesForEmp.otIn.start) && m <= toMins(__isSaturday ? '23:59' : rangesForEmp.otIn.end);
+        return m > pmOutRefMins && isInOtWindowWithOvernight(m, toMins(__isSaturday ? __satEnd : rangesForEmp.otIn.start), toMins(__isSaturday ? '23:59' : rangesForEmp.otIn.end));
       });
       otInActual = otInCandidates.length ? otInCandidates[0] : null;
 
-      const otOutCandidates = times
+      const otOutCandidates = otTimes
         .filter(t => {
           const m = toMins(t);
-          return m > pmOutRefMins && m >= toMins(__isSaturday ? __satEnd : rangesForEmp.otOut.start) && m <= toMins(__isSaturday ? '23:59' : rangesForEmp.otOut.end);
+          return m > pmOutRefMins && isInOtWindowWithOvernight(m, toMins(__isSaturday ? __satEnd : rangesForEmp.otOut.start), toMins(__isSaturday ? '23:59' : rangesForEmp.otOut.end));
         })
         .filter(t => !otInActual || toMins(t) >= toMins(otInActual));
       otOutActual = otOutCandidates.length ? otOutCandidates[otOutCandidates.length - 1] : null;
@@ -16093,12 +16181,11 @@ let otMins = 0;
       if (otInM !== null && otOutM !== null) {
         let rangeStart = toMins(__isSaturday ? (__satEnd || rangesForEmp.otIn.start) : rangesForEmp.otIn.start);
         let rangeEnd = toMins(__isSaturday ? '23:59' : (rangesForEmp.otOut.end || rangesForEmp.otIn.end));
-        if (otOutM < otInM) otOutM += 24 * 60;
-        if (otOutM >= 24 * 60 && rangeEnd < 24 * 60) rangeEnd += 24 * 60;
-        if (otInM >= 24 * 60 && rangeStart < 24 * 60) rangeStart += 24 * 60;
+        if (otOutM >= 1440) rangeEnd = Math.max(rangeEnd, 1440 + OVERNIGHT_CUTOFF_HOUR * 60);
+        // OT duration now always uses toMins(..) values (supports HH:MM+N).
         const otStartClamp = Math.max(otInM, rangeStart);
         const otEndClamp = Math.min(otOutM, rangeEnd);
-        if(otEndClamp > otStartClamp) otMins = otEndClamp - otStartClamp;
+        otMins = Math.max(0, otEndClamp - otStartClamp);
       }
     }
     
@@ -16189,12 +16276,12 @@ let otMins = 0;
           otIn: { start: sched.rng_ot_in_start || DEFAULT_RANGES.rng_ot_in_start, end: sched.rng_ot_in_end || DEFAULT_RANGES.rng_ot_in_end },
           otOut:{ start: sched.rng_ot_out_start||DEFAULT_RANGES.rng_ot_out_start, end: sched.rng_ot_out_end||DEFAULT_RANGES.rng_ot_out_end }
         };
-        const otInCands = times.filter(t=>{ const m=toMins(t); return m>pmOutRef && m>=toMins(isSat?satEnd:rng.otIn.start) && m<=toMins(isSat?'23:59':rng.otIn.end); });
+        const otInCands = otTimes.filter(t=>{ const m=toMins(t); return m>pmOutRef && isInOtWindowWithOvernight(m, toMins(isSat?satEnd:rng.otIn.start), toMins(isSat?'23:59':rng.otIn.end)); });
         otIn = otInCands.length ? otInCands[0] : null;
-        const otOutCands = times.filter(t=>{ const m=toMins(t); return m>pmOutRef && m>=toMins(isSat?satEnd:rng.otOut.start) && m<=toMins(isSat?'23:59':rng.otOut.end); }).filter(t=>!otIn||toMins(t)>=toMins(otIn));
+        const otOutCands = otTimes.filter(t=>{ const m=toMins(t); return m>pmOutRef && isInOtWindowWithOvernight(m, toMins(isSat?satEnd:rng.otOut.start), toMins(isSat?'23:59':rng.otOut.end)); }).filter(t=>!otIn||toMins(t)>=toMins(otIn));
         otOut = otOutCands.length ? otOutCands[otOutCands.length-1] : null;
         if (isSat && satEnd) { const lastOut=pmOutActual||amOutActual||null; const lastOutM=lastOut?toMins(lastOut):null; const satEndM=toMins(satEnd); if (lastOutM!==null&&lastOutM>satEndM){ if(!otIn) otIn=satEnd; if(!otOut) otOut=lastOut; } }
-        if (otIn && otOut) { const startClamp=Math.max(toMins(otIn), toMins(isSat?(satEnd||rng.otIn.start):rng.otIn.start)); const endClamp=Math.min(toMins(otOut), toMins(isSat?'23:59':(rng.otOut.end||rng.otIn.end))); if(endClamp>startClamp) otM=endClamp-startClamp; }
+        if (otIn && otOut) { const inM=toMins(otIn), outM=toMins(otOut); const startClamp=Math.max(inM, toMins(isSat?(satEnd||rng.otIn.start):rng.otIn.start)); let rangeEnd=toMins(isSat?'23:59':(rng.otOut.end||rng.otIn.end)); if(outM>=1440) rangeEnd=Math.max(rangeEnd, 1440 + OVERNIGHT_CUTOFF_HOUR * 60); const endClamp=Math.min(outM, rangeEnd); otM=Math.max(0,endClamp-startClamp); }
         return { mins: otM, otIn: otIn, otOut: otOut };
       };
       const hasBridge = !!(amInActual && !amOutActual && !pmInActual && pmOutActual);
@@ -16532,6 +16619,7 @@ function computeHoursForDateRange(startDate, endDate) {
     if (endDate && r.date > endDate) continue;
     const emp = storedEmployees[r.empId];
     if (!emp) continue;
+    if (isPunchClaimedByPreviousDayOt(r.empId, r.date, r.time)) continue;
     const dayKey = r.date + '___' + r.empId;
     if (!grouped[dayKey]) grouped[dayKey] = [];
     grouped[dayKey].push(r.time);
@@ -16560,9 +16648,12 @@ function computeHoursForDateRange(startDate, endDate) {
     const schedule = keys[scheduleIdForEmp] || Object.assign({}, DEFAULT_SCHEDULE);
 
     const times = [...new Set(grouped[key])].sort();
+    const otTimes = getOtCandidateTimes(empId, date, times);
 
     const pickEarliest = (win) => times.find(t => t >= win.start && t <= win.end) || null;
     const pickLatest = (win) => { const arr = times.filter(t => t >= win.start && t <= win.end); return arr.length ? arr[arr.length-1] : null; };
+    const pickEarliestOt = (win) => { const sM = toMins(win.start), eM = toMins(win.end); return otTimes.find(t => isInOtWindowWithOvernight(toMins(t), sM, eM)) || null; };
+    const pickLatestOt = (win) => { const sM = toMins(win.start), eM = toMins(win.end); const arr = otTimes.filter(t => isInOtWindowWithOvernight(toMins(t), sM, eM)); return arr.length ? arr[arr.length-1] : null; };
 
     const overridePunches = dtrOverrides && Object.prototype.hasOwnProperty.call(dtrOverrides, overrideKey)
       ? dtrOverrides[overrideKey]
@@ -16610,8 +16701,8 @@ function computeHoursForDateRange(startDate, endDate) {
       }
     } catch(e){ console.warn('Saturday OT local patch error', e); }
     if (!overridePunches) {
-      otInActual = pickEarliest({start: schedule.rng_ot_in_start, end: schedule.rng_ot_in_end});
-      otOutActual = pickLatest({start: schedule.rng_ot_out_start, end: schedule.rng_ot_out_end});
+      otInActual = pickEarliestOt({start: schedule.rng_ot_in_start, end: schedule.rng_ot_in_end});
+      otOutActual = pickLatestOt({start: schedule.rng_ot_out_start, end: schedule.rng_ot_out_end});
     }
 
     let regMins = 0;
@@ -16685,10 +16776,12 @@ function computeHoursForDateRange(startDate, endDate) {
     let dayOTMins = 0;
     if (overridePunches) {
       if (otInActual && otOutActual) {
-        let otInM = toMins(otInActual);
-        let otOutM = toMins(otOutActual);
-        if (otOutM < otInM) otOutM += 1440;
-        dayOTMins = Math.max(0, otOutM - otInM);
+        // OT duration relies on toMins so stored +1 values are interpreted correctly.
+        const otInM = toMins(otInActual);
+        const otOutM = toMins(otOutActual);
+        dayOTMins = (otInM !== null && otOutM !== null)
+          ? Math.max(0, otOutM - otInM)
+          : 0;
       }
     } else if (__isSaturday) {
       // Saturday override: sum minutes worked after the Saturday end for
@@ -16711,10 +16804,12 @@ function computeHoursForDateRange(startDate, endDate) {
     } else {
       // Nonâ€‘Saturday: prefer explicit OT punches when they exist
       if (otInActual && otOutActual && toMins(otInActual) > pmOutRefMins) {
-        let otInM = toMins(otInActual);
-        let otOutM = toMins(otOutActual);
-        if (otOutM < otInM) otOutM += 1440;
-        dayOTMins = Math.max(0, otOutM - otInM);
+        // OT duration relies on toMins so stored +1 values are interpreted correctly.
+        const otInM = toMins(otInActual);
+        const otOutM = toMins(otOutActual);
+        dayOTMins = (otInM !== null && otOutM !== null)
+          ? Math.max(0, otOutM - otInM)
+          : 0;
       } else {
         // Fallback: no explicit OT punches.  Check the last clockâ€‘out and
         // count any minutes worked after the scheduled end as OT.  Only
@@ -16728,10 +16823,8 @@ function computeHoursForDateRange(startDate, endDate) {
           if (lastOutM === null || outM > lastOutM) lastOutM = outM;
         }
         if (lastOutM != null) {
-          let adjLastOut = lastOutM;
-          if (adjLastOut < pmOutRefMins) adjLastOut += 1440;
-          if (adjLastOut > pmOutRefMins) {
-            dayOTMins = adjLastOut - pmOutRefMins;
+          if (lastOutM > pmOutRefMins) {
+            dayOTMins = lastOutM - pmOutRefMins;
           }
         }
       }
@@ -17043,6 +17136,7 @@ function restoreData(file) {
       </label>
       <label class="dtr-punch-field" data-field-group="ot">OT Out
         <select id="dtrPunchOtOut"></select>
+        <small class="dtr-punch-hint">If OT ends after midnight, choose the time with (+1).</small>
       </label>
     </div>
     <div class="dtr-modal-actions">
@@ -17429,7 +17523,13 @@ function restoreData(file) {
 <script>
 (function(){
   function q(id){ return document.getElementById(id); }
-  function toMins(hm){ if(!hm) return null; var p=hm.split(':'), h=+p[0]||0, m=+p[1]||0; return h*60+m; }
+  function toMins(hm){
+    if(!hm) return null;
+    var m = String(hm).trim().match(/^(\d{1,2})\s*:\s*(\d{2})(?:\s*\+\s*(\d+))?$/);
+    if(!m) return null;
+    var h = +m[1]||0, mm = +m[2]||0, d = m[3] ? (+m[3]||0) : 0;
+    return (h*60)+mm+(d*1440);
+  }
   function minsToDec(mins){ return Math.round((mins/60)*100)/100; }
   function uniqSort(arr){ var seen={}, out=[]; for(var i=0;i<arr.length;i++){ var v=arr[i]; if(!seen[v]){ seen[v]=1; out.push(v);} } out.sort(); return out; }
   function max0(x){ return x>0?x:0; }
@@ -17560,6 +17660,7 @@ function restoreData(file) {
       if (startDate && r.date < startDate) continue;
       if (endDate && r.date > endDate) continue;
       if (!empMap[r.empId]) continue;
+      if (isPunchClaimedByPreviousDayOt(r.empId, r.date, r.time)) continue;
       var key = r.date + '___' + r.empId;
       if (!dayGroups[key]) dayGroups[key] = [];
       dayGroups[key].push(r.time);
@@ -17582,6 +17683,7 @@ function restoreData(file) {
       var S = (schedId && schedMap[schedId]) ? schedMap[schedId] : DEF;
 
       var times = uniqSort(dayGroups[key]);
+      var otTimes = getOtCandidateTimes(empId, date, times);
 
       var win = {
         amIn:  {start:S.rng_am_in_start||'05:00', end:S.rng_am_in_end||'09:00'},
@@ -17602,13 +17704,13 @@ function restoreData(file) {
       var pmOutRefMins = pmOut ? toMins(pmOut) : toMins(S.sch_pm_end || '17:00');
 
       var otIn = null, otOut = null;
-      for (var x=0;x<times.length;x++){
-        var tt = times[x]; var m = toMins(tt);
-        if (m>pmOutRefMins && m>=toMins(win.otIn.start) && m<=toMins(win.otIn.end)){ otIn = tt; break; }
+      for (var x=0;x<otTimes.length;x++){
+        var tt = otTimes[x]; var m = toMins(tt);
+        if (m>pmOutRefMins && isInOtWindowWithOvernight(m, toMins(win.otIn.start), toMins(win.otIn.end))){ otIn = tt; break; }
       }
-      for (var y=times.length-1;y>=0;y--){
-        var tt2 = times[y]; var m2 = toMins(tt2);
-        if (m2>pmOutRefMins && m2>=toMins(win.otOut.start) && m2<=toMins(win.otOut.end)){ otOut = tt2; if(!otIn || toMins(otOut)>=toMins(otIn)) break; }
+      for (var y=otTimes.length-1;y>=0;y--){
+        var tt2 = otTimes[y]; var m2 = toMins(tt2);
+        if (m2>pmOutRefMins && isInOtWindowWithOvernight(m2, toMins(win.otOut.start), toMins(win.otOut.end))){ otOut = tt2; if(!otIn || toMins(otOut)>=toMins(otIn)) break; }
       }
 
       var grace = Number(S.sch_grace)||0;
@@ -17639,9 +17741,12 @@ function restoreData(file) {
 
       var otMins = 0;
       if (otIn && otOut){
-        var startClamp = Math.max(toMins(otIn), toMins(win.otIn.start));
-        var endClamp   = Math.min(toMins(otOut), toMins(win.otOut.end));
-        if (endClamp > startClamp) otMins = endClamp - startClamp;
+        var otInMins = toMins(otIn), otOutMins = toMins(otOut);
+        var startClamp = Math.max(otInMins, toMins(win.otIn.start));
+        var rangeEnd = toMins(win.otOut.end);
+        if (otOutMins >= 1440) rangeEnd = Math.max(rangeEnd, 1440 + OVERNIGHT_CUTOFF_HOUR * 60);
+        var endClamp   = Math.min(otOutMins, rangeEnd);
+        otMins = Math.max(0, endClamp - startClamp);
       }
 
       var regDec = minsToDec(regMins);
