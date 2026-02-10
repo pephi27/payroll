@@ -15938,39 +15938,10 @@ if(!_passes && typeof splits !== 'undefined' && splits && splits[empId + '___' +
 }
 if(!_passes) continue;
 
-    const timesSet = new Set(groups[key]);
-    const nextDate = (function(){
-      const dt = new Date(date + 'T00:00');
-      if (isNaN(dt)) return null;
-      dt.setDate(dt.getDate() + 1);
-      return dt.toISOString().slice(0, 10);
-    })();
-    if (nextDate) {
-      (storedRecords || [])
-        .filter(r => String(r.empId) === String(empId) && r.date === nextDate)
-        .forEach(r => {
-          const t = padHM(r.time);
-          const m = toMins(t);
-          if (m !== null && m <= OVERNIGHT_CUTOFF_HOUR * 60) timesSet.add(t + '+1');
-        });
-    }
-    const times = Array.from(timesSet).sort((a,b) => (toMins(a)||0) - (toMins(b)||0));
+    const times = Array.from(new Set(groups[key])).sort();
 
-    const pickEarliest = (win) => {
-      const ws = toMins(win.start), we = toMins(win.end);
-      return times.find(t => {
-        const m = toMins(t);
-        return m !== null && ws !== null && we !== null && m >= ws && m <= we;
-      }) || null;
-    };
-    const pickLatest = (win) => {
-      const ws = toMins(win.start), we = toMins(win.end);
-      const arr = times.filter(t => {
-        const m = toMins(t);
-        return m !== null && ws !== null && we !== null && m >= ws && m <= we;
-      });
-      return arr.length ? arr[arr.length-1] : null;
-    };
+    const pickEarliest = (win) => times.find(t => t >= win.start && t <= win.end) || null;
+    const pickLatest = (win) => { const arr = times.filter(t => t >= win.start && t <= win.end); return arr.length ? arr[arr.length-1] : null; };
 
     let scheduleIdForEmp = emp && emp.scheduleId ? emp.scheduleId : defaultScheduleId;
     const overrideKey = empId + '___' + date;
@@ -16036,24 +16007,16 @@ if(!_passes) continue;
         return mins > pmOutRefMins && mins >= toMins(rangesForEmp.otIn.start) && mins <= toMins(rangesForEmp.otIn.end);
       });
       // --- Patched OT In/Out picking (DTR) ---
-      const inOtWindow = (m, start, end) => {
-        let s = toMins(start), e = toMins(end);
-        if (m >= 24 * 60 && e < 24 * 60) {
-          s += 24 * 60;
-          e += 24 * 60;
-        }
-        return m >= s && m <= e;
-      };
       const otInCandidates = times.filter(t => {
         const m = toMins(t);
-        return m > pmOutRefMins && inOtWindow(m, (__isSaturday ? __satEnd : rangesForEmp.otIn.start), (__isSaturday ? '23:59' : rangesForEmp.otIn.end));
+        return m > pmOutRefMins && m >= toMins(__isSaturday ? __satEnd : rangesForEmp.otIn.start) && m <= toMins(__isSaturday ? '23:59' : rangesForEmp.otIn.end);
       });
       otInActual = otInCandidates.length ? otInCandidates[0] : null;
 
       const otOutCandidates = times
         .filter(t => {
           const m = toMins(t);
-          return m > pmOutRefMins && inOtWindow(m, (__isSaturday ? __satEnd : rangesForEmp.otOut.start), (__isSaturday ? '23:59' : rangesForEmp.otOut.end));
+          return m > pmOutRefMins && m >= toMins(__isSaturday ? __satEnd : rangesForEmp.otOut.start) && m <= toMins(__isSaturday ? '23:59' : rangesForEmp.otOut.end);
         })
         .filter(t => !otInActual || toMins(t) >= toMins(otInActual));
       otOutActual = otOutCandidates.length ? otOutCandidates[otOutCandidates.length - 1] : null;
@@ -16226,17 +16189,9 @@ let otMins = 0;
           otIn: { start: sched.rng_ot_in_start || DEFAULT_RANGES.rng_ot_in_start, end: sched.rng_ot_in_end || DEFAULT_RANGES.rng_ot_in_end },
           otOut:{ start: sched.rng_ot_out_start||DEFAULT_RANGES.rng_ot_out_start, end: sched.rng_ot_out_end||DEFAULT_RANGES.rng_ot_out_end }
         };
-        const inOtWindow = (m, start, end) => {
-          let s = toMins(start), e = toMins(end);
-          if (m >= 24 * 60 && e < 24 * 60) {
-            s += 24 * 60;
-            e += 24 * 60;
-          }
-          return m >= s && m <= e;
-        };
-        const otInCands = times.filter(t=>{ const m=toMins(t); return m>pmOutRef && inOtWindow(m, (isSat?satEnd:rng.otIn.start), (isSat?'23:59':rng.otIn.end)); });
+        const otInCands = times.filter(t=>{ const m=toMins(t); return m>pmOutRef && m>=toMins(isSat?satEnd:rng.otIn.start) && m<=toMins(isSat?'23:59':rng.otIn.end); });
         otIn = otInCands.length ? otInCands[0] : null;
-        const otOutCands = times.filter(t=>{ const m=toMins(t); return m>pmOutRef && inOtWindow(m, (isSat?satEnd:rng.otOut.start), (isSat?'23:59':rng.otOut.end)); }).filter(t=>!otIn||toMins(t)>=toMins(otIn));
+        const otOutCands = times.filter(t=>{ const m=toMins(t); return m>pmOutRef && m>=toMins(isSat?satEnd:rng.otOut.start) && m<=toMins(isSat?'23:59':rng.otOut.end); }).filter(t=>!otIn||toMins(t)>=toMins(otIn));
         otOut = otOutCands.length ? otOutCands[otOutCands.length-1] : null;
         if (isSat && satEnd) { const lastOut=pmOutActual||amOutActual||null; const lastOutM=lastOut?toMins(lastOut):null; const satEndM=toMins(satEnd); if (lastOutM!==null&&lastOutM>satEndM){ if(!otIn) otIn=satEnd; if(!otOut) otOut=lastOut; } }
         if (otIn && otOut) { const startClamp=Math.max(toMins(otIn), toMins(isSat?(satEnd||rng.otIn.start):rng.otIn.start)); const endClamp=Math.min(toMins(otOut), toMins(isSat?'23:59':(rng.otOut.end||rng.otIn.end))); if(endClamp>startClamp) otM=endClamp-startClamp; }
