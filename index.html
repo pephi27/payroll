@@ -3162,6 +3162,9 @@ window.addEventListener('load', dashReports);
       <button id="printPayrollExcelBtn" type="button">
        Print Report Excel
       </button>
+      <button id="payrollBackupXlsxBtn" type="button">
+       Export Period Backup (XLSX)
+      </button>
       <button id="printAllPayslipsBtn" type="button">
        Print Payslips
       </button>
@@ -12912,6 +12915,436 @@ rows += `<tr class="allowance">
     }
 
     try { window.exportExcelAllTabs = exportExcelAllTabs; } catch(e){}
+
+    function collectPeriodBackupStorageEntries(options = {}){
+      const opts = (options && typeof options === 'object') ? options : {};
+      const includeParsed = !!opts.includeParsed;
+      const denyFragments = ['token', 'auth', 'apikey', 'key', 'supabase', 'secret'];
+
+      const isSafeStorageKey = (name) => {
+        const key = String(name || '').trim();
+        if (!key) return false;
+        const lowered = key.toLowerCase();
+        return !denyFragments.some(fragment => lowered.includes(fragment));
+      };
+
+      const keySet = new Set();
+      const addKey = (name) => {
+        const key = String(name || '').trim();
+        if (!key || !isSafeStorageKey(key)) return;
+        keySet.add(key);
+      };
+
+      const lsConstantValues = [
+        (typeof LS_EMPLOYEES !== 'undefined') ? LS_EMPLOYEES : null,
+        (typeof LS_PROJECTS !== 'undefined') ? LS_PROJECTS : null,
+        (typeof LS_SCHEDULES !== 'undefined') ? LS_SCHEDULES : null,
+        (typeof LS_SCHEDULES_DEFAULT !== 'undefined') ? LS_SCHEDULES_DEFAULT : null,
+        (typeof LS_RECORDS !== 'undefined') ? LS_RECORDS : null,
+        (typeof LS_OVERRIDES_SCHEDULES !== 'undefined') ? LS_OVERRIDES_SCHEDULES : null,
+        (typeof LS_OVERRIDES_PROJECTS !== 'undefined') ? LS_OVERRIDES_PROJECTS : null,
+        (typeof LS_DTR_OVERRIDES !== 'undefined') ? LS_DTR_OVERRIDES : null,
+        (typeof LS_SPLITS !== 'undefined') ? LS_SPLITS : null,
+        (typeof LS_RATES !== 'undefined') ? LS_RATES : null,
+        (typeof LS_REG_HRS !== 'undefined') ? LS_REG_HRS : null,
+        (typeof LS_OT_HRS !== 'undefined') ? LS_OT_HRS : null,
+        (typeof LS_OTMULT !== 'undefined') ? LS_OTMULT : null,
+        (typeof LS_DIVISOR !== 'undefined') ? LS_DIVISOR : null,
+        (typeof LS_SSS_TABLE !== 'undefined') ? LS_SSS_TABLE : null,
+        (typeof LS_LOAN_SSS !== 'undefined') ? LS_LOAN_SSS : null,
+        (typeof LS_LOAN_PI !== 'undefined') ? LS_LOAN_PI : null,
+        (typeof LS_VALE !== 'undefined') ? LS_VALE : null,
+        (typeof LS_VALE_WED !== 'undefined') ? LS_VALE_WED : null,
+        (typeof LS_LOAN_TRACKER !== 'undefined') ? LS_LOAN_TRACKER : null,
+        (typeof LS_OTHER_DEDUCTIONS_DETAILS !== 'undefined') ? LS_OTHER_DEDUCTIONS_DETAILS : null,
+        (typeof LS_OTHER_DEDUCTIONS_TOTAL !== 'undefined') ? LS_OTHER_DEDUCTIONS_TOTAL : null,
+        (typeof LS_ADJ_LEGACY !== 'undefined') ? LS_ADJ_LEGACY : null,
+        (typeof LS_ADJ_HRS !== 'undefined') ? LS_ADJ_HRS : null,
+        (typeof LS_PAGIBIG_RATE !== 'undefined') ? LS_PAGIBIG_RATE : null,
+        (typeof LS_PHILHEALTH_RATE !== 'undefined') ? LS_PHILHEALTH_RATE : null,
+        (typeof LS_PAGIBIG_TABLE !== 'undefined') ? LS_PAGIBIG_TABLE : null,
+        (typeof LS_PHILHEALTH_TABLE !== 'undefined') ? LS_PHILHEALTH_TABLE : null,
+        (typeof LS_BANTAY !== 'undefined') ? LS_BANTAY : null,
+        (typeof LS_BANTAY_PROJ !== 'undefined') ? LS_BANTAY_PROJ : null,
+        (typeof LS_ADDITIONAL_INCOME_DETAILS !== 'undefined') ? LS_ADDITIONAL_INCOME_DETAILS : null,
+        (typeof LS_ADDITIONAL_INCOME_TOTAL !== 'undefined') ? LS_ADDITIONAL_INCOME_TOTAL : null,
+        (typeof LS_INCOME_TYPE_OPTIONS !== 'undefined') ? LS_INCOME_TYPE_OPTIONS : null,
+        (typeof LS_DEDUCTION_TYPE_OPTIONS !== 'undefined') ? LS_DEDUCTION_TYPE_OPTIONS : null,
+        (typeof LS_CONTRIB_FLAGS !== 'undefined') ? LS_CONTRIB_FLAGS : null,
+        (typeof PAYROLL_SETTINGS_KEY !== 'undefined') ? PAYROLL_SETTINGS_KEY : null
+      ];
+      lsConstantValues.forEach(addKey);
+
+      [
+        'payroll_hist',
+        'payroll_lock_state',
+        'payroll_active_index',
+        'att_overrides_hours_v1',
+        'payroll_dtr_tombstones',
+        'payroll_dtr_last_saved_keys',
+        'dtr_overrides_v1'
+      ].forEach(addKey);
+
+      const knownKeys = (typeof KNOWN_KEYS !== 'undefined' && Array.isArray(KNOWN_KEYS))
+        ? KNOWN_KEYS
+        : ((typeof window !== 'undefined' && Array.isArray(window.KNOWN_KEYS)) ? window.KNOWN_KEYS : []);
+      knownKeys.forEach(addKey);
+
+      const prefixAllows = ['att_', 'payroll_'];
+      for (let i = 0; i < localStorage.length; i++){
+        const key = localStorage.key(i);
+        const lowered = String(key || '').toLowerCase();
+        if (prefixAllows.some(prefix => lowered.startsWith(prefix))) addKey(key);
+      }
+
+      return Array.from(keySet).sort().map(key => {
+        const entry = { key, value: localStorage.getItem(key) };
+        if (includeParsed){
+          try { entry.parsed = JSON.parse(entry.value); } catch(e){}
+        }
+        return entry;
+      });
+    }
+
+
+    function buildTableBackupAoA(tableId, options = {}){
+      const opts = (options && typeof options === 'object') ? options : {};
+      const dropHeaders = Array.isArray(opts.dropHeaders) ? opts.dropHeaders.map(v => String(v || '').trim().toLowerCase()) : [];
+      const table = document.getElementById(tableId);
+      if (!table) return null;
+      const clone = table.cloneNode(true);
+      clone.querySelectorAll('input, select, textarea').forEach(el => {
+        const td = el.closest('td');
+        if (!td) return;
+        let txt = '';
+        try {
+          if (el.tagName === 'SELECT') {
+            const idx = el.selectedIndex;
+            txt = (idx >= 0 && el.options && el.options[idx]) ? (el.options[idx].textContent || el.options[idx].innerText || el.options[idx].value || '') : (el.value || '');
+          } else if (el.type === 'checkbox') {
+            txt = el.checked ? 'Yes' : 'No';
+          } else {
+            txt = el.value || el.textContent || '';
+          }
+        } catch(e){}
+        td.textContent = String(txt || '').trim();
+      });
+      clone.querySelectorAll('button').forEach(btn => btn.remove());
+
+      if (dropHeaders.length) {
+        const dropIdx = [];
+        if (clone.tHead && clone.tHead.rows && clone.tHead.rows[0]) {
+          const head = clone.tHead.rows[0];
+          for (let i = 0; i < head.cells.length; i++) {
+            const txt = String(head.cells[i].textContent || '').trim().toLowerCase();
+            if (dropHeaders.includes(txt)) dropIdx.push(i);
+          }
+        }
+        if (dropIdx.length) {
+          const sorted = Array.from(new Set(dropIdx)).sort((a,b)=>b-a);
+          const removeCols = (tr) => {
+            if (!tr || !tr.cells) return;
+            sorted.forEach(idx => { try { if (idx >= 0 && idx < tr.cells.length) tr.deleteCell(idx); } catch(e){} });
+          };
+          if (clone.tHead) Array.from(clone.tHead.rows || []).forEach(removeCols);
+          Array.from(clone.tBodies || []).forEach(tb => Array.from(tb.rows || []).forEach(removeCols));
+          if (clone.tFoot) Array.from(clone.tFoot.rows || []).forEach(removeCols);
+        }
+      }
+
+      const aoa = tableToAoA(clone);
+      return (aoa && aoa.length) ? aoa : null;
+    }
+
+    function buildOvertimeAoA(){
+      try {
+        if (typeof buildOvertimeReportData === 'function') {
+          const report = buildOvertimeReportData();
+          const rows = (report && Array.isArray(report.rows)) ? report.rows : [];
+          if (!rows.length) return null;
+          const aoa = [['Employee ID','Employee Name','Hourly Rate','Total OT Hrs','ADJ OT Hrs','Overtime Hours Final','Overtime Pay']];
+          rows.forEach(row => {
+            aoa.push([
+              row && row.id != null ? row.id : '',
+              row && row.name != null ? row.name : '',
+              Number(row && row.rate || 0),
+              Number(row && row.total || 0),
+              Number(row && row.adj || 0),
+              Number(row && row.final || 0),
+              Number(row && row.pay || 0)
+            ]);
+          });
+          const totals = rows.reduce((acc, row) => {
+            acc.total = roundToCents(acc.total + (Number(row && row.total) || 0));
+            acc.adj = roundToCents(acc.adj + (Number(row && row.adj) || 0));
+            acc.final = roundToCents(acc.final + (Number(row && row.final) || 0));
+            acc.pay = roundToCents(acc.pay + (Number(row && row.pay) || 0));
+            return acc;
+          }, { total:0, adj:0, final:0, pay:0 });
+          aoa.push(['', 'Grand Total', '', totals.total, totals.adj, totals.final, totals.pay]);
+          return aoa;
+        }
+      } catch(e){ console.warn('buildOvertimeAoA failed', e); }
+      return buildTableBackupAoA('overtimeTable');
+    }
+
+    function buildDeductionsAoA(){
+      try {
+        if (typeof buildDeductionsReportData === 'function') {
+          const report = buildDeductionsReportData();
+          const columns = (report && Array.isArray(report.visibleColumns)) ? report.visibleColumns : [];
+          const rows = (report && Array.isArray(report.rows)) ? report.rows : [];
+          if (!columns.length || !rows.length) return null;
+          const labels = {
+            pagibig: 'Pag-IBIG', philhealth: 'PhilHealth', sss: 'SSS', loanSSS: 'SSS Loan',
+            loanPI: 'Pag-IBIG Loan', vale: 'Account', adjustments: 'Other Deductions', valeWed: 'Wed Vale', total: 'Total Deductions'
+          };
+          const aoa = [['Employee ID','Employee Name'].concat(columns.map(c => labels[c] || c))];
+          rows.forEach(row => {
+            const vals = columns.map(c => Number((row && row.values && row.values[c]) || 0));
+            aoa.push([row && row.id != null ? row.id : '', row && row.name != null ? row.name : ''].concat(vals));
+          });
+          const totals = columns.map(c => Number((report && report.totals && report.totals[c]) || 0));
+          aoa.push(['', 'Total'].concat(totals));
+          return aoa;
+        }
+      } catch(e){ console.warn('buildDeductionsAoA failed', e); }
+      return buildTableBackupAoA('deductionsTable', { dropHeaders: ['actions'] });
+    }
+
+    function buildAdditionalIncomeAoA(){
+      try {
+        if (typeof buildAdditionalIncomeReportData === 'function') {
+          const report = buildAdditionalIncomeReportData();
+          const labels = (report && Array.isArray(report.columnLabels)) ? report.columnLabels : [];
+          const rows = (report && Array.isArray(report.rows)) ? report.rows : [];
+          if (!labels.length && !rows.length) return null;
+          const aoa = [['ID','Employee'].concat(labels).concat(['Total'])];
+          rows.forEach(row => {
+            const vals = labels.map(label => Number((row && row.totals && row.totals[String(label || '').toLowerCase()]) || 0));
+            aoa.push([row && row.id != null ? row.id : '', row && row.name != null ? row.name : ''].concat(vals, [Number(row && row.total || 0)]));
+          });
+          const sums = labels.map(label => rows.reduce((sum, row) => roundToCents(sum + (Number((row && row.totals && row.totals[String(label || '').toLowerCase()]) || 0))), 0));
+          const grand = rows.reduce((sum, row) => roundToCents(sum + (Number(row && row.total || 0))), 0);
+          aoa.push(['','Grand Total'].concat(sums,[grand]));
+          return aoa;
+        }
+      } catch(e){ console.warn('buildAdditionalIncomeAoA failed', e); }
+      return buildTableBackupAoA('additionalIncomeTable', { dropHeaders: ['actions'] });
+    }
+
+    function buildOtherDeductionsAoA(){
+      return buildTableBackupAoA('otherDeductionsTable', { dropHeaders: ['actions'] });
+    }
+
+    function buildAdjustmentsAoA(){
+      return buildTableBackupAoA('adjustmentHoursTable');
+    }
+
+    async function buildPeriodBackupPack(from, to, options = {}){
+      const opts = (options && typeof options === 'object') ? options : {};
+      const rangeFrom = String(from || '').trim();
+      const rangeTo = String(to || '').trim();
+      const periodKeyValue = (typeof createPeriodKey === 'function')
+        ? createPeriodKey(rangeFrom, rangeTo)
+        : `${rangeFrom}_${rangeTo}`;
+      let dtrAoA = null;
+      let payrollAoA = null;
+      let masterAoA = null;
+      let overtimeAoA = null;
+      let deductionsAoA = null;
+      let additionalIncomeAoA = null;
+      let otherDeductionsAoA = null;
+      let adjustmentsAoA = null;
+      try { dtrAoA = buildDtrAoA(); } catch(e){ console.warn('buildPeriodBackupPack DTR failed', e); }
+      try { payrollAoA = await buildPayrollAoA(); } catch(e){ console.warn('buildPeriodBackupPack Payroll failed', e); }
+      try { masterAoA = buildMasterReportAoA(); } catch(e){ console.warn('buildPeriodBackupPack Master failed', e); }
+      try {
+        if (typeof buildOvertimeAoA === 'function') overtimeAoA = buildOvertimeAoA();
+      } catch(e){ console.warn('buildPeriodBackupPack Overtime failed', e); }
+      try { deductionsAoA = buildDeductionsAoA(); } catch(e){ console.warn('buildPeriodBackupPack Deductions failed', e); }
+      try { additionalIncomeAoA = buildAdditionalIncomeAoA(); } catch(e){ console.warn('buildPeriodBackupPack Additional Income failed', e); }
+      try { otherDeductionsAoA = buildOtherDeductionsAoA(); } catch(e){ console.warn('buildPeriodBackupPack Other Deductions failed', e); }
+      try { adjustmentsAoA = buildAdjustmentsAoA(); } catch(e){ console.warn('buildPeriodBackupPack Adjustments failed', e); }
+
+      return {
+        meta: {
+          generatedAt: new Date().toISOString(),
+          schemaVersion: 1
+        },
+        range: {
+          from: rangeFrom,
+          to: rangeTo,
+          periodKey: periodKeyValue
+        },
+        computed: {
+          dtrAoA: dtrAoA || [],
+          payrollAoA: payrollAoA || [],
+          masterReportAoA: masterAoA || [],
+          ...(overtimeAoA ? { overtimeAoA } : {}),
+          ...(deductionsAoA ? { deductionsAoA } : {}),
+          ...(additionalIncomeAoA ? { additionalIncomeAoA } : {}),
+          ...(otherDeductionsAoA ? { otherDeductionsAoA } : {}),
+          ...(adjustmentsAoA ? { adjustmentsAoA } : {})
+        },
+        storage: collectPeriodBackupStorageEntries(opts)
+      };
+    }
+
+    async function exportPeriodBackupXlsx(from, to, options = {}){
+      let ws;
+      let we;
+      let prevS = '';
+      let prevE = '';
+      let changed = false;
+      try{
+        if (typeof XLSX === 'undefined' || !XLSX || !XLSX.utils) { alert('Excel library not available'); return; }
+
+        ws = document.getElementById('weekStart');
+        we = document.getElementById('weekEnd');
+        prevS = ws && ws.value;
+        prevE = we && we.value;
+
+        const targetS = String(from || prevS || '').trim();
+        const targetE = String(to || prevE || '').trim();
+        if (!targetS || !targetE) {
+          alert('Please select a payroll period first.');
+          return;
+        }
+        changed = (targetS !== prevS) || (targetE !== prevE);
+
+        function recalcForActiveRange(){
+          try{ if (typeof syncPeriodScopedData === 'function') syncPeriodScopedData(); }catch(e){}
+          try{
+            if (typeof calculatePayrollFromResultsTable === 'function') {
+              calculatePayrollFromResultsTable();
+            } else if (typeof calculatePayrollFromRecords === 'function') {
+              calculatePayrollFromRecords();
+            }
+          }catch(e){}
+          try{ if (typeof checkAndToggleEditState === 'function') checkAndToggleEditState(); }catch(e){}
+          try{ if (typeof window.rebuildReports === 'function') window.rebuildReports(); }catch(e){}
+        }
+
+        if (ws) ws.value = targetS;
+        if (we) we.value = targetE;
+        recalcForActiveRange();
+
+        await new Promise(resolve => setTimeout(resolve, 300));
+
+        const pack = await buildPeriodBackupPack(targetS, targetE, options);
+
+        const wb = XLSX.utils.book_new();
+        const metaRows = [['field', 'value']];
+        Object.entries(pack.meta || {}).forEach(([field, value]) => {
+          metaRows.push([field, String(value == null ? '' : value)]);
+        });
+        Object.entries(pack.range || {}).forEach(([field, value]) => {
+          metaRows.push([`range.${field}`, String(value == null ? '' : value)]);
+        });
+        XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(metaRows), 'META');
+
+        if (pack.computed && Array.isArray(pack.computed.dtrAoA) && pack.computed.dtrAoA.length){
+          XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(pack.computed.dtrAoA), 'DTR');
+        }
+        if (pack.computed && Array.isArray(pack.computed.payrollAoA) && pack.computed.payrollAoA.length){
+          XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(pack.computed.payrollAoA), 'PAYROLL');
+        }
+        if (pack.computed && Array.isArray(pack.computed.masterReportAoA) && pack.computed.masterReportAoA.length){
+          XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(pack.computed.masterReportAoA), 'MASTER_REPORT');
+        }
+        if (pack.computed && Array.isArray(pack.computed.overtimeAoA) && pack.computed.overtimeAoA.length){
+          XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(pack.computed.overtimeAoA), 'OVERTIME');
+        }
+        if (pack.computed && Array.isArray(pack.computed.deductionsAoA) && pack.computed.deductionsAoA.length){
+          XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(pack.computed.deductionsAoA), 'DEDUCTIONS');
+        }
+        if (pack.computed && Array.isArray(pack.computed.additionalIncomeAoA) && pack.computed.additionalIncomeAoA.length){
+          XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(pack.computed.additionalIncomeAoA), 'ADDITIONAL_INCOME');
+        }
+        if (pack.computed && Array.isArray(pack.computed.otherDeductionsAoA) && pack.computed.otherDeductionsAoA.length){
+          XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(pack.computed.otherDeductionsAoA), 'OTHER_DEDUCTIONS');
+        }
+        if (pack.computed && Array.isArray(pack.computed.adjustmentsAoA) && pack.computed.adjustmentsAoA.length){
+          XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(pack.computed.adjustmentsAoA), 'ADJUSTMENTS');
+        }
+
+        const EXCEL_CELL_MAX = 32767;
+        const SAFE_CELL_CHUNK = 30000;
+        function splitForExcelCell(value){
+          const txt = String(value == null ? '' : value);
+          if (txt.length <= EXCEL_CELL_MAX) return [txt];
+          const chunks = [];
+          for (let i = 0; i < txt.length; i += SAFE_CELL_CHUNK){
+            chunks.push(txt.slice(i, i + SAFE_CELL_CHUNK));
+          }
+          return chunks;
+        }
+
+        const storageRows = [['key', 'value']];
+        (pack.storage || []).forEach(entry => {
+          const key = entry && entry.key != null ? String(entry.key) : '';
+          const chunks = splitForExcelCell(entry && entry.value != null ? String(entry.value) : '');
+          const total = chunks.length;
+          chunks.forEach((chunk, idx) => {
+            const chunkKey = total > 1 ? `${key} [part ${idx + 1}/${total}]` : key;
+            storageRows.push([chunkKey, chunk]);
+          });
+        });
+        XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(storageRows), 'STORAGE_KEYS');
+
+        const packJson = JSON.stringify(pack);
+        const jsonChunks = splitForExcelCell(packJson);
+        const jsonRows = [['chunk_index', 'chunk_count', 'json_chunk']];
+        const jsonTotal = jsonChunks.length;
+        jsonChunks.forEach((chunk, idx) => {
+          jsonRows.push([idx + 1, jsonTotal, chunk]);
+        });
+        XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(jsonRows), 'PACK_JSON');
+
+        const filename = `payroll_backup_${targetS}_to_${targetE}.xlsx`;
+        XLSX.writeFile(wb, filename);
+
+      }catch(e){
+        console.warn('Export period backup failed', e);
+        alert('Export period backup failed');
+      } finally {
+        if (ws) ws.value = prevS;
+        if (we) we.value = prevE;
+        if (changed) {
+          try{ if (typeof syncPeriodScopedData === 'function') syncPeriodScopedData(); }catch(e){}
+          try{
+            if (typeof calculatePayrollFromResultsTable === 'function') {
+              calculatePayrollFromResultsTable();
+            } else if (typeof calculatePayrollFromRecords === 'function') {
+              calculatePayrollFromRecords();
+            }
+          }catch(e){}
+          try{ if (typeof checkAndToggleEditState === 'function') checkAndToggleEditState(); }catch(e){}
+          try{ if (typeof window.rebuildReports === 'function') window.rebuildReports(); }catch(e){}
+        } else {
+          try{ if (typeof checkAndToggleEditState === 'function') checkAndToggleEditState(); }catch(e){}
+          try{ if (typeof window.rebuildReports === 'function') window.rebuildReports(); }catch(e){}
+        }
+      }
+    }
+
+    try { window.buildPeriodBackupPack = buildPeriodBackupPack; } catch(e){}
+    try { window.exportPeriodBackupXlsx = exportPeriodBackupXlsx; } catch(e){}
+
+    try {
+      var backupBtn = document.getElementById('payrollBackupXlsxBtn');
+      if (backupBtn && !backupBtn.__periodBackupBound) {
+        backupBtn.addEventListener('click', async function(ev){
+          ev.preventDefault();
+          const from = (document.getElementById('weekStart') || {}).value || '';
+          const to = (document.getElementById('weekEnd') || {}).value || '';
+          await exportPeriodBackupXlsx(from, to);
+        });
+        backupBtn.__periodBackupBound = true;
+      }
+    } catch(e){}
+
     // Bind UI button for Excel (All Tabs)
     try {
       var xBtn = document.getElementById('r_xlsx');
