@@ -3263,6 +3263,7 @@ window.addEventListener('load', dashReports);
       </label>
       <div class="column-toggle-controls" id="deductionColumnToggles">
        <span>Include in deductions:</span>
+      <label><input type="checkbox" id="deductions_include_all" checked/> All</label>
       <label><input type="checkbox" name="deductions_include_pagibig" data-col="pagibig" checked/> Pag-IBIG</label>
       <label><input type="checkbox" name="deductions_include_philhealth" data-col="philhealth" checked/> PhilHealth</label>
       <label><input type="checkbox" name="deductions_include_sss" data-col="sss" checked/> SSS</label>
@@ -6327,6 +6328,20 @@ function updateDeductionCellDisplay(cell, raw, effective, included){
   }
 }
 
+function updateDeductionIncludeAllCheckbox(){
+  const allToggle = document.getElementById('deductions_include_all');
+  if (!allToggle) return;
+  const toggles = Array.from(document.querySelectorAll('#deductionColumnToggles input[data-col]'));
+  if (!toggles.length) {
+    allToggle.checked = true;
+    allToggle.indeterminate = false;
+    return;
+  }
+  const includedCount = toggles.reduce(function(sum, input){ return sum + (input.checked ? 1 : 0); }, 0);
+  allToggle.checked = includedCount === toggles.length;
+  allToggle.indeterminate = includedCount > 0 && includedCount < toggles.length;
+}
+
 function applyDeductionColumnState(){
   try { refreshCurrentDeductionColumnInclusions(); } catch(_){ }
   const toggles = document.querySelectorAll('#deductionColumnToggles input[data-col]');
@@ -6335,6 +6350,7 @@ function applyDeductionColumnState(){
     if (!col) return;
     input.checked = isDeductionColumnIncluded(col);
   });
+  updateDeductionIncludeAllCheckbox();
 
   const table = document.getElementById('deductionsTable');
   if (!table) return;
@@ -6712,14 +6728,31 @@ document.addEventListener('DOMContentLoaded', function(){
     if (toggles && !toggles.__boundColumnToggle){
       toggles.addEventListener('change', function(ev){
         const input = ev.target;
-        if (!input || !input.matches('input[data-col]')) return;
-        const col = input.getAttribute('data-col');
-        if (!col || DEDUCTION_COLUMN_KEYS.indexOf(col) === -1) return;
-        if (input.checked) {
-          delete deductionColumnInclusions[col];
+        if (!input || !input.matches('input[data-col], #deductions_include_all')) return;
+
+        if (input.id === 'deductions_include_all') {
+          const shouldIncludeAll = !!input.checked;
+          const colToggles = toggles.querySelectorAll('input[data-col]');
+          colToggles.forEach(function(colInput){
+            colInput.checked = shouldIncludeAll;
+            const col = colInput.getAttribute('data-col');
+            if (!col || DEDUCTION_COLUMN_KEYS.indexOf(col) === -1) return;
+            if (shouldIncludeAll) {
+              delete deductionColumnInclusions[col];
+            } else {
+              deductionColumnInclusions[col] = false;
+            }
+          });
         } else {
-          deductionColumnInclusions[col] = false;
+          const col = input.getAttribute('data-col');
+          if (!col || DEDUCTION_COLUMN_KEYS.indexOf(col) === -1) return;
+          if (input.checked) {
+            delete deductionColumnInclusions[col];
+          } else {
+            deductionColumnInclusions[col] = false;
+          }
         }
+
         persistDeductionColumnInclusions();
         applyDeductionColumnState();
         try {
