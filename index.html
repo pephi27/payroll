@@ -6594,18 +6594,18 @@ const loanTrackerRefresh = (() => {
   };
 })();
 
-document.addEventListener('change', function(ev){
-  const el = ev && ev.target;
-  if (!el) return;
-  if (el.id === 'applyLoanTrackerBtn') return;
-  if (el.id === 'recalcLoanTrackerBtn') return;
-  if (!el.closest || !el.closest('#loanTrackerTable')) return;
+function applyLoanTrackerFieldChange(el){
+  if (!el) return false;
+  if (el.id === 'applyLoanTrackerBtn') return false;
+  if (el.id === 'recalcLoanTrackerBtn') return false;
+  if (!el.closest || !el.closest('#loanTrackerTable')) return false;
   const empId = el.dataset.empId;
   const type = el.dataset.loanType;
   const field = el.dataset.field;
-  if (!empId || !type || !field) return;
+  if (!empId || !type || !field) return false;
   const entry = getLoanTrackerEntry(empId, type);
-  if (!entry) return;
+  if (!entry) return false;
+
   if (field === 'active') {
     entry.active = !!el.checked;
   } else if (field === 'principal') {
@@ -6614,8 +6614,32 @@ document.addEventListener('change', function(ev){
     entry.weekly = roundToCents(Number(el.value) || 0);
   } else if (field === 'monthly') {
     entry.monthly = roundToCents(Number(el.value) || 0);
+  } else {
+    return false;
   }
-  loanTrackerRefresh.schedule({ createEntries: true });
+
+  if (field === 'active') {
+    loanTrackerRefresh.flush({ createEntries: true });
+  } else {
+    loanTrackerRefresh.schedule({ createEntries: true });
+  }
+  return true;
+}
+
+document.addEventListener('input', function(ev){
+  const el = ev && ev.target;
+  if (!el) return;
+  if (!el.closest || !el.closest('#loanTrackerTable')) return;
+  if (el.dataset && (el.dataset.field === 'principal' || el.dataset.field === 'weekly' || el.dataset.field === 'monthly')) {
+    applyLoanTrackerFieldChange(el);
+  }
+});
+
+document.addEventListener('change', function(ev){
+  const el = ev && ev.target;
+  if (!el) return;
+  if (el.id === 'loanTrackerActiveOnly') return;
+  applyLoanTrackerFieldChange(el);
 });
 
 document.addEventListener('click', function(ev){
