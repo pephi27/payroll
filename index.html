@@ -19973,10 +19973,13 @@ function loadSaved(){
       const onHashChange = () => {
         const ws = document.getElementById('weekStart');
         const we = document.getElementById('weekEnd');
-        // Simple heuristic: if dashboard panel isn't visible, keep inputs disabled
+        // Keep week inputs disabled when dashboard is hidden OR the selected
+        // period is finalized. This avoids re-enabling date adjustment after a
+        // period has been locked/finalized when users switch tabs.
         const dash = document.getElementById('panelDashboard');
         const dashActive = dash && (dash.classList.contains('active') || dash.style.display !== 'none');
-        const disabled = !dashActive;
+        const finalized = (typeof isSelectedPeriodLocked === 'function') ? !!isSelectedPeriodLocked() : false;
+        const disabled = !dashActive || finalized;
         if (ws) ws.disabled = disabled;
         if (we) we.disabled = disabled;
       };
