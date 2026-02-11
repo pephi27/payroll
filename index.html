@@ -3258,6 +3258,7 @@ window.addEventListener('load', dashReports);
         <th>Total OT Hrs</th>
         <th>ADJ OT hours</th>
         <th>Overtime Hours Final</th>
+        <th>Night Diff</th>
         <th>Overtime Pay</th>
        </tr>
       </thead>
@@ -3747,6 +3748,13 @@ function getOvertimePayForEmployee(empId, rateOverride) {
   const pay = getOvertimeFinalHours(empId) * rate;
   if (typeof roundToCents === 'function') return roundToCents(pay);
   return Math.round(pay * 100) / 100;
+}
+
+function getNightDifferentialPayForEmployee(empId) {
+  const value = Number((nightDiffByEmployee && nightDiffByEmployee[empId]) || 0);
+  if (!Number.isFinite(value)) return 0;
+  if (typeof roundToCents === 'function') return roundToCents(value);
+  return Math.round(value * 100) / 100;
 }
 
 async function persistPayrollSettings() {
@@ -5521,6 +5529,7 @@ let otherDeductionsTotal = ensurePeriodData(allOtherDeductionsTotals, currentPer
 let allAdjHrs = JSON.parse(localStorage.getItem(LS_ADJ_HRS) || '{}');
 let adjHrs = isPlainObject(allAdjHrs[currentPeriodKey]) ? allAdjHrs[currentPeriodKey] : {};
 if (!isPlainObject(allAdjHrs[currentPeriodKey])) allAdjHrs[currentPeriodKey] = adjHrs;
+let nightDiffByEmployee = {};
 let allBantay = JSON.parse(localStorage.getItem(LS_BANTAY) || '{}');
 let bantay = allBantay[currentPeriodKey] || {};
 let allAdditionalIncomeDetails = loadPeriodScopedMap(LS_ADDITIONAL_INCOME_DETAILS);
@@ -7175,6 +7184,7 @@ function renderOvertimeTable(){
   let totalOtHours = 0;
   let totalAdjHours = 0;
   let totalFinalHours = 0;
+  let totalNightDiff = 0;
   let totalOtPay = 0;
   const formatZeroDisplay = (value) => {
     const num = Number(value);
@@ -7189,11 +7199,14 @@ function renderOvertimeTable(){
     const otTotal = getOvertimeHoursTotal(id);
     const adj = getOvertimeAdjustmentHours(id);
     const otFinal = otTotal + adj;
+    const nightDiffPay = getNightDifferentialPayForEmployee(id);
     const otPay = getOvertimePayForEmployee(id, baseRate);
+    const totalOtWithNightDiff = roundToCents(otPay + nightDiffPay);
     totalOtHours = roundToCents(totalOtHours + otTotal);
     totalAdjHours = roundToCents(totalAdjHours + adj);
     totalFinalHours = roundToCents(totalFinalHours + otFinal);
-    totalOtPay = roundToCents(totalOtPay + otPay);
+    totalNightDiff = roundToCents(totalNightDiff + nightDiffPay);
+    totalOtPay = roundToCents(totalOtPay + totalOtWithNightDiff);
     const tr = document.createElement('tr');
     tr.dataset.empId = id;
     tr.innerHTML = `
@@ -7203,7 +7216,8 @@ function renderOvertimeTable(){
       <td class="num otHoursTotal">${formatZeroDisplay(otTotal)}</td>
       <td class="num otAdjustHours">${formatZeroDisplay(adj)}</td>
       <td class="num otFinalHours">${formatZeroDisplay(otFinal)}</td>
-      <td class="num otPay">${formatZeroDisplay(otPay)}</td>
+      <td class="num nightDiff">${formatZeroDisplay(nightDiffPay)}</td>
+      <td class="num otPay">${formatZeroDisplay(totalOtWithNightDiff)}</td>
     `;
     tbody.appendChild(tr);
   });
@@ -7216,6 +7230,7 @@ function renderOvertimeTable(){
     <td class="num" data-col="totalOtHours">${formatZeroDisplay(totalOtHours)}</td>
     <td class="num" data-col="adjOtHours">${formatZeroDisplay(totalAdjHours)}</td>
     <td class="num" data-col="finalOtHours">${formatZeroDisplay(totalFinalHours)}</td>
+    <td class="num" data-col="nightDiff">${formatZeroDisplay(totalNightDiff)}</td>
     <td class="num" data-col="otPay">${formatZeroDisplay(totalOtPay)}</td>
   `;
   tbody.appendChild(totalRow);
@@ -7226,7 +7241,8 @@ function renderOvertimeTable(){
     const otTotal = getOvertimeHoursTotal(empId);
     const adj = getOvertimeAdjustmentHours(empId);
     const otFinal = otTotal + adj;
-    const otPay = getOvertimePayForEmployee(empId, baseRate);
+    const nightDiffPay = getNightDifferentialPayForEmployee(empId);
+    const otPay = roundToCents(getOvertimePayForEmployee(empId, baseRate) + nightDiffPay);
     const rateCell = tr.querySelector('.otRate');
     if (rateCell) rateCell.textContent = formatZeroDisplay(rate);
     const totalCell = tr.querySelector('.otHoursTotal');
@@ -7235,6 +7251,8 @@ function renderOvertimeTable(){
     if (adjCell) adjCell.textContent = formatZeroDisplay(adj);
     const finalCell = tr.querySelector('.otFinalHours');
     if (finalCell) finalCell.textContent = formatZeroDisplay(otFinal);
+    const nightDiffCell = tr.querySelector('.nightDiff');
+    if (nightDiffCell) nightDiffCell.textContent = formatZeroDisplay(nightDiffPay);
     const payCell = tr.querySelector('.otPay');
     if (payCell) payCell.textContent = formatZeroDisplay(otPay);
   };
@@ -7249,16 +7267,19 @@ function updateOvertimeGrandTotals() {
   let totalOtHours = 0;
   let totalAdjHours = 0;
   let totalFinalHours = 0;
+  let totalNightDiff = 0;
   let totalOtPay = 0;
   getEmployeeList().forEach(emp => {
     const baseRate = getEmployeeHourlyRate(emp.id);
     const otTotal = getOvertimeHoursTotal(emp.id);
     const adj = getOvertimeAdjustmentHours(emp.id);
     const otFinal = otTotal + adj;
-    const otPay = getOvertimePayForEmployee(emp.id, baseRate);
+    const nightDiffPay = getNightDifferentialPayForEmployee(emp.id);
+    const otPay = roundToCents(getOvertimePayForEmployee(emp.id, baseRate) + nightDiffPay);
     totalOtHours = roundToCents(totalOtHours + otTotal);
     totalAdjHours = roundToCents(totalAdjHours + adj);
     totalFinalHours = roundToCents(totalFinalHours + otFinal);
+    totalNightDiff = roundToCents(totalNightDiff + nightDiffPay);
     totalOtPay = roundToCents(totalOtPay + otPay);
   });
   const formatZeroDisplay = (value) => {
@@ -7273,6 +7294,7 @@ function updateOvertimeGrandTotals() {
   setCell('totalOtHours', totalOtHours);
   setCell('adjOtHours', totalAdjHours);
   setCell('finalOtHours', totalFinalHours);
+  setCell('nightDiff', totalNightDiff);
   setCell('otPay', totalOtPay);
 }
 
@@ -7288,7 +7310,8 @@ function updateOvertimeRowForEmployee(empId){
   const otTotal = getOvertimeHoursTotal(empId);
   const adj = getOvertimeAdjustmentHours(empId);
   const otFinal = otTotal + adj;
-  const otPay = getOvertimePayForEmployee(empId, baseRate);
+  const nightDiffPay = getNightDifferentialPayForEmployee(empId);
+  const otPay = roundToCents(getOvertimePayForEmployee(empId, baseRate) + nightDiffPay);
   const formatZeroDisplay = (value) => {
     const num = Number(value);
     if (!Number.isFinite(num) || Math.abs(num) < 0.005) return '-';
@@ -7302,6 +7325,8 @@ function updateOvertimeRowForEmployee(empId){
   if (adjCell) adjCell.textContent = formatZeroDisplay(adj);
   const finalCell = row.querySelector('.otFinalHours');
   if (finalCell) finalCell.textContent = formatZeroDisplay(otFinal);
+  const nightDiffCell = row.querySelector('.nightDiff');
+  if (nightDiffCell) nightDiffCell.textContent = formatZeroDisplay(nightDiffPay);
   const payCell = row.querySelector('.otPay');
   if (payCell) payCell.textContent = formatZeroDisplay(otPay);
   updateOvertimeGrandTotals();
@@ -7858,7 +7883,9 @@ function calculateRow(tr){  const readNum = sel => { const el = tr.querySelector
   const regPay = roundToCents(reg * rate);
   const adjPay = roundToCents(regAdjHours * rate);
   const effectiveOtRate = getEffectiveOvertimeRateForEmployee(id, rate);
-  const otPay = roundToCents(otTotal * effectiveOtRate);
+  const baseOtPay = roundToCents(otTotal * effectiveOtRate);
+  const nightDiffPay = getNightDifferentialPayForEmployee(id);
+  const otPay = roundToCents(baseOtPay + nightDiffPay);
   const gross = roundToCents(regPay + adjPay + additionalIncomeShown);
   // Compute contributions using dynamic tables (employee share).  Determine the
   // appropriate rate based on the monthly income and multiply by regular pay.
@@ -9709,7 +9736,8 @@ function buildOvertimeReportData() {
     const otTotal = getOvertimeHoursTotal(emp.id);
     const adj = getOvertimeAdjustmentHours(emp.id);
     const otFinal = otTotal + adj;
-    const otPay = getOvertimePayForEmployee(emp.id, baseRate);
+    const nightDiff = getNightDifferentialPayForEmployee(emp.id);
+    const otPay = roundToCents(getOvertimePayForEmployee(emp.id, baseRate) + nightDiff);
     rows.push({
       id: emp.id,
       name: emp.name,
@@ -9717,6 +9745,7 @@ function buildOvertimeReportData() {
       total: otTotal,
       adj,
       final: otFinal,
+      nightDiff,
       pay: otPay
     });
   });
@@ -9737,6 +9766,7 @@ document.addEventListener('DOMContentLoaded', function(){
       { key: 'total', label: 'Total OT Hrs', numeric: true },
       { key: 'adj', label: 'ADJ OT hours', numeric: true },
       { key: 'final', label: 'Overtime Hours Final', numeric: true },
+      { key: 'nightDiff', label: 'Night Diff', numeric: true },
       { key: 'pay', label: 'Overtime Pay', numeric: true }
     ];
     const visibleColumns = columns.filter(col => report.rows.some(row => Number(row[col.key]) !== 0));
@@ -9752,8 +9782,9 @@ document.addEventListener('DOMContentLoaded', function(){
     const totalOtHrs = report.rows.reduce((sum, row) => roundToCents(sum + (Number(row.total) || 0)), 0);
     const totalAdjHrs = report.rows.reduce((sum, row) => roundToCents(sum + (Number(row.adj) || 0)), 0);
     const totalFinalHrs = report.rows.reduce((sum, row) => roundToCents(sum + (Number(row.final) || 0)), 0);
+    const totalNightDiff = report.rows.reduce((sum, row) => roundToCents(sum + (Number(row.nightDiff) || 0)), 0);
     const totalOtPay = report.rows.reduce((sum, row) => roundToCents(sum + (Number(row.pay) || 0)), 0);
-    const totals = { total: totalOtHrs, adj: totalAdjHrs, final: totalFinalHrs, pay: totalOtPay };
+    const totals = { total: totalOtHrs, adj: totalAdjHrs, final: totalFinalHrs, nightDiff: totalNightDiff, pay: totalOtPay };
 
     let html = '<div id="printOvertimeReport"><table><thead><tr><th>Employee ID</th><th>Employee Name</th>';
     visibleColumns.forEach(col => {
@@ -16975,9 +17006,11 @@ initApp();
 function computeHoursForDateRange(startDate, endDate) {
   const totalsReg = {};
   const totalsOT = {};
+  const totalsND = {};
   Object.keys(storedEmployees).forEach(id => {
     totalsReg[id] = 0;
     totalsOT[id] = 0;
+    totalsND[id] = 0;
   });
 
   const keys = Object.keys(storedSchedules).length ? storedSchedules : {default: DEFAULT_SCHEDULE};
@@ -17005,6 +17038,32 @@ function computeHoursForDateRange(startDate, endDate) {
     return h*60+m+(dayOffset*24*60);
   };
   const minsToDec = mins => mins / 60;
+  const ndSettings = (typeof getNightDifferentialSettings === 'function')
+    ? getNightDifferentialSettings()
+    : { enabled: false, start: '22:00', end: '06:00', multiplier: 1.10 };
+  const ndEnabled = !!ndSettings.enabled;
+  const ndStartMins = toMins(ndSettings.start);
+  const ndEndMins = toMins(ndSettings.end);
+  const ndPremiumFactorRaw = Number(ndSettings.multiplier) - 1;
+  const ndPremiumFactor = Number.isFinite(ndPremiumFactorRaw) ? Math.max(0, ndPremiumFactorRaw) : 0;
+  const overlapMinsWithNightWindow = (rangeStart, rangeEnd) => {
+    if (!ndEnabled) return 0;
+    if (!Number.isFinite(rangeStart) || !Number.isFinite(rangeEnd) || rangeEnd <= rangeStart) return 0;
+    if (!Number.isFinite(ndStartMins) || !Number.isFinite(ndEndMins)) return 0;
+    let overlap = 0;
+    const startDay = Math.floor(rangeStart / 1440) - 1;
+    const endDay = Math.floor((rangeEnd - 1) / 1440) + 1;
+    for (let day = startDay; day <= endDay; day++) {
+      const winStart = day * 1440 + ndStartMins;
+      const winEnd = (ndEndMins > ndStartMins)
+        ? (day * 1440 + ndEndMins)
+        : ((day + 1) * 1440 + ndEndMins);
+      const segStart = Math.max(rangeStart, winStart);
+      const segEnd = Math.min(rangeEnd, winEnd);
+      if (segEnd > segStart) overlap += (segEnd - segStart);
+    }
+    return overlap;
+  };
 
   for (const key in grouped) {
     const [date, empId] = key.split('___');
@@ -17216,8 +17275,38 @@ function computeHoursForDateRange(startDate, endDate) {
       }
     }
     totalsOT[empId] += minsToDec(dayOTMins);
+
+    let dayOtStartMins = null;
+    let dayOtEndMins = null;
+    if (otInActual && otOutActual) {
+      const otInM = toMins(otInActual);
+      const otOutM = toMins(otOutActual);
+      if (otInM !== null && otOutM !== null && otOutM > otInM) {
+        dayOtStartMins = otInM;
+        dayOtEndMins = otOutM;
+      }
+    } else if (dayOTMins > 0) {
+      let lastOutM = null;
+      for (let i = 0; i < times.length; i += 2) {
+        const outStr = times[i+1];
+        if (!outStr) continue;
+        const outM = toMins(outStr);
+        if (lastOutM === null || outM > lastOutM) lastOutM = outM;
+      }
+      if (lastOutM != null && lastOutM > pmOutRefMins) {
+        dayOtStartMins = pmOutRefMins;
+        dayOtEndMins = lastOutM;
+      }
+    }
+    const ndMins = overlapMinsWithNightWindow(dayOtStartMins, dayOtEndMins);
+    const hourlyRate = Number(getEmployeeHourlyRate(empId)) || 0;
+    const ndPay = (ndMins > 0 && hourlyRate > 0 && ndPremiumFactor > 0)
+      ? roundToCents(minsToDec(ndMins) * hourlyRate * ndPremiumFactor)
+      : 0;
+    totalsND[empId] = roundToCents((totalsND[empId] || 0) + ndPay);
   }
-  return { totalsReg, totalsOT };
+  return { totalsReg, totalsOT, totalsND };
+
 }
 const dtrStartEl = document.getElementById('filterStart');
 const dtrEndEl = document.getElementById('filterEnd');
@@ -17238,15 +17327,17 @@ function calculatePayrollFromRecords(){
     const start = (typeof weekStartEl !== 'undefined' && weekStartEl && weekStartEl.value) ? weekStartEl.value : (dtrStartEl ? dtrStartEl.value : '');
     const end   = (typeof weekEndEl   !== 'undefined' && weekEndEl   && weekEndEl.value)   ? weekEndEl.value   : (dtrEndEl   ? dtrEndEl.value   : '');
     // Use the helper to compute perâ€‘employee hours across the full dataset.
-    const { totalsReg, totalsOT } = computeHoursForDateRange(start, end);
+    const { totalsReg, totalsOT, totalsND } = computeHoursForDateRange(start, end);
     // Initialize regHours and otHours with computed totals
     regHours = Object.assign({}, totalsReg || {});
     otHours  = Object.assign({}, totalsOT  || {});
+    nightDiffByEmployee = Object.assign({}, totalsND || {});
     // Guarantee every employee has a defined entry (default 0)
     Object.keys(storedEmployees || {}).forEach(id => {
         if (storedEmployees[id] && storedEmployees[id].active === false) return;
       if (!regHours.hasOwnProperty(id)) regHours[id] = 0;
       if (!otHours.hasOwnProperty(id))  otHours[id]  = 0;
+      if (!nightDiffByEmployee.hasOwnProperty(id)) nightDiffByEmployee[id] = 0;
     });
     // Persist hours to localStorage
     try {
