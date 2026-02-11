@@ -2924,9 +2924,24 @@ window.addEventListener('load', dashReports);
       </td>
      </tr>
      <tr>
+      <td>Saturday Clock In</td>
+      <td><input class="cell" data-key="rng_sat_in_start" name="rng_sat_in_start" type="time"/></td>
+      <td><input class="cell" data-key="rng_sat_in_end" name="rng_sat_in_end" type="time"/></td>
+     </tr>
+     <tr>
+      <td>Saturday Clock Out</td>
+      <td><input class="cell" data-key="rng_sat_out_start" name="rng_sat_out_start" type="time"/></td>
+      <td><input class="cell" data-key="rng_sat_out_end" name="rng_sat_out_end" type="time"/></td>
+     </tr>
+     <tr>
       <td>Saturday OT In</td>
       <td><input class="cell" data-key="rng_sat_ot_start" name="rng_sat_ot_start" type="time"/></td>
       <td><input class="cell" data-key="rng_sat_ot_end" name="rng_sat_ot_end" type="time"/></td>
+     </tr>
+     <tr>
+      <td>Saturday OT Out</td>
+      <td><input class="cell" data-key="rng_sat_ot_out_start" name="rng_sat_ot_out_start" type="time"/></td>
+      <td><input class="cell" data-key="rng_sat_ot_out_end" name="rng_sat_ot_out_end" type="time"/></td>
      </tr>
     </tbody>
    </table>
@@ -14904,7 +14919,10 @@ const DEFAULT_RANGES = {
   rng_pm_out_start:"15:00", rng_pm_out_end:"20:00",
   rng_ot_in_start:"19:00", rng_ot_in_end:"22:00",
   rng_ot_out_start:"19:00", rng_ot_out_end:"23:59",
-  rng_sat_ot_start:"11:00", rng_sat_ot_end:"23:59"
+  rng_sat_in_start:"05:00", rng_sat_in_end:"12:00",
+  rng_sat_out_start:"11:30", rng_sat_out_end:"12:30",
+  rng_sat_ot_start:"11:00", rng_sat_ot_end:"23:59",
+  rng_sat_ot_out_start:"11:00", rng_sat_ot_out_end:"23:59"
 };
 const DEFAULT_SCHEDULE = {
   name: "Default",
@@ -16051,6 +16069,13 @@ if(!_passes) continue;
       otOut:{ start: schedule.rng_ot_out_start || DEFAULT_RANGES.rng_ot_out_start, end: schedule.rng_ot_out_end || DEFAULT_RANGES.rng_ot_out_end }
     };
 
+    // Determine day-of-week before selecting punches so Saturday can use its own ranges.
+    const __dow = (function(d){
+      const dt = new Date(d + 'T00:00');
+      return (isNaN(dt) ? new Date(d) : dt).getDay();
+    })(date);
+    const __isSaturday = (__dow === 6);
+
     const overridePunches = dtrOverrides && Object.prototype.hasOwnProperty.call(dtrOverrides, overrideKey)
       ? dtrOverrides[overrideKey]
       : null;
@@ -16067,6 +16092,15 @@ if(!_passes) continue;
       pmOutActual = normalizeOverrideValue(overridePunches.pmOut);
       otInActual = normalizeOverrideValue(overridePunches.otIn);
       otOutActual = normalizeOverrideValue(overridePunches.otOut);
+    } else if (__isSaturday) {
+      amInActual = pickEarliest({
+        start: schedule.rng_sat_in_start || DEFAULT_RANGES.rng_sat_in_start,
+        end: schedule.rng_sat_in_end || DEFAULT_RANGES.rng_sat_in_end
+      });
+      pmOutActual = pickLatest({
+        start: schedule.rng_sat_out_start || DEFAULT_RANGES.rng_sat_out_start,
+        end: schedule.rng_sat_out_end || DEFAULT_RANGES.rng_sat_out_end
+      });
     } else {
       amInActual = pickEarliest(rangesForEmp.amIn);
       amOutActual = pickLatest(rangesForEmp.amOut);
@@ -16080,14 +16114,9 @@ if(!_passes) continue;
     
     // === Saturday rule (scoped) ===
     // Use local flags/vars so other days are untouched.
-    let __isSaturday = false, __satStart = null, __satEnd = null;
+    let __satStart = null, __satEnd = null;
     try {
-      const __dow = (function(d){
-        const dt = new Date(d + 'T00:00');
-        return (isNaN(dt) ? new Date(d) : dt).getDay();
-      })(date);
-      if (__dow === 6) { // Saturday
-        __isSaturday = true;
+      if (__isSaturday) { // Saturday
         const satStart = schedule.sch_sat_start || schedule.sch_am_start || "08:00";
         const satEnd   = schedule.sch_sat_end   || schedule.sch_pm_end || schedule.sch_am_end || "11:00";
         __satStart = satStart;
@@ -16104,34 +16133,38 @@ if(!_passes) continue;
       // --- Patched OT In/Out picking (DTR) ---
       const otInCandidates = otTimes.filter(t => {
         const m = toMins(t);
-        return m > pmOutRefMins && isInOtWindowWithOvernight(m, toMins(__isSaturday ? __satEnd : rangesForEmp.otIn.start), toMins(__isSaturday ? '23:59' : rangesForEmp.otIn.end));
+        const satOtInStart = toMins(schedule.rng_sat_ot_start || DEFAULT_RANGES.rng_sat_ot_start);
+        const satOtInEnd = toMins(schedule.rng_sat_ot_end || DEFAULT_RANGES.rng_sat_ot_end);
+        return m > pmOutRefMins && isInOtWindowWithOvernight(
+          m,
+          toMins(__isSaturday ? (schedule.rng_sat_ot_start || DEFAULT_RANGES.rng_sat_ot_start) : rangesForEmp.otIn.start),
+          toMins(__isSaturday ? (schedule.rng_sat_ot_end || DEFAULT_RANGES.rng_sat_ot_end) : rangesForEmp.otIn.end)
+        ) && (!__isSaturday || (m >= satOtInStart && m <= satOtInEnd));
       });
       otInActual = otInCandidates.length ? otInCandidates[0] : null;
 
       const otOutCandidates = otTimes
         .filter(t => {
           const m = toMins(t);
-          return m > pmOutRefMins && isInOtWindowWithOvernight(m, toMins(__isSaturday ? __satEnd : rangesForEmp.otOut.start), toMins(__isSaturday ? '23:59' : rangesForEmp.otOut.end));
+          const satOtOutStart = toMins(schedule.rng_sat_ot_out_start || schedule.rng_sat_ot_start || DEFAULT_RANGES.rng_sat_ot_out_start || DEFAULT_RANGES.rng_sat_ot_start);
+          const satOtOutEnd = toMins(schedule.rng_sat_ot_out_end || schedule.rng_sat_ot_end || DEFAULT_RANGES.rng_sat_ot_out_end || DEFAULT_RANGES.rng_sat_ot_end);
+          return m > pmOutRefMins && isInOtWindowWithOvernight(
+            m,
+            toMins(__isSaturday ? (schedule.rng_sat_ot_out_start || schedule.rng_sat_ot_start || DEFAULT_RANGES.rng_sat_ot_out_start || DEFAULT_RANGES.rng_sat_ot_start) : rangesForEmp.otOut.start),
+            toMins(__isSaturday ? (schedule.rng_sat_ot_out_end || schedule.rng_sat_ot_end || DEFAULT_RANGES.rng_sat_ot_out_end || DEFAULT_RANGES.rng_sat_ot_end) : rangesForEmp.otOut.end)
+          ) && (!__isSaturday || (m >= satOtOutStart && m <= satOtOutEnd));
         })
-        .filter(t => !otInActual || toMins(t) >= toMins(otInActual));
+        .filter(t => !otInActual || toMins(t) > toMins(otInActual));
       otOutActual = otOutCandidates.length ? otOutCandidates[otOutCandidates.length - 1] : null;
+      if (otInActual && otOutActual && toMins(otOutActual) <= toMins(otInActual)) {
+        otInActual = null;
+        otOutActual = null;
+      }
       // --- end patch ---
     }
 
-// Saturday fallback: if only a single OUT exists beyond the Saturday end, treat OT as (satEnd -> lastOut)
 let otInCalc = otInActual;
 let otOutCalc = otOutActual;
-try {
-  if (!overridePunches && __isSaturday && __satEnd) {
-    const lastOut = pmOutActual || amOutActual || null;
-    const lastOutM = lastOut ? toMins(lastOut) : null;
-    const satEndM = toMins(__satEnd);
-    if (lastOutM !== null && lastOutM > satEndM) {
-      if (!otInCalc) otInCalc = __satEnd;
-      if (!otOutCalc) otOutCalc = lastOut;
-    }
-  }
-} catch(e){ console.warn('Saturday OT fallback failed', e); }
 
 
     
@@ -16196,22 +16229,6 @@ let otMins = 0;
       }
     }
     
-    // Saturday definitive OT computation: last OUT beyond Saturday end is OT
-    try {
-      if (!overridePunches && __isSaturday && __satEnd) {
-        const lastOut = (pmOutActual || amOutActual || null);
-        if (lastOut) {
-          const satEndM = toMins(__satEnd);
-          const satStartClamp = Math.max(satEndM, toMins(schedule.rng_sat_ot_start || __satEnd || DEFAULT_RANGES.rng_sat_ot_start));
-          const satEndClamp   = toMins(schedule.rng_sat_ot_end || DEFAULT_RANGES.rng_sat_ot_end);
-          const lastOutM = toMins(lastOut);
-          const startM = satStartClamp;
-          const endM   = Math.min(lastOutM, satEndClamp);
-          const diff = endM - startM;
-          if (diff > 0) otMins = diff;
-        }
-      }
-    } catch(e){ console.warn('Saturday OT direct compute failed', e); }
 
     // Fallback OT computation for nonâ€‘Saturday days.
     // When there are no explicit OT punches (or the OT IN occurs before
@@ -16662,6 +16679,13 @@ function computeHoursForDateRange(startDate, endDate) {
     const pickEarliestOt = (win) => { const sM = toMins(win.start), eM = toMins(win.end); return otTimes.find(t => isInOtWindowWithOvernight(toMins(t), sM, eM)) || null; };
     const pickLatestOt = (win) => { const sM = toMins(win.start), eM = toMins(win.end); const arr = otTimes.filter(t => isInOtWindowWithOvernight(toMins(t), sM, eM)); return arr.length ? arr[arr.length-1] : null; };
 
+    // Determine day-of-week before selecting punches so Saturday can use its own ranges.
+    const __dow = (function(d){
+      const dt = new Date(d + 'T00:00');
+      return (isNaN(dt) ? new Date(d) : dt).getDay();
+    })(date);
+    const __isSaturday = (__dow === 6);
+
     const overridePunches = dtrOverrides && Object.prototype.hasOwnProperty.call(dtrOverrides, overrideKey)
       ? dtrOverrides[overrideKey]
       : null;
@@ -16678,6 +16702,15 @@ function computeHoursForDateRange(startDate, endDate) {
       pmOutActual = normalizeOverrideValue(overridePunches.pmOut);
       otInActual = normalizeOverrideValue(overridePunches.otIn);
       otOutActual = normalizeOverrideValue(overridePunches.otOut);
+    } else if (__isSaturday) {
+      amInActual = pickEarliest({
+        start: schedule.rng_sat_in_start || DEFAULT_RANGES.rng_sat_in_start,
+        end: schedule.rng_sat_in_end || DEFAULT_RANGES.rng_sat_in_end
+      });
+      pmOutActual = pickLatest({
+        start: schedule.rng_sat_out_start || DEFAULT_RANGES.rng_sat_out_start,
+        end: schedule.rng_sat_out_end || DEFAULT_RANGES.rng_sat_out_end
+      });
     } else {
       amInActual = pickEarliest({start: schedule.rng_am_in_start, end: schedule.rng_am_in_end});
       amOutActual = pickLatest({start: schedule.rng_am_out_start, end: schedule.rng_am_out_end});
@@ -16691,14 +16724,9 @@ function computeHoursForDateRange(startDate, endDate) {
     
     // === Saturday rule (scoped) ===
     // Use local flags/vars so other days are untouched.
-    let __isSaturday = false, __satStart = null, __satEnd = null;
+    let __satStart = null, __satEnd = null;
     try {
-      const __dow = (function(d){
-        const dt = new Date(d + 'T00:00');
-        return (isNaN(dt) ? new Date(d) : dt).getDay();
-      })(date);
-      if (__dow === 6) { // Saturday
-        __isSaturday = true;
+      if (__isSaturday) { // Saturday
         const satStart = schedule.sch_sat_start || schedule.sch_am_start || "08:00";
         const satEnd   = schedule.sch_sat_end   || schedule.sch_pm_end || schedule.sch_am_end || "11:00";
         __satStart = satStart;
@@ -16708,8 +16736,23 @@ function computeHoursForDateRange(startDate, endDate) {
       }
     } catch(e){ console.warn('Saturday OT local patch error', e); }
     if (!overridePunches) {
-      otInActual = pickEarliestOt({start: schedule.rng_ot_in_start, end: schedule.rng_ot_in_end});
-      otOutActual = pickLatestOt({start: schedule.rng_ot_out_start, end: schedule.rng_ot_out_end});
+      if (__isSaturday) {
+        otInActual = pickEarliestOt({
+          start: schedule.rng_sat_ot_start || DEFAULT_RANGES.rng_sat_ot_start,
+          end: schedule.rng_sat_ot_end || DEFAULT_RANGES.rng_sat_ot_end
+        });
+        otOutActual = pickLatestOt({
+          start: schedule.rng_sat_ot_out_start || schedule.rng_sat_ot_start || DEFAULT_RANGES.rng_sat_ot_out_start || DEFAULT_RANGES.rng_sat_ot_start,
+          end: schedule.rng_sat_ot_out_end || schedule.rng_sat_ot_end || DEFAULT_RANGES.rng_sat_ot_out_end || DEFAULT_RANGES.rng_sat_ot_end
+        });
+      } else {
+        otInActual = pickEarliestOt({start: schedule.rng_ot_in_start, end: schedule.rng_ot_in_end});
+        otOutActual = pickLatestOt({start: schedule.rng_ot_out_start, end: schedule.rng_ot_out_end});
+      }
+      if (otInActual && otOutActual && toMins(otOutActual) <= toMins(otInActual)) {
+        otInActual = null;
+        otOutActual = null;
+      }
     }
 
     let regMins = 0;
@@ -16791,23 +16834,14 @@ function computeHoursForDateRange(startDate, endDate) {
           : 0;
       }
     } else if (__isSaturday) {
-      // Saturday override: sum minutes worked after the Saturday end for
-      // every recorded segment.  Each segment contributes its own OT
-      // minutes without regard to explicit OT punches.
-      let extraOTMins = 0;
-      const satEndM = toMins(__satEnd);
-      for (let i = 0; i < times.length; i += 2) {
-        const inStr  = times[i];
-        const outStr = times[i+1];
-        if (!outStr) continue;
-        const inM  = toMins(inStr);
-        const outM = toMins(outStr);
-        const startM = Math.max(inM, satEndM);
-        if (outM > startM) {
-          extraOTMins += (outM - startM);
-        }
+      // Saturday: only count OT when there is an explicit OT in/out pair.
+      if (otInActual && otOutActual) {
+        const otInM = toMins(otInActual);
+        const otOutM = toMins(otOutActual);
+        dayOTMins = (otInM !== null && otOutM !== null && otOutM > otInM)
+          ? (otOutM - otInM)
+          : 0;
       }
-      dayOTMins = extraOTMins;
     } else {
       // Nonâ€‘Saturday: prefer explicit OT punches when they exist
       if (otInActual && otOutActual && toMins(otInActual) > pmOutRefMins) {
