@@ -16118,20 +16118,9 @@ if(!_passes) continue;
       // --- end patch ---
     }
 
-// Saturday fallback: if only a single OUT exists beyond the Saturday end, treat OT as (satEnd -> lastOut)
+// Keep OT explicit: do not infer Saturday OT from a single late OUT.
 let otInCalc = otInActual;
 let otOutCalc = otOutActual;
-try {
-  if (!overridePunches && __isSaturday && __satEnd) {
-    const lastOut = pmOutActual || amOutActual || null;
-    const lastOutM = lastOut ? toMins(lastOut) : null;
-    const satEndM = toMins(__satEnd);
-    if (lastOutM !== null && lastOutM > satEndM) {
-      if (!otInCalc) otInCalc = __satEnd;
-      if (!otOutCalc) otOutCalc = lastOut;
-    }
-  }
-} catch(e){ console.warn('Saturday OT fallback failed', e); }
 
 
     
@@ -16196,23 +16185,6 @@ let otMins = 0;
       }
     }
     
-    // Saturday definitive OT computation: last OUT beyond Saturday end is OT
-    try {
-      if (!overridePunches && __isSaturday && __satEnd) {
-        const lastOut = (pmOutActual || amOutActual || null);
-        if (lastOut) {
-          const satEndM = toMins(__satEnd);
-          const satStartClamp = Math.max(satEndM, toMins(schedule.rng_sat_ot_start || __satEnd || DEFAULT_RANGES.rng_sat_ot_start));
-          const satEndClamp   = toMins(schedule.rng_sat_ot_end || DEFAULT_RANGES.rng_sat_ot_end);
-          const lastOutM = toMins(lastOut);
-          const startM = satStartClamp;
-          const endM   = Math.min(lastOutM, satEndClamp);
-          const diff = endM - startM;
-          if (diff > 0) otMins = diff;
-        }
-      }
-    } catch(e){ console.warn('Saturday OT direct compute failed', e); }
-
     // Fallback OT computation for nonâ€‘Saturday days.
     // When there are no explicit OT punches (or the OT IN occurs before
     // the end of the regular shift), treat any minutes worked beyond
@@ -16756,14 +16728,10 @@ function computeHoursForDateRange(startDate, endDate) {
     totalsReg[empId] += minsToDec(regMins);
 
     /*
-     * Compute OT minutes for the current day/employee.  There are three
-     * scenarios handled here:
+     * Compute OT minutes for the current day/employee.
      *
-     *   1) Saturday: Any time worked after the scheduled Saturday end
-     *      counts as OT, regardless of whether explicit OT punches were
-     *      recorded.  Each in/out segment contributes separately to the
-     *      OT total.  The resulting OT minutes are added to the employee's
-     *      running total.
+     *   1) Saturday: OT is counted only when explicit OT in/out punches
+     *      are present and OT in occurs after the scheduled Saturday end.
      *
      *   2) Nonâ€‘Saturday with explicit OT punches: When OT In and OT Out
      *      times are recorded and the OT In occurs after the normal
@@ -16791,23 +16759,14 @@ function computeHoursForDateRange(startDate, endDate) {
           : 0;
       }
     } else if (__isSaturday) {
-      // Saturday override: sum minutes worked after the Saturday end for
-      // every recorded segment.  Each segment contributes its own OT
-      // minutes without regard to explicit OT punches.
-      let extraOTMins = 0;
-      const satEndM = toMins(__satEnd);
-      for (let i = 0; i < times.length; i += 2) {
-        const inStr  = times[i];
-        const outStr = times[i+1];
-        if (!outStr) continue;
-        const inM  = toMins(inStr);
-        const outM = toMins(outStr);
-        const startM = Math.max(inM, satEndM);
-        if (outM > startM) {
-          extraOTMins += (outM - startM);
-        }
+      // Saturday OT must come from explicit OT in/out punches only.
+      if (otInActual && otOutActual && toMins(otInActual) > pmOutRefMins) {
+        const otInM = toMins(otInActual);
+        const otOutM = toMins(otOutActual);
+        dayOTMins = (otInM !== null && otOutM !== null)
+          ? Math.max(0, otOutM - otInM)
+          : 0;
       }
-      dayOTMins = extraOTMins;
     } else {
       // Nonâ€‘Saturday: prefer explicit OT punches when they exist
       if (otInActual && otOutActual && toMins(otInActual) > pmOutRefMins) {
