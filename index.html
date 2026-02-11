@@ -6160,9 +6160,6 @@ function getStoredDeductionInclusionsForPeriod(period){
   if (deductionColumnVisibilityByPeriod[key]) {
     return Object.assign({}, deductionColumnVisibilityByPeriod[key]);
   }
-  if (key !== DEDUCTION_DEFAULT_PERIOD_KEY && deductionColumnVisibilityByPeriod[DEDUCTION_DEFAULT_PERIOD_KEY]){
-    return Object.assign({}, deductionColumnVisibilityByPeriod[DEDUCTION_DEFAULT_PERIOD_KEY]);
-  }
   return {};
 }
 
@@ -6720,6 +6717,7 @@ document.addEventListener('DOMContentLoaded', function(){
         } else {
           deductionColumnInclusions[col] = false;
         }
+
         persistDeductionColumnInclusions();
         applyDeductionColumnState();
         try {
