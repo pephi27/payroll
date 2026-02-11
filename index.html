@@ -17192,18 +17192,31 @@ function restoreData(file) {
     const btn = document.getElementById('manualDtrBtn');
     const cancelBtn = document.getElementById('cancelManualDtr');
     const saveBtn = document.getElementById('saveManualDtr');
-    if(btn) btn.addEventListener('click', openManualModal);
-    if(cancelBtn) cancelBtn.addEventListener('click', closeManualModal);
-    if(saveBtn) saveBtn.addEventListener('click', function(){
+    if(btn && !btn.__wiredManualOpen){
+      btn.__wiredManualOpen = true;
+      btn.addEventListener('click', openManualModal);
+    }
+    if(cancelBtn && !cancelBtn.__wiredManualCancel){
+      cancelBtn.__wiredManualCancel = true;
+      cancelBtn.addEventListener('click', closeManualModal);
+    }
+    if(saveBtn && !saveBtn.__wiredManualSave) saveBtn.addEventListener('click', function(){
+      if (saveBtn.__savingManual) return;
+      saveBtn.__savingManual = true;
       const empId = (document.getElementById('manualEmpSelect')||{}).value;
       const dateVal = (document.getElementById('manualDate')||{}).value;
       const timeVal = (document.getElementById('manualTime')||{}).value;
       if(!empId || !dateVal || !timeVal){
         alert('Please fill all fields.');
+        saveBtn.__savingManual = false;
         return;
       }
       try {
-        storedRecords.push({ empId: String(empId), date: dateVal, time: timeVal, manual: true });
+        const record = { empId: String(empId), date: dateVal, time: timeVal, manual: true };
+        const exists = storedRecords.some(r =>
+          String(r.empId) === record.empId && r.date === record.date && r.time === record.time
+        );
+        if (!exists) storedRecords.push(record);
         // Persist to localStorage
         localStorage.setItem(LS_RECORDS, JSON.stringify(storedRecords));
         // Persist to Supabase for crossâ€‘device sync
@@ -17211,7 +17224,9 @@ function restoreData(file) {
       } catch(e) { console.error('Saving manual DTR failed', e); }
       closeManualModal();
       if(typeof renderResults === 'function') renderResults();
+      setTimeout(function(){ saveBtn.__savingManual = false; }, 150);
     });
+    if (saveBtn) saveBtn.__wiredManualSave = true;
   }
   function wirePunchEditor(){
     const modal = document.getElementById('dtrPunchModal');
