@@ -697,6 +697,8 @@ function safeStringify(v){
 #loanTrackerTable input[type="number"] { width: 110px; }
 #loanTrackerTable input[type="checkbox"] { transform: scale(1.15); }
 #loanTrackerControls { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 8px; }
+#loanTrackerControls .loan-tracker-filter { min-width: 220px; }
+#loanTrackerControls .loan-tracker-toggle { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; }
 #loanTrackerControls .money-locked-control,
 #loanTrackerTable .money-locked-control,
 #deductionsTable .money-locked-control { opacity: 0.55; cursor: not-allowed; }
@@ -3325,6 +3327,8 @@ window.addEventListener('load', dashReports);
        <b>Cash Advance</b> uses <b>Total</b> + <b>Weekly</b> (balance tracked).
       </div>
       <div class="toolbar" id="loanTrackerControls">
+       <input type="search" id="loanTrackerSearch" class="loan-tracker-filter" placeholder="Search ID or name" autocomplete="off" />
+       <label class="loan-tracker-toggle"><input type="checkbox" id="loanTrackerActiveOnly" /> Active loans only</label>
        <button type="button" id="applyLoanTrackerBtn">Apply tracker to current period</button>
        <button type="button" id="recalcLoanTrackerBtn">Recalculate current period</button>
        <span class="save-indicator" id="loanTrackerSaveStatus">Saved locally</span>
@@ -6379,15 +6383,29 @@ function renderLoanTrackerTable(){
   if (!tbody) return;
   const pk = currentPeriodKey || periodKey();
   const div = Number(divisor) || 1;
+  const searchEl = document.getElementById('loanTrackerSearch');
+  const activeOnlyEl = document.getElementById('loanTrackerActiveOnly');
+  const searchNeedle = ((searchEl && searchEl.value) ? String(searchEl.value) : '').trim().toLowerCase();
+  const activeOnly = !!(activeOnlyEl && activeOnlyEl.checked);
   tbody.innerHTML = '';
 
   (getEmployeeList() || []).forEach(emp => {
     if (!emp || !emp.id) return;
-    const empId = emp.id;
+    const empId = String(emp.id);
+    const empName = String(emp.name || '');
+    const matchesSearch = !searchNeedle || empId.toLowerCase().includes(searchNeedle) || empName.toLowerCase().includes(searchNeedle);
+    if (!matchesSearch) return;
+
+    const hasAnyActiveLoan = LOAN_TYPES_SSS.concat(LOAN_TYPES_PI, ['vale']).some(type => {
+      const entry = getLoanTrackerEntry(empId, type);
+      return !!(entry && entry.active);
+    });
+    if (activeOnly && !hasAnyActiveLoan) return;
+
     const tr = document.createElement('tr');
 
     const tdId = document.createElement('td'); tdId.textContent = empId; tr.appendChild(tdId);
-    const tdName = document.createElement('td'); tdName.textContent = emp.name || ''; tr.appendChild(tdName);
+    const tdName = document.createElement('td'); tdName.textContent = empName; tr.appendChild(tdName);
 
     const addPrincipalMonthlyCells = (type) => {
       const entry = getLoanTrackerEntry(empId, type) || { principal: 0, monthly: 0, active: false };
@@ -6576,18 +6594,18 @@ const loanTrackerRefresh = (() => {
   };
 })();
 
-document.addEventListener('change', function(ev){
-  const el = ev && ev.target;
-  if (!el) return;
-  if (el.id === 'applyLoanTrackerBtn') return;
-  if (el.id === 'recalcLoanTrackerBtn') return;
-  if (!el.closest || !el.closest('#loanTrackerTable')) return;
+function applyLoanTrackerFieldChange(el){
+  if (!el) return false;
+  if (el.id === 'applyLoanTrackerBtn') return false;
+  if (el.id === 'recalcLoanTrackerBtn') return false;
+  if (!el.closest || !el.closest('#loanTrackerTable')) return false;
   const empId = el.dataset.empId;
   const type = el.dataset.loanType;
   const field = el.dataset.field;
-  if (!empId || !type || !field) return;
+  if (!empId || !type || !field) return false;
   const entry = getLoanTrackerEntry(empId, type);
-  if (!entry) return;
+  if (!entry) return false;
+
   if (field === 'active') {
     entry.active = !!el.checked;
   } else if (field === 'principal') {
@@ -6596,8 +6614,32 @@ document.addEventListener('change', function(ev){
     entry.weekly = roundToCents(Number(el.value) || 0);
   } else if (field === 'monthly') {
     entry.monthly = roundToCents(Number(el.value) || 0);
+  } else {
+    return false;
   }
-  loanTrackerRefresh.schedule({ createEntries: true });
+
+  if (field === 'active') {
+    loanTrackerRefresh.flush({ createEntries: true });
+  } else {
+    loanTrackerRefresh.schedule({ createEntries: true });
+  }
+  return true;
+}
+
+document.addEventListener('input', function(ev){
+  const el = ev && ev.target;
+  if (!el) return;
+  if (!el.closest || !el.closest('#loanTrackerTable')) return;
+  if (el.dataset && (el.dataset.field === 'principal' || el.dataset.field === 'weekly' || el.dataset.field === 'monthly')) {
+    applyLoanTrackerFieldChange(el);
+  }
+});
+
+document.addEventListener('change', function(ev){
+  const el = ev && ev.target;
+  if (!el) return;
+  if (el.id === 'loanTrackerActiveOnly') return;
+  applyLoanTrackerFieldChange(el);
 });
 
 document.addEventListener('click', function(ev){
@@ -6609,6 +6651,18 @@ document.addEventListener('click', function(ev){
   if (el.id === 'recalcLoanTrackerBtn') {
     loanTrackerRefresh.flush({ createEntries: true, force: true });
   }
+});
+
+document.addEventListener('input', function(ev){
+  const el = ev && ev.target;
+  if (!el || el.id !== 'loanTrackerSearch') return;
+  renderLoanTrackerTable();
+});
+
+document.addEventListener('change', function(ev){
+  const el = ev && ev.target;
+  if (!el || el.id !== 'loanTrackerActiveOnly') return;
+  renderLoanTrackerTable();
 });
 
 function renderDeductionsTable(){
