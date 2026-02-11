@@ -3162,6 +3162,9 @@ window.addEventListener('load', dashReports);
       <button id="printPayrollExcelBtn" type="button">
        Print Report Excel
       </button>
+      <button id="payrollBackupXlsxBtn" type="button">
+       Export Period Backup (XLSX)
+      </button>
       <button id="printAllPayslipsBtn" type="button">
        Print Payslips
       </button>
@@ -12881,6 +12884,255 @@ rows += `<tr class="allowance">
     }
 
     try { window.exportExcelAllTabs = exportExcelAllTabs; } catch(e){}
+
+    function collectPeriodBackupStorageEntries(options = {}){
+      const opts = (options && typeof options === 'object') ? options : {};
+      const includeParsed = !!opts.includeParsed;
+      const denyFragments = ['token', 'auth', 'apikey', 'key', 'supabase', 'secret'];
+
+      const isSafeStorageKey = (name) => {
+        const key = String(name || '').trim();
+        if (!key) return false;
+        const lowered = key.toLowerCase();
+        return !denyFragments.some(fragment => lowered.includes(fragment));
+      };
+
+      const keySet = new Set();
+      const addKey = (name) => {
+        const key = String(name || '').trim();
+        if (!key || !isSafeStorageKey(key)) return;
+        keySet.add(key);
+      };
+
+      const lsConstantValues = [
+        (typeof LS_EMPLOYEES !== 'undefined') ? LS_EMPLOYEES : null,
+        (typeof LS_PROJECTS !== 'undefined') ? LS_PROJECTS : null,
+        (typeof LS_SCHEDULES !== 'undefined') ? LS_SCHEDULES : null,
+        (typeof LS_SCHEDULES_DEFAULT !== 'undefined') ? LS_SCHEDULES_DEFAULT : null,
+        (typeof LS_RECORDS !== 'undefined') ? LS_RECORDS : null,
+        (typeof LS_OVERRIDES_SCHEDULES !== 'undefined') ? LS_OVERRIDES_SCHEDULES : null,
+        (typeof LS_OVERRIDES_PROJECTS !== 'undefined') ? LS_OVERRIDES_PROJECTS : null,
+        (typeof LS_DTR_OVERRIDES !== 'undefined') ? LS_DTR_OVERRIDES : null,
+        (typeof LS_SPLITS !== 'undefined') ? LS_SPLITS : null,
+        (typeof LS_RATES !== 'undefined') ? LS_RATES : null,
+        (typeof LS_REG_HRS !== 'undefined') ? LS_REG_HRS : null,
+        (typeof LS_OT_HRS !== 'undefined') ? LS_OT_HRS : null,
+        (typeof LS_OTMULT !== 'undefined') ? LS_OTMULT : null,
+        (typeof LS_DIVISOR !== 'undefined') ? LS_DIVISOR : null,
+        (typeof LS_SSS_TABLE !== 'undefined') ? LS_SSS_TABLE : null,
+        (typeof LS_LOAN_SSS !== 'undefined') ? LS_LOAN_SSS : null,
+        (typeof LS_LOAN_PI !== 'undefined') ? LS_LOAN_PI : null,
+        (typeof LS_VALE !== 'undefined') ? LS_VALE : null,
+        (typeof LS_VALE_WED !== 'undefined') ? LS_VALE_WED : null,
+        (typeof LS_LOAN_TRACKER !== 'undefined') ? LS_LOAN_TRACKER : null,
+        (typeof LS_OTHER_DEDUCTIONS_DETAILS !== 'undefined') ? LS_OTHER_DEDUCTIONS_DETAILS : null,
+        (typeof LS_OTHER_DEDUCTIONS_TOTAL !== 'undefined') ? LS_OTHER_DEDUCTIONS_TOTAL : null,
+        (typeof LS_ADJ_LEGACY !== 'undefined') ? LS_ADJ_LEGACY : null,
+        (typeof LS_ADJ_HRS !== 'undefined') ? LS_ADJ_HRS : null,
+        (typeof LS_PAGIBIG_RATE !== 'undefined') ? LS_PAGIBIG_RATE : null,
+        (typeof LS_PHILHEALTH_RATE !== 'undefined') ? LS_PHILHEALTH_RATE : null,
+        (typeof LS_PAGIBIG_TABLE !== 'undefined') ? LS_PAGIBIG_TABLE : null,
+        (typeof LS_PHILHEALTH_TABLE !== 'undefined') ? LS_PHILHEALTH_TABLE : null,
+        (typeof LS_BANTAY !== 'undefined') ? LS_BANTAY : null,
+        (typeof LS_BANTAY_PROJ !== 'undefined') ? LS_BANTAY_PROJ : null,
+        (typeof LS_ADDITIONAL_INCOME_DETAILS !== 'undefined') ? LS_ADDITIONAL_INCOME_DETAILS : null,
+        (typeof LS_ADDITIONAL_INCOME_TOTAL !== 'undefined') ? LS_ADDITIONAL_INCOME_TOTAL : null,
+        (typeof LS_INCOME_TYPE_OPTIONS !== 'undefined') ? LS_INCOME_TYPE_OPTIONS : null,
+        (typeof LS_DEDUCTION_TYPE_OPTIONS !== 'undefined') ? LS_DEDUCTION_TYPE_OPTIONS : null,
+        (typeof LS_CONTRIB_FLAGS !== 'undefined') ? LS_CONTRIB_FLAGS : null,
+        (typeof PAYROLL_SETTINGS_KEY !== 'undefined') ? PAYROLL_SETTINGS_KEY : null
+      ];
+      lsConstantValues.forEach(addKey);
+
+      [
+        'payroll_hist',
+        'payroll_lock_state',
+        'payroll_active_index',
+        'att_overrides_hours_v1',
+        'payroll_dtr_tombstones',
+        'payroll_dtr_last_saved_keys',
+        'dtr_overrides_v1'
+      ].forEach(addKey);
+
+      const knownKeys = (typeof KNOWN_KEYS !== 'undefined' && Array.isArray(KNOWN_KEYS))
+        ? KNOWN_KEYS
+        : ((typeof window !== 'undefined' && Array.isArray(window.KNOWN_KEYS)) ? window.KNOWN_KEYS : []);
+      knownKeys.forEach(addKey);
+
+      const prefixAllows = ['att_', 'payroll_'];
+      for (let i = 0; i < localStorage.length; i++){
+        const key = localStorage.key(i);
+        const lowered = String(key || '').toLowerCase();
+        if (prefixAllows.some(prefix => lowered.startsWith(prefix))) addKey(key);
+      }
+
+      return Array.from(keySet).sort().map(key => {
+        const entry = { key, value: localStorage.getItem(key) };
+        if (includeParsed){
+          try { entry.parsed = JSON.parse(entry.value); } catch(e){}
+        }
+        return entry;
+      });
+    }
+
+    async function buildPeriodBackupPack(from, to, options = {}){
+      const opts = (options && typeof options === 'object') ? options : {};
+      const rangeFrom = String(from || '').trim();
+      const rangeTo = String(to || '').trim();
+      const periodKeyValue = (typeof createPeriodKey === 'function')
+        ? createPeriodKey(rangeFrom, rangeTo)
+        : `${rangeFrom}_${rangeTo}`;
+      let dtrAoA = null;
+      let payrollAoA = null;
+      let masterAoA = null;
+      let overtimeAoA = null;
+      try { dtrAoA = buildDtrAoA(); } catch(e){ console.warn('buildPeriodBackupPack DTR failed', e); }
+      try { payrollAoA = await buildPayrollAoA(); } catch(e){ console.warn('buildPeriodBackupPack Payroll failed', e); }
+      try { masterAoA = buildMasterReportAoA(); } catch(e){ console.warn('buildPeriodBackupPack Master failed', e); }
+      try {
+        if (typeof buildOvertimeAoA === 'function') overtimeAoA = buildOvertimeAoA();
+      } catch(e){ console.warn('buildPeriodBackupPack Overtime failed', e); }
+
+      return {
+        meta: {
+          generatedAt: new Date().toISOString(),
+          schemaVersion: 1
+        },
+        range: {
+          from: rangeFrom,
+          to: rangeTo,
+          periodKey: periodKeyValue
+        },
+        computed: {
+          dtrAoA: dtrAoA || [],
+          payrollAoA: payrollAoA || [],
+          masterReportAoA: masterAoA || [],
+          ...(overtimeAoA ? { overtimeAoA } : {})
+        },
+        storage: collectPeriodBackupStorageEntries(opts)
+      };
+    }
+
+    async function exportPeriodBackupXlsx(from, to, options = {}){
+      let ws;
+      let we;
+      let prevS = '';
+      let prevE = '';
+      let changed = false;
+      try{
+        if (typeof XLSX === 'undefined' || !XLSX || !XLSX.utils) { alert('Excel library not available'); return; }
+
+        ws = document.getElementById('weekStart');
+        we = document.getElementById('weekEnd');
+        prevS = ws && ws.value;
+        prevE = we && we.value;
+
+        const targetS = String(from || prevS || '').trim();
+        const targetE = String(to || prevE || '').trim();
+        if (!targetS || !targetE) {
+          alert('Please select a payroll period first.');
+          return;
+        }
+        changed = (targetS !== prevS) || (targetE !== prevE);
+
+        function recalcForActiveRange(){
+          try{ if (typeof syncPeriodScopedData === 'function') syncPeriodScopedData(); }catch(e){}
+          try{
+            if (typeof calculatePayrollFromResultsTable === 'function') {
+              calculatePayrollFromResultsTable();
+            } else if (typeof calculatePayrollFromRecords === 'function') {
+              calculatePayrollFromRecords();
+            }
+          }catch(e){}
+          try{ if (typeof checkAndToggleEditState === 'function') checkAndToggleEditState(); }catch(e){}
+          try{ if (typeof window.rebuildReports === 'function') window.rebuildReports(); }catch(e){}
+        }
+
+        if (ws) ws.value = targetS;
+        if (we) we.value = targetE;
+        recalcForActiveRange();
+
+        await new Promise(resolve => setTimeout(resolve, 300));
+
+        const pack = await buildPeriodBackupPack(targetS, targetE, options);
+
+        const wb = XLSX.utils.book_new();
+        const metaRows = [['field', 'value']];
+        Object.entries(pack.meta || {}).forEach(([field, value]) => {
+          metaRows.push([field, String(value == null ? '' : value)]);
+        });
+        Object.entries(pack.range || {}).forEach(([field, value]) => {
+          metaRows.push([`range.${field}`, String(value == null ? '' : value)]);
+        });
+        XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(metaRows), 'META');
+
+        if (pack.computed && Array.isArray(pack.computed.dtrAoA) && pack.computed.dtrAoA.length){
+          XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(pack.computed.dtrAoA), 'DTR');
+        }
+        if (pack.computed && Array.isArray(pack.computed.payrollAoA) && pack.computed.payrollAoA.length){
+          XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(pack.computed.payrollAoA), 'PAYROLL');
+        }
+        if (pack.computed && Array.isArray(pack.computed.masterReportAoA) && pack.computed.masterReportAoA.length){
+          XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(pack.computed.masterReportAoA), 'MASTER_REPORT');
+        }
+
+        const storageRows = [['key', 'value']];
+        (pack.storage || []).forEach(entry => {
+          storageRows.push([entry.key, entry.value == null ? '' : String(entry.value)]);
+        });
+        XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(storageRows), 'STORAGE_KEYS');
+
+        const packJson = JSON.stringify(pack);
+        const chunkSize = 32000;
+        const jsonRows = [['json_chunk']];
+        for (let i = 0; i < packJson.length; i += chunkSize){
+          jsonRows.push([packJson.slice(i, i + chunkSize)]);
+        }
+        XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(jsonRows), 'PACK_JSON');
+
+        const filename = `payroll_backup_${targetS}_to_${targetE}.xlsx`;
+        XLSX.writeFile(wb, filename);
+
+      }catch(e){
+        console.warn('Export period backup failed', e);
+        alert('Export period backup failed');
+      } finally {
+        if (ws) ws.value = prevS;
+        if (we) we.value = prevE;
+        if (changed) {
+          try{ if (typeof syncPeriodScopedData === 'function') syncPeriodScopedData(); }catch(e){}
+          try{
+            if (typeof calculatePayrollFromResultsTable === 'function') {
+              calculatePayrollFromResultsTable();
+            } else if (typeof calculatePayrollFromRecords === 'function') {
+              calculatePayrollFromRecords();
+            }
+          }catch(e){}
+          try{ if (typeof checkAndToggleEditState === 'function') checkAndToggleEditState(); }catch(e){}
+          try{ if (typeof window.rebuildReports === 'function') window.rebuildReports(); }catch(e){}
+        } else {
+          try{ if (typeof checkAndToggleEditState === 'function') checkAndToggleEditState(); }catch(e){}
+          try{ if (typeof window.rebuildReports === 'function') window.rebuildReports(); }catch(e){}
+        }
+      }
+    }
+
+    try { window.buildPeriodBackupPack = buildPeriodBackupPack; } catch(e){}
+    try { window.exportPeriodBackupXlsx = exportPeriodBackupXlsx; } catch(e){}
+
+    try {
+      var backupBtn = document.getElementById('payrollBackupXlsxBtn');
+      if (backupBtn && !backupBtn.__periodBackupBound) {
+        backupBtn.addEventListener('click', async function(ev){
+          ev.preventDefault();
+          const from = (document.getElementById('weekStart') || {}).value || '';
+          const to = (document.getElementById('weekEnd') || {}).value || '';
+          await exportPeriodBackupXlsx(from, to);
+        });
+        backupBtn.__periodBackupBound = true;
+      }
+    } catch(e){}
+
     // Bind UI button for Excel (All Tabs)
     try {
       var xBtn = document.getElementById('r_xlsx');
