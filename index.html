@@ -14652,6 +14652,8 @@ function getPunchOptions(empId, dateStr, fieldKey) {
 function openPunchEditor(rowContext) {
   const modal = document.getElementById('dtrPunchModal');
   if (!modal || !rowContext) return;
+  const activeEl = document.activeElement;
+  modal.__lastActiveElement = activeEl && activeEl instanceof HTMLElement ? activeEl : null;
   const { empId, date, name } = rowContext;
   const scope = rowContext.scope || 'all';
   const title = document.getElementById('dtrPunchModalTitle');
@@ -14713,6 +14715,10 @@ function openPunchEditor(rowContext) {
   });
   modal.classList.add('is-open');
   modal.setAttribute('aria-hidden', 'false');
+  const firstFocusable = modal.querySelector('button, select, input, [tabindex]:not([tabindex="-1"])');
+  if (firstFocusable && typeof firstFocusable.focus === 'function') {
+    firstFocusable.focus();
+  }
 }
 // Store per-date split flags for half-day display. When true for an empId+date,
 // the DTR entry is rendered as two separate rows (AM and PM) rather than a
@@ -17153,8 +17159,17 @@ function restoreData(file) {
   function closePunchModal(){
     const modal = document.getElementById('dtrPunchModal');
     if (!modal) return;
+    const activeEl = document.activeElement;
+    if (activeEl && modal.contains(activeEl) && typeof activeEl.blur === 'function') {
+      activeEl.blur();
+    }
     modal.classList.remove('is-open');
     modal.setAttribute('aria-hidden', 'true');
+    const previousEl = modal.__lastActiveElement;
+    if (previousEl && document.contains(previousEl) && typeof previousEl.focus === 'function') {
+      previousEl.focus();
+    }
+    modal.__lastActiveElement = null;
   }
   function syncPayrollAfterOverride(){
     try { if (typeof renderResults === 'function') renderResults(); } catch (e) {}
