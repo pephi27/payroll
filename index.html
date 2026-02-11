@@ -5166,13 +5166,6 @@ function applyLoanTrackerToPeriod(pk, options){
       }
       scheduled = desired;
       changed = true;
-    } else if (!allowCommit && createEntries) {
-      const cur = roundToCents(Number(scheduled) || 0);
-      if (cur !== desired) {
-        setLoanTrackerApplied(pk, empId, type, desired);
-        scheduled = desired;
-        changed = true;
-      }
     } else if (allowCommit) {
       // If already applied for this period, do not modify (idempotent finalize).
     }
