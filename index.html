@@ -15920,19 +15920,6 @@ function toMins(hm){
   if(!isFinite(h) || !isFinite(m) || !isFinite(dayOffset)) return null;
   return (h * 60) + m + (dayOffset * 24 * 60);
 }
-
-// Apply grace and late-rounding rules to segment start time.
-// Rules:
-// - Within grace minutes from schedule start => count as on-time (segment start).
-// - Beyond grace => round up to the next 30-minute mark.
-//   e.g. 8:16 -> 8:30, 8:31 -> 9:00.
-function normalizeSegmentInMins(inM, segStart, graceMins){
-  if (!Number.isFinite(inM) || !Number.isFinite(segStart)) return inM;
-  const grace = Number(graceMins) || 0;
-  if (inM <= segStart + grace) return segStart;
-  return Math.ceil(inM / 30) * 30;
-}
-
 function minsToDecimal(mins){ return (mins/60).toFixed(2); }
 
 function queueDtrDropdownRender(){
@@ -16276,7 +16263,7 @@ let otOutCalc = otOutActual;
         segEnd += 12*60; // push to PM
       }
       if (segEnd <= segStart) return 0;
-      inM = normalizeSegmentInMins(inM, segStart, grace);
+      if (inM <= segStart + grace) inM = segStart;
       const endM = Math.min(outM, segEnd);
       return Math.max(0, endM - inM);
     };
@@ -16373,7 +16360,7 @@ let otMins = 0;
         if (segEnd <= segStart && segStart >= 12 * 60 && segEnd <= 12 * 60) segEnd += 12 * 60;
         if (segEnd <= segStart) return 0;
         const g = Number(sched && sched.sch_grace) || 0;
-        inM = normalizeSegmentInMins(inM, segStart, g);
+        if (inM <= segStart + g) inM = segStart;
         const endM = Math.min(outM, segEnd);
         return Math.max(0, endM - inM);
       };
@@ -16854,7 +16841,7 @@ function computeHoursForDateRange(startDate, endDate) {
       let sE = sEraw;
       if (sE <= sS && sS >= 12*60 && sE <= 12*60) sE += 12*60; // fix 06:00 vs 18:00 typo
       if (sE <= sS) return 0;
-      inM = normalizeSegmentInMins(inM, sS, grace);
+      if (inM <= sS + grace) inM = sS; // grace on start
       const endM = Math.min(outM, sE);
       return Math.max(0, endM - inM);
     };
