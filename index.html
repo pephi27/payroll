@@ -6485,7 +6485,15 @@ function renderLoanTrackerTable(){
       const entry = getLoanTrackerEntry(empId, type) || { principal: 0, weekly: 0, active: false };
       const principal = roundToCents(entry.principal || 0);
       const weekly = roundToCents(entry.weekly || 0);
-      const bal = loanTrackerRemaining(pk, empId, type);
+      const paidBefore = sumLoanTrackerAppliedBefore(pk, empId, type);
+      const remainingBefore = roundToCents(principal - paidBefore);
+      const scheduled = getLoanTrackerApplied(pk, empId, type);
+      const currentDeduction = (scheduled != null)
+        ? roundToCents(Number(scheduled) || 0)
+        : ((entry.active && weekly > 0 && remainingBefore > 0)
+          ? roundToCents(Math.min(weekly, remainingBefore))
+          : 0);
+      const bal = roundToCents(Math.max(0, remainingBefore - currentDeduction));
 
       const tdPrincipal = document.createElement('td');
       const inPrincipal = document.createElement('input');
