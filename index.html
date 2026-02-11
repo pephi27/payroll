@@ -183,6 +183,7 @@ function markHydrated() {
   try { window.dispatchEvent(new Event('kv-hydrated')); } catch {}
 }
 
+let __kvRerenderTimer = null;
 function queueHydrateRerender() {
   markHydrated();
   try { if (typeof refreshPeriodScopedCachesFromStorage === 'function') refreshPeriodScopedCachesFromStorage(); } catch {}
@@ -195,11 +196,10 @@ function queueHydrateRerender() {
     try {
       if (typeof renderAdditionalIncomeTable === 'function') renderAdditionalIncomeTable();
     } catch {}
-    
     try {
       if (typeof renderLoanTrackerTable === 'function') renderLoanTrackerTable();
     } catch {}
-try { if (typeof window.calculateAll === 'function') window.calculateAll(); } catch {}
+    try { if (typeof window.calculateAll === 'function') window.calculateAll(); } catch {}
     try { if (typeof window.renderResults === 'function') window.renderResults(); } catch {}
   };
   try {
@@ -214,10 +214,19 @@ try { if (typeof window.calculateAll === 'function') window.calculateAll(); } ca
     }
     if (shouldDefer) return;
   } catch (_) {}
+
+  const schedule = () => {
+    try { if (__kvRerenderTimer) window.clearTimeout(__kvRerenderTimer); } catch {}
+    __kvRerenderTimer = window.setTimeout(() => {
+      __kvRerenderTimer = null;
+      rerender();
+    }, 120);
+  };
+
   if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', () => { setTimeout(rerender, 0); }, { once: true });
+    document.addEventListener('DOMContentLoaded', schedule, { once: true });
   } else {
-    setTimeout(rerender, 0);
+    schedule();
   }
 }
 
@@ -265,10 +274,17 @@ function __kvPayrollHistoryLatestTs(list){
 }
 try { window.queueHydrateRerender = queueHydrateRerender; } catch (_) {}
 
+let __kvPeriodicHydrateInFlight = false;
 async function __kvPeriodicHydrate() {
+  if (__kvPeriodicHydrateInFlight) return;
+  __kvPeriodicHydrateInFlight = true;
   try {
+    if (document.visibilityState && document.visibilityState !== 'visible') return;
     if (typeof __kvHydrateOnce === 'function') await __kvHydrateOnce();
-  } catch (_) {}
+  } catch (_) {
+  } finally {
+    __kvPeriodicHydrateInFlight = false;
+  }
 }
 
 function __kvScheduleRealtimeReconnect(delayMs = 1500) {
@@ -350,7 +366,7 @@ function __kvSetupRealtimeChannel(force = false) {
     if (!window.__kvRealtimeFallbackTimer) {
       window.__kvRealtimeFallbackTimer = window.setInterval(() => {
         __kvPeriodicHydrate();
-      }, 25000);
+      }, 90000);
     }
 
     if (!window.__kvUnloadCleanup) {
