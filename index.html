@@ -5031,6 +5031,35 @@ function sumLoanTrackerAppliedUpTo(periodKey, empId, type){
   }
   return roundToCents(sum);
 }
+function sumLoanTrackerAppliedAll(empId, type){
+  ensureLoanTrackerShape(loanTracker);
+  const keys = Object.keys(loanTracker.applied || {});
+  let sum = 0;
+  for (const k of keys){
+    if (!k) continue;
+    const v = getLoanTrackerApplied(k, empId, type);
+    if (v) sum += v;
+  }
+  return roundToCents(sum);
+}
+function clearLoanTrackerHistory(empId, type){
+  ensureLoanTrackerShape(loanTracker);
+  if (!empId || !type) return;
+  const clearMap = (source) => {
+    if (!isPlainObject(source)) return;
+    Object.keys(source).forEach((pk) => {
+      const per = source[pk];
+      if (!isPlainObject(per)) return;
+      const emp = per[empId];
+      if (!isPlainObject(emp)) return;
+      if (Object.prototype.hasOwnProperty.call(emp, type)) delete emp[type];
+      if (!Object.keys(emp).length) delete per[empId];
+      if (!Object.keys(per).length) delete source[pk];
+    });
+  };
+  clearMap(loanTracker.applied);
+  clearMap(loanTracker.paymentsByPeriod);
+}
 function loanTrackerRemaining(periodKey, empId, type){
   const entry = getLoanTrackerEntry(empId, type);
   if (!entry || isLoanTypePagibig(type)) return 0;
@@ -5150,6 +5179,13 @@ function applyLoanTrackerToPeriod(pk, options){
       }
       scheduled = desired;
       changed = true;
+    } else if (!allowCommit && createEntries) {
+      const cur = roundToCents(Number(scheduled) || 0);
+      if (cur !== desired) {
+        setLoanTrackerApplied(pk, empId, type, desired);
+        scheduled = desired;
+        changed = true;
+      }
     } else if (allowCommit) {
       // If already applied for this period, do not modify (idempotent finalize).
     }
@@ -6609,7 +6645,17 @@ function applyLoanTrackerFieldChange(el){
   if (field === 'active') {
     entry.active = !!el.checked;
   } else if (field === 'principal') {
-    entry.principal = roundToCents(Number(el.value) || 0);
+    const prevPrincipal = roundToCents(entry.principal || 0);
+    const nextPrincipal = roundToCents(Number(el.value) || 0);
+    entry.principal = nextPrincipal;
+    if (LOAN_TYPES_CASH.indexOf(type) >= 0) {
+      const paidAll = sumLoanTrackerAppliedAll(empId, type);
+      const hadHistoricalApplied = paidAll > 0;
+      const wasSettled = prevPrincipal > 0 && paidAll >= roundToCents(prevPrincipal);
+      if ((hadHistoricalApplied && prevPrincipal <= 0 && nextPrincipal > 0) || (wasSettled && nextPrincipal > 0 && nextPrincipal !== prevPrincipal)) {
+        clearLoanTrackerHistory(empId, type);
+      }
+    }
   } else if (field === 'weekly') {
     entry.weekly = roundToCents(Number(el.value) || 0);
   } else if (field === 'monthly') {
