@@ -6,96 +6,6 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>PayrollPro</title>
 
-  <style id="icon-system-styles">
-    .nav-icon {
-      width: 20px;
-      height: 20px;
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      font-size: 0;
-      line-height: 1;
-      flex: 0 0 20px;
-    }
-    .nav-icon::before {
-      display: block;
-      font-family: "Segoe UI Symbol", "Noto Sans Symbols", sans-serif;
-      font-size: 14px;
-      line-height: 1;
-      color: currentColor;
-      content: "\25A0";
-    }
-    #tabDashboard .nav-icon::before,
-    #old-tabDashboard .nav-icon::before { content: "\25A6"; }
-    #tabMain .nav-icon::before,
-    #old-tabMain .nav-icon::before { content: "\25D4"; }
-    #tabSchedule .nav-icon::before,
-    #old-tabSchedule .nav-icon::before { content: "\25A4"; }
-    #tabEmployees .nav-icon::before,
-    #old-tabEmployees .nav-icon::before { content: "\25C9"; }
-    #tabProjects .nav-icon::before,
-    #old-tabProjects .nav-icon::before { content: "\25B3"; }
-    #tabPayroll .nav-icon::before,
-    #old-tabPayroll .nav-icon::before { content: "\20B1"; }
-    #tabProjectTotals .nav-icon::before,
-    #old-tabProjectTotals .nav-icon::before { content: "\25A5"; }
-    #tabContributionSummary .nav-icon::before,
-    #old-tabContributionSummary .nav-icon::before { content: "\25C8"; }
-    #tabSettings .nav-icon::before,
-    #old-tabSettings .nav-icon::before { content: "\2699"; }
-
-    .page-title-icon {
-      width: 32px;
-      height: 32px;
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      font-size: 0;
-      line-height: 1;
-    }
-    .page-title-icon::before {
-      content: "\25A6";
-      font-family: "Segoe UI Symbol", "Noto Sans Symbols", sans-serif;
-      font-size: 24px;
-      color: currentColor;
-      line-height: 1;
-    }
-
-    .mobile-menu-btn span {
-      width: 20px;
-      height: 14px;
-      position: relative;
-      display: inline-block;
-      font-size: 0;
-      color: currentColor;
-    }
-    .mobile-menu-btn span::before,
-    .mobile-menu-btn span::after {
-      content: "";
-      position: absolute;
-      left: 0;
-      right: 0;
-      height: 2px;
-      border-radius: 2px;
-      background: currentColor;
-      transition: transform 0.2s ease, top 0.2s ease, opacity 0.2s ease;
-    }
-    .mobile-menu-btn span::before {
-      top: 3px;
-      box-shadow: 0 4px 0 currentColor;
-    }
-    .mobile-menu-btn span::after { top: 11px; }
-    .mobile-menu-btn[aria-expanded="true"] span::before {
-      top: 7px;
-      box-shadow: none;
-      transform: rotate(45deg);
-    }
-    .mobile-menu-btn[aria-expanded="true"] span::after {
-      top: 7px;
-      transform: rotate(-45deg);
-    }
-  </style>
-
   <!-- Performance: preconnect to critical origins and modulepreload -->
   <link rel="preconnect" href="https://qzkzugzfpegozpiqutdv.supabase.co" crossorigin>
   <link rel="dns-prefetch" href="//qzkzugzfpegozpiqutdv.supabase.co">
@@ -2218,6 +2128,44 @@ window.addEventListener('load', dashReports);
 </style>
 </head>
 
+<!-- UI fixes: restore emojis and icons if text got corrupted by encoding -->
+<style>
+  /* Replace corrupted nav icon text with emojis */
+  .header .nav-icon { font-size: 0; line-height: 1; }
+  #tabDashboard .nav-icon::before { content: "📊"; font-size: 14px; }
+  #tabMain .nav-icon::before      { content: "🕒"; font-size: 14px; }
+  #tabSchedule .nav-icon::before  { content: "🗓️"; font-size: 14px; }
+  #tabEmployees .nav-icon::before { content: "👥"; font-size: 14px; }
+  #tabProjects .nav-icon::before  { content: "🚀"; font-size: 14px; }
+  #tabPayroll .nav-icon::before   { content: "💰"; font-size: 14px; }
+  #tabProjectTotals .nav-icon::before { content: "📈"; font-size: 14px; }
+  #tabContributionSummary .nav-icon::before { content: "💳"; font-size: 14px; }
+  #tabSettings .nav-icon::before { content: "⚙️"; font-size: 14px; }
+  /* Sidebar duplicates */
+  #old-tabDashboard .nav-icon::before { content: "📊"; }
+  #old-tabMain .nav-icon::before      { content: "🕒"; }
+  #old-tabSchedule .nav-icon::before  { content: "🗓️"; }
+  #old-tabEmployees .nav-icon::before { content: "👥"; }
+  #old-tabProjects .nav-icon::before  { content: "🚀"; }
+  #old-tabPayroll .nav-icon::before   { content: "💰"; }
+  #old-tabProjectTotals .nav-icon::before { content: "📈"; }
+  #old-tabContributionSummary .nav-icon::before { content: "💳"; }
+  #old-tabSettings .nav-icon::before { content: "⚙️"; }
+
+  /* Mobile menu icon */
+  .mobile-menu-btn span { font-size: 0; }
+  .mobile-menu-btn span::before { content: "☰"; font-size: 20px; }
+  .mobile-menu-btn[aria-expanded="true"] span::before { content: "✕"; }
+
+  /* Sidebar logo: render clean text */
+  .sidebar .logo { font-size: 0; }
+  .sidebar .logo::before { content: "💰 PayrollHub"; font-size: 24px; }
+
+  /* Page title icon */
+  .page-title > span:first-child { font-size: 0; } .page-title > span:first-child::before { content: "📊"; font-size: 32px; } .page-title > span.icon-emoji { font-size: 32px !important; } .page-title > span.icon-emoji::before { content: none !important; }
+
+</style>
+
 <!-- Boot guard to ensure global stored data is available early -->
 <script>
 /*
@@ -2320,15 +2268,15 @@ window.addEventListener('load', dashReports);
           </button>
           <nav id="primaryNav">
             <ul class="nav-menu">
-              <li class="nav-item"><button class="nav-link tab-btn active" id="tabDashboard" data-page="dashboard"><span class="nav-icon" aria-hidden="true"></span> Dashboard</button></li>
-              <li class="nav-item"><button class="nav-link tab-btn" id="tabMain" data-page="dtr"><span class="nav-icon" aria-hidden="true"></span> DTR</button></li>
-              <li class="nav-item"><button class="nav-link tab-btn" id="tabSchedule" data-page="schedules"><span class="nav-icon" aria-hidden="true"></span> Schedules</button></li>
-              <li class="nav-item"><button class="nav-link tab-btn" id="tabEmployees" data-page="employees"><span class="nav-icon" aria-hidden="true"></span> Employees</button></li>
-              <li class="nav-item"><button class="nav-link tab-btn" id="tabProjects" data-page="projects"><span class="nav-icon" aria-hidden="true"></span> Projects</button></li>
-              <li class="nav-item"><button class="nav-link tab-btn" id="tabPayroll" data-page="payroll"><span class="nav-icon" aria-hidden="true"></span> Payroll</button></li>
-              <li class="nav-item"><button class="nav-link tab-btn" id="tabProjectTotals" data-page="totals"><span class="nav-icon" aria-hidden="true"></span> Reports</button></li>
-              <li class="nav-item"><button class="nav-link tab-btn" id="tabContributionSummary" data-page="contribSummary"><span class="nav-icon" aria-hidden="true"></span> Contributions</button></li>
-              <li class="nav-item"><button class="nav-link tab-btn" id="tabSettings" data-page="settings"><span class="nav-icon" aria-hidden="true"></span> Settings</button></li>
+              <li class="nav-item"><button class="nav-link tab-btn active" id="tabDashboard" data-page="dashboard"><span class="nav-icon">ðŸ“Š</span> Dashboard</button></li>
+              <li class="nav-item"><button class="nav-link tab-btn" id="tabMain" data-page="dtr"><span class="nav-icon">ðŸ•</span> DTR</button></li>
+              <li class="nav-item"><button class="nav-link tab-btn" id="tabSchedule" data-page="schedules"><span class="nav-icon">ðŸ“…</span> Schedules</button></li>
+              <li class="nav-item"><button class="nav-link tab-btn" id="tabEmployees" data-page="employees"><span class="nav-icon">ðŸ‘¥</span> Employees</button></li>
+              <li class="nav-item"><button class="nav-link tab-btn" id="tabProjects" data-page="projects"><span class="nav-icon">ðŸš€</span> Projects</button></li>
+              <li class="nav-item"><button class="nav-link tab-btn" id="tabPayroll" data-page="payroll"><span class="nav-icon">ðŸ’°</span> Payroll</button></li>
+              <li class="nav-item"><button class="nav-link tab-btn" id="tabProjectTotals" data-page="totals"><span class="nav-icon">ðŸ“ˆ</span> Reports</button></li>
+              <li class="nav-item"><button class="nav-link tab-btn" id="tabContributionSummary" data-page="contribSummary"><span class="nav-icon">ðŸ’³</span> Contributions</button></li>
+              <li class="nav-item"><button class="nav-link tab-btn" id="tabSettings" data-page="settings"><span class="nav-icon">⚙️</span> Settings</button></li>
             </ul>
           </nav>
         </div>
@@ -2336,62 +2284,62 @@ window.addEventListener('load', dashReports);
     <aside class="sidebar" id="sidebar">
       <div class="sidebar-header">
         <div class="logo">
-          PayrollHub
+          ðŸ’¼ PayrollHub
         </div>
       </div>
       <nav>
         <ul class="nav-menu">
           <li class="nav-item">
             <button class="nav-link tab-btn active" id="old-tabDashboard" data-page="dashboard">
-              <span class="nav-icon" aria-hidden="true"></span>
+              <span class="nav-icon">ðŸ“Š</span>
               Dashboard
             </button>
           </li>
           <li class="nav-item">
             <button class="nav-link tab-btn" id="old-tabMain" data-page="dtr">
-              <span class="nav-icon" aria-hidden="true"></span>
+              <span class="nav-icon">ðŸ•</span>
               DTR
             </button>
           </li>
           <li class="nav-item">
             <button class="nav-link tab-btn" id="old-tabSchedule" data-page="schedules">
-              <span class="nav-icon" aria-hidden="true"></span>
+              <span class="nav-icon">ðŸ“…</span>
               Schedules
             </button>
           </li>
           <li class="nav-item">
             <button class="nav-link tab-btn" id="old-tabEmployees" data-page="employees">
-              <span class="nav-icon" aria-hidden="true"></span>
+              <span class="nav-icon">ðŸ‘¥</span>
               Employees
             </button>
           </li>
           <li class="nav-item">
             <button class="nav-link tab-btn" id="old-tabProjects" data-page="projects">
-              <span class="nav-icon" aria-hidden="true"></span>
+              <span class="nav-icon">ðŸš€</span>
               Projects
             </button>
           </li>
           <li class="nav-item">
             <button class="nav-link tab-btn" id="old-tabPayroll" data-page="payroll">
-              <span class="nav-icon" aria-hidden="true"></span>
+              <span class="nav-icon">ðŸ’°</span>
               Payroll
             </button>
           </li>
           <li class="nav-item">
             <button class="nav-link tab-btn" id="old-tabProjectTotals" data-page="totals">
-              <span class="nav-icon" aria-hidden="true"></span>
+              <span class="nav-icon">ðŸ“ˆ</span>
               Reports
             </button>
           </li>
           <li class="nav-item">
             <button class="nav-link tab-btn" id="old-tabContributionSummary" data-page="contribSummary">
-              <span class="nav-icon" aria-hidden="true"></span>
+              <span class="nav-icon">ðŸ’³</span>
               Contributions
             </button>
           </li>
           <li class="nav-item">
             <button class="nav-link tab-btn" id="old-tabSettings" data-page="settings">
-              <span class="nav-icon" aria-hidden="true"></span>
+              <span class="nav-icon">⚙️</span>
               Settings
             </button>
           </li>
@@ -2400,8 +2348,8 @@ window.addEventListener('load', dashReports);
     </aside>
     <main class="main-content">
       <div class="content-header">
-        <h1 class="page-title" data-page="dashboard">
-          <span class="page-title-icon" aria-hidden="true"></span>
+        <h1 class="page-title">
+          <span style="font-size: 32px;">ðŸ“Š</span>
           Dashboard
         </h1>
         <p class="page-subtitle">Manage your payroll system efficiently</p>
@@ -2750,7 +2698,7 @@ window.addEventListener('load', dashReports);
       <!-- Alert to display when there is no remote DTR data and no local DTR data.  This
            banner is hidden by default and shown via showRemoteDtrAlert() -->
       <div id="remoteDtrAlert" style="display:none;margin:8px 0;padding:10px;border:1px solid #facc15;background:#fef9c3;color:#713f12;border-radius:6px;font-weight:600;">
-        Warning: No remote DTR data found. Import a .DAT/.TXT file on this device to populate cloud data.
+        âš  No remote DTR data found. Import a .DAT/.TXT file on this device to populate cloud data.
       </div>
       <!-- Wrap the results table in a scrollable container so horizontal overflow
            is always visible. Without this wrapper some layouts (especially when
@@ -15027,15 +14975,24 @@ rows += `<tr class="allowance">
     <!-- Sidebar navigation behaviour -->
     <script>
     (function(){
+      const ICONS = {
+        dashboard: '📊',
+        dtr: '🕒',
+        schedules: '🗓️',
+        employees: '👥',
+        projects: '🚀',
+        payroll: '💰',
+        totals: '📈',
+        contribSummary: '💳',
+        settings: '⚙️'
+      };
       function setTitleFrom(btn){
         try{
           const pg = btn && (btn.dataset.page || btn.getAttribute('data-page')) || '';
-          const label = (btn.textContent || '').trim();
+          const label = (btn.textContent || '').replace(/^[^A-Za-z0-9]+/,'').trim();
+          const icon = ICONS[pg] || '📊';
           const title = document.querySelector('.page-title');
-          if (!title) return;
-          title.dataset.page = pg || 'dashboard';
-          title.innerHTML = '<span class="page-title-icon" aria-hidden="true"></span>';
-          title.append(' ' + label);
+          if (title){ title.innerHTML = '<span class="icon-emoji" style="font-size:32px">'+icon+'</span> ' + label; }
         }catch(_){}
       }
       document.querySelectorAll('.nav-link').forEach(function(link){
@@ -21068,7 +21025,7 @@ function showRemoteDtrAlert(msg){
   const el = document.getElementById('remoteDtrAlert');
   if (!el) return;
   // Prefix the message with a warning symbol for emphasis
-  el.textContent = `Warning: ${msg}`;
+  el.textContent = `âš  ${msg}`;
   el.style.display = '';
 }
 function hideRemoteDtrAlert(){
