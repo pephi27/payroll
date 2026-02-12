@@ -16708,7 +16708,7 @@ if(!_passes) continue;
         start: schedule.rng_sat_in_start || DEFAULT_RANGES.rng_sat_in_start,
         end: schedule.rng_sat_in_end || DEFAULT_RANGES.rng_sat_in_end
       });
-      pmOutActual = pickLatest({
+      amOutActual = pickLatest({
         start: schedule.rng_sat_out_start || DEFAULT_RANGES.rng_sat_out_start,
         end: schedule.rng_sat_out_end || DEFAULT_RANGES.rng_sat_out_end
       });
@@ -17364,7 +17364,7 @@ function computeHoursForDateRange(startDate, endDate) {
         start: schedule.rng_sat_in_start || DEFAULT_RANGES.rng_sat_in_start,
         end: schedule.rng_sat_in_end || DEFAULT_RANGES.rng_sat_in_end
       });
-      pmOutActual = pickLatest({
+      amOutActual = pickLatest({
         start: schedule.rng_sat_out_start || DEFAULT_RANGES.rng_sat_out_start,
         end: schedule.rng_sat_out_end || DEFAULT_RANGES.rng_sat_out_end
       });
