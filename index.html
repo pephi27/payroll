@@ -10747,7 +10747,8 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!activeTableBody) return;
     activeTableBody.innerHTML = '';
     payrollHistory.forEach((snap, index) => {
-      if (snap.locked) return;
+      const lockEntry = getLockEntry(snap.startDate, snap.endDate);
+      if (snap.locked || (lockEntry && lockEntry.locked)) return;
       const tr = document.createElement('tr');
       const startText = formatDisplayDate(snap.startDate);
       const endText = formatDisplayDate(snap.endDate);
@@ -10789,6 +10790,11 @@ document.addEventListener('DOMContentLoaded', () => {
     } else if (target.classList.contains('deleteActive')) {
       // Delete active (unlocked) snapshot after confirmation
       if (!snap) return;
+      const lockEntry = getLockEntry(snap.startDate, snap.endDate);
+      if (snap.locked || (lockEntry && lockEntry.locked)) {
+        alert('This payroll period is locked and cannot be deleted.');
+        return;
+      }
       const ok = confirm('Are you sure you want to delete this payroll snapshot? This action cannot be undone.');
       if (!ok) return;
       payrollHistory.splice(idx, 1);
@@ -11730,8 +11736,13 @@ document.addEventListener('DOMContentLoaded', () => {
       return;
     }
     if (actionBtn.classList.contains('deleteSnapshot')) {
-      // Delete a snapshot from history if it is not locked
-      if (snap.locked) return; // Skip deletion for locked snapshots
+      // Keep button enabled for visibility, but guard deletions for locked/finalized entries.
+      const snapStatus = getSnapshotStatus(snap);
+      const lockEntry = getLockEntry(snap.startDate, snap.endDate);
+      if (snap.locked || (lockEntry && lockEntry.locked) || snapStatus === 'finalized' || snapStatus === 'voided') {
+        alert('This payroll record is locked and cannot be deleted.');
+        return;
+      }
       const confirmDel = confirm('Are you sure you want to delete this payroll record? This cannot be undone.');
       if (!confirmDel) return;
       payrollHistory.splice(idx, 1);
