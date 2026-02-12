@@ -10834,13 +10834,9 @@ document.addEventListener('DOMContentLoaded', () => {
       if (status === 'finalized') {
         actions.push(`<button type="button" class="voidSnapshot" data-index="${index}">Void Pay Run</button>`);
       }
-      if (snap.locked || status === 'voided') {
-        // For locked snapshots, show a disabled delete button to indicate it cannot be removed
-        actions.push(`<button type="button" class="deleteSnapshot" data-index="${index}" disabled>Delete</button>`);
-      } else {
-        // For unlocked snapshots, allow deletion
-        actions.push(`<button type="button" class="deleteSnapshot" data-index="${index}">Delete</button>`);
-      }
+      // Keep the Delete button enabled for every row; click handling decides whether
+      // deletion is allowed for the selected snapshot.
+      actions.push(`<button type="button" class="deleteSnapshot" data-index="${index}">Delete</button>`);
       const finalizedStamp = snap.finalizedAt || snap.lockedAt;
       tr.innerHTML = `
         <td>${startText}</td>
