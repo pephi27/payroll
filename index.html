@@ -185,11 +185,6 @@ function markHydrated() {
 
 let __kvRerenderTimer = null;
 function queueHydrateRerender() {
-  const emitKvDataUpdated = () => {
-    try {
-      window.dispatchEvent(new CustomEvent('kv-data-updated', { detail: { source: 'kv_store' } }));
-    } catch (_) {}
-  };
   markHydrated();
   try {
     if (typeof window.refreshCoreStoresFromStorage === 'function') {
@@ -222,10 +217,7 @@ function queueHydrateRerender() {
       window.__additionalIncomeHydratePending = true;
       shouldDefer = true;
     }
-    if (shouldDefer) {
-      emitKvDataUpdated();
-      return;
-    }
+    if (shouldDefer) return;
   } catch (_) {}
 
   const schedule = () => {
@@ -241,7 +233,6 @@ function queueHydrateRerender() {
   } else {
     schedule();
   }
-  emitKvDataUpdated();
 }
 
 function __kvHasMeaningfulPeriodMap(obj){
@@ -10038,34 +10029,6 @@ document.addEventListener('DOMContentLoaded', () => {
   let payrollLocks = loadLockMap();
   try { window.payrollLocks = payrollLocks; } catch (err) {}
 
-
-  function safeParseLS(key, fallback) {
-    try {
-      const v = localStorage.getItem(key);
-      return v ? JSON.parse(v) : fallback;
-    } catch (err) {
-      return fallback;
-    }
-  }
-
-  function refreshDashboardFromStorage() {
-    try {
-      payrollHistory = safeParseLS(PAYROLL_HIST_KEY, []);
-      if (!Array.isArray(payrollHistory)) payrollHistory = [];
-      window.payrollHistory = payrollHistory;
-    } catch (_) {}
-    try {
-      payrollLocks = safeParseLS(PAYROLL_LOCKS_KEY, { __meta: { lastUpdatedAt: 0 } });
-      if (!payrollLocks || typeof payrollLocks !== 'object') payrollLocks = { __meta: { lastUpdatedAt: 0 } };
-      if (!payrollLocks.__meta) payrollLocks.__meta = {};
-      window.payrollLocks = payrollLocks;
-    } catch (_) {}
-    try { renderHistory(); } catch (_) {}
-    try { renderActivePayrolls(); } catch (_) {}
-    try { applyLockUI && applyLockUI(); } catch (_) {}
-    try { checkAndToggleEditState && checkAndToggleEditState(); } catch (_) {}
-  }
-
   function persistLocks(changed) {
     try {
       if (!payrollLocks || typeof payrollLocks !== 'object') payrollLocks = { __meta: {} };
@@ -10614,7 +10577,6 @@ document.addEventListener('DOMContentLoaded', () => {
     try { if (typeof window.populatePayrollDropdowns === 'function') window.populatePayrollDropdowns(); } catch (err) {}
     try { if (typeof window.applyPayrollLockUI === 'function') window.applyPayrollLockUI(); } catch (err) {}
     try { if (typeof window.checkAndToggleEditState === 'function') window.checkAndToggleEditState(); } catch (err) {}
-    try { refreshDashboardFromStorage(); } catch (_) {}
   }
 
   async function lockCurrentPeriod() {
@@ -10716,7 +10678,6 @@ document.addEventListener('DOMContentLoaded', () => {
     });
     applySnapshotToPayrollTable(existing);
     applyLockUI();
-    try { refreshDashboardFromStorage(); } catch (_) {}
   }
 
   if (dashStart) {
@@ -10726,9 +10687,6 @@ document.addEventListener('DOMContentLoaded', () => {
     dashEnd.addEventListener('change', () => { checkAndToggleEditState(); });
   }
   checkAndToggleEditState();
-
-  window.addEventListener('kv-hydrated', () => { refreshDashboardFromStorage(); }, { passive: true });
-  window.addEventListener('kv-data-updated', () => { refreshDashboardFromStorage(); }, { passive: true });
   try {
     window.getPayrollLockEntry = getLockEntry;
     window.setPayrollLock = setPeriodLocked;
