@@ -22406,7 +22406,11 @@ document.addEventListener('DOMContentLoaded', async function () {
       if (!regCell || !otCell || !totCell) continue;
       const reg = num(regCell.textContent);
       const ot  = num(otCell.textContent);
-      totCell.textContent = (reg + ot).toFixed(2);
+      const total = reg + ot;
+      const next = total === 0 ? '-' : total.toFixed(2);
+      if (totCell.textContent !== next) {
+        totCell.textContent = next;
+      }
     }
   }
   function hookTable(){
