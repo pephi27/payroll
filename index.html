@@ -157,6 +157,7 @@ const KNOWN_KEYS = [
   ,"payroll_contrib_flags"
   ,"att_overrides_hours_v1"
   ,"payroll_lock_state"
+  ,"payroll_workflow_state"
   ,"dtr_overrides_v1"
   ,"incomeTypeOptions"
   ,"deductionTypeOptions"
@@ -2378,6 +2379,11 @@ window.addEventListener('load', dashReports);
           <button id="lockSnapshotBtn" type="button" class="date-input">Finalize &amp; Snapshot</button>
           <button id="voidPayRunBtn" type="button" class="date-input" disabled>Void Pay Run</button>
           <span id="dashLockStatus" style="display:none;font-size:12px;color:#111827;font-weight:600;"></span>
+        </div>
+        <div id="workflowControls" class="date-range" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:10px;">
+          <span id="workflowStatusBadge" class="status-tag status-active">DRAFT</span>
+          <span id="workflowStatusMeta" style="font-size:12px;color:#475569;"></span>
+          <div id="workflowButtonGroup" style="display:flex;gap:8px;flex-wrap:wrap;"></div>
         </div>
         <!-- New Period Modal (pre-rendered for instant open) -->
         <style>
@@ -10010,6 +10016,10 @@ document.addEventListener('DOMContentLoaded', () => {
   const dashLockButton = document.getElementById('lockSnapshotBtn');
   const dashVoidButton = document.getElementById('voidPayRunBtn');
   const dashLockStatus = document.getElementById('dashLockStatus');
+  const workflowControls = document.getElementById('workflowControls');
+  const workflowStatusBadge = document.getElementById('workflowStatusBadge');
+  const workflowStatusMeta = document.getElementById('workflowStatusMeta');
+  const workflowButtonGroup = document.getElementById('workflowButtonGroup');
   const historyTableBody = document.querySelector('#historyTable tbody');
   const snapshotView = document.getElementById('snapshotView');
   // Reference to the Active Payrolls table body
@@ -10021,6 +10031,21 @@ document.addEventListener('DOMContentLoaded', () => {
   const voidConfirmBtn = document.getElementById('confirmVoidPayRun');
 
   const PAYROLL_LOCKS_KEY = 'payroll_lock_state';
+  const PAYROLL_WORKFLOW_KEY = 'payroll_workflow_state';
+  const WORKFLOW_STATUSES = ['DRAFT', 'FOR_APPROVAL', 'APPROVED', 'COMPUTED', 'FINALIZED'];
+
+  function loadWorkflowMap() {
+    try {
+      const raw = localStorage.getItem(PAYROLL_WORKFLOW_KEY);
+      if (!raw) return { __meta: { lastUpdatedAt: 0 } };
+      const parsed = JSON.parse(raw);
+      if (!parsed || typeof parsed !== 'object') return { __meta: { lastUpdatedAt: 0 } };
+      if (!parsed.__meta) parsed.__meta = {};
+      return parsed;
+    } catch (err) {
+      return { __meta: { lastUpdatedAt: 0 } };
+    }
+  }
 
   function loadLockMap() {
     try {
@@ -10036,7 +10061,9 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   let payrollLocks = loadLockMap();
+  let payrollWorkflow = loadWorkflowMap();
   try { window.payrollLocks = payrollLocks; } catch (err) {}
+  try { window.payrollWorkflow = payrollWorkflow; } catch (err) {}
 
 
   function safeParseLS(key, fallback) {
@@ -10060,9 +10087,16 @@ document.addEventListener('DOMContentLoaded', () => {
       if (!payrollLocks.__meta) payrollLocks.__meta = {};
       window.payrollLocks = payrollLocks;
     } catch (_) {}
+    try {
+      payrollWorkflow = safeParseLS(PAYROLL_WORKFLOW_KEY, { __meta: { lastUpdatedAt: 0 } });
+      if (!payrollWorkflow || typeof payrollWorkflow !== 'object') payrollWorkflow = { __meta: { lastUpdatedAt: 0 } };
+      if (!payrollWorkflow.__meta) payrollWorkflow.__meta = {};
+      window.payrollWorkflow = payrollWorkflow;
+    } catch (_) {}
     try { renderHistory(); } catch (_) {}
     try { renderActivePayrolls(); } catch (_) {}
     try { applyLockUI && applyLockUI(); } catch (_) {}
+    try { renderWorkflowControls && renderWorkflowControls(); } catch (_) {}
     try { checkAndToggleEditState && checkAndToggleEditState(); } catch (_) {}
   }
 
@@ -10075,6 +10109,81 @@ document.addEventListener('DOMContentLoaded', () => {
     } catch (err) {
       console.warn('Unable to persist payroll lock state', err);
     }
+  }
+
+  function persistWorkflow(changed) {
+    try {
+      if (!payrollWorkflow || typeof payrollWorkflow !== 'object') payrollWorkflow = { __meta: {} };
+      if (!payrollWorkflow.__meta) payrollWorkflow.__meta = {};
+      if (changed) payrollWorkflow.__meta.lastUpdatedAt = Date.now();
+      localStorage.setItem(PAYROLL_WORKFLOW_KEY, JSON.stringify(payrollWorkflow));
+    } catch (err) {
+      console.warn('Unable to persist payroll workflow state', err);
+    }
+  }
+
+  function ensureWorkflowEntry(start, end) {
+    if (!start || !end) return null;
+    if (!payrollWorkflow || typeof payrollWorkflow !== 'object') payrollWorkflow = { __meta: {} };
+    const key = periodKey(start, end);
+    const existing = payrollWorkflow[key] && typeof payrollWorkflow[key] === 'object' ? payrollWorkflow[key] : null;
+    if (existing && WORKFLOW_STATUSES.includes(existing.payroll_status)) return existing;
+    const next = Object.assign({}, existing || {}, {
+      payroll_status: 'DRAFT',
+      status_log: Array.isArray(existing && existing.status_log) ? existing.status_log : []
+    });
+    payrollWorkflow[key] = next;
+    persistWorkflow(true);
+    try { window.payrollWorkflow = payrollWorkflow; } catch (err) {}
+    return next;
+  }
+
+  function getWorkflowEntry(start, end) {
+    if (!start || !end) return null;
+    const key = periodKey(start, end);
+    const entry = payrollWorkflow && payrollWorkflow[key];
+    if (!entry || typeof entry !== 'object') return ensureWorkflowEntry(start, end);
+    if (!WORKFLOW_STATUSES.includes(entry.payroll_status)) entry.payroll_status = 'DRAFT';
+    if (!Array.isArray(entry.status_log)) entry.status_log = [];
+    return entry;
+  }
+
+  function canEditPeriod(start, end) {
+    const entry = getWorkflowEntry(start, end);
+    return !!(entry && entry.payroll_status === 'DRAFT');
+  }
+
+  function markComputedStale(start, end, reason) {
+    const snap = findLatestSnapshotForPeriod(start, end, { includeVoided: true });
+    if (!snap) return;
+    snap.computedStale = true;
+    snap.computedStaleAt = new Date().toISOString();
+    if (reason) snap.computedStaleReason = reason;
+    try { saveHistory(); } catch (err) {}
+  }
+
+  function transitionWorkflowStatus(start, end, toStatus, opts = {}) {
+    const entry = ensureWorkflowEntry(start, end);
+    if (!entry) return;
+    const from = entry.payroll_status || 'DRAFT';
+    const at = new Date().toISOString();
+    entry.payroll_status = toStatus;
+    if (toStatus === 'FOR_APPROVAL') {
+      entry.submitted_at = at;
+      entry.submitted_note = opts.note || '';
+    }
+    if (toStatus === 'APPROVED') {
+      entry.approved_at = at;
+      entry.approved_note = opts.note || '';
+    }
+    if (toStatus === 'COMPUTED') entry.computed_at = at;
+    if (toStatus === 'FINALIZED') entry.finalized_at = at;
+    entry.status_log = Array.isArray(entry.status_log) ? entry.status_log : [];
+    entry.status_log.push({ from, to: toStatus, at, reason: opts.reason || opts.note || '' });
+    if (entry.status_log.length > 200) entry.status_log = entry.status_log.slice(-200);
+    persistWorkflow(true);
+    try { window.payrollWorkflow = payrollWorkflow; } catch (err) {}
+    if (opts.markComputedStale) markComputedStale(start, end, opts.reason || opts.note || '');
   }
 
   function periodKey(start, end) {
@@ -10490,6 +10599,104 @@ document.addEventListener('DOMContentLoaded', () => {
     dashLockStatus.style.display = 'inline';
   }
 
+  function workflowMetaText(entry) {
+    if (!entry) return '';
+    const status = entry.payroll_status || 'DRAFT';
+    const stamp = entry.finalized_at || entry.computed_at || entry.approved_at || entry.submitted_at || '';
+    if (!stamp) return status;
+    try { return `${status} · ${new Date(stamp).toLocaleString()}`; } catch (err) { return status; }
+  }
+
+  function renderWorkflowControls() {
+    if (!workflowControls || !workflowButtonGroup || !workflowStatusBadge) return;
+    const { start, end } = getCurrentPeriodRange();
+    workflowButtonGroup.innerHTML = '';
+    if (!start || !end) {
+      workflowControls.style.display = 'none';
+      return;
+    }
+    workflowControls.style.display = 'flex';
+    const entry = ensureWorkflowEntry(start, end);
+    const status = entry?.payroll_status || 'DRAFT';
+    workflowStatusBadge.textContent = status;
+    workflowStatusBadge.className = 'status-tag ' + (status === 'FINALIZED' ? 'status-finalized' : status === 'COMPUTED' ? 'status-active' : status === 'APPROVED' ? 'status-finalized' : status === 'FOR_APPROVAL' ? 'status-active' : 'status-active');
+    if (workflowStatusMeta) workflowStatusMeta.textContent = workflowMetaText(entry);
+
+    const addBtn = (label, onClick) => {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'date-input';
+      btn.textContent = label;
+      btn.addEventListener('click', onClick);
+      workflowButtonGroup.appendChild(btn);
+    };
+
+    if (status === 'DRAFT') {
+      addBtn('Submit for Approval', () => {
+        const note = prompt('Optional submission note:', '') || '';
+        transitionWorkflowStatus(start, end, 'FOR_APPROVAL', { note });
+        renderWorkflowControls();
+        checkAndToggleEditState();
+      });
+    } else if (status === 'FOR_APPROVAL') {
+      addBtn('Approve', () => {
+        transitionWorkflowStatus(start, end, 'APPROVED', {});
+        renderWorkflowControls();
+        checkAndToggleEditState();
+      });
+      addBtn('Return to Draft', () => {
+        const reason = (prompt('Reason (required):', '') || '').trim();
+        if (!reason) return alert('Reason is required.');
+        transitionWorkflowStatus(start, end, 'DRAFT', { reason });
+        renderWorkflowControls();
+        checkAndToggleEditState();
+      });
+      addBtn('Enable Edit (Override)', () => {
+        const reason = (prompt('Override reason (required):', '') || '').trim();
+        if (!reason) return alert('Reason is required.');
+        transitionWorkflowStatus(start, end, 'DRAFT', { reason });
+        renderWorkflowControls();
+        checkAndToggleEditState();
+      });
+    } else if (status === 'APPROVED') {
+      addBtn('Compute Payroll', async () => {
+        try { if (typeof calculateAll === 'function') await Promise.resolve(calculateAll()); } catch (err) {}
+        transitionWorkflowStatus(start, end, 'COMPUTED', {});
+        renderWorkflowControls();
+        checkAndToggleEditState();
+      });
+      addBtn('Back to Approval', () => {
+        const note = prompt('Optional note:', '') || '';
+        transitionWorkflowStatus(start, end, 'FOR_APPROVAL', { note });
+        renderWorkflowControls();
+        checkAndToggleEditState();
+      });
+    } else if (status === 'COMPUTED') {
+      addBtn('Finalize/Release', async () => {
+        try { await Promise.resolve(lockCurrentPeriod()); } catch (err) {}
+        transitionWorkflowStatus(start, end, 'FINALIZED', {});
+        renderWorkflowControls();
+        checkAndToggleEditState();
+      });
+      addBtn('Back to Draft', () => {
+        const reason = (prompt('Reason (required):', '') || '').trim();
+        if (!reason) return alert('Reason is required.');
+        transitionWorkflowStatus(start, end, 'DRAFT', { reason, markComputedStale: true });
+        renderWorkflowControls();
+        checkAndToggleEditState();
+      });
+    } else if (status === 'FINALIZED') {
+      addBtn('Reopen to Draft', () => {
+        const reason = (prompt('Reason (required):', '') || '').trim();
+        if (!reason) return alert('Reason is required.');
+        transitionWorkflowStatus(start, end, 'DRAFT', { reason, markComputedStale: true });
+        setPeriodLocked(start, end, false, {});
+        renderWorkflowControls();
+        checkAndToggleEditState();
+      });
+    }
+  }
+
   function applyLockUI() {
     const { start, end } = getCurrentPeriodRange();
     const hasRange = !!(start && end);
@@ -10502,7 +10709,8 @@ document.addEventListener('DOMContentLoaded', () => {
       return false;
     }
     const entry = getLockEntry(start, end);
-    let locked = !!(entry && entry.locked);
+    const editable = canEditPeriod(start, end);
+    let locked = !!(entry && entry.locked) || !editable;
     if (locked) {
       disablePayrollInputs();
       updateLockStatusDisplay(entry);
@@ -10513,7 +10721,7 @@ document.addEventListener('DOMContentLoaded', () => {
         clearSnapshotOverride();
         enablePayrollInputs();
         updateLockStatusDisplay(null);
-        if (dashLockButton) dashLockButton.disabled = false;
+        if (dashLockButton) dashLockButton.disabled = !editable;
         if (dashVoidButton) dashVoidButton.disabled = true;
         return false;
       }
@@ -10549,7 +10757,7 @@ document.addEventListener('DOMContentLoaded', () => {
           }
         }
       }
-      if (dashLockButton) dashLockButton.disabled = false;
+      if (dashLockButton) dashLockButton.disabled = !editable;
       if (dashVoidButton) dashVoidButton.disabled = true;
     }
     return locked;
@@ -10715,16 +10923,22 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     });
     applySnapshotToPayrollTable(existing);
+    try {
+      const wf = getWorkflowEntry(start, end);
+      if (wf && wf.payroll_status !== 'FINALIZED') transitionWorkflowStatus(start, end, 'FINALIZED', { note: 'Finalized via snapshot action' });
+    } catch (err) {}
     applyLockUI();
+    renderWorkflowControls();
     try { refreshDashboardFromStorage(); } catch (_) {}
   }
 
   if (dashStart) {
-    dashStart.addEventListener('change', () => { checkAndToggleEditState(); });
+    dashStart.addEventListener('change', () => { renderWorkflowControls(); checkAndToggleEditState(); });
   }
   if (dashEnd) {
-    dashEnd.addEventListener('change', () => { checkAndToggleEditState(); });
+    dashEnd.addEventListener('change', () => { renderWorkflowControls(); checkAndToggleEditState(); });
   }
+  renderWorkflowControls();
   checkAndToggleEditState();
 
   window.addEventListener('kv-hydrated', () => { refreshDashboardFromStorage(); }, { passive: true });
@@ -10733,6 +10947,7 @@ document.addEventListener('DOMContentLoaded', () => {
     window.getPayrollLockEntry = getLockEntry;
     window.setPayrollLock = setPeriodLocked;
     window.applyPayrollLockUI = applyLockUI;
+    window.canEditPeriod = canEditPeriod;
     window.lockCurrentPeriod = lockCurrentPeriod;
     window.getSnapshotStatus = getSnapshotStatus;
     window.isSnapshotVoided = isSnapshotVoided;
@@ -11125,6 +11340,23 @@ document.addEventListener('DOMContentLoaded', () => {
   document.addEventListener('change', handleMoneyChangerLockedEvent, true);
   document.addEventListener('input', handleMoneyChangerLockedEvent, true);
 
+  function setEditActionVisibility(readOnly) {
+    const selectors = [
+      '#additionalIncomeTable button',
+      '#otherDeductionsTable button',
+      '#adjustmentHoursTable button',
+      '#loanTrackerControls button'
+    ];
+    selectors.forEach((sel) => {
+      document.querySelectorAll(sel).forEach((btn) => {
+        const label = (btn.textContent || '').toLowerCase();
+        const isViewAction = label.includes('print') || label.includes('export') || label.includes('view');
+        if (isViewAction) return;
+        btn.style.display = readOnly ? 'none' : '';
+      });
+    });
+  }
+
   function disablePayrollInputs() {
     // Disable all editable fields in the payroll table
     document.querySelectorAll('#payrollTable input').forEach(inp => {
@@ -11172,6 +11404,7 @@ document.addEventListener('DOMContentLoaded', () => {
     document.querySelectorAll('#additionalIncomeTable button, #otherDeductionsTable button, #adjustmentHoursTable button').forEach(btn => {
       btn.disabled = true;
     });
+    setEditActionVisibility(true);
     // Ensure the payroll tab reflects the locked state as well
     try { setPayrollLockedUI(true); } catch (err) { /* no-op if helper is unavailable */ }
     try { setMoneyChangerLockedUI(true); } catch (err) { /* no-op if helper is unavailable */ }
@@ -11233,6 +11466,7 @@ document.addEventListener('DOMContentLoaded', () => {
     document.querySelectorAll('#additionalIncomeTable button, #otherDeductionsTable button, #adjustmentHoursTable button').forEach(btn => {
       btn.disabled = false;
     });
+    setEditActionVisibility(false);
     // Restore interactivity for the payroll tab when unlocked
     try { setPayrollLockedUI(false); } catch (err) { /* no-op if helper is unavailable */ }
     try { setMoneyChangerLockedUI(false); } catch (err) { /* no-op if helper is unavailable */ }
@@ -11250,7 +11484,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const range = getCurrentPeriodRange();
     if (!range.start || !range.end) return false;
     const entry = getLockEntry(range.start, range.end);
-    return !!(entry && entry.locked);
+    return !!((entry && entry.locked) || !canEditPeriod(range.start, range.end));
   }
   window.isSelectedPeriodLocked = isSelectedPeriodLocked;
 
@@ -11319,6 +11553,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
     const now = new Date().toISOString();
     payrollHistory.push({ startDate: start, endDate: end, rows: snap.rows, totals: snap.totals, hash: hashHex, lockedAt: now, locked: false, status: 'draft', createdAt: now });
+    ensureWorkflowEntry(start, end);
     saveHistory();
     // Update both history and active payroll tables after creating a new snapshot
     renderHistory();
