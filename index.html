@@ -10747,7 +10747,8 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!activeTableBody) return;
     activeTableBody.innerHTML = '';
     payrollHistory.forEach((snap, index) => {
-      if (snap.locked) return;
+      const lockEntry = getLockEntry(snap.startDate, snap.endDate);
+      if (snap.locked || (lockEntry && lockEntry.locked)) return;
       const tr = document.createElement('tr');
       const startText = formatDisplayDate(snap.startDate);
       const endText = formatDisplayDate(snap.endDate);
@@ -10789,6 +10790,11 @@ document.addEventListener('DOMContentLoaded', () => {
     } else if (target.classList.contains('deleteActive')) {
       // Delete active (unlocked) snapshot after confirmation
       if (!snap) return;
+      const lockEntry = getLockEntry(snap.startDate, snap.endDate);
+      if (snap.locked || (lockEntry && lockEntry.locked)) {
+        alert('This payroll period is locked and cannot be deleted.');
+        return;
+      }
       const ok = confirm('Are you sure you want to delete this payroll snapshot? This action cannot be undone.');
       if (!ok) return;
       payrollHistory.splice(idx, 1);
@@ -10834,13 +10840,9 @@ document.addEventListener('DOMContentLoaded', () => {
       if (status === 'finalized') {
         actions.push(`<button type="button" class="voidSnapshot" data-index="${index}">Void Pay Run</button>`);
       }
-      if (snap.locked || status === 'voided') {
-        // For locked snapshots, show a disabled delete button to indicate it cannot be removed
-        actions.push(`<button type="button" class="deleteSnapshot" data-index="${index}" disabled>Delete</button>`);
-      } else {
-        // For unlocked snapshots, allow deletion
-        actions.push(`<button type="button" class="deleteSnapshot" data-index="${index}">Delete</button>`);
-      }
+      // Keep the Delete button enabled for every row; click handling decides whether
+      // deletion is allowed for the selected snapshot.
+      actions.push(`<button type="button" class="deleteSnapshot" data-index="${index}">Delete</button>`);
       const finalizedStamp = snap.finalizedAt || snap.lockedAt;
       tr.innerHTML = `
         <td>${startText}</td>
@@ -11734,14 +11736,32 @@ document.addEventListener('DOMContentLoaded', () => {
       return;
     }
     if (actionBtn.classList.contains('deleteSnapshot')) {
-      // Delete a snapshot from history if it is not locked
-      if (snap.locked) return; // Skip deletion for locked snapshots
+      const snapStatus = getSnapshotStatus(snap);
+      const lockEntry = getLockEntry(snap.startDate, snap.endDate);
+      const isLockedRecord = !!(snap.locked || (lockEntry && lockEntry.locked) || snapStatus === 'finalized' || snapStatus === 'voided');
+      if (isLockedRecord) {
+        const confirmLockedDelete = confirm('This payroll record is locked/finalized. Deleting it will also remove the lock for this payroll period. Continue?');
+        if (!confirmLockedDelete) return;
+      }
       const confirmDel = confirm('Are you sure you want to delete this payroll record? This cannot be undone.');
       if (!confirmDel) return;
+      const start = snap.startDate;
+      const end = snap.endDate;
       payrollHistory.splice(idx, 1);
+      if (isLockedRecord) {
+        const hasRemainingLockedForPeriod = payrollHistory.some((entry) => {
+          if (!entry || entry.startDate !== start || entry.endDate !== end) return false;
+          const entryStatus = getSnapshotStatus(entry);
+          return !!(entry.locked || entryStatus === 'finalized' || entryStatus === 'voided');
+        });
+        if (!hasRemainingLockedForPeriod) clearPeriodLockEntry(start, end);
+      }
       saveHistory();
       renderHistory();
       renderActivePayrolls();
+      try { if (typeof window.populatePayrollDropdowns === 'function') window.populatePayrollDropdowns(); } catch (err) {}
+      try { if (typeof window.applyPayrollLockUI === 'function') window.applyPayrollLockUI(); } catch (err) {}
+      try { if (typeof window.checkAndToggleEditState === 'function') window.checkAndToggleEditState(); } catch (err) {}
       return;
     }
   });
