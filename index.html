@@ -11730,8 +11730,12 @@ document.addEventListener('DOMContentLoaded', () => {
       return;
     }
     if (actionBtn.classList.contains('deleteSnapshot')) {
-      // Delete a snapshot from history if it is not locked
-      if (snap.locked) return; // Skip deletion for locked snapshots
+      // Keep button enabled for visibility, but guard deletions for locked/finalized entries.
+      const snapStatus = getSnapshotStatus(snap);
+      if (snap.locked || snapStatus === 'finalized' || snapStatus === 'voided') {
+        alert('This payroll record is locked and cannot be deleted.');
+        return;
+      }
       const confirmDel = confirm('Are you sure you want to delete this payroll record? This cannot be undone.');
       if (!confirmDel) return;
       payrollHistory.splice(idx, 1);
