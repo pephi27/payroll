@@ -186,6 +186,11 @@ function markHydrated() {
 let __kvRerenderTimer = null;
 function queueHydrateRerender() {
   markHydrated();
+  try {
+    if (typeof window.refreshCoreStoresFromStorage === 'function') {
+      window.refreshCoreStoresFromStorage();
+    }
+  } catch (_) {}
   try { if (typeof refreshPeriodScopedCachesFromStorage === 'function') refreshPeriodScopedCachesFromStorage(); } catch {}
   try { if (typeof refreshLoanTrackerCacheFromStorage === 'function') refreshLoanTrackerCacheFromStorage(); } catch {}
   const rerender = () => {
@@ -15490,6 +15495,45 @@ let storedEmployees = JSON.parse(localStorage.getItem(LS_EMPLOYEES) || '{}');
 let storedSchedules = JSON.parse(localStorage.getItem(LS_SCHEDULES) || 'null');
 let defaultScheduleId = localStorage.getItem(LS_SCHEDULES_DEFAULT) || null;
 let storedProjects = JSON.parse(localStorage.getItem(LS_PROJECTS) || '{}');
+
+function safeParseStorageJSON(key, fallbackValue) {
+  try {
+    const raw = localStorage.getItem(key);
+    if (raw == null) return fallbackValue;
+    const parsed = JSON.parse(raw);
+    return parsed == null ? fallbackValue : parsed;
+  } catch (_) {
+    return fallbackValue;
+  }
+}
+
+function refreshCoreStoresFromStorage() {
+  overridesSchedules = safeParseStorageJSON(LS_OVERRIDES_SCHEDULES, {});
+  overridesProjects = safeParseStorageJSON(LS_OVERRIDES_PROJECTS, {});
+  splits = safeParseStorageJSON(LS_SPLITS, {});
+  dtrOverrides = safeParseStorageJSON(LS_DTR_OVERRIDES, {});
+  storedEmployees = safeParseStorageJSON(LS_EMPLOYEES, {});
+  storedSchedules = safeParseStorageJSON(LS_SCHEDULES, null);
+  storedProjects = safeParseStorageJSON(LS_PROJECTS, {});
+  payrollRates = safeParseStorageJSON(LS_RATES, {});
+  regHours = safeParseStorageJSON(LS_REG_HRS, {});
+  otHours = safeParseStorageJSON(LS_OT_HRS, {});
+
+  try {
+    window.storedEmployees = storedEmployees;
+    window.storedSchedules = storedSchedules;
+    window.storedProjects = storedProjects;
+    window.overridesSchedules = overridesSchedules;
+    window.overridesProjects = overridesProjects;
+    window.splits = splits;
+    window.dtrOverrides = dtrOverrides;
+    window.payrollRates = payrollRates;
+    window.regHours = regHours;
+    window.otHours = otHours;
+  } catch (_) {}
+}
+
+window.refreshCoreStoresFromStorage = refreshCoreStoresFromStorage;
 document.getElementById('downloadEmployeesCSV').addEventListener('click', () => {
   const header = ['ID','Name','Hourly Rate','Company','Bank Account','Schedule Name','Schedule ID','Project Name','Project ID','Deduct Pag-IBIG','Deduct PhilHealth','Deduct SSS'];
   const rows = [header];
@@ -17184,7 +17228,25 @@ async function initApp(){
   }
   renderResults();
 }
-initApp();
+
+async function bootAfterKvHydrate() {
+  if (!window.__kv_hydrated) {
+    await new Promise((resolve) => {
+      const onHydrated = () => {
+        window.removeEventListener('kv-hydrated', onHydrated);
+        resolve();
+      };
+      window.addEventListener('kv-hydrated', onHydrated, { once: true });
+    });
+  }
+  try {
+    if (typeof window.refreshCoreStoresFromStorage === 'function') {
+      window.refreshCoreStoresFromStorage();
+    }
+  } catch (_) {}
+  await initApp();
+}
+bootAfterKvHydrate();
   </script>
   <script>
 function computeHoursForDateRange(startDate, endDate) {
