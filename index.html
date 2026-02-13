@@ -900,10 +900,31 @@ function injectPrintOrientation(html, orientation){
   }
   return html + styleTag;
 }
+function injectPrintHeaderStyle(html){
+  var rule = [
+    '.report-header, .payslip-header, .hdr, .header-lines{',
+    'text-align:center !important;',
+    'align-items:center !important;',
+    'justify-content:center !important;',
+    '}',
+    '.report-header h1, .report-header h2, .report-header h3, .report-header h4, .report-header h5, .report-header h6,',
+    '.payslip-header h1, .payslip-header h2, .payslip-header h3, .payslip-header h4, .payslip-header h5, .payslip-header h6,',
+    '.hdr h1, .hdr h2, .hdr h3, .hdr h4, .hdr h5, .hdr h6,',
+    '.header-lines, .report-title, .report-period, .company-line{',
+    'font-size:200% !important;',
+    'line-height:1.2 !important;',
+    '}'
+  ].join('');
+  var styleTag = '<style id="printHeaderStyle">' + rule + '</style>';
+  if (/<\/head>/i.test(html)) {
+    return html.replace(/<\/head>/i, styleTag + '</head>');
+  }
+  return html + styleTag;
+}
 function printReport(html, options){
   var opts = options || {};
   var orientation = normalizePrintOrientation(opts.orientation);
-  var doc = injectPrintOrientation(html, orientation);
+  var doc = injectPrintHeaderStyle(injectPrintOrientation(html, orientation));
   var target = opts.targetWindow;
   var w = target || window.open('', opts.name || '_blank', opts.features || 'width=1024,height=768');
   if (!w) {
