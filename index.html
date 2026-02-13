@@ -3363,12 +3363,6 @@ window.addEventListener('load', dashReports);
       </tfoot>
 
      </table>
-     <div id="deductionsContributionBreakdown" class="section note" style="display:none; margin-top:8px;">
-      <strong>Contribution Deductions:</strong>
-      Edifice: <strong id="deductionsEdificeTotal">0.00</strong>
-      &nbsp;|&nbsp;
-      Portafolio: <strong id="deductionsPortafolioTotal">0.00</strong>
-     </div>
 
      <div class="section loan-tracker">
       <h3>Loan Tracker</h3>
@@ -9633,41 +9627,10 @@ function getDeductionsReportCompanyName() {
   return 'PayrollPro';
 }
 
-function getContributionSplitForEmployee(empId) {
-  const split = { edifice: 0, portafolio: 0 };
-  const items = (typeof otherDeductionsDetails !== 'undefined' && otherDeductionsDetails && Array.isArray(otherDeductionsDetails[empId]))
-    ? otherDeductionsDetails[empId]
-    : [];
-  items.forEach(it => {
-    if (!it) return;
-    const amount = roundToCents(Number(String(it.amount || 0).replace(/,/g, '')) || 0);
-    if (!amount) return;
-    const tagText = ((it.type || '') + ' ' + (it.label || '')).toLowerCase();
-    if (!/contribution/.test(tagText)) return;
-    if (/edifice/.test(tagText)) split.edifice = roundToCents(split.edifice + amount);
-    if (/(portafolio|portfolio)/.test(tagText)) split.portafolio = roundToCents(split.portafolio + amount);
-  });
-  return split;
-}
-
-function updateDeductionsContributionBreakdownDisplay(split) {
-  const holder = document.getElementById('deductionsContributionBreakdown');
-  if (!holder) return;
-  const edifice = roundToCents(Number(split && split.edifice) || 0);
-  const portafolio = roundToCents(Number(split && split.portafolio) || 0);
-  const hasValue = Math.abs(edifice) >= 0.005 || Math.abs(portafolio) >= 0.005;
-  holder.style.display = hasValue ? 'block' : 'none';
-  const edificeEl = document.getElementById('deductionsEdificeTotal');
-  const portafolioEl = document.getElementById('deductionsPortafolioTotal');
-  if (edificeEl) edificeEl.textContent = formatDeductionDisplay(edifice);
-  if (portafolioEl) portafolioEl.textContent = formatDeductionDisplay(portafolio);
-}
-
 function buildDeductionsReportData() {
   syncPeriodScopedData();
   const rows = [];
   const totals = {};
-  const contributionTotals = { edifice: 0, portafolio: 0 };
   DEDUCTION_COLUMN_KEYS.forEach(key => { totals[key] = 0; });
   getEmployeeList().forEach(emp => {
     const rH = Number(regHours[emp.id] ?? 0);
@@ -9702,9 +9665,6 @@ function buildDeductionsReportData() {
     };
     rowRaw.total = roundToCents(pagibig + philhealth + sss + sssLoan + piLoan + v + vW + otherDeductionsAmount);
     const rowEffective = computeEffectiveDeductionValues(rowRaw);
-    const contributionSplit = getContributionSplitForEmployee(emp.id);
-    contributionTotals.edifice = roundToCents(contributionTotals.edifice + contributionSplit.edifice);
-    contributionTotals.portafolio = roundToCents(contributionTotals.portafolio + contributionSplit.portafolio);
     DEDUCTION_COLUMN_KEYS.forEach(key => {
       totals[key] = roundToCents((totals[key] || 0) + (Number(rowEffective[key]) || 0));
     });
@@ -9718,23 +9678,18 @@ function buildDeductionsReportData() {
     if (!isDeductionColumnIncluded(key)) return false;
     return rows.some(row => Math.abs(Number(row.values[key]) || 0) >= 0.005);
   });
-  return { rows, totals, visibleColumns, contributionTotals };
+  return { rows, totals, visibleColumns };
 }
 
 document.addEventListener('DOMContentLoaded', function(){
   const btn = document.getElementById('printDeductionsBtn');
   if (!btn) return;
-  try {
-    const liveReport = buildDeductionsReportData();
-    updateDeductionsContributionBreakdownDisplay(liveReport.contributionTotals);
-  } catch (_) {}
   btn.addEventListener('click', function(){
     if (!getEmployeeList() || !getEmployeeList().length) {
       alert('No employees available for the deductions report.');
       return;
     }
     const report = buildDeductionsReportData();
-    updateDeductionsContributionBreakdownDisplay(report.contributionTotals);
     if (!report.visibleColumns.length) {
       alert('No deductions data to print for this period.');
       return;
@@ -9766,17 +9721,7 @@ document.addEventListener('DOMContentLoaded', function(){
     report.visibleColumns.forEach(col => {
       html += `<td class="num">${formatDeductionDisplay(report.totals[col])}</td>`;
     });
-    html += '</tr></tfoot></table>';
-    const edificeContribution = Number(report.contributionTotals && report.contributionTotals.edifice) || 0;
-    const portafolioContribution = Number(report.contributionTotals && report.contributionTotals.portafolio) || 0;
-    if (Math.abs(edificeContribution) >= 0.005 || Math.abs(portafolioContribution) >= 0.005) {
-      html += '<div style="margin-top:8px;font-size:10px;">';
-      html += '<strong>Contribution Deductions:</strong> ';
-      html += `Edifice: <strong>${formatDeductionDisplay(edificeContribution)}</strong> &nbsp;|&nbsp; `;
-      html += `Portafolio: <strong>${formatDeductionDisplay(portafolioContribution)}</strong>`;
-      html += '</div>';
-    }
-    html += '</div>';
+    html += '</tr></tfoot></table></div>';
 
     const ws = document.getElementById('weekStart');
     const we = document.getElementById('weekEnd');
@@ -19226,10 +19171,6 @@ document.addEventListener('DOMContentLoaded', function(){
       var effective = roundToCents(effectiveTotals[key] || 0);
       updateDeductionCellDisplay(cell, raw, effective, isDeductionColumnIncluded(key));
     });
-    try {
-      var report = buildDeductionsReportData();
-      updateDeductionsContributionBreakdownDisplay(report.contributionTotals);
-    } catch (_) {}
   }
   window.updateDeductionsGrandTotals = updateDeductionsGrandTotals;
 
@@ -23008,6 +22949,7 @@ document.addEventListener('DOMContentLoaded', function(){
     if (includeCustom) html += '<td>'+od_formatMoney((pivot.totals && pivot.totals[pivot.customCol]) || 0)+'</td>';
     html += '<td>'+od_formatMoney(pivot.grandTotal||0)+'</td>';
     html += '</tr></tfoot></table>';
+
     html += '</body></html>';
     printReport(html, { orientation: orientation });
   }
@@ -23035,6 +22977,7 @@ document.addEventListener('DOMContentLoaded', function(){
     totalRow.push(Number((pivot.totals && pivot.totals[pivot.customCol]) || 0));
     totalRow.push(Number(pivot.grandTotal || 0));
     aoa.push(totalRow);
+
     var ws = XLSX.utils.aoa_to_sheet(aoa);
 
     // basic number formatting for amount columns
