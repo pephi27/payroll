@@ -3363,6 +3363,47 @@ window.addEventListener('load', dashReports);
       </tfoot>
 
      </table>
+     <div id="deductionsContributionBreakdown" class="section note" style="display:none; margin-top:8px;">
+      <strong>Contribution / Loan Split by Company</strong>
+      <table style="margin-top:6px; width:100%; border-collapse:collapse; table-layout:fixed;">
+       <thead>
+        <tr>
+         <th style="border:1px solid #cbd5e1; padding:4px; text-align:left;">Company</th>
+         <th style="border:1px solid #cbd5e1; padding:4px; text-align:right;">Pag-IBIG</th>
+         <th style="border:1px solid #cbd5e1; padding:4px; text-align:right;">PhilHealth</th>
+         <th style="border:1px solid #cbd5e1; padding:4px; text-align:right;">SSS</th>
+         <th style="border:1px solid #cbd5e1; padding:4px; text-align:right;">SSS Loan</th>
+         <th style="border:1px solid #cbd5e1; padding:4px; text-align:right;">Pag-IBIG Loan</th>
+        </tr>
+       </thead>
+       <tbody>
+        <tr>
+         <td style="border:1px solid #cbd5e1; padding:4px;">Edifice</td>
+         <td id="deductionsEdificePagibig" style="border:1px solid #cbd5e1; padding:4px; text-align:right;">0.00</td>
+         <td id="deductionsEdificePhilhealth" style="border:1px solid #cbd5e1; padding:4px; text-align:right;">0.00</td>
+         <td id="deductionsEdificeSss" style="border:1px solid #cbd5e1; padding:4px; text-align:right;">0.00</td>
+         <td id="deductionsEdificeLoanSss" style="border:1px solid #cbd5e1; padding:4px; text-align:right;">0.00</td>
+         <td id="deductionsEdificeLoanPi" style="border:1px solid #cbd5e1; padding:4px; text-align:right;">0.00</td>
+        </tr>
+        <tr>
+         <td style="border:1px solid #cbd5e1; padding:4px;">Portafolio</td>
+         <td id="deductionsPortafolioPagibig" style="border:1px solid #cbd5e1; padding:4px; text-align:right;">0.00</td>
+         <td id="deductionsPortafolioPhilhealth" style="border:1px solid #cbd5e1; padding:4px; text-align:right;">0.00</td>
+         <td id="deductionsPortafolioSss" style="border:1px solid #cbd5e1; padding:4px; text-align:right;">0.00</td>
+         <td id="deductionsPortafolioLoanSss" style="border:1px solid #cbd5e1; padding:4px; text-align:right;">0.00</td>
+         <td id="deductionsPortafolioLoanPi" style="border:1px solid #cbd5e1; padding:4px; text-align:right;">0.00</td>
+        </tr>
+        <tr>
+         <td style="border:1px solid #cbd5e1; padding:4px; font-weight:700; background:#fff7ed;">Grand Total</td>
+         <td id="deductionsGrandPagibig" style="border:1px solid #cbd5e1; padding:4px; text-align:right; font-weight:700; background:#fff7ed;">0.00</td>
+         <td id="deductionsGrandPhilhealth" style="border:1px solid #cbd5e1; padding:4px; text-align:right; font-weight:700; background:#fff7ed;">0.00</td>
+         <td id="deductionsGrandSss" style="border:1px solid #cbd5e1; padding:4px; text-align:right; font-weight:700; background:#fff7ed;">0.00</td>
+         <td id="deductionsGrandLoanSss" style="border:1px solid #cbd5e1; padding:4px; text-align:right; font-weight:700; background:#fff7ed;">0.00</td>
+         <td id="deductionsGrandLoanPi" style="border:1px solid #cbd5e1; padding:4px; text-align:right; font-weight:700; background:#fff7ed;">0.00</td>
+        </tr>
+       </tbody>
+      </table>
+     </div>
 
      <div class="section loan-tracker">
       <h3>Loan Tracker</h3>
@@ -9627,10 +9668,57 @@ function getDeductionsReportCompanyName() {
   return 'PayrollPro';
 }
 
+function getEmployeeCompanyBucket(empId) {
+  const companyRaw = String((storedEmployees && storedEmployees[empId] && storedEmployees[empId].company) || '').trim().toLowerCase();
+  if (/edifice/.test(companyRaw)) return 'edifice';
+  if (/(portafolio|portfolio)/.test(companyRaw)) return 'portafolio';
+  return null;
+}
+
+const CONTRIBUTION_SPLIT_KEYS = ['pagibig','philhealth','sss','loanSSS','loanPI'];
+
+function updateDeductionsContributionBreakdownDisplay(split) {
+  const holder = document.getElementById('deductionsContributionBreakdown');
+  if (!holder) return;
+  holder.style.display = 'block';
+  const safe = (bucket, key) => roundToCents(Number(split && split[bucket] && split[bucket][key]) || 0);
+  const map = [
+    ['edifice','Pagibig','pagibig'],
+    ['edifice','Philhealth','philhealth'],
+    ['edifice','Sss','sss'],
+    ['edifice','LoanSss','loanSSS'],
+    ['edifice','LoanPi','loanPI'],
+    ['portafolio','Pagibig','pagibig'],
+    ['portafolio','Philhealth','philhealth'],
+    ['portafolio','Sss','sss'],
+    ['portafolio','LoanSss','loanSSS'],
+    ['portafolio','LoanPi','loanPI']
+  ];
+  map.forEach(([bucket, labelKey, valueKey]) => {
+    const id = `deductions${bucket === 'edifice' ? 'Edifice' : 'Portafolio'}${labelKey}`;
+    const el = document.getElementById(id);
+    if (el) el.textContent = formatDeductionDisplay(safe(bucket, valueKey));
+  });
+  const grandMap = [
+    ['deductionsGrandPagibig', 'pagibig'],
+    ['deductionsGrandPhilhealth', 'philhealth'],
+    ['deductionsGrandSss', 'sss'],
+    ['deductionsGrandLoanSss', 'loanSSS'],
+    ['deductionsGrandLoanPi', 'loanPI']
+  ];
+  grandMap.forEach(([id, key]) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    const val = roundToCents(safe('edifice', key) + safe('portafolio', key));
+    el.textContent = formatDeductionDisplay(val);
+  });
+}
+
 function buildDeductionsReportData() {
   syncPeriodScopedData();
   const rows = [];
   const totals = {};
+  const contributionTotals = { edifice: { pagibig:0, philhealth:0, sss:0, loanSSS:0, loanPI:0 }, portafolio: { pagibig:0, philhealth:0, sss:0, loanSSS:0, loanPI:0 } };
   DEDUCTION_COLUMN_KEYS.forEach(key => { totals[key] = 0; });
   getEmployeeList().forEach(emp => {
     const rH = Number(regHours[emp.id] ?? 0);
@@ -9665,6 +9753,12 @@ function buildDeductionsReportData() {
     };
     rowRaw.total = roundToCents(pagibig + philhealth + sss + sssLoan + piLoan + v + vW + otherDeductionsAmount);
     const rowEffective = computeEffectiveDeductionValues(rowRaw);
+    const companyBucket = getEmployeeCompanyBucket(emp.id);
+    if (companyBucket) {
+      CONTRIBUTION_SPLIT_KEYS.forEach(key => {
+        contributionTotals[companyBucket][key] = roundToCents((contributionTotals[companyBucket][key] || 0) + (Number(rowEffective[key]) || 0));
+      });
+    }
     DEDUCTION_COLUMN_KEYS.forEach(key => {
       totals[key] = roundToCents((totals[key] || 0) + (Number(rowEffective[key]) || 0));
     });
@@ -9678,18 +9772,23 @@ function buildDeductionsReportData() {
     if (!isDeductionColumnIncluded(key)) return false;
     return rows.some(row => Math.abs(Number(row.values[key]) || 0) >= 0.005);
   });
-  return { rows, totals, visibleColumns };
+  return { rows, totals, visibleColumns, contributionTotals };
 }
 
 document.addEventListener('DOMContentLoaded', function(){
   const btn = document.getElementById('printDeductionsBtn');
   if (!btn) return;
+  try {
+    const liveReport = buildDeductionsReportData();
+    updateDeductionsContributionBreakdownDisplay(liveReport.contributionTotals);
+  } catch (_) {}
   btn.addEventListener('click', function(){
     if (!getEmployeeList() || !getEmployeeList().length) {
       alert('No employees available for the deductions report.');
       return;
     }
     const report = buildDeductionsReportData();
+    updateDeductionsContributionBreakdownDisplay(report.contributionTotals);
     if (!report.visibleColumns.length) {
       alert('No deductions data to print for this period.');
       return;
@@ -9721,7 +9820,20 @@ document.addEventListener('DOMContentLoaded', function(){
     report.visibleColumns.forEach(col => {
       html += `<td class="num">${formatDeductionDisplay(report.totals[col])}</td>`;
     });
-    html += '</tr></tfoot></table></div>';
+    html += '</tr></tfoot></table>';
+    const e = (k) => Number(report.contributionTotals && report.contributionTotals.edifice && report.contributionTotals.edifice[k]) || 0;
+    const p = (k) => Number(report.contributionTotals && report.contributionTotals.portafolio && report.contributionTotals.portafolio[k]) || 0;
+    html += '<div style="margin-top:8px;font-size:10px;">';
+    html += '<strong>Contribution / Loan Split by Company</strong>';
+    html += '<table style="margin-top:4px;width:100%;border-collapse:collapse;table-layout:fixed;">';
+    html += '<thead><tr><th style="border:1px solid #000;padding:3px;text-align:left;">Company</th><th style="border:1px solid #000;padding:3px;text-align:right;">Pag-IBIG</th><th style="border:1px solid #000;padding:3px;text-align:right;">PhilHealth</th><th style="border:1px solid #000;padding:3px;text-align:right;">SSS</th><th style="border:1px solid #000;padding:3px;text-align:right;">SSS Loan</th><th style="border:1px solid #000;padding:3px;text-align:right;">Pag-IBIG Loan</th></tr></thead>';
+    html += '<tbody>';
+    const g = (k) => roundToCents(e(k) + p(k));
+    html += `<tr><td style="border:1px solid #000;padding:3px;">Edifice</td><td style="border:1px solid #000;padding:3px;text-align:right;">${formatDeductionDisplay(e('pagibig'))}</td><td style="border:1px solid #000;padding:3px;text-align:right;">${formatDeductionDisplay(e('philhealth'))}</td><td style="border:1px solid #000;padding:3px;text-align:right;">${formatDeductionDisplay(e('sss'))}</td><td style="border:1px solid #000;padding:3px;text-align:right;">${formatDeductionDisplay(e('loanSSS'))}</td><td style="border:1px solid #000;padding:3px;text-align:right;">${formatDeductionDisplay(e('loanPI'))}</td></tr>`;
+    html += `<tr><td style="border:1px solid #000;padding:3px;">Portafolio</td><td style="border:1px solid #000;padding:3px;text-align:right;">${formatDeductionDisplay(p('pagibig'))}</td><td style="border:1px solid #000;padding:3px;text-align:right;">${formatDeductionDisplay(p('philhealth'))}</td><td style="border:1px solid #000;padding:3px;text-align:right;">${formatDeductionDisplay(p('sss'))}</td><td style="border:1px solid #000;padding:3px;text-align:right;">${formatDeductionDisplay(p('loanSSS'))}</td><td style="border:1px solid #000;padding:3px;text-align:right;">${formatDeductionDisplay(p('loanPI'))}</td></tr>`;
+    html += `<tr><td style="border:1px solid #000;padding:3px;font-weight:700;background:#fff7ed;">Grand Total</td><td style="border:1px solid #000;padding:3px;text-align:right;font-weight:700;background:#fff7ed;">${formatDeductionDisplay(g('pagibig'))}</td><td style="border:1px solid #000;padding:3px;text-align:right;font-weight:700;background:#fff7ed;">${formatDeductionDisplay(g('philhealth'))}</td><td style="border:1px solid #000;padding:3px;text-align:right;font-weight:700;background:#fff7ed;">${formatDeductionDisplay(g('sss'))}</td><td style="border:1px solid #000;padding:3px;text-align:right;font-weight:700;background:#fff7ed;">${formatDeductionDisplay(g('loanSSS'))}</td><td style="border:1px solid #000;padding:3px;text-align:right;font-weight:700;background:#fff7ed;">${formatDeductionDisplay(g('loanPI'))}</td></tr>`;
+    html += '</tbody></table></div>';
+    html += '</div>';
 
     const ws = document.getElementById('weekStart');
     const we = document.getElementById('weekEnd');
@@ -19171,6 +19283,10 @@ document.addEventListener('DOMContentLoaded', function(){
       var effective = roundToCents(effectiveTotals[key] || 0);
       updateDeductionCellDisplay(cell, raw, effective, isDeductionColumnIncluded(key));
     });
+    try {
+      var report = buildDeductionsReportData();
+      updateDeductionsContributionBreakdownDisplay(report.contributionTotals);
+    } catch (_) {}
   }
   window.updateDeductionsGrandTotals = updateDeductionsGrandTotals;
 
@@ -22949,7 +23065,6 @@ document.addEventListener('DOMContentLoaded', function(){
     if (includeCustom) html += '<td>'+od_formatMoney((pivot.totals && pivot.totals[pivot.customCol]) || 0)+'</td>';
     html += '<td>'+od_formatMoney(pivot.grandTotal||0)+'</td>';
     html += '</tr></tfoot></table>';
-
     html += '</body></html>';
     printReport(html, { orientation: orientation });
   }
@@ -22977,7 +23092,6 @@ document.addEventListener('DOMContentLoaded', function(){
     totalRow.push(Number((pivot.totals && pivot.totals[pivot.customCol]) || 0));
     totalRow.push(Number(pivot.grandTotal || 0));
     aoa.push(totalRow);
-
     var ws = XLSX.utils.aoa_to_sheet(aoa);
 
     // basic number formatting for amount columns
