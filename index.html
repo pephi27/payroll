@@ -21210,9 +21210,13 @@ document.addEventListener('DOMContentLoaded', async function () {
 
   const LS_LAST  = 'payroll_dtr_last_saved_keys';
 
-  const localRecs = Array.isArray(window.storedRecords)
-    ? window.storedRecords
-    : (typeof storedRecords !== 'undefined' && Array.isArray(storedRecords) ? storedRecords : []);
+  const getCurrentLocalRecords = () => {
+    const fromWindow = (typeof window !== 'undefined' && Array.isArray(window.storedRecords))
+      ? window.storedRecords
+      : null;
+    if (fromWindow) return fromWindow;
+    return (typeof storedRecords !== 'undefined' && Array.isArray(storedRecords)) ? storedRecords : [];
+  };
 
   try {
     const res = await loadDtrFromCloud();
@@ -21233,6 +21237,10 @@ document.addEventListener('DOMContentLoaded', async function () {
       }
 
       // Merge: remote is source of truth, but keep any local-only punches (offline adds) that are not in remote.
+      // IMPORTANT: pull local records *after* the async cloud fetch resolves. If a user creates
+      // a manual DTR while hydration is in flight, we must merge that latest local state so the
+      // new punch is not overwritten by a stale pre-fetch snapshot.
+      const localRecs = getCurrentLocalRecords();
       const remoteKeys = new Set(remoteRecs.map(__dtrRecId).filter(Boolean));
       const merged = remoteRecs.slice();
       for (const r of (localRecs || [])) {
@@ -21274,6 +21282,7 @@ document.addEventListener('DOMContentLoaded', async function () {
 
     } else if (res && (res.status === 'not_found' || (res.status === 'ok' && (!res.records || !res.records.length)))) {
       // Remote is empty/missing
+      const localRecs = getCurrentLocalRecords();
       if (localRecs && localRecs.length) {
         // Seed remote from local
         window.__dtrHydrationDone = true; // allow save
