@@ -18994,6 +18994,24 @@ document.addEventListener('DOMContentLoaded', function(){
       }
     }
   }
+  function markPrintColumnByHeader(table, headerLabel, className){
+    if (!table || !table.tHead || !table.tHead.rows || !table.tHead.rows.length) return;
+    var target = normalizeHeader(headerLabel || '');
+    if (!target) return;
+    var headRow = table.tHead.rows[table.tHead.rows.length - 1];
+    var idx = -1;
+    for (var i = 0; i < headRow.cells.length; i += 1) {
+      if (normalizeHeader(headRow.cells[i].textContent || '') === target) {
+        idx = i;
+        break;
+      }
+    }
+    if (idx < 0) return;
+    Array.from(table.querySelectorAll('tr')).forEach(function(row){
+      var cell = row.cells && row.cells[idx];
+      if (cell) cell.classList.add(className);
+    });
+  }
   function buildDtrPrintTable(){
     var tbl = document.getElementById('resultsTable');
     if (!tbl) return null;
@@ -19006,6 +19024,7 @@ document.addEventListener('DOMContentLoaded', function(){
     removeColumnsByIndex(clone, removeIdx);
     replaceZeroWithDash(clone);
     removeEmptyColumns(clone, ['Project']);
+    markPrintColumnByHeader(clone, 'Project', 'dtr-project-col');
     return clone;
   }
   function printDTR(orientation){
@@ -19017,7 +19036,7 @@ document.addEventListener('DOMContentLoaded', function(){
       var periodText = getDtrPeriodText();
       var projectText = getDtrProjectText();
       var doc = '<!DOCTYPE html><html><head><meta charset="utf-8"><title>' + reportTitle + '</title>' +
-        '<style>@page{size:letter landscape;margin:10mm} body{font-family:Arial,Helvetica,sans-serif;margin:0} .report-header{margin:0 0 8px} .company-name{font-size:14px;font-weight:700} .report-title{font-size:12px;font-weight:600;margin-top:2px} .report-period{font-size:10px;margin-top:2px} table{width:100%;border-collapse:collapse;table-layout:fixed} th,td{border:1pt solid #000;padding:4px;font-size:10px;text-align:center} th{background:#f1f5f9} thead{display:table-header-group} tfoot{display:table-footer-group} td:first-child, th:first-child, td:nth-child(2), th:nth-child(2){text-align:left} #resultsTable th, #resultsTable td { white-space: nowrap; } #resultsTable th:nth-child(2), #resultsTable td:nth-child(2) { white-space: normal; overflow-wrap: anywhere; word-break: break-word; max-width: 200px; vertical-align: top; } #resultsTable th:nth-child(3), #resultsTable td:nth-child(3) { white-space: normal; overflow-wrap: anywhere; word-break: break-word; max-width: 240px; vertical-align: top; }</style>' +
+        '<style>@page{size:letter landscape;margin:10mm} body{font-family:Arial,Helvetica,sans-serif;margin:0} .report-header{margin:0 0 8px} .company-name{font-size:14px;font-weight:700} .report-title{font-size:12px;font-weight:600;margin-top:2px} .report-period{font-size:10px;margin-top:2px} table{width:100%;border-collapse:collapse;table-layout:fixed} th,td{border:1pt solid #000;padding:4px;font-size:10px;text-align:center} th{background:#f1f5f9} thead{display:table-header-group} tfoot{display:table-footer-group} td:first-child, th:first-child, td:nth-child(2), th:nth-child(2){text-align:left} #resultsTable th, #resultsTable td { white-space: nowrap; } #resultsTable .dtr-project-col { white-space: normal !important; overflow-wrap: anywhere; word-break: break-word; hyphens: auto; max-width: 240px; vertical-align: top; } #resultsTable th:nth-child(2), #resultsTable td:nth-child(2) { white-space: normal; overflow-wrap: anywhere; word-break: break-word; max-width: 200px; vertical-align: top; }</style>' +
         '</head><body>' +
         '<div class="report-header">' +
         '<div class="company-name">' + companyName + '</div>' +
