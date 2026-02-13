@@ -13963,19 +13963,42 @@ rows += `<tr class="allowance">
           if (!tot) return;
           const cells = tot.querySelectorAll('td');
           if (!cells || cells.length < 2) return;
-          const gross = num(cells[cells.length-1].textContent);
-          const hrs = num(cells[cells.length-2].textContent);
+          let regHrs = 0;
+          let otHrs = 0;
+          let regGross = 0;
+          let otGross = 0;
+
+          // Preferred path: the Detailed report's project-total row exposes
+          // dedicated REG/OT hour and gross columns in this order:
+          // [.., RWH HRS, OT HRS, RWH GROSS, OT GROSS, TOTAL GROSS].
+          // Read those exact columns so OT amounts don't get folded into
+          // REGULAR PAY in the master report.
+          if (tableId === 'r_table' && cells.length >= 5) {
+            regHrs = num(cells[cells.length - 5].textContent);
+            otHrs = num(cells[cells.length - 4].textContent);
+            regGross = num(cells[cells.length - 3].textContent);
+            otGross = num(cells[cells.length - 2].textContent);
+          } else {
+            // Fallback for legacy table layouts.
+            const gross = num(cells[cells.length - 1].textContent);
+            const hrs = num(cells[cells.length - 2].textContent);
+            if (mode === 'ot') {
+              otHrs = hrs;
+              otGross = gross;
+            } else {
+              regHrs = hrs;
+              regGross = gross;
+            }
+          }
+
           const meta = resolveProjectDetails('', rawName);
           const displayName = meta.name || rawName;
           const bucket = ensure(displayName, meta);
           if (!bucket) return;
-          if (mode === 'ot') {
-            bucket.otHrs += hrs;
-            bucket.otTotal += gross;
-          } else {
-            bucket.regHrs += hrs;
-            bucket.regTotal += gross;
-          }
+          bucket.regHrs += regHrs;
+          bucket.otHrs += otHrs;
+          bucket.regTotal += regGross;
+          bucket.otTotal += otGross;
         });
       };
 
