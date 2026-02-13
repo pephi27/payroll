@@ -22807,6 +22807,10 @@ document.addEventListener('DOMContentLoaded', function(){
     var totals = {};
     types.forEach(function(t){ totals[t] = 0; });
     totals[CUSTOM_COL] = 0;
+    var contributionTotals = {
+      edifice: 0,
+      portafolio: 0
+    };
 
     var rows = [];
     (typeof getEmployeeList()!=='undefined' && Array.isArray(getEmployeeList()) ? getEmployeeList() : []).forEach(function(emp){
@@ -22827,6 +22831,7 @@ document.addEventListener('DOMContentLoaded', function(){
 
         var t = (it.type || '').toString().trim();
         var lbl = (it.label || '').toString().trim();
+        var tagText = (t + ' ' + lbl).toLowerCase();
         var resolved = null;
 
         // Prefer stored type if it matches options
@@ -22837,6 +22842,9 @@ document.addEventListener('DOMContentLoaded', function(){
 
         if (resolved === CUSTOM_COL) sums[CUSTOM_COL] += amt;
         else sums[resolved] += amt;
+
+        if (/edifice/.test(tagText)) contributionTotals.edifice += amt;
+        if (/(portafolio|portfolio)/.test(tagText)) contributionTotals.portafolio += amt;
       });
 
       var rowTotal = 0;
@@ -22867,6 +22875,7 @@ document.addEventListener('DOMContentLoaded', function(){
       types: types,
       customCol: CUSTOM_COL,
       totals: totals,
+      contributionTotals: contributionTotals,
       grandTotal: grandTotal,
       rows: rows
     };
@@ -22950,6 +22959,16 @@ document.addEventListener('DOMContentLoaded', function(){
     html += '<td>'+od_formatMoney(pivot.grandTotal||0)+'</td>';
     html += '</tr></tfoot></table>';
 
+    var edificeContribution = Number(pivot.contributionTotals && pivot.contributionTotals.edifice) || 0;
+    var portafolioContribution = Number(pivot.contributionTotals && pivot.contributionTotals.portafolio) || 0;
+    if (edificeContribution !== 0 || portafolioContribution !== 0){
+      html += '<div style="margin-top:8px;font-size:10px;">';
+      html += '<strong>Contribution deduction breakdown:</strong> ';
+      html += 'Edifice: <strong>'+od_formatMoney(edificeContribution)+'</strong> &nbsp;|&nbsp; ';
+      html += 'Portafolio: <strong>'+od_formatMoney(portafolioContribution)+'</strong>';
+      html += '</div>';
+    }
+
     html += '</body></html>';
     printReport(html, { orientation: orientation });
   }
@@ -22977,6 +22996,14 @@ document.addEventListener('DOMContentLoaded', function(){
     totalRow.push(Number((pivot.totals && pivot.totals[pivot.customCol]) || 0));
     totalRow.push(Number(pivot.grandTotal || 0));
     aoa.push(totalRow);
+
+    var edificeContribution = Number(pivot.contributionTotals && pivot.contributionTotals.edifice) || 0;
+    var portafolioContribution = Number(pivot.contributionTotals && pivot.contributionTotals.portafolio) || 0;
+    if (edificeContribution !== 0 || portafolioContribution !== 0){
+      aoa.push(['Contribution deduction breakdown', '', '', '', '']);
+      aoa.push(['Edifice', '', '', '', edificeContribution]);
+      aoa.push(['Portafolio', '', '', '', portafolioContribution]);
+    }
 
     var ws = XLSX.utils.aoa_to_sheet(aoa);
 
