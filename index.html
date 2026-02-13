@@ -900,10 +900,41 @@ function injectPrintOrientation(html, orientation){
   }
   return html + styleTag;
 }
+function normalizePrintCompanyName(name){
+  var raw = String(name || '').trim();
+  var fullName = 'Edifice Group Corp & Portafolio Interiors Inc.';
+  if (!raw) return fullName;
+  if (/^payrollpro$/i.test(raw)) return fullName;
+  if (/^edifice$/i.test(raw) || /^edifice group corp\.?$/i.test(raw)) return fullName;
+  if (/^portafolio$/i.test(raw) || /^portafolio interiors inc\.?$/i.test(raw)) return fullName;
+  if (/^edifice\s*&\s*portafolio$/i.test(raw)) return fullName;
+  return raw;
+}
+function injectPrintHeaderStyle(html){
+  var rule = [
+    '.report-header, .hdr, .proj-title, .mr-project-title{',
+    'text-align:center !important;',
+    'align-items:center !important;',
+    'justify-content:center !important;',
+    '}',
+    '.report-header h1, .report-header h2, .report-header h3, .report-header h4, .report-header h5, .report-header h6,',
+    '.payslip-header h1, .payslip-header h2, .payslip-header h3, .payslip-header h4, .payslip-header h5, .payslip-header h6,',
+    '.hdr h1, .hdr h2, .hdr h3, .hdr h4, .hdr h5, .hdr h6,',
+    '.report-title, .report-period, .company-line, .company-name, .proj-title, .mr-project-title{',
+    'font-size:150% !important;',
+    'line-height:1.2 !important;',
+    '}'
+  ].join('');
+  var styleTag = '<style id="printHeaderStyle">' + rule + '</style>';
+  if (/<\/head>/i.test(html)) {
+    return html.replace(/<\/head>/i, styleTag + '</head>');
+  }
+  return html + styleTag;
+}
 function printReport(html, options){
   var opts = options || {};
   var orientation = normalizePrintOrientation(opts.orientation);
-  var doc = injectPrintOrientation(html, orientation);
+  var doc = injectPrintHeaderStyle(injectPrintOrientation(html, orientation));
   var target = opts.targetWindow;
   var w = target || window.open('', opts.name || '_blank', opts.features || 'width=1024,height=768');
   if (!w) {
@@ -1087,20 +1118,6 @@ function printReport(html, options){
     var generatedOn = new Date();
     var generatedText = generatedOn.toLocaleDateString();
     var payDateText = (data.payDate || periodEnd || generatedText || '').toString();
-    var companyName = '';
-    if (data.company) {
-      companyName = data.company;
-    } else {
-      try {
-        var empMap = (typeof storedEmployees !== 'undefined' && storedEmployees) ? storedEmployees : (window.storedEmployees || {});
-        companyName = (empMap && data.id && empMap[data.id] && empMap[data.id].company) ? empMap[data.id].company : '';
-      } catch (e) {
-        companyName = '';
-      }
-    }
-    if (!companyName) {
-      companyName = (typeof COMPANY_OPTIONS !== 'undefined' && Array.isArray(COMPANY_OPTIONS) && COMPANY_OPTIONS[0]) ? COMPANY_OPTIONS[0] : 'PayrollPro';
-    }
     var additionalIncomeItems = Array.isArray(data.additionalIncomeDetails) ? data.additionalIncomeDetails : [];
     var additionalIncomeTotal = toNum(data.additionalIncomeTotal);
     if (!(additionalIncomeTotal > 0)) {
@@ -1161,7 +1178,6 @@ function printReport(html, options){
     }
     return `<div class="payslip">
       <div class="payslip-header">
-        <div class="company-name">${companyName}</div>
         <div class="header-lines">
           <div class="meta-line"><span class="meta-label">EMPLOYEE:</span> ${data.name || ''} <span class="meta-muted">(ID: ${data.id || ''})</span></div>
           <div class="meta-line"><span class="meta-label">PAY PERIOD:</span> ${periodStart || '-'} – ${periodEnd || '-'}</div>
@@ -9627,7 +9643,7 @@ document.addEventListener('DOMContentLoaded', function(){
       '</head><body>' +
       '<div id="printWrap">' +
       '<div class="report-header">' +
-      '<div class="company-name">Edifice Group Corp.</div>' +
+      '<div class="company-name">Edifice Group Corp & Portafolio Interiors Inc.</div>' +
       voidedLabel +
       '<div class="report-title">PAYROLL \u2013 COMPRESSED WORK WEEK</div>' +
       (startDate && endDate ? '<div class="report-period">Payroll Period: ' + startDate + ' to ' + endDate + '</div>' : '') +
@@ -9642,9 +9658,9 @@ document.addEventListener('DOMContentLoaded', function(){
 
 function getDeductionsReportCompanyName() {
   if (typeof COMPANY_OPTIONS !== 'undefined' && Array.isArray(COMPANY_OPTIONS) && COMPANY_OPTIONS[0]) {
-    return COMPANY_OPTIONS[0];
+    return normalizePrintCompanyName(COMPANY_OPTIONS[0]);
   }
-  return 'PayrollPro';
+  return normalizePrintCompanyName('PayrollPro');
 }
 
 function getEmployeeCompanyBucket(empId) {
@@ -9839,9 +9855,9 @@ document.addEventListener('DOMContentLoaded', function(){
 
 function getOvertimeReportCompanyName() {
   if (typeof COMPANY_OPTIONS !== 'undefined' && Array.isArray(COMPANY_OPTIONS) && COMPANY_OPTIONS[0]) {
-    return COMPANY_OPTIONS[0];
+    return normalizePrintCompanyName(COMPANY_OPTIONS[0]);
   }
-  return 'PayrollPro';
+  return normalizePrintCompanyName('PayrollPro');
 }
 
 function buildOvertimeReportData() {
@@ -18896,9 +18912,9 @@ document.addEventListener('DOMContentLoaded', function(){
   }
   function getDtrReportCompanyName(){
     if (typeof COMPANY_OPTIONS !== 'undefined' && Array.isArray(COMPANY_OPTIONS) && COMPANY_OPTIONS[0]) {
-      return COMPANY_OPTIONS[0];
+      return normalizePrintCompanyName(COMPANY_OPTIONS[0]);
     }
-    return 'PayrollPro';
+    return normalizePrintCompanyName('PayrollPro');
   }
   function getDtrPeriodText(){
     var start = (document.getElementById('weekStart') || {}).value || '';
