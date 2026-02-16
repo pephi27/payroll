@@ -1215,7 +1215,7 @@ function printReport(html, options){
           <div class="detail-row"><span>Pag-IBIG</span><span>${formatMoney(data.pagibig)}</span></div>
           ${sssLoan > 0 ? `<div class="detail-row"><span>SSS Loan</span><span>${formatMoney(sssLoan)}</span></div>` : ''}
           ${piLoan > 0 ? `<div class="detail-row"><span>Pag-IBIG Loan</span><span>${formatMoney(piLoan)}</span></div>` : ''}
-          ${vale > 0 ? `<div class="detail-row"><span>Vale</span><span>${formatMoney(vale)}</span></div>` : ''}
+          ${vale > 0 ? `<div class="detail-row"><span>Cash Advance</span><span>${formatMoney(vale)}</span></div>` : ''}
           ${valeWed > 0 ? `<div class="detail-row"><span>Vale (Wed)</span><span>${formatMoney(valeWed)}</span></div>` : ''}
           ${otherDeductionBlock}
         </div>
@@ -20073,7 +20073,7 @@ body{font-family:Arial,Helvetica,sans-serif;margin:0;padding:0 0.1in;}
       <tr><td>SSS</td><td class="right">${sss}</td></tr>
       <tr><td>SSS Loan</td><td class="right">${sssLoan}</td></tr>
       <tr><td>Pag-IBIG Loan</td><td class="right">${piLoan}</td></tr>
-      <tr><td>Account</td><td class="right">${valeAmt}</td></tr>
+      <tr><td>Cash Advance</td><td class="right">${valeAmt}</td></tr>
       <tr><td>Wednesday Vale</td><td class="right">${wedValeAmt}</td></tr>
       <tr><th>Total Deductions</th><th class="right">${totalDed}</th></tr>
     </table>
