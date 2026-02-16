@@ -12375,8 +12375,13 @@ document.addEventListener('DOMContentLoaded', () => {
           }).join('');
 
           const adj = adjustmentMap[empId] || { regPay: 0, otPay: 0, otHours: 0, adjHrs: 0, adjGross: 0 };
-          const regGross = roundToCents((rowRegHours * rate) + Number(adj.regPay || 0));
-          const otGross = roundToCents((rowOtHours + Number(adj.otHours || 0)) * effectiveOtRate);
+          // Keep report buckets aligned with payroll tab totals:
+          // - RWH GROSS reflects only regular pay from rendered regular hours.
+          // - OT GROSS reflects only overtime pay from rendered overtime hours.
+          // - ADJ GROSS captures all adjustment amounts (REG/OT explicit adjustments).
+          // This avoids counting the same adjustment amount twice in both RWH/OT and ADJ columns.
+          const regGross = roundToCents(rowRegHours * rate);
+          const otGross = roundToCents(rowOtHours * effectiveOtRate);
           const adjHrs = roundToCents(Number(adj.adjHrs || 0));
           const adjGross = roundToCents(Number(adj.adjGross || 0));
           const totalGross = roundToCents(regGross + otGross + adjGross);
@@ -12572,8 +12577,8 @@ rows += `<tr class="allowance">
           });
 
           const adj = adjustmentMap[empId] || { regPay: 0, otPay: 0, otHours: 0, adjHrs: 0, adjGross: 0 };
-          const regGross = roundToCents((rowRegHours * rate) + Number(adj.regPay || 0));
-          const otGross = roundToCents((rowOtHours + Number(adj.otHours || 0)) * effectiveOtRate);
+          const regGross = roundToCents(rowRegHours * rate);
+          const otGross = roundToCents(rowOtHours * effectiveOtRate);
           const adjHrs = roundToCents(Number(adj.adjHrs || 0));
           const adjGross = roundToCents(Number(adj.adjGross || 0));
           const totalGross = roundToCents(regGross + otGross + adjGross);
@@ -14069,14 +14074,14 @@ rows += `<tr class="allowance">
 
           // Preferred path: the Detailed report's project-total row exposes
           // dedicated REG/OT hour and gross columns in this order:
-          // [.., RWH HRS, OT HRS, RWH GROSS, OT GROSS, TOTAL GROSS].
-          // Read those exact columns so OT amounts don't get folded into
-          // REGULAR PAY in the master report.
-          if (tableId === 'r_table' && cells.length >= 5) {
-            regHrs = num(cells[cells.length - 5].textContent);
-            otHrs = num(cells[cells.length - 4].textContent);
-            regGross = num(cells[cells.length - 3].textContent);
-            otGross = num(cells[cells.length - 2].textContent);
+          // [.., RWH HRS, OT HRS, ADJ HRS, RWH GROSS, OT GROSS, ADJ GROSS, TOTAL GROSS].
+          // Read the exact RWH/OT columns so master-report REGULAR PAY mirrors
+          // payroll-tab regular pay and does not drift when ADJ columns exist.
+          if (tableId === 'r_table' && cells.length >= 7) {
+            regHrs = num(cells[cells.length - 7].textContent);
+            otHrs = num(cells[cells.length - 6].textContent);
+            regGross = num(cells[cells.length - 4].textContent);
+            otGross = num(cells[cells.length - 3].textContent);
           } else {
             // Fallback for legacy table layouts.
             const gross = num(cells[cells.length - 1].textContent);
@@ -14226,10 +14231,105 @@ rows += `<tr class="allowance">
     return rows;
   }
 
+  function computeEmployeeProjectLookup(){
+    const byEmployee = {};
+    try {
+      const rows = Array.from(document.querySelectorAll('#resultsTable tbody tr'));
+      rows.forEach(tr => {
+        const rawId = (tr.cells[0]?.textContent || '').trim();
+        const name = (tr.cells[1]?.textContent || '').trim();
+        const empId = (typeof resolveReportEmployeeId === 'function') ? resolveReportEmployeeId(rawId, name) : rawId;
+        if (!empId) return;
+        const regHrs = num(tr.cells[11]?.textContent) || num(tr.querySelector('.regHrs')?.value);
+        const otHrs = num(tr.cells[12]?.textContent) || num(tr.querySelector('.otHrs')?.value);
+        const weight = regHrs + otHrs;
+        const cell = tr.cells[2];
+        let projectIdHint = '';
+        let projectLabel = '';
+        try {
+          const sel = cell?.querySelector('select');
+          if (sel) {
+            projectIdHint = String(sel.value || sel.getAttribute('data-project-id') || '').trim();
+            const opt = sel.options[sel.selectedIndex];
+            projectLabel = String((opt && (opt.textContent || opt.label)) || '').trim();
+          } else {
+            projectIdHint = String(cell?.dataset?.projectId || cell?.dataset?.project || '').trim();
+            projectLabel = String(cell?.dataset?.projectName || cell?.dataset?.project || cell?.textContent || '').trim();
+          }
+        } catch (_) {}
+        const meta = resolveProjectDetails(projectIdHint, projectLabel);
+        const projectName = safe(meta?.name || projectLabel || projectIdHint).trim();
+        if (!projectName) return;
+        const rec = byEmployee[empId] || { projectName: '', weight: -1 };
+        if (weight >= rec.weight) {
+          byEmployee[empId] = { projectName, weight };
+        }
+      });
+    } catch (_) {}
+    return byEmployee;
+  }
+
+  function computeProjectSideAmounts(){
+    const out = {};
+    const addTo = (projectName, key, value) => {
+      const label = safe(projectName).trim();
+      if (!label) return;
+      const mapKey = label.toLowerCase();
+      if (!out[mapKey]) out[mapKey] = { additionalIncome: 0, otherDeductions: 0 };
+      out[mapKey][key] += Number(value) || 0;
+    };
+
+    try {
+      const lookup = computeEmployeeProjectLookup();
+      const projectMap = (typeof storedProjects !== 'undefined' && storedProjects) || {};
+      const ai = (typeof additionalIncomeDetails !== 'undefined' && additionalIncomeDetails) || {};
+      Object.keys(ai).forEach(empId => {
+        const items = Array.isArray(ai[empId]) ? ai[empId] : [];
+        items.forEach(item => {
+          const amount = num(item && item.amount);
+          if (amount <= 0) return;
+          const assigned = String((item && (item.projectId != null ? item.projectId : item.project)) || '').trim();
+          const fallbackProject = (lookup[empId] && lookup[empId].projectName) || '';
+          const projId = resolveProjectIdValue(assigned, projectMap);
+          const meta = resolveProjectDetails(projId, assigned || fallbackProject);
+          const projectName = meta.name || assigned || fallbackProject;
+          addTo(projectName, 'additionalIncome', amount);
+        });
+      });
+    } catch (_) {}
+
+    try {
+      const lookup = computeEmployeeProjectLookup();
+      const ods = (typeof otherDeductionsDetails !== 'undefined' && otherDeductionsDetails) || {};
+      Object.keys(ods).forEach(empId => {
+        const projectName = lookup[empId] && lookup[empId].projectName;
+        if (!projectName) return;
+        const items = Array.isArray(ods[empId]) ? ods[empId] : [];
+        const total = items.reduce((sum, item) => sum + num(item && item.amount), 0);
+        if (total <= 0) return;
+        addTo(projectName, 'otherDeductions', total);
+      });
+    } catch (_) {}
+
+    return out;
+  }
+
   function computeProjectTotals(){
-    const fromDetailed = computeProjectTotalsFromDetailed();
-    if (fromDetailed.length) return fromDetailed;
-    return computeProjectTotalsFromDTR();
+    const baseRows = (() => {
+      const fromDetailed = computeProjectTotalsFromDetailed();
+      if (fromDetailed.length) return fromDetailed;
+      return computeProjectTotalsFromDTR();
+    })();
+    const side = computeProjectSideAmounts();
+    return baseRows.map(row => {
+      const key = safe(row && row.name).trim().toLowerCase();
+      const add = side[key] || { additionalIncome: 0, otherDeductions: 0 };
+      return {
+        ...row,
+        additionalIncome: Number(add.additionalIncome || 0),
+        otherDeductions: Number(add.otherDeductions || 0)
+      };
+    });
   }
 
   function readPayrollGrandTotalValue(key){
@@ -14247,9 +14347,11 @@ rows += `<tr class="allowance">
     const g = prows.reduce((acc,r)=>{
       acc.regTotal += Number((r && r.regTotal != null) ? r.regTotal : 0);
       acc.otTotal += Number((r && r.otTotal != null) ? r.otTotal : 0);
+      acc.additionalIncome += Number((r && r.additionalIncome != null) ? r.additionalIncome : 0);
+      acc.otherDeductions += Number((r && r.otherDeductions != null) ? r.otherDeductions : 0);
       acc.t += Number((r && r.total != null) ? r.total : 0);
       return acc;
-    }, {regTotal:0, otTotal:0, t:0});
+    }, {regTotal:0, otTotal:0, additionalIncome:0, otherDeductions:0, t:0});
     const payrollGrandOtPay = readPayrollGrandTotalValue('otPay');
     if (payrollGrandOtPay != null) {
       g.otTotal = payrollGrandOtPay;
@@ -14274,7 +14376,7 @@ rows += `<tr class="allowance">
     const projectGroups = {};
     const ensureProjectGroup = (companyName) => {
       const label = normalizeCompanyLabel(companyName);
-      if (!projectGroups[label]) projectGroups[label] = { label, rows: [], regHrs:0, otHrs:0, regTotal:0, otTotal:0, totalHrs:0, total:0 };
+      if (!projectGroups[label]) projectGroups[label] = { label, rows: [], regHrs:0, otHrs:0, regTotal:0, otTotal:0, additionalIncome:0, otherDeductions:0, totalHrs:0, total:0 };
       return projectGroups[label];
     };
     prows.forEach(row => {
@@ -14284,6 +14386,8 @@ rows += `<tr class="allowance">
       group.otHrs += Number((row && row.otHrs != null) ? row.otHrs : 0);
       group.regTotal += Number((row && row.regTotal != null) ? row.regTotal : 0);
       group.otTotal += Number((row && row.otTotal != null) ? row.otTotal : 0);
+      group.additionalIncome += Number((row && row.additionalIncome != null) ? row.additionalIncome : 0);
+      group.otherDeductions += Number((row && row.otherDeductions != null) ? row.otherDeductions : 0);
       group.totalHrs += Number((row && row.totalHrs != null) ? row.totalHrs : 0);
       group.total += Number((row && row.total != null) ? row.total : 0);
     });
@@ -14303,13 +14407,13 @@ rows += `<tr class="allowance">
 
     html += '<div class="mr-section" style="margin-top:16px;">';
     html += '<h4 class="mr-project-title">PROJECT</h4>';
-    html += '<table class="mr-table"><thead><tr><th class="left">NAME</th><th class="mr-num">REGULAR PAY</th><th class="mr-num">OVERTIME PAY</th><th class="mr-num">GRAND TOTAL</th></tr></thead><tbody>';
+    html += '<table class="mr-table"><thead><tr><th class="left">NAME</th><th class="mr-num">REGULAR PAY</th><th class="mr-num">OVERTIME PAY</th><th class="mr-num">ADDITIONAL INCOME</th><th class="mr-num">OTHER DEDUCTIONS</th><th class="mr-num">GRAND TOTAL</th></tr></thead><tbody>';
     if (!projectOrder.length){
       if (!prows.length){
-        html += '<tr><td class="left" colspan="4">No project totals available.</td></tr>';
+        html += '<tr><td class="left" colspan="6">No project totals available.</td></tr>';
       } else {
         prows.forEach(r=>{
-          html += `<tr><td class="left">${safe(r.name)}</td><td class="mr-num">${f2(r.regTotal)}</td><td class="mr-num">${f2(r.otTotal)}</td><td class="mr-num">${f2(r.total)}</td></tr>`;
+          html += `<tr><td class="left">${safe(r.name)}</td><td class="mr-num">${f2(r.regTotal)}</td><td class="mr-num">${f2(r.otTotal)}</td><td class="mr-num">${f2(r.additionalIncome)}</td><td class="mr-num">${f2(r.otherDeductions)}</td><td class="mr-num">${f2(r.total)}</td></tr>`;
         });
       }
     } else {
@@ -14317,15 +14421,15 @@ rows += `<tr class="allowance">
         const group = projectGroups[companyName];
         if (!group || !group.rows.length) return;
         const companyLabel = normalizeCompanyLabel(companyName);
-        html += `<tr class="mr-company"><th colspan="4">${safe(companyLabel)}</th></tr>`;
+        html += `<tr class="mr-company"><th colspan="6">${safe(companyLabel)}</th></tr>`;
         const sortedRows = group.rows.slice().sort((a,b)=> safe(a && a.name).localeCompare(safe(b && b.name)));
         sortedRows.forEach(r=>{
-          html += `<tr><td class="left">${safe(r && r.name)}</td><td class="mr-num">${f2(r && r.regTotal)}</td><td class="mr-num">${f2(r && r.otTotal)}</td><td class="mr-num">${f2(r && r.total)}</td></tr>`;
+          html += `<tr><td class="left">${safe(r && r.name)}</td><td class="mr-num">${f2(r && r.regTotal)}</td><td class="mr-num">${f2(r && r.otTotal)}</td><td class="mr-num">${f2(r && r.additionalIncome)}</td><td class="mr-num">${f2(r && r.otherDeductions)}</td><td class="mr-num">${f2(r && r.total)}</td></tr>`;
         });
-        html += `<tr class="mr-subtotal"><td class="left" style="font-weight:600;">Subtotal - ${safe(companyLabel)}</td><td class="mr-num" style="font-weight:600;">${f2(group.regTotal)}</td><td class="mr-num" style="font-weight:600;">${f2(group.otTotal)}</td><td class="mr-num" style="font-weight:600;">${f2(group.total)}</td></tr>`;
+        html += `<tr class="mr-subtotal"><td class="left" style="font-weight:600;">Subtotal - ${safe(companyLabel)}</td><td class="mr-num" style="font-weight:600;">${f2(group.regTotal)}</td><td class="mr-num" style="font-weight:600;">${f2(group.otTotal)}</td><td class="mr-num" style="font-weight:600;">${f2(group.additionalIncome)}</td><td class="mr-num" style="font-weight:600;">${f2(group.otherDeductions)}</td><td class="mr-num" style="font-weight:600;">${f2(group.total)}</td></tr>`;
       });
     }
-    html += `</tbody><tfoot><tr><td class="left">Grand Total</td><td class="mr-num">${f2(g.regTotal)}</td><td class="mr-num">${f2(g.otTotal)}</td><td class="mr-num">${f2(g.t)}</td></tr></tfoot></table>`;
+    html += `</tbody><tfoot><tr><td class="left">Grand Total</td><td class="mr-num">${f2(g.regTotal)}</td><td class="mr-num">${f2(g.otTotal)}</td><td class="mr-num">${f2(g.additionalIncome)}</td><td class="mr-num">${f2(g.otherDeductions)}</td><td class="mr-num">${f2(g.t)}</td></tr></tfoot></table>`;
     html += '</div>';
 
     host.innerHTML = html;
