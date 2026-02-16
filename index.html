@@ -14284,7 +14284,33 @@ rows += `<tr class="allowance">
       const label = safe(projectName).trim();
       if (!label) return;
       const key = label.toLowerCase();
-
+      out[key] = (Number(out[key]) || 0) + (Number(amount) || 0);
+    };
+    try {
+      const rows = Array.from(document.querySelectorAll('#resultsTable tbody tr'));
+      rows.forEach(tr => {
+        const cell = tr.cells[2];
+        let projectIdHint = '';
+        let projectLabel = '';
+        try {
+          const sel = cell?.querySelector('select');
+          if (sel) {
+            projectIdHint = String(sel.value || sel.getAttribute('data-project-id') || '').trim();
+            const opt = sel.options[sel.selectedIndex];
+            projectLabel = String((opt && (opt.textContent || opt.label)) || '').trim();
+          } else {
+            projectIdHint = String(cell?.dataset?.projectId || cell?.dataset?.project || '').trim();
+            projectLabel = String(cell?.dataset?.projectName || cell?.dataset?.project || cell?.textContent || '').trim();
+          }
+        } catch (_) {}
+        const meta = resolveProjectDetails(projectIdHint, projectLabel);
+        const projectName = safe(meta?.name || projectLabel || projectIdHint).trim();
+        if (!projectName) return;
+        const adjPay = num(tr.querySelector('.adjPay')?.textContent) || num(tr.cells[15]?.textContent);
+        if (!adjPay) return;
+        addTo(projectName, adjPay);
+      });
+    } catch (_) {}
     return out;
   }
 
