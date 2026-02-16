@@ -12146,100 +12146,6 @@ document.addEventListener('DOMContentLoaded', () => {
       return M;
     }
 
-    function buildDetailedAdjustmentsByProject(){
-      const buckets = {};
-      const seenByEmployee = {};
-      const fallbackSource = isPlainObject(adjHrs) ? adjHrs : {};
-      const addEntry = (empId, bucket, entry = {}) => {
-        if (!empId || !bucket) return;
-        const normalizedEmployeeId = resolveReportEmployeeId(empId, entry.name);
-        if (!normalizedEmployeeId) return;
-        const rawId = entry.id ?? entry.adjustmentId ?? entry.rowId ?? entry.uid ?? entry.key ?? null;
-        const serial = rawId != null
-          ? String(rawId)
-          : JSON.stringify({
-            type: entry.type ?? entry.category ?? '',
-            h: entry.hours ?? entry.hrs ?? entry.adjHrs ?? entry.reg ?? entry.ot ?? 0,
-            a: entry.amount ?? entry.adjPay ?? entry.pay ?? 0,
-            p: entry.projectId ?? entry.project ?? ''
-          });
-        seenByEmployee[normalizedEmployeeId] = seenByEmployee[normalizedEmployeeId] || new Set();
-        if (seenByEmployee[normalizedEmployeeId].has(serial)) return;
-        seenByEmployee[normalizedEmployeeId].add(serial);
-
-        const hoursRaw = Number(entry.hours ?? entry.hrs ?? entry.value ?? entry.adjHrs ?? 0);
-        const hours = Number.isFinite(hoursRaw) ? roundToCents(hoursRaw) : 0;
-        const explicitAmount = Number(entry.amount ?? entry.adjPay ?? entry.pay ?? entry.total ?? NaN);
-        const rate = getReportEmployeeRate(normalizedEmployeeId, entry.name);
-        const amount = Number.isFinite(explicitAmount)
-          ? roundToCents(explicitAmount)
-          : roundToCents(hours * rate);
-        const kind = normalizeAdjustmentType(entry.type ?? entry.kind ?? entry.label ?? entry.name ?? entry.category ?? entry.adjustmentType ?? entry.entryType);
-        const effectiveOtRate = getEffectiveOvertimeRateForEmployee(normalizedEmployeeId, rate);
-
-        if (!buckets[bucket]) buckets[bucket] = {};
-        if (!buckets[bucket][normalizedEmployeeId]) {
-          buckets[bucket][normalizedEmployeeId] = {
-            regHours: 0,
-            otHours: 0,
-            adjHrs: 0,
-            regPay: 0,
-            otPay: 0,
-            adjGross: 0
-          };
-        }
-        const slot = buckets[bucket][normalizedEmployeeId];
-        const safeHours = Number.isFinite(hours) ? hours : 0;
-        const safeAmount = Number.isFinite(amount) ? amount : 0;
-        slot.adjHrs = roundToCents(slot.adjHrs + safeHours);
-        slot.adjGross = roundToCents(slot.adjGross + safeAmount);
-        if (kind === 'ADJ OT') {
-          slot.otHours = roundToCents(slot.otHours + safeHours);
-          slot.otPay = roundToCents(slot.otPay + (Number.isFinite(explicitAmount) ? safeAmount : (safeHours * effectiveOtRate)));
-        } else {
-          slot.regHours = roundToCents(slot.regHours + safeHours);
-          slot.regPay = roundToCents(slot.regPay + (Number.isFinite(explicitAmount) ? safeAmount : (safeHours * rate)));
-        }
-      };
-
-      Object.keys(fallbackSource).forEach(empId => {
-        const raw = fallbackSource[empId];
-        if (raw == null) return;
-
-        if (Array.isArray(raw)) {
-          raw.forEach((entry, idx) => {
-            if (!entry) return;
-            const projectId = resolveProjectIdValue(entry.projectId ?? entry.projectType ?? entry.project);
-            const bucket = getReportProjectBucket(projectId || getAdjustmentProjectType(empId));
-            if (!bucket) return;
-            addEntry(empId, bucket, { ...entry, id: entry.id ?? `${empId}-${idx}` });
-          });
-          return;
-        }
-
-        const projectId = resolveProjectIdValue(raw.projectId ?? raw.projectType ?? raw.project ?? getAdjustmentProjectType(empId));
-        const bucket = getReportProjectBucket(projectId);
-        if (!bucket) return;
-
-        if (typeof raw === 'number' || typeof raw === 'string') {
-          addEntry(empId, bucket, { id: `${empId}-legacy-ot`, hours: raw, type: 'ADJ OT' });
-          return;
-        }
-
-        if (typeof raw === 'object') {
-          const hasTotals = Object.prototype.hasOwnProperty.call(raw, 'reg') || Object.prototype.hasOwnProperty.call(raw, 'ot');
-          if (hasTotals) {
-            addEntry(empId, bucket, { id: `${empId}-reg-total`, hours: raw.reg, type: 'REG' });
-            addEntry(empId, bucket, { id: `${empId}-ot-total`, hours: raw.ot, type: 'ADJ OT' });
-            return;
-          }
-          addEntry(empId, bucket, { ...raw, id: raw.id ?? `${empId}-single` });
-        }
-      });
-
-      return buckets;
-    }
-
     function buildReportData(){
       const dtrRows = $$('#resultsTable tbody tr');
       if (dtrRows.length === 0) return null;
@@ -12248,10 +12154,27 @@ document.addEventListener('DOMContentLoaded', () => {
       const dates = eachDate(new Date(from).setHours(0,0,0,0), new Date(to).setHours(0,0,0,0));
       const data = collect(from, to) || {};
 
-      let adjustmentsByProjectEmp = {};
+      const adjustmentsByProjectEmp = {};
       try {
-        adjustmentsByProjectEmp = buildDetailedAdjustmentsByProject();
-      } catch (e) { adjustmentsByProjectEmp = {}; }
+        const empIds = Object.keys((typeof adjHrs !== 'undefined' && adjHrs) || {});
+        empIds.forEach(empId => {
+          const regHours = Number(getRegularAdjustmentHours(empId) || 0);
+          const otHours = Number(getOvertimeAdjustmentHours(empId) || 0);
+          if (!regHours && !otHours) return;
+          const assignedPid = resolveProjectIdValue(getAdjustmentProjectType(empId));
+          const bucket = getReportProjectBucket(assignedPid);
+          if (!bucket) return;
+          const rate = Number(getEmployeeHourlyRate(empId) || 0);
+          const effectiveOtRate = getEffectiveOvertimeRateForEmployee(empId, rate);
+          if (!adjustmentsByProjectEmp[bucket]) adjustmentsByProjectEmp[bucket] = {};
+          adjustmentsByProjectEmp[bucket][empId] = {
+            regHours,
+            otHours,
+            regPay: regHours * rate,
+            otPay: roundToCents(otHours * effectiveOtRate)
+          };
+        });
+      } catch (e) { /* ignore */ }
 
       // Ensure projects that only have Bantay allowance (no DTR rows) appear as their own blocks
       try {
@@ -12314,7 +12237,7 @@ document.addEventListener('DOMContentLoaded', () => {
       showMsg('', 'r_msg');
 
       const { data, from, to, dates, additionalIncomeByProject, adjustmentsByProjectEmp } = report;
-      const totalCols = 2 + (dates.length * 2) + 7;
+      const totalCols = 2 + (dates.length * 2) + 5;
       const hint = document.getElementById('r_range_hint');
       if (hint) {
         const fromDay = new Date(from).toLocaleDateString(undefined,{weekday:'long'}).toUpperCase();
@@ -12327,12 +12250,12 @@ document.addEventListener('DOMContentLoaded', () => {
         const lbl = d.toLocaleDateString(undefined,{day:'2-digit',month:'short',year:'numeric'});
         thead1 += `<th colspan="2">${lbl}</th>`;
       });
-      thead1 += `<th rowspan="3">RWH HRS</th><th rowspan="3">OT HRS</th><th rowspan="3">ADJ HRS</th><th rowspan="3">RWH GROSS</th><th rowspan="3">OT GROSS</th><th rowspan="3">ADJ GROSS</th><th rowspan="3">TOTAL GROSS</th></tr>`;
+      thead1 += `<th rowspan="3">RWH HRS</th><th rowspan="3">OT HRS</th><th rowspan="3">RWH GROSS</th><th rowspan="3">OT GROSS</th><th rowspan="3">TOTAL GROSS</th></tr>`;
       let thead2 = `<tr>${dates.map(d=>`<th colspan="2">${d.toLocaleDateString(undefined,{weekday:'long'}).toUpperCase()}</th>`).join('')}</tr>`;
       let thead3 = `<tr>${dates.map(()=>`<th>RWH</th><th>OT</th>`).join('')}</tr>`;
 
       const tbodies = [];
-      let gRegHours=0, gOtHours=0, gAdjHours=0, gRegGross=0, gOtGross=0, gAdjGross=0, gTotalGross=0;
+      let gRegHours=0, gOtHours=0, gRegGross=0, gOtGross=0, gTotalGross=0;
       const gDayTotals = dates.map(() => ({ rwh:0, oth:0 }));
       const projects = Object.keys(data).sort((a,b)=>getReportProjectLabel(a).localeCompare(getReportProjectLabel(b)));
 
@@ -12340,7 +12263,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const empMap = data[proj] || {};
         const projectLabel = getReportProjectLabel(proj);
         const adjustmentMap = (adjustmentsByProjectEmp && adjustmentsByProjectEmp[proj]) || {};
-        let pRegHours=0, pOtHours=0, pAdjHours=0, pRegGross=0, pOtGross=0, pAdjGross=0, pTotalGross=0;
+        let pRegHours=0, pOtHours=0, pRegGross=0, pOtGross=0, pTotalGross=0;
         const dayTotals = dates.map(() => ({ rwh:0, oth:0 }));
         let rows='';
 
@@ -12374,18 +12297,14 @@ document.addEventListener('DOMContentLoaded', () => {
             return `<td class="num">${f2(v.rwh)}</td><td class="num">${f2(v.oth)}</td>`;
           }).join('');
 
-          const adj = adjustmentMap[empId] || { regPay: 0, otPay: 0, otHours: 0, adjHrs: 0, adjGross: 0 };
+          const adj = adjustmentMap[empId] || { regPay: 0, otPay: 0, otHours: 0 };
           const regGross = roundToCents((rowRegHours * rate) + Number(adj.regPay || 0));
           const otGross = roundToCents((rowOtHours + Number(adj.otHours || 0)) * effectiveOtRate);
-          const adjHrs = roundToCents(Number(adj.adjHrs || 0));
-          const adjGross = roundToCents(Number(adj.adjGross || 0));
-          const totalGross = roundToCents(regGross + otGross + adjGross);
+          const totalGross = roundToCents(regGross + otGross);
           pRegHours += rowRegHours;
           pOtHours += rowOtHours;
-          pAdjHours += adjHrs;
           pRegGross += regGross;
           pOtGross += otGross;
-          pAdjGross += adjGross;
           pTotalGross += totalGross;
 
           rows += `<tr>
@@ -12394,10 +12313,8 @@ document.addEventListener('DOMContentLoaded', () => {
             ${cells}
             <td class="num">${f2(rowRegHours)}</td>
             <td class="num">${f2(rowOtHours)}</td>
-            <td class="num">${f2(adjHrs)}</td>
             <td class="num">${f2(regGross)}</td>
             <td class="num">${f2(otGross)}</td>
-            <td class="num">${f2(adjGross)}</td>
             <td class="num">${f2(totalGross)}</td>
           </tr>`;
         });
@@ -12414,7 +12331,6 @@ rows += `<tr class="allowance">
   <td class="left">Allowance</td>
   <td class="num">-</td>
   ${dates.map(()=>`<td class="num">-</td><td class="num">-</td>`).join('')}
-  <td class="num">-</td>
   <td class="num">-</td>
   <td class="num">-</td>
   <td class="num">-</td>
@@ -12438,7 +12354,6 @@ rows += `<tr class="allowance">
   <td class="num">-</td>
   <td class="num">-</td>
   <td class="num">-</td>
-  <td class="num">-</td>
   <td class="num">${f2(amt)}</td>
 </tr>`;
       pTotalGross += amt;
@@ -12451,19 +12366,15 @@ rows += `<tr class="allowance">
             ${dayTotals.map(dt => `<td class="num">${f2(dt.rwh)}</td><td class="num">${f2(dt.oth)}</td>`).join('')}
             <td class="num">${f2(pRegHours)}</td>
             <td class="num">${f2(pOtHours)}</td>
-            <td class="num">${f2(pAdjHours)}</td>
             <td class="num">${f2(pRegGross)}</td>
             <td class="num">${f2(pOtGross)}</td>
-            <td class="num">${f2(pAdjGross)}</td>
             <td class="num">${f2(pTotalGross)}</td>
           </tr>`;
 
           gRegHours += pRegHours;
           gOtHours += pOtHours;
-          gAdjHours += pAdjHours;
           gRegGross += pRegGross;
           gOtGross += pOtGross;
-          gAdjGross += pAdjGross;
           gTotalGross += pTotalGross;
           dayTotals.forEach((dt,i)=>{ gDayTotals[i].rwh += dt.rwh; gDayTotals[i].oth += dt.oth; });
 
@@ -12480,10 +12391,8 @@ rows += `<tr class="allowance">
           ${gDayTotals.map(dt => `<td class="num">${f2(dt.rwh)}</td><td class="num">${f2(dt.oth)}</td>`).join('')}
           <td class="num">${f2(gRegHours)}</td>
           <td class="num">${f2(gOtHours)}</td>
-          <td class="num">${f2(gAdjHours)}</td>
           <td class="num">${f2(gRegGross)}</td>
           <td class="num">${f2(gOtGross)}</td>
-          <td class="num">${f2(gAdjGross)}</td>
           <td class="num">${f2(gTotalGross)}</td>
         </tr>`;
 
@@ -12525,18 +12434,18 @@ rows += `<tr class="allowance">
 
       const header = ['PROJECT','PERSONNEL','RATE']
         .concat(dayHeader)
-        .concat(['RWH HRS', 'OT HRS', 'ADJ HRS', 'RWH GROSS', 'OT GROSS', 'ADJ GROSS', 'TOTAL GROSS']);
+        .concat(['RWH HRS', 'OT HRS', 'RWH GROSS', 'OT GROSS', 'TOTAL GROSS']);
       const rows = [header];
 
       const projects = Object.keys(data).sort((a,b)=>getReportProjectLabel(a).localeCompare(getReportProjectLabel(b)));
-      let gRegHours=0, gOtHours=0, gAdjHours=0, gRegGross=0, gOtGross=0, gAdjGross=0, gTotalGross=0;
+      let gRegHours=0, gOtHours=0, gRegGross=0, gOtGross=0, gTotalGross=0;
       const gDayTotals = dates.map(() => ({ rwh:0, oth:0 }));
 
       projects.forEach(proj=>{
         const empMap = data[proj] || {};
         const projectLabel = getReportProjectLabel(proj);
         const adjustmentMap = (adjustmentsByProjectEmp && adjustmentsByProjectEmp[proj]) || {};
-        let pRegHours=0, pOtHours=0, pAdjHours=0, pRegGross=0, pOtGross=0, pAdjGross=0, pTotalGross=0;
+        let pRegHours=0, pOtHours=0, pRegGross=0, pOtGross=0, pTotalGross=0;
         const dayTotals = dates.map(() => ({ rwh:0, oth:0 }));
 
         const projectEmpIds = Array.from(new Set([
@@ -12569,21 +12478,17 @@ rows += `<tr class="allowance">
             dayCells.push(to2(v.rwh), to2(v.oth));
           });
 
-          const adj = adjustmentMap[empId] || { regPay: 0, otPay: 0, otHours: 0, adjHrs: 0, adjGross: 0 };
+          const adj = adjustmentMap[empId] || { regPay: 0, otPay: 0, otHours: 0 };
           const regGross = roundToCents((rowRegHours * rate) + Number(adj.regPay || 0));
           const otGross = roundToCents((rowOtHours + Number(adj.otHours || 0)) * effectiveOtRate);
-          const adjHrs = roundToCents(Number(adj.adjHrs || 0));
-          const adjGross = roundToCents(Number(adj.adjGross || 0));
-          const totalGross = roundToCents(regGross + otGross + adjGross);
+          const totalGross = roundToCents(regGross + otGross);
           pRegHours += rowRegHours;
           pOtHours += rowOtHours;
-          pAdjHours += adjHrs;
           pRegGross += regGross;
           pOtGross += otGross;
-          pAdjGross += adjGross;
           pTotalGross += totalGross;
 
-          rows.push([projectLabel, display, to2(rate)].concat(dayCells, [to2(rowRegHours), to2(rowOtHours), to2(adjHrs), to2(regGross), to2(otGross), to2(adjGross), to2(totalGross)]));
+          rows.push([projectLabel, display, to2(rate)].concat(dayCells, [to2(rowRegHours), to2(rowOtHours), to2(regGross), to2(otGross), to2(totalGross)]));
         });
 
         try {
@@ -12596,7 +12501,7 @@ rows += `<tr class="allowance">
           }, 0);
           if (allow && allow > 0) {
             const zeroCells = new Array(dates.length * 2).fill('0.00');
-            rows.push([projectLabel, 'Allowance', ''].concat(zeroCells, ['0.00', '0.00', '0.00', '0.00', '0.00', '0.00', to2(allow)]));
+            rows.push([projectLabel, 'Allowance', ''].concat(zeroCells, ['0.00', '0.00', '0.00', '0.00', to2(allow)]));
             pTotalGross += allow;
           }
         } catch (e) { /* no-op if allowance data missing */ }
@@ -12607,23 +12512,21 @@ rows += `<tr class="allowance">
             const amt = parseFloat(aiMap[lbl]) || 0;
             if (amt <= 0) return;
             const zeroCells = new Array(dates.length * 2).fill('0.00');
-            rows.push([projectLabel, lbl || 'Additional Income', ''].concat(zeroCells, ['0.00', '0.00', '0.00', '0.00', '0.00', '0.00', to2(amt)]));
+            rows.push([projectLabel, lbl || 'Additional Income', ''].concat(zeroCells, ['0.00', '0.00', '0.00', '0.00', to2(amt)]));
             pTotalGross += amt;
           });
         } catch (e) { /* ignore */ }
 
         gRegHours += pRegHours;
         gOtHours += pOtHours;
-        gAdjHours += pAdjHours;
         gRegGross += pRegGross;
         gOtGross += pOtGross;
-        gAdjGross += pAdjGross;
         gTotalGross += pTotalGross;
         dayTotals.forEach((dt,i)=>{ gDayTotals[i].rwh += dt.rwh; gDayTotals[i].oth += dt.oth; });
         const dayTotalsCells = dayTotals.flatMap(dt=>[to2(dt.rwh), to2(dt.oth)]);
         rows.push([projectLabel, 'Project Total', ''].concat(
           dayTotalsCells,
-          [to2(pRegHours), to2(pOtHours), to2(pAdjHours), to2(pRegGross), to2(pOtGross), to2(pAdjGross), to2(pTotalGross)]
+          [to2(pRegHours), to2(pOtHours), to2(pRegGross), to2(pOtGross), to2(pTotalGross)]
         ));
       });
 
@@ -12634,7 +12537,7 @@ rows += `<tr class="allowance">
       const gDayTotalsCells = gDayTotals.flatMap(dt=>[to2(dt.rwh), to2(dt.oth)]);
       rows.push(['', 'Grand Total', ''].concat(
         gDayTotalsCells,
-        [to2(gRegHours), to2(gOtHours), to2(gAdjHours), to2(gRegGross), to2(gOtGross), to2(gAdjGross), to2(gTotalGross)]
+        [to2(gRegHours), to2(gOtHours), to2(gRegGross), to2(gOtGross), to2(gTotalGross)]
       ));
 
       return { rows, from, to };
