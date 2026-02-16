@@ -14074,14 +14074,14 @@ rows += `<tr class="allowance">
 
           // Preferred path: the Detailed report's project-total row exposes
           // dedicated REG/OT hour and gross columns in this order:
-          // [.., RWH HRS, OT HRS, RWH GROSS, OT GROSS, TOTAL GROSS].
-          // Read those exact columns so OT amounts don't get folded into
-          // REGULAR PAY in the master report.
-          if (tableId === 'r_table' && cells.length >= 5) {
-            regHrs = num(cells[cells.length - 5].textContent);
-            otHrs = num(cells[cells.length - 4].textContent);
-            regGross = num(cells[cells.length - 3].textContent);
-            otGross = num(cells[cells.length - 2].textContent);
+          // [.., RWH HRS, OT HRS, ADJ HRS, RWH GROSS, OT GROSS, ADJ GROSS, TOTAL GROSS].
+          // Read the exact RWH/OT columns so master-report REGULAR PAY mirrors
+          // payroll-tab regular pay and does not drift when ADJ columns exist.
+          if (tableId === 'r_table' && cells.length >= 7) {
+            regHrs = num(cells[cells.length - 7].textContent);
+            otHrs = num(cells[cells.length - 6].textContent);
+            regGross = num(cells[cells.length - 4].textContent);
+            otGross = num(cells[cells.length - 3].textContent);
           } else {
             // Fallback for legacy table layouts.
             const gross = num(cells[cells.length - 1].textContent);
