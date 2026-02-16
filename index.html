@@ -1201,6 +1201,9 @@ function printReport(html, options){
       <div class="details-grid">
         <div class="details-col">
           <div class="details-title">EARNINGS</div>
+          <div class="detail-row"><span>Regular Hours</span><span>${dash(data.regHours) || '-'}</span></div>
+          <div class="detail-row"><span>OT Hours</span><span>${dash(data.otHours) || '-'}</span></div>
+          <div class="detail-row"><span>Adj Hours</span><span>${dash(data.adjHours) || '-'}</span></div>
           <div class="detail-row"><span>Total Hours Worked</span><span>${dash(data.totalHours) || '-'}</span></div>
           <div class="detail-row"><span>Basic Pay</span><span>${formatMoney(data.regPay)}</span></div>
           ${adjPay > 0 ? `<div class="detail-row"><span>Adjustment Pay</span><span>${formatMoney(adjPay)}</span></div>` : ''}
@@ -20050,7 +20053,8 @@ body{font-family:Arial,Helvetica,sans-serif;margin:0;padding:0 0.1in;}
   <table>
     <tr><th>Employee ID</th><td>${id}</td><th>Name</th><td>${name}</td></tr>
     <tr><th>Rate</th><td class="right">${rate}</td><th>Reg Hrs</th><td class="right">${regHrs}</td></tr>
-    <tr><th>OT Hrs</th><td class="right">${otHrs}</td><th>Gross Pay</th><td class="right">${gross}</td></tr>
+    <tr><th>OT Hrs</th><td class="right">${otHrs}</td><th>Adj Hrs</th><td class="right">${adjHrs}</td></tr>
+    <tr><th>Total Hrs</th><td class="right">${totalHrs}</td><th>Gross Pay</th><td class="right">${gross}</td></tr>
   </table>
 
   <div class="section">
