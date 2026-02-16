@@ -12375,8 +12375,13 @@ document.addEventListener('DOMContentLoaded', () => {
           }).join('');
 
           const adj = adjustmentMap[empId] || { regPay: 0, otPay: 0, otHours: 0, adjHrs: 0, adjGross: 0 };
-          const regGross = roundToCents((rowRegHours * rate) + Number(adj.regPay || 0));
-          const otGross = roundToCents((rowOtHours + Number(adj.otHours || 0)) * effectiveOtRate);
+          // Keep report buckets aligned with payroll tab totals:
+          // - RWH GROSS reflects only regular pay from rendered regular hours.
+          // - OT GROSS reflects only overtime pay from rendered overtime hours.
+          // - ADJ GROSS captures all adjustment amounts (REG/OT explicit adjustments).
+          // This avoids counting the same adjustment amount twice in both RWH/OT and ADJ columns.
+          const regGross = roundToCents(rowRegHours * rate);
+          const otGross = roundToCents(rowOtHours * effectiveOtRate);
           const adjHrs = roundToCents(Number(adj.adjHrs || 0));
           const adjGross = roundToCents(Number(adj.adjGross || 0));
           const totalGross = roundToCents(regGross + otGross + adjGross);
@@ -12572,8 +12577,8 @@ rows += `<tr class="allowance">
           });
 
           const adj = adjustmentMap[empId] || { regPay: 0, otPay: 0, otHours: 0, adjHrs: 0, adjGross: 0 };
-          const regGross = roundToCents((rowRegHours * rate) + Number(adj.regPay || 0));
-          const otGross = roundToCents((rowOtHours + Number(adj.otHours || 0)) * effectiveOtRate);
+          const regGross = roundToCents(rowRegHours * rate);
+          const otGross = roundToCents(rowOtHours * effectiveOtRate);
           const adjHrs = roundToCents(Number(adj.adjHrs || 0));
           const adjGross = roundToCents(Number(adj.adjGross || 0));
           const totalGross = roundToCents(regGross + otGross + adjGross);
