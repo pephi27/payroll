@@ -2159,7 +2159,6 @@ window.addEventListener('load', dashReports);
   #tabPayroll .nav-icon::before   { content: "💰"; font-size: 14px; }
   #tabProjectTotals .nav-icon::before { content: "📈"; font-size: 14px; }
   #tabContributionSummary .nav-icon::before { content: "💳"; font-size: 14px; }
-  #tabAudit .nav-icon::before { content: "🔍"; font-size: 14px; }
   #tabSettings .nav-icon::before { content: "⚙️"; font-size: 14px; }
   /* Sidebar duplicates */
   #old-tabDashboard .nav-icon::before { content: "📊"; }
@@ -2170,7 +2169,6 @@ window.addEventListener('load', dashReports);
   #old-tabPayroll .nav-icon::before   { content: "💰"; }
   #old-tabProjectTotals .nav-icon::before { content: "📈"; }
   #old-tabContributionSummary .nav-icon::before { content: "💳"; }
-  #old-tabAudit .nav-icon::before { content: "🔍"; }
   #old-tabSettings .nav-icon::before { content: "⚙️"; }
 
   /* Mobile menu icon */
@@ -2297,7 +2295,6 @@ window.addEventListener('load', dashReports);
               <li class="nav-item"><button class="nav-link tab-btn" id="tabPayroll" data-page="payroll"><span class="nav-icon">ðŸ’°</span> Payroll</button></li>
               <li class="nav-item"><button class="nav-link tab-btn" id="tabProjectTotals" data-page="totals"><span class="nav-icon">ðŸ“ˆ</span> Reports</button></li>
               <li class="nav-item"><button class="nav-link tab-btn" id="tabContributionSummary" data-page="contribSummary"><span class="nav-icon">ðŸ’³</span> Contributions</button></li>
-              <li class="nav-item"><button class="nav-link tab-btn" id="tabAudit" data-page="audit"><span class="nav-icon">ðŸ”</span> Audit</button></li>
               <li class="nav-item"><button class="nav-link tab-btn" id="tabSettings" data-page="settings"><span class="nav-icon">⚙️</span> Settings</button></li>
             </ul>
           </nav>
@@ -2357,12 +2354,6 @@ window.addEventListener('load', dashReports);
             <button class="nav-link tab-btn" id="old-tabContributionSummary" data-page="contribSummary">
               <span class="nav-icon">ðŸ’³</span>
               Contributions
-            </button>
-          </li>
-          <li class="nav-item">
-            <button class="nav-link tab-btn" id="old-tabAudit" data-page="audit">
-              <span class="nav-icon">ðŸ”</span>
-              Audit
             </button>
           </li>
           <li class="nav-item">
@@ -10773,12 +10764,6 @@ document.addEventListener('DOMContentLoaded', () => {
       hashHex = '';
     }
     const lockedAt = new Date().toISOString();
-    try {
-      await persistSnapshotSegmentsForPeriod(start, end);
-      await upsertSnapshotIndexEntry(start, end, { finalizedAt: lockedAt, hash: hashHex });
-    } catch (err) {
-      console.warn('Persist snapshot segments failed', err);
-    }
     let existing = findLatestSnapshotForPeriod(start, end, { onlyUnlocked: true, includeVoided: false });
     if (!existing) {
       existing = { startDate: start, endDate: end, createdAt: lockedAt };
@@ -11489,148 +11474,6 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
-  async function writeSnapshotSegment(segment, startDate, endDate, value) {
-    const key = composeSnapshotStorageKey(segment, startDate, endDate);
-    if (!key) return false;
-    let ok = false;
-    if (typeof window.writeKV === 'function') {
-      try {
-        ok = await window.writeKV(key, value);
-      } catch (err) {
-        console.warn('KV write failed for', key, err);
-      }
-    }
-    if (!ok) {
-      try { localStorage.setItem(key, JSON.stringify(value)); ok = true; }
-      catch (err) { console.warn('Local snapshot write failed for', key, err); }
-    }
-    return ok;
-  }
-
-  function captureTableSnapshot(tableId) {
-    const table = document.getElementById(tableId);
-    if (!table) return { headers: [], rows: [] };
-    const headerCells = Array.from(table.querySelectorAll('thead tr:last-child th'));
-    const headers = headerCells.map(th => (th.textContent || '').trim());
-    const rows = Array.from(table.querySelectorAll('tbody tr')).map((tr) => {
-      return Array.from(tr.cells || []).map((td) => {
-        const field = td.querySelector('input, select, textarea');
-        if (field) {
-          if (field.type === 'checkbox') return field.checked ? 'Yes' : 'No';
-          return String(field.value ?? '').trim();
-        }
-        return String(td.textContent || '').trim();
-      });
-    });
-    return { headers, rows };
-  }
-
-  async function persistSnapshotSegmentsForPeriod(startDate, endDate) {
-    await writeSnapshotSegment('dtr', startDate, endDate, captureTableSnapshot('resultsTable'));
-    await writeSnapshotSegment('payroll', startDate, endDate, captureTableSnapshot('payrollTable'));
-    await writeSnapshotSegment('overtime', startDate, endDate, captureTableSnapshot('overtimeTable'));
-    await writeSnapshotSegment('deductions', startDate, endDate, captureTableSnapshot('deductionsTable'));
-    await writeSnapshotSegment('additionalIncome', startDate, endDate, captureTableSnapshot('additionalIncomeTable'));
-    await writeSnapshotSegment('otherDeductions', startDate, endDate, captureTableSnapshot('otherDeductionsTable'));
-    await writeSnapshotSegment('adjustments', startDate, endDate, captureTableSnapshot('adjustmentHoursTable'));
-    await writeSnapshotSegment('reports', startDate, endDate, captureTableSnapshot('r_table'));
-    const masterHtml = document.getElementById('masterReportContainer')?.innerHTML || '';
-    if (masterHtml) await writeSnapshotSegment('master', startDate, endDate, { html: masterHtml });
-  }
-
-  async function readSnapshotIndex() {
-    if (typeof window.readKV === 'function') {
-      try {
-        const idx = await window.readKV('snap:index', null);
-        if (Array.isArray(idx)) return idx;
-      } catch (err) { console.warn('readSnapshotIndex KV failed', err); }
-    }
-    try {
-      const raw = localStorage.getItem('snap:index');
-      const parsed = raw ? JSON.parse(raw) : [];
-      return Array.isArray(parsed) ? parsed : [];
-    } catch (err) {
-      console.warn('readSnapshotIndex local failed', err);
-      return [];
-    }
-  }
-
-  async function writeSnapshotIndex(list) {
-    const normalized = Array.isArray(list) ? list : [];
-    let ok = false;
-    if (typeof window.writeKV === 'function') {
-      try { ok = await window.writeKV('snap:index', normalized); }
-      catch (err) { console.warn('writeSnapshotIndex KV failed', err); }
-    }
-    if (!ok) {
-      try { localStorage.setItem('snap:index', JSON.stringify(normalized)); ok = true; }
-      catch (err) { console.warn('writeSnapshotIndex local failed', err); }
-    }
-    return ok;
-  }
-
-  async function upsertSnapshotIndexEntry(startDate, endDate, meta) {
-    const current = await readSnapshotIndex();
-    const next = current.filter(item => !(item && item.startDate === startDate && item.endDate === endDate));
-    next.push({ startDate, endDate, ...(meta || {}) });
-    next.sort((a, b) => {
-      const aStamp = a?.finalizedAt || '';
-      const bStamp = b?.finalizedAt || '';
-      return String(bStamp).localeCompare(String(aStamp));
-    });
-    await writeSnapshotIndex(next);
-    return next;
-  }
-
-  function formatAuditOptionLabel(item) {
-    if (!item) return '';
-    const start = item.startDate || '';
-    const end = item.endDate || '';
-    const stamp = item.finalizedAt || '';
-    return `${start} to ${end}${stamp ? ` (${stamp})` : ''}`;
-  }
-
-  async function populateAuditPeriodSelect() {
-    const select = document.getElementById('auditPeriodSelect');
-    if (!select) return;
-    const idx = await readSnapshotIndex();
-    select.innerHTML = '';
-    if (!idx.length) {
-      const opt = document.createElement('option');
-      opt.value = '';
-      opt.textContent = 'No finalized snapshots yet';
-      select.appendChild(opt);
-      return;
-    }
-    idx.forEach((item) => {
-      const opt = document.createElement('option');
-      opt.value = `${item.startDate || ''}|${item.endDate || ''}`;
-      opt.textContent = formatAuditOptionLabel(item);
-      select.appendChild(opt);
-    });
-  }
-
-  async function loadAuditSnapshot(startDate, endDate) {
-    const map = {
-      dtr: 'auditDtr', payroll: 'auditPayroll', overtime: 'auditOvertime', deductions: 'auditDeductions',
-      additionalIncome: 'auditAdditionalIncome', otherDeductions: 'auditOtherDeductions', adjustments: 'auditAdjustments',
-      reports: 'auditReports', master: 'auditMaster'
-    };
-    const segs = ['dtr','payroll','overtime','deductions','additionalIncome','otherDeductions','adjustments','reports','master'];
-    for (const seg of segs) {
-      const host = document.getElementById(map[seg]);
-      if (!host) continue;
-      const data = await readSnapshotSegment(seg, startDate, endDate);
-      if (seg === 'master') {
-        host.innerHTML = (data && typeof data.html === 'string' && data.html.trim()) ? data.html : '<p class="audit-empty">(no master snapshot)</p>';
-      } else if (data && Array.isArray(data.headers) && Array.isArray(data.rows)) {
-        host.innerHTML = buildTableHtml(data.headers, data.rows, {});
-      } else {
-        host.innerHTML = '<p class="audit-empty">No snapshot data.</p>';
-      }
-    }
-  }
-
   async function readSnapshotSegment(segment, startDate, endDate) {
     const key = composeSnapshotStorageKey(segment, startDate, endDate);
     if (!key) return null;
@@ -11882,12 +11725,7 @@ document.addEventListener('DOMContentLoaded', () => {
       `snap:dtr:${pid}`,
       `snap:payroll:${pid}`,
       `snap:reports:${pid}`,
-      `snap:deductions:${pid}`,
-      `snap:overtime:${pid}`,
-      `snap:additionalIncome:${pid}`,
-      `snap:otherDeductions:${pid}`,
-      `snap:adjustments:${pid}`,
-      `snap:master:${pid}`
+      `snap:deductions:${pid}`
     ];
   }
 
@@ -14718,36 +14556,6 @@ rows += `<tr class="allowance">
 })();
 </script>
 
-
-  <section class="panel" id="panelAudit">
-    <style>
-      #panelAudit .audit-controls{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:12px}
-      #panelAudit .audit-controls select{min-width:320px}
-      #panelAudit .audit-grid{display:grid;gap:12px}
-      #panelAudit .audit-card{border:1px solid #e2e8f0;border-radius:12px;padding:12px;background:#fff}
-      #panelAudit .audit-view{overflow:auto}
-      #panelAudit .audit-view table{pointer-events:none}
-      #panelAudit .audit-view input,#panelAudit .audit-view select,#panelAudit .audit-view textarea,#panelAudit .audit-view button{pointer-events:none}
-      #panelAudit .audit-empty{color:#64748b;font-size:12px}
-    </style>
-    <h3>Audit Snapshots</h3>
-    <div class="audit-controls">
-      <select id="auditPeriodSelect"></select>
-      <button id="auditLoadBtn" type="button">Load Snapshot</button>
-    </div>
-    <div class="audit-grid">
-      <div class="audit-card"><h4>DTR</h4><div id="auditDtr" class="audit-view audit-empty">No snapshot loaded.</div></div>
-      <div class="audit-card"><h4>Payroll</h4><div id="auditPayroll" class="audit-view audit-empty">No snapshot loaded.</div></div>
-      <div class="audit-card"><h4>Overtime</h4><div id="auditOvertime" class="audit-view audit-empty">No snapshot loaded.</div></div>
-      <div class="audit-card"><h4>Deductions</h4><div id="auditDeductions" class="audit-view audit-empty">No snapshot loaded.</div></div>
-      <div class="audit-card"><h4>Additional Income</h4><div id="auditAdditionalIncome" class="audit-view audit-empty">No snapshot loaded.</div></div>
-      <div class="audit-card"><h4>Other Deductions</h4><div id="auditOtherDeductions" class="audit-view audit-empty">No snapshot loaded.</div></div>
-      <div class="audit-card"><h4>Adjustments</h4><div id="auditAdjustments" class="audit-view audit-empty">No snapshot loaded.</div></div>
-      <div class="audit-card"><h4>Reports</h4><div id="auditReports" class="audit-view audit-empty">No snapshot loaded.</div></div>
-      <div class="audit-card"><h4>Master</h4><div id="auditMaster" class="audit-view audit-empty">No snapshot loaded.</div></div>
-    </div>
-  </section>
-
   <section class="panel" id="panelContributionSummary">
     <style>
       #panelContributionSummary .card{background:#fff;border:1px solid #e5e7eb;border-radius:14px;padding:18px;box-shadow:0 4px 18px rgba(0,0,0,.06)}
@@ -15621,7 +15429,6 @@ rows += `<tr class="allowance">
         payroll: '💰',
         totals: '📈',
         contribSummary: '💳',
-        audit: '🔍',
         settings: '⚙️'
       };
       function setTitleFrom(btn){
@@ -16259,8 +16066,6 @@ const tabs = {
   panelProjectTotals: document.getElementById('panelProjectTotals'),
   tabContributionSummary: document.getElementById('tabContributionSummary'),
   panelContributionSummary: document.getElementById('panelContributionSummary'),
-  tabAudit: document.getElementById('tabAudit'),
-  panelAudit: document.getElementById('panelAudit'),
   tabSettings: document.getElementById('tabSettings'),
   panelSettings: document.getElementById('panelSettings')
 };
@@ -16291,7 +16096,6 @@ function showTab(name){
   if(name==='payroll'){ tabs.tabPayroll && tabs.tabPayroll.classList.add('active'); tabs.panelPayroll && tabs.panelPayroll.classList.add('active'); }
   if(name==='projectTotals'){ tabs.tabProjectTotals && tabs.tabProjectTotals.classList.add('active'); tabs.panelProjectTotals && tabs.panelProjectTotals.classList.add('active'); }
   if(name==='contribSummary'){ tabs.tabContributionSummary && tabs.tabContributionSummary.classList.add('active'); tabs.panelContributionSummary && tabs.panelContributionSummary.classList.add('active'); }
-  if(name==='audit'){ tabs.tabAudit && tabs.tabAudit.classList.add('active'); tabs.panelAudit && tabs.panelAudit.classList.add('active'); if (typeof populateAuditPeriodSelect === 'function') { try { populateAuditPeriodSelect(); } catch (err) {} } }
   if(name==='settings'){ tabs.tabSettings && tabs.tabSettings.classList.add('active'); tabs.panelSettings && tabs.panelSettings.classList.add('active'); }
 }
 window.__dtrFilterBackup = null;
@@ -19034,36 +18838,6 @@ function restoreData(file) {
       showTab('settings');
     });
     settingsSidebar.__wired = true;
-  }
-
-  const auditBtn = tabs && tabs.tabAudit;
-  if (auditBtn && !auditBtn.__wired){
-    auditBtn.addEventListener('click', function(){
-      showTab('audit');
-    });
-    auditBtn.__wired = true;
-  }
-
-  const auditSidebar = document.getElementById('old-tabAudit');
-  if (auditSidebar && !auditSidebar.__wired){
-    auditSidebar.addEventListener('click', function(){
-      showTab('audit');
-    });
-    auditSidebar.__wired = true;
-  }
-
-  const auditLoadBtn = document.getElementById('auditLoadBtn');
-  if (auditLoadBtn && !auditLoadBtn.__wired) {
-    auditLoadBtn.addEventListener('click', async function(){
-      const select = document.getElementById('auditPeriodSelect');
-      const val = select && select.value ? select.value : '';
-      const parts = val.split('|');
-      const startDate = parts[0] || '';
-      const endDate = parts[1] || '';
-      if (!startDate || !endDate) return;
-      await loadAuditSnapshot(startDate, endDate);
-    });
-    auditLoadBtn.__wired = true;
   }
 
   // Re-render when date range changes while active
