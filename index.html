@@ -10188,7 +10188,9 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!snap || typeof snap !== 'object') return 'draft';
     if (snap.status) return snap.status;
     if (snap.voidedAt || snap.voidedBy || snap.voidReason) return 'voided';
-    if (snap.locked || snap.finalized) return 'finalized';
+    // Backward-compatible finalized detection: older snapshots may have
+    // finalizedAt populated but missing explicit boolean flags.
+    if (snap.locked || snap.finalized || snap.finalizedAt) return 'finalized';
     return 'draft';
   }
 
@@ -10605,11 +10607,13 @@ document.addEventListener('DOMContentLoaded', () => {
       return false;
     }
     const entry = getLockEntry(start, end);
-    let locked = !!(entry && entry.locked);
+    const fallbackSnap = findLatestFinalizedSnapshot(start, end);
+    const fallbackLocked = !!(fallbackSnap && !isSnapshotVoided(fallbackSnap));
+    let locked = !!((entry && entry.locked) || fallbackLocked);
     if (locked) {
       disablePayrollInputs();
       updateLockStatusDisplay(entry);
-      const snap = findHistorySnapshot(start, end);
+      const snap = findHistorySnapshot(start, end) || fallbackSnap;
       if (!snap) {
         clearPeriodLockEntry(start, end);
         locked = false;
@@ -11357,7 +11361,9 @@ document.addEventListener('DOMContentLoaded', () => {
     const range = getCurrentPeriodRange();
     if (!range.start || !range.end) return false;
     const entry = getLockEntry(range.start, range.end);
-    return !!(entry && entry.locked);
+    if (entry && entry.locked) return true;
+    const finalizedSnap = findLatestFinalizedSnapshot(range.start, range.end);
+    return !!(finalizedSnap && !isSnapshotVoided(finalizedSnap));
   }
   window.isSelectedPeriodLocked = isSelectedPeriodLocked;
 
@@ -20929,7 +20935,8 @@ function loadSaved(){
   return '';
 }
 function updateWeekInputs(snap) {
-  const isLockedSnapshot = !!(snap && snap.locked);
+  const status = (typeof window.getSnapshotStatus === 'function') ? window.getSnapshotStatus(snap) : (snap && snap.status);
+  const isLockedSnapshot = status === 'finalized' || !!(snap && snap.locked);
   const startISO = toIsoDate(snap && snap.startDate);
   const endISO   = toIsoDate(snap && snap.endDate);
 
