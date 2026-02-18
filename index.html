@@ -2158,8 +2158,6 @@ window.addEventListener('load', dashReports);
   #tabProjects .nav-icon::before  { content: "🚀"; font-size: 14px; }
   #tabPayroll .nav-icon::before   { content: "💰"; font-size: 14px; }
   #tabProjectTotals .nav-icon::before { content: "📈"; font-size: 14px; }
-  #tabContributionSummary .nav-icon::before { content: "💳"; font-size: 14px; }
-  #tabAudit .nav-icon::before { content: "🔍"; font-size: 14px; }
   #tabSettings .nav-icon::before { content: "⚙️"; font-size: 14px; }
   /* Sidebar duplicates */
   #old-tabDashboard .nav-icon::before { content: "📊"; }
@@ -2169,8 +2167,6 @@ window.addEventListener('load', dashReports);
   #old-tabProjects .nav-icon::before  { content: "🚀"; }
   #old-tabPayroll .nav-icon::before   { content: "💰"; }
   #old-tabProjectTotals .nav-icon::before { content: "📈"; }
-  #old-tabContributionSummary .nav-icon::before { content: "💳"; }
-  #old-tabAudit .nav-icon::before { content: "🔍"; }
   #old-tabSettings .nav-icon::before { content: "⚙️"; }
 
   /* Mobile menu icon */
@@ -2296,8 +2292,6 @@ window.addEventListener('load', dashReports);
               <li class="nav-item"><button class="nav-link tab-btn" id="tabProjects" data-page="projects"><span class="nav-icon">ðŸš€</span> Projects</button></li>
               <li class="nav-item"><button class="nav-link tab-btn" id="tabPayroll" data-page="payroll"><span class="nav-icon">ðŸ’°</span> Payroll</button></li>
               <li class="nav-item"><button class="nav-link tab-btn" id="tabProjectTotals" data-page="totals"><span class="nav-icon">ðŸ“ˆ</span> Reports</button></li>
-              <li class="nav-item"><button class="nav-link tab-btn" id="tabContributionSummary" data-page="contribSummary"><span class="nav-icon">ðŸ’³</span> Contributions</button></li>
-              <li class="nav-item"><button class="nav-link tab-btn" id="tabAudit" data-page="audit"><span class="nav-icon">ðŸ”</span> Audit</button></li>
               <li class="nav-item"><button class="nav-link tab-btn" id="tabSettings" data-page="settings"><span class="nav-icon">⚙️</span> Settings</button></li>
             </ul>
           </nav>
@@ -2351,18 +2345,6 @@ window.addEventListener('load', dashReports);
             <button class="nav-link tab-btn" id="old-tabProjectTotals" data-page="totals">
               <span class="nav-icon">ðŸ“ˆ</span>
               Reports
-            </button>
-          </li>
-          <li class="nav-item">
-            <button class="nav-link tab-btn" id="old-tabContributionSummary" data-page="contribSummary">
-              <span class="nav-icon">ðŸ’³</span>
-              Contributions
-            </button>
-          </li>
-          <li class="nav-item">
-            <button class="nav-link tab-btn" id="old-tabAudit" data-page="audit">
-              <span class="nav-icon">ðŸ”</span>
-              Audit
             </button>
           </li>
           <li class="nav-item">
@@ -10780,7 +10762,6 @@ document.addEventListener('DOMContentLoaded', () => {
     try {
       await persistSnapshotSegmentsForPeriod(start, end);
       await upsertSnapshotIndexEntry(start, end, { finalizedAt: lockedAt, hash: hashHex });
-      window.populateAuditPeriodSelect?.().catch(() => {});
     } catch (err) {
       console.warn('Persist snapshot segments failed', err);
     }
@@ -11625,113 +11606,6 @@ document.addEventListener('DOMContentLoaded', () => {
     await writeSnapshotIndex(next);
     return next;
   }
-
-  function formatAuditOptionLabel(item) {
-    if (!item) return '';
-    const start = item.startDate || '';
-    const end = item.endDate || '';
-    const stamp = item.finalizedAt || '';
-    return `${start} to ${end}${stamp ? ` (${stamp})` : ''}`;
-  }
-
-  async function populateAuditPeriodSelect() {
-    const select = document.getElementById('auditPeriodSelect');
-    if (!select) return;
-    const idx = await readSnapshotIndex();
-    select.innerHTML = '';
-    if (!idx.length) {
-      const opt = document.createElement('option');
-      opt.value = '';
-      opt.textContent = 'No finalized snapshots yet';
-      select.appendChild(opt);
-      return;
-    }
-    idx.forEach((item) => {
-      const opt = document.createElement('option');
-      opt.value = `${item.startDate || ''}|${item.endDate || ''}`;
-      opt.textContent = formatAuditOptionLabel(item);
-      select.appendChild(opt);
-    });
-  }
-
-  window.auditState = window.auditState || {
-    startDate: null,
-    endDate: null,
-    activeTab: 'dtr',
-    data: {},
-    rendered: {},
-    indexMeta: null
-  };
-
-  const AUDIT_TAB_MAP = {
-    dtr: { segment: 'dtr', containerId: 'auditDtr', panelId: 'auditPanelDtr' },
-    payroll: { segment: 'payroll', containerId: 'auditPayroll', panelId: 'auditPanelPayroll' },
-    overtime: { segment: 'overtime', containerId: 'auditOvertime', panelId: 'auditPanelOvertime' },
-    deductions: { segment: 'deductions', containerId: 'auditDeductions', panelId: 'auditPanelDeductions' },
-    additionalIncome: { segment: 'additionalIncome', containerId: 'auditAdditionalIncome', panelId: 'auditPanelAdditionalIncome' },
-    otherDeductions: { segment: 'otherDeductions', containerId: 'auditOtherDeductions', panelId: 'auditPanelOtherDeductions' },
-    adjustments: { segment: 'adjustments', containerId: 'auditAdjustments', panelId: 'auditPanelAdjustments' },
-    reports: { segment: 'reports', containerId: 'auditReports', panelId: 'auditPanelReports' },
-    master: { segment: 'master', containerId: 'auditMaster', panelId: 'auditPanelMaster' }
-  };
-
-  function renderAuditSegment(tabName) {
-    const state = window.auditState || {};
-    const info = AUDIT_TAB_MAP[tabName];
-    if (!info || state.rendered?.[tabName]) return;
-
-    const container = document.getElementById(info.containerId);
-    if (!container) return;
-    const snap = state.data?.[info.segment] || null;
-    if (tabName === 'master') {
-      const html = snap && typeof snap.html === 'string' ? snap.html : '';
-      container.innerHTML = html.trim() ? html : '<em>No master snapshot saved.</em>';
-    } else if (!snap || !Array.isArray(snap.headers) || !Array.isArray(snap.rows)) {
-      container.innerHTML = '<em>No snapshot saved for this section.</em>';
-    } else {
-      container.innerHTML = buildTableHtml(snap.headers, snap.rows, { footerRow: Array.isArray(snap.footerRow) ? snap.footerRow : null });
-    }
-    state.rendered[tabName] = true;
-  }
-
-  function setAuditSubtab(tabName) {
-    const state = window.auditState || (window.auditState = { startDate: null, endDate: null, activeTab: 'dtr', data: {}, rendered: {}, indexMeta: null });
-    const nextTab = AUDIT_TAB_MAP[tabName] ? tabName : 'dtr';
-    state.activeTab = nextTab;
-
-    document.querySelectorAll('#auditSubtabBar .audit-subtab-btn').forEach((btn) => {
-      btn.classList.toggle('active', btn.dataset.auditTab === nextTab);
-    });
-    document.querySelectorAll('#panelAudit .audit-subpanel').forEach((panel) => panel.classList.remove('active'));
-    const panelId = AUDIT_TAB_MAP[nextTab] && AUDIT_TAB_MAP[nextTab].panelId;
-    const panel = panelId ? document.getElementById(panelId) : null;
-    if (panel) panel.classList.add('active');
-
-    if (state.startDate && state.endDate) renderAuditSegment(nextTab);
-  }
-
-  async function loadAuditSnapshot(startDate, endDate) {
-    const state = window.auditState || (window.auditState = { startDate: null, endDate: null, activeTab: 'dtr', data: {}, rendered: {}, indexMeta: null });
-    const activeTab = state.activeTab || 'dtr';
-    state.startDate = startDate || null;
-    state.endDate = endDate || null;
-    state.data = {};
-    state.rendered = {};
-
-    const idx = await readSnapshotIndex();
-    state.indexMeta = (Array.isArray(idx) ? idx.find(item => item && item.startDate === startDate && item.endDate === endDate) : null) || null;
-
-    const segs = ['dtr','payroll','overtime','deductions','additionalIncome','otherDeductions','adjustments','reports','master'];
-    await Promise.all(segs.map(async (seg) => {
-      state.data[seg] = await readSnapshotSegment(seg, startDate, endDate);
-    }));
-
-    setAuditSubtab(activeTab);
-  }
-
-  window.setAuditSubtab = setAuditSubtab;
-  window.populateAuditPeriodSelect = populateAuditPeriodSelect;
-  window.loadAuditSnapshot = loadAuditSnapshot;
 
   async function readSnapshotSegment(segment, startDate, endDate) {
     const key = composeSnapshotStorageKey(segment, startDate, endDate);
@@ -14821,114 +14695,6 @@ rows += `<tr class="allowance">
 </script>
 
 
-  <section class="panel" id="panelAudit">
-    <style>
-      #panelAudit .audit-controls{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:12px}
-      #panelAudit .audit-controls select{min-width:320px}
-      #panelAudit .audit-subtabs{display:flex;flex-wrap:wrap;gap:6px;margin:10px 0}
-      #panelAudit .audit-subtab-btn{padding:6px 10px;border-radius:8px;cursor:pointer;border:1px solid #cbd5e1;background:#f8fafc;color:#0f172a}
-      #panelAudit .audit-subtab-btn.active{font-weight:700;background:#dbeafe;border-color:#93c5fd}
-      #panelAudit .audit-subpanel{display:none;margin-top:10px}
-      #panelAudit .audit-subpanel.active{display:block}
-      #panelAudit .audit-subpanel h4{margin:0 0 8px 0}
-      #panelAudit .audit-view{overflow:auto}
-      #panelAudit .audit-view table{pointer-events:none}
-      #panelAudit .audit-view input,#panelAudit .audit-view select,#panelAudit .audit-view textarea,#panelAudit .audit-view button{pointer-events:none}
-      #panelAudit .audit-empty{color:#64748b;font-size:12px}
-    </style>
-    <h3>Audit Snapshots</h3>
-    <div class="audit-controls">
-      <select id="auditPeriodSelect"></select>
-      <button id="auditLoadBtn" type="button">Load Snapshot</button>
-    </div>
-    <div id="auditSubtabBar" class="audit-subtabs">
-      <button class="audit-subtab-btn active" data-audit-tab="dtr">DTR</button>
-      <button class="audit-subtab-btn" data-audit-tab="payroll">Payroll</button>
-      <button class="audit-subtab-btn" data-audit-tab="overtime">Overtime</button>
-      <button class="audit-subtab-btn" data-audit-tab="deductions">Deductions</button>
-      <button class="audit-subtab-btn" data-audit-tab="additionalIncome">Additional Income</button>
-      <button class="audit-subtab-btn" data-audit-tab="otherDeductions">Other Deductions</button>
-      <button class="audit-subtab-btn" data-audit-tab="adjustments">Adjustments</button>
-      <button class="audit-subtab-btn" data-audit-tab="reports">Reports</button>
-      <button class="audit-subtab-btn" data-audit-tab="master">Master</button>
-    </div>
-    <div class="audit-subpanel active" id="auditPanelDtr"><h4>DTR</h4><div id="auditDtr" class="audit-view audit-empty">No snapshot loaded.</div></div>
-    <div class="audit-subpanel" id="auditPanelPayroll"><h4>Payroll</h4><div id="auditPayroll" class="audit-view audit-empty">No snapshot loaded.</div></div>
-    <div class="audit-subpanel" id="auditPanelOvertime"><h4>Overtime</h4><div id="auditOvertime" class="audit-view audit-empty">No snapshot loaded.</div></div>
-    <div class="audit-subpanel" id="auditPanelDeductions"><h4>Deductions</h4><div id="auditDeductions" class="audit-view audit-empty">No snapshot loaded.</div></div>
-    <div class="audit-subpanel" id="auditPanelAdditionalIncome"><h4>Additional Income</h4><div id="auditAdditionalIncome" class="audit-view audit-empty">No snapshot loaded.</div></div>
-    <div class="audit-subpanel" id="auditPanelOtherDeductions"><h4>Other Deductions</h4><div id="auditOtherDeductions" class="audit-view audit-empty">No snapshot loaded.</div></div>
-    <div class="audit-subpanel" id="auditPanelAdjustments"><h4>Adjustments</h4><div id="auditAdjustments" class="audit-view audit-empty">No snapshot loaded.</div></div>
-    <div class="audit-subpanel" id="auditPanelReports"><h4>Reports</h4><div id="auditReports" class="audit-view audit-empty">No snapshot loaded.</div></div>
-    <div class="audit-subpanel" id="auditPanelMaster"><h4>Master</h4><div id="auditMaster" class="audit-view audit-empty">No snapshot loaded.</div></div>
-  </section>
-
-  <section class="panel" id="panelContributionSummary">
-    <style>
-      #panelContributionSummary .card{background:#fff;border:1px solid #e5e7eb;border-radius:14px;padding:18px;box-shadow:0 4px 18px rgba(0,0,0,.06)}
-      #panelContributionSummary .controls{display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-bottom:12px}
-      #panelContributionSummary .controls label{font-size:13px;color:#334155;font-weight:600;display:flex;flex-direction:column;align-items:flex-start;gap:6px}
-      #panelContributionSummary .controls label .hint{font-weight:400;font-size:12px;color:#64748b}
-      #panelContributionSummary .controls select{padding:6px 10px;border:1px solid #cbd5e1;border-radius:8px;font-size:14px;min-width:220px;background:#fff;color:#0f172a}
-      #panelContributionSummary .controls .actions{display:flex;gap:8px;align-items:center;margin-left:auto}
-      #panelContributionSummary .controls .actions button{padding:8px 12px;border:1px solid #cbd5e1;border-radius:8px;background:#f8fafc;color:#0f172a;font-weight:600;cursor:pointer;transition:background .15s ease,box-shadow .15s ease}
-      #panelContributionSummary .controls .actions button:hover{background:#eef4fb;box-shadow:0 1px 3px rgba(0,0,0,.08)}
-      #panelContributionSummary .controls .actions button:focus{outline:2px solid #a5b4fc;outline-offset:2px}
-      #panelContributionSummary .summary-meta{font-size:13px;color:#475569;margin-bottom:10px}
-      #panelContributionSummary .empty-state{padding:16px;border:1px dashed #cbd5e1;border-radius:10px;background:#f8fafc;color:#64748b;font-size:14px;text-align:center}
-      #panelContributionSummary .table-wrap{overflow-x:auto}
-      #panelContributionSummary table{width:100%;border-collapse:collapse;margin-top:8px;font-size:13px}
-      #panelContributionSummary th,#panelContributionSummary td{border:1px solid #dbe3ef;padding:8px 10px;text-align:right}
-      #panelContributionSummary th:first-child,#panelContributionSummary td:first-child{ text-align:left; white-space:nowrap }
-      #panelContributionSummary th:nth-child(2),#panelContributionSummary td:nth-child(2){ text-align:left }
-      #panelContributionSummary thead th{background:#eef4fb;color:#0f172a;text-align:center}
-      #panelContributionSummary tfoot th,#panelContributionSummary tfoot td{font-weight:600;background:#fff7ed}
-    </style>
-    <div class="card">
-      <h3 style="margin:0 0 12px 0;">Contribution &amp; Loan Summary</h3>
-      <div class="controls">
-        <label class="period-control">Payroll Periods
-          <select id="contribPeriodSelect" multiple size="6" title="Hold Ctrl (Windows) or Command (macOS) to select multiple periods."></select>
-          <span class="hint">Hold Ctrl (Windows) or ⌘ (macOS) to select multiple periods.</span>
-        </label>
-        <div class="actions">
-          <button id="contribPrintBtn" type="button">Print</button>
-          <button id="contribExcelBtn" type="button">Download Excel</button>
-        </div>
-      </div>
-      <div id="contribSummaryMeta" class="summary-meta">Choose one or more payroll periods to view contribution totals from payroll history.</div>
-      <div id="contribSummaryEmpty" class="empty-state">Select at least one payroll period to view contribution totals.</div>
-      <div class="table-wrap">
-        <table id="contribSummaryTable" style="display:none">
-          <thead>
-            <tr>
-              <th>Employee ID</th>
-              <th>Name</th>
-              <th>Pag-IBIG</th>
-              <th>PhilHealth</th>
-              <th>SSS</th>
-              <th>SSS Loan</th>
-              <th>Pag-IBIG Loan</th>
-              <th>Total</th>
-            </tr>
-          </thead>
-          <tbody></tbody>
-          <tfoot>
-            <tr>
-              <th colspan="2">Grand Total</th>
-              <td>0.00</td>
-              <td>0.00</td>
-              <td>0.00</td>
-              <td>0.00</td>
-              <td>0.00</td>
-              <td>0.00</td>
-            </tr>
-          </tfoot>
-        </table>
-      </div>
-    </div>
-  </section>
-
   <section class="panel" id="panelSettings">
     <style>
       #panelSettings .card{background:#fff;border:1px solid #e5e7eb;border-radius:14px;padding:18px;box-shadow:0 4px 18px rgba(0,0,0,.06)}
@@ -15220,508 +14986,6 @@ rows += `<tr class="allowance">
       </div>
     </div>
   </section>
-
-  <script>
-  (function(){
-    const HIST_KEY = 'payroll_hist';
-    const PERIOD_SELECT_ID = 'contribPeriodSelect';
-    const EMPTY_ID = 'contribSummaryEmpty';
-    const META_ID = 'contribSummaryMeta';
-    const TABLE_ID = 'contribSummaryTable';
-    const PRINT_ID = 'contribPrintBtn';
-    const EXCEL_ID = 'contribExcelBtn';
-
-    function readHistory(){
-      if (Array.isArray(window.payrollHistory)) return window.payrollHistory.slice();
-      try {
-        const raw = localStorage.getItem(HIST_KEY);
-        if (!raw) return [];
-        const parsed = JSON.parse(raw);
-        return Array.isArray(parsed) ? parsed : [];
-      } catch (e) {
-        return [];
-      }
-    }
-
-    function toIsoDate(value){
-      if (!value) return '';
-      const str = String(value).trim();
-      if (!str) return '';
-      if (/^\d{4}-\d{2}-\d{2}$/.test(str)) return str;
-      const parsed = new Date(str);
-      if (!isNaN(parsed)){
-        const year = parsed.getFullYear();
-        const month = String(parsed.getMonth()+1).padStart(2,'0');
-        const day = String(parsed.getDate()).padStart(2,'0');
-        return `${year}-${month}-${day}`;
-      }
-      return '';
-    }
-
-    function toNumber(value){
-      if (value == null || value === '') return 0;
-      const num = Number(String(value).replace(/,/g,''));
-      return Number.isFinite(num) ? num : 0;
-    }
-
-    function escapeHtml(value){
-      return String(value == null ? '' : value)
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;')
-        .replace(/'/g, '&#39;');
-    }
-
-    function formatNumber(value){
-      return Number(value || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-    }
-
-    function formatDisplayDate(value){
-      const str = value != null ? String(value).trim() : '';
-      if (!str) return '';
-      const parsed = new Date(str);
-      if (!isNaN(parsed)){
-        return parsed.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
-      }
-      return str;
-    }
-
-    function createPeriodKey(start, end){
-      const safeStart = (start || '').trim();
-      const safeEnd = (end || '').trim();
-      return `${safeStart}__${safeEnd}`;
-    }
-
-    function createPeriodDescriptor(snap){
-      if (!snap) return null;
-      const rawStart = snap.startDate != null ? String(snap.startDate).trim() : '';
-      const rawEnd = snap.endDate != null ? String(snap.endDate).trim() : '';
-      const startIso = toIsoDate(rawStart);
-      const endIso = toIsoDate(rawEnd);
-      const start = startIso || rawStart;
-      const end = endIso || rawEnd;
-      if (!start && !end) return null;
-      const key = createPeriodKey(start, end);
-      const displayStart = formatDisplayDate(start || rawStart);
-      const displayEnd = formatDisplayDate(end || rawEnd);
-      const label = displayStart && displayEnd
-        ? `${displayStart} – ${displayEnd}`
-        : displayStart || displayEnd || 'Unnamed period';
-      const sortValue = endIso || startIso || end || start || '';
-      return { key, start, end, startIso, endIso, displayStart, displayEnd, label, sortValue };
-    }
-
-    function listPeriods(){
-      const history = readHistory();
-      const map = new Map();
-      history.forEach(snap => {
-        const descriptor = createPeriodDescriptor(snap);
-        if (!descriptor) return;
-        if (!map.has(descriptor.key)) map.set(descriptor.key, descriptor);
-      });
-      return Array.from(map.values()).sort((a, b) => {
-        const aSort = (a.sortValue || '').trim();
-        const bSort = (b.sortValue || '').trim();
-        if (aSort || bSort){
-          const comp = (bSort || '').localeCompare(aSort || '');
-          if (comp) return comp;
-        }
-        const aStart = (a.startIso || a.start || '').trim();
-        const bStart = (b.startIso || b.start || '').trim();
-        return (bStart || '').localeCompare(aStart || '');
-      });
-    }
-
-    function populatePeriodSelect({ preserveSelection = false } = {}){
-      const select = document.getElementById(PERIOD_SELECT_ID);
-      if (!select) return [];
-      const periods = listPeriods();
-      const previous = preserveSelection
-        ? Array.from(select.selectedOptions || []).map(opt => opt.value).filter(Boolean)
-        : [];
-      select.innerHTML = periods.map(period => `<option value="${escapeHtml(period.key)}">${escapeHtml(period.label)}</option>`).join('');
-      if (previous.length){
-        const previousSet = new Set(previous);
-        Array.from(select.options).forEach(opt => {
-          opt.selected = previousSet.has(opt.value);
-        });
-      }
-      return periods;
-    }
-
-    function ensureDefaultPeriod(periods){
-      const select = document.getElementById(PERIOD_SELECT_ID);
-      if (!select) return;
-      const hasSelection = Array.from(select.selectedOptions || []).some(opt => opt.value);
-      if (hasSelection) return;
-      const list = Array.isArray(periods) ? periods : listPeriods();
-      if (!list.length) return;
-      const defaultKey = list[0].key;
-      Array.from(select.options || []).forEach(opt => {
-        opt.selected = opt.value === defaultKey;
-      });
-    }
-
-    function computeSummary(selectedKeys){
-      const keys = Array.isArray(selectedKeys)
-        ? selectedKeys.filter(key => typeof key === 'string' && key.trim().length)
-        : [];
-      const uniqueKeys = Array.from(new Set(keys.map(key => key.trim())));
-      const history = readHistory();
-      const periodMeta = new Map();
-      const map = new Map();
-      if (!uniqueKeys.length){
-        return {
-          entries: [],
-          totals: { pagibig:0, philhealth:0, sss:0, loanSSS:0, loanPI:0, total:0, perPeriod: [] },
-          periods: [],
-          periodKeys: []
-        };
-      }
-      const keySet = new Set(uniqueKeys);
-      const normalizeDivisor = (value) => {
-        const num = Number(value);
-        return (Number.isFinite(num) && num > 0) ? num : 1;
-      };
-      const normalizeLoanValue = (raw, divisor) => {
-        const base = toNumber(raw);
-        if (!divisor || !Number.isFinite(divisor) || divisor <= 0) return base;
-        return Number(((base || 0) / divisor).toFixed(2));
-      };
-
-      history.forEach(snap => {
-        const descriptor = createPeriodDescriptor(snap);
-        if (!descriptor || !keySet.has(descriptor.key)) return;
-        if (!periodMeta.has(descriptor.key)){
-          periodMeta.set(descriptor.key, { ...descriptor });
-        }
-        const divisor = normalizeDivisor(snap && snap.divisor);
-        const rows = Array.isArray(snap.rows) ? snap.rows : [];
-        rows.forEach(row => {
-          if (!row) return;
-          const id = row.id != null ? String(row.id).trim() : '';
-          if (!id) return;
-          const record = map.get(id) || {
-            id,
-            name: '',
-            pagibig: 0,
-            philhealth: 0,
-            sss: 0,
-            loanSSS: 0,
-            loanPI: 0,
-            byPeriod: {}
-          };
-          const name = row.name != null ? String(row.name).trim() : '';
-          if (name && !record.name) record.name = name;
-          const pagibigVal = toNumber(row.pagibig);
-          const philVal = toNumber(row.philhealth);
-          const sssVal = toNumber(row.sss);
-          const loanSssVal = normalizeLoanValue(row.loanSSS, divisor);
-          const loanPiVal = normalizeLoanValue(row.loanPI, divisor);
-          record.pagibig += pagibigVal;
-          record.philhealth += philVal;
-          record.sss += sssVal;
-          record.loanSSS += loanSssVal;
-          record.loanPI += loanPiVal;
-          const perPeriod = record.byPeriod[descriptor.key] || { pagibig:0, philhealth:0, sss:0, loanSSS:0, loanPI:0 };
-          perPeriod.pagibig += pagibigVal;
-          perPeriod.philhealth += philVal;
-          perPeriod.sss += sssVal;
-          perPeriod.loanSSS += loanSssVal;
-          perPeriod.loanPI += loanPiVal;
-          record.byPeriod[descriptor.key] = perPeriod;
-          map.set(id, record);
-        });
-      });
-      const orderedPeriods = Array.from(periodMeta.values()).sort((a, b) => {
-        const aSort = (a.sortValue || '').trim();
-        const bSort = (b.sortValue || '').trim();
-        const comp = aSort.localeCompare(bSort);
-        if (comp) return comp;
-        const aStart = (a.startIso || a.start || '').trim();
-        const bStart = (b.startIso || b.start || '').trim();
-        return aStart.localeCompare(bStart);
-      }).map((period, idx) => ({ ...period, index: idx }));
-      const periodKeys = orderedPeriods.map(p => p.key);
-      const entries = Array.from(map.values()).map(entry => {
-        const perPeriod = periodKeys.map(key => {
-          const values = entry.byPeriod && entry.byPeriod[key] ? entry.byPeriod[key] : {};
-          return {
-            pagibig: values.pagibig || 0,
-            philhealth: values.philhealth || 0,
-            sss: values.sss || 0,
-            loanSSS: values.loanSSS || 0,
-            loanPI: values.loanPI || 0
-          };
-        });
-        const total = entry.pagibig + entry.philhealth + entry.sss + entry.loanSSS + entry.loanPI;
-        const { byPeriod, ...rest } = entry;
-        return { ...rest, name: rest.name || rest.id, total, perPeriod };
-      }).sort((a,b) => {
-        const nameComp = a.name.localeCompare(b.name, undefined, { sensitivity: 'base' });
-        if (nameComp) return nameComp;
-        return a.id.localeCompare(b.id, undefined, { sensitivity: 'base' });
-      });
-      const totals = {
-        pagibig: 0,
-        philhealth: 0,
-        sss: 0,
-        loanSSS: 0,
-        loanPI: 0,
-        total: 0,
-        perPeriod: periodKeys.map(() => ({ pagibig:0, philhealth:0, sss:0, loanSSS:0, loanPI:0 }))
-      };
-      entries.forEach(entry => {
-        totals.pagibig += entry.pagibig;
-        totals.philhealth += entry.philhealth;
-        totals.sss += entry.sss;
-        totals.loanSSS += entry.loanSSS;
-        totals.loanPI += entry.loanPI;
-        totals.total += entry.total;
-        entry.perPeriod.forEach((periodData, idx) => {
-          const slot = totals.perPeriod[idx];
-          if (!slot) return;
-          slot.pagibig += periodData.pagibig;
-          slot.philhealth += periodData.philhealth;
-          slot.sss += periodData.sss;
-          slot.loanSSS += periodData.loanSSS;
-          slot.loanPI += periodData.loanPI;
-        });
-      });
-      totals.perPeriod.forEach(slot => {
-        if (!slot) return;
-        slot.total = slot.pagibig + slot.philhealth + slot.sss + slot.loanSSS + slot.loanPI;
-      });
-      return { entries, totals, periods: orderedPeriods, periodKeys: orderedPeriods.map(period => period.key) };
-    }
-
-    function updateMeta(periods, selectedKeys){
-      const metaEl = document.getElementById(META_ID);
-      if (!metaEl) return;
-      const keys = Array.isArray(selectedKeys) ? selectedKeys.filter(Boolean) : [];
-      if (!keys.length){
-        metaEl.textContent = 'Choose one or more payroll periods to view contribution totals from payroll history.';
-        return;
-      }
-      const periodList = Array.isArray(periods) ? periods : [];
-      if (!periodList.length){
-        metaEl.textContent = keys.length === 1
-          ? 'Selected payroll period was not found in payroll history.'
-          : 'Selected payroll periods were not found in payroll history.';
-        return;
-      }
-      if (periodList.length === 1){
-        const range = periodList[0].label || 'Selected payroll period';
-        metaEl.innerHTML = `Viewing contribution totals for <strong>${escapeHtml(range)}</strong>.`;
-      } else {
-        const primary = periodList[0].label || 'Selected payroll periods';
-        const joined = periodList.map(period => period.label || period.key).join(', ');
-        metaEl.innerHTML = `Viewing contribution totals for <strong>${escapeHtml(primary)}</strong> plus ${periodList.length - 1} more period${periodList.length - 1 === 1 ? '' : 's'}. Combined snapshots: ${escapeHtml(joined)}.`;
-      }
-    }
-
-    function render(){
-      const periods = populatePeriodSelect({ preserveSelection: true });
-      ensureDefaultPeriod(periods);
-      const select = document.getElementById(PERIOD_SELECT_ID);
-      const selectedKeys = select ? Array.from(select.selectedOptions || []).map(opt => opt.value).filter(Boolean) : [];
-      const { entries, totals, periods: periodDetails } = computeSummary(selectedKeys);
-      const table = document.getElementById(TABLE_ID);
-      const emptyEl = document.getElementById(EMPTY_ID);
-      if (!table) return;
-      const thead = table.querySelector('thead');
-      const tbody = table.querySelector('tbody');
-      const tfoot = table.querySelector('tfoot');
-      if (!thead || !tbody || !tfoot) return;
-
-      const categories = [
-        { key: 'pagibig', label: 'Pag-IBIG' },
-        { key: 'philhealth', label: 'PhilHealth' },
-        { key: 'sss', label: 'SSS' },
-        { key: 'loanSSS', label: 'SSS Loan' },
-        { key: 'loanPI', label: 'Pag-IBIG Loan' }
-      ];
-      const periodList = Array.isArray(periodDetails) ? periodDetails : [];
-      const perPeriodTotals = Array.isArray(totals.perPeriod) ? totals.perPeriod : [];
-      const formatPeriodRange = (period) => {
-        if (!period) return '';
-        const start = period.displayStart || formatDisplayDate(period.start);
-        const end = period.displayEnd || formatDisplayDate(period.end);
-        if (start && end) return `${start} – ${end}`;
-        return start || end || '';
-      };
-
-      const headerCells = [];
-      headerCells.push('<th>Employee ID</th>');
-      headerCells.push('<th>Name</th>');
-      categories.forEach(cat => {
-        periodList.forEach((period, idx) => {
-          const headerLabel = periodList.length > 1 ? `${cat.label} P${idx + 1}` : `${cat.label}`;
-          const range = formatPeriodRange(period);
-          const titleAttr = range ? ` title="${escapeHtml(range)}"` : '';
-          headerCells.push(`<th${titleAttr}>${escapeHtml(headerLabel)}</th>`);
-        });
-        headerCells.push(`<th>${escapeHtml(cat.label + ' Total')}</th>`);
-      });
-      headerCells.push('<th>Grand Total</th>');
-      thead.innerHTML = `<tr>${headerCells.join('')}</tr>`;
-
-      tbody.innerHTML = '';
-      if (entries.length){
-        entries.forEach(entry => {
-          const tr = document.createElement('tr');
-          const cells = [];
-          cells.push(`<td>${escapeHtml(entry.id)}</td>`);
-          cells.push(`<td>${escapeHtml(entry.name)}</td>`);
-          categories.forEach(cat => {
-            periodList.forEach((_, idx) => {
-              const periodData = entry.perPeriod && entry.perPeriod[idx] ? entry.perPeriod[idx] : {};
-              const value = periodData[cat.key] || 0;
-              cells.push(`<td>${formatNumber(value)}</td>`);
-            });
-            cells.push(`<td>${formatNumber(entry[cat.key] || 0)}</td>`);
-          });
-          cells.push(`<td>${formatNumber(entry.total)}</td>`);
-          tr.innerHTML = cells.join('');
-          tbody.appendChild(tr);
-        });
-      }
-
-      const totalCells = [];
-      categories.forEach(cat => {
-        periodList.forEach((_, idx) => {
-          const slot = perPeriodTotals[idx] || {};
-          const value = slot[cat.key] || 0;
-          totalCells.push(`<td>${formatNumber(value)}</td>`);
-        });
-        totalCells.push(`<td>${formatNumber(totals[cat.key] || 0)}</td>`);
-      });
-      totalCells.push(`<td>${formatNumber(totals.total || 0)}</td>`);
-      tfoot.innerHTML = `<tr><th colspan="2">Grand Total</th>${totalCells.join('')}</tr>`;
-
-      const hasSelection = selectedKeys.length > 0;
-      const hasData = entries.length > 0;
-      table.style.display = hasData ? 'table' : 'none';
-      if (emptyEl){
-        if (!hasSelection){
-          emptyEl.textContent = 'Select at least one payroll period to view contribution totals.';
-        } else if (!periodList.length){
-          emptyEl.textContent = 'Selected payroll periods were not found in payroll history.';
-        } else if (!hasData){
-          const label = formatPeriodRange(periodList[0]) || 'the selected payroll period';
-          emptyEl.textContent = `No payroll data found for ${label}.`;
-        }
-        emptyEl.style.display = hasData ? 'none' : '';
-      }
-
-      updateMeta(periodDetails, selectedKeys);
-    }
-
-    function cloneVisibleTable(){
-      const table = document.getElementById(TABLE_ID);
-      if (!table) return null;
-      const clone = table.cloneNode(true);
-      clone.style.removeProperty('display');
-      return clone;
-    }
-
-    function hasContributionRows(table){
-      if (!table) return false;
-      return Array.from(table.querySelectorAll('tbody tr')).length > 0;
-    }
-
-    function printContributionSummary(orientation){
-      const tableClone = cloneVisibleTable();
-      if (!tableClone || !hasContributionRows(tableClone)){
-        alert('Select at least one payroll period with contribution data before printing.');
-        return;
-      }
-      const metaEl = document.getElementById(META_ID);
-      const metaHtml = metaEl ? metaEl.innerHTML : '';
-      const html = `<!doctype html><html><head><meta charset="utf-8"><title>Contribution Summary</title>`+
-        '<style>body{font-family:Arial,Helvetica,sans-serif;padding:16px;color:#0f172a} h2{margin:0 0 10px 0;text-align:center}' +
-        '#meta{margin-bottom:12px;font-size:13px;color:#475569} table{width:100%;border-collapse:collapse;font-size:12px}' +
-        'th,td{border:1px solid #1f2937;padding:6px 8px;text-align:right;font-variant-numeric:tabular-nums}' +
-        'th:first-child,td:first-child{text-align:left;white-space:nowrap}' +
-        'th:nth-child(2),td:nth-child(2){text-align:left}' +
-        'thead th{background:#eef2ff}' +
-        'tfoot th,tfoot td{font-weight:600;background:#fef3c7}' +
-        '</style></head><body>' +
-        '<h2>Contribution &amp; Loan Summary</h2>' +
-        (metaHtml ? `<div id="meta">${metaHtml}</div>` : '') +
-        tableClone.outerHTML +
-        '</body></html>';
-      printReport(html, { orientation: orientation, features: 'width=1024,height=768' });
-    }
-
-    function exportContributionExcel(){
-      const table = cloneVisibleTable();
-      if (!table || !hasContributionRows(table)){
-        alert('Select at least one payroll period with contribution data before downloading.');
-        return;
-      }
-      if (typeof XLSX === 'undefined'){
-        alert('Excel library not available');
-        return;
-      }
-      const metaEl = document.getElementById(META_ID);
-      const metaText = metaEl ? metaEl.textContent.trim() : '';
-      const rows = Array.from(table.querySelectorAll('tr')).map(tr =>
-        Array.from(tr.querySelectorAll('th,td')).map(cell => {
-          const text = (cell.textContent || '').trim();
-          const numeric = Number(text.replace(/,/g,''));
-          return (text !== '' && Number.isFinite(numeric)) ? numeric : text;
-        })
-      );
-      const aoa = [['Contribution & Loan Summary']];
-      if (metaText) aoa.push([metaText]);
-      aoa.push([]);
-      rows.forEach(row => aoa.push(row));
-      const ws = XLSX.utils.aoa_to_sheet(aoa);
-      ws['!cols'] = (rows[0] || []).map(() => ({ wch: 16 }));
-      const wb = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(wb, ws, 'Contributions');
-      XLSX.writeFile(wb, 'contribution-summary.xlsx');
-    }
-
-    function bind(){
-      const select = document.getElementById(PERIOD_SELECT_ID);
-      if (select && !select.__wired){
-        select.addEventListener('change', render);
-        select.addEventListener('input', render);
-        select.__wired = true;
-      }
-      const printBtn = document.getElementById(PRINT_ID);
-      if (printBtn && !printBtn.__wired){
-        printBtn.addEventListener('click', function(){
-          withPrintOrientation(function(orientation){
-            printContributionSummary(orientation);
-          });
-        });
-        printBtn.__wired = true;
-      }
-      const excelBtn = document.getElementById(EXCEL_ID);
-      if (excelBtn && !excelBtn.__wired){
-        excelBtn.addEventListener('click', exportContributionExcel);
-        excelBtn.__wired = true;
-      }
-    }
-
-    function init(){
-      render();
-      bind();
-    }
-
-    if (document.readyState === 'loading'){
-      document.addEventListener('DOMContentLoaded', init);
-    } else {
-      init();
-    }
-
-    try { window.renderContributionSummary = render; } catch (e) {}
-  })();
-  </script>
       </main>
     </div>
     <!-- Sidebar navigation behaviour -->
@@ -15735,8 +14999,6 @@ rows += `<tr class="allowance">
         projects: '🚀',
         payroll: '💰',
         totals: '📈',
-        contribSummary: '💳',
-        audit: '🔍',
         settings: '⚙️'
       };
       function setTitleFrom(btn){
@@ -16372,10 +15634,6 @@ const tabs = {
   panelPayroll: document.getElementById('panelPayroll'),
   tabProjectTotals: document.getElementById('tabProjectTotals'),
   panelProjectTotals: document.getElementById('panelProjectTotals'),
-  tabContributionSummary: document.getElementById('tabContributionSummary'),
-  panelContributionSummary: document.getElementById('panelContributionSummary'),
-  tabAudit: document.getElementById('tabAudit'),
-  panelAudit: document.getElementById('panelAudit'),
   tabSettings: document.getElementById('tabSettings'),
   panelSettings: document.getElementById('panelSettings')
 };
@@ -16405,8 +15663,6 @@ function showTab(name){
 
   if(name==='payroll'){ tabs.tabPayroll && tabs.tabPayroll.classList.add('active'); tabs.panelPayroll && tabs.panelPayroll.classList.add('active'); }
   if(name==='projectTotals'){ tabs.tabProjectTotals && tabs.tabProjectTotals.classList.add('active'); tabs.panelProjectTotals && tabs.panelProjectTotals.classList.add('active'); }
-  if(name==='contribSummary'){ tabs.tabContributionSummary && tabs.tabContributionSummary.classList.add('active'); tabs.panelContributionSummary && tabs.panelContributionSummary.classList.add('active'); }
-  if(name==='audit'){ tabs.tabAudit && tabs.tabAudit.classList.add('active'); tabs.panelAudit && tabs.panelAudit.classList.add('active'); if (typeof window.populateAuditPeriodSelect === 'function') { try { window.populateAuditPeriodSelect(); } catch (err) {} } if (typeof window.setAuditSubtab === 'function') { try { window.setAuditSubtab('dtr'); } catch (err) {} } }
   if(name==='settings'){ tabs.tabSettings && tabs.tabSettings.classList.add('active'); tabs.panelSettings && tabs.panelSettings.classList.add('active'); }
 }
 window.__dtrFilterBackup = null;
@@ -19065,8 +18321,6 @@ function restoreData(file) {
   if (typeof tabs !== 'undefined' && tabs){
     tabs.tabProjectTotals   = tabs.tabProjectTotals || document.getElementById('tabProjectTotals');
     tabs.panelProjectTotals = tabs.panelProjectTotals || document.getElementById('panelProjectTotals');
-    tabs.tabContributionSummary = tabs.tabContributionSummary || document.getElementById('tabContributionSummary');
-    tabs.panelContributionSummary = tabs.panelContributionSummary || document.getElementById('panelContributionSummary');
     tabs.tabSettings = tabs.tabSettings || document.getElementById('tabSettings');
     tabs.panelSettings = tabs.panelSettings || document.getElementById('panelSettings');
   }
@@ -19080,11 +18334,6 @@ function restoreData(file) {
         if (tabs.tabProjectTotals) tabs.tabProjectTotals.classList.add('active');
         if (tabs.panelProjectTotals) tabs.panelProjectTotals.classList.add('active');
         renderProjectTotals();
-      }
-      if (name === 'contribSummary'){
-        if (tabs.tabContributionSummary) tabs.tabContributionSummary.classList.add('active');
-        if (tabs.panelContributionSummary) tabs.panelContributionSummary.classList.add('active');
-        try { if (typeof window.renderContributionSummary === 'function') window.renderContributionSummary(); } catch(e){}
       }
     };
   }
@@ -19117,24 +18366,6 @@ function restoreData(file) {
     });
   }
 
-  const contribBtn = tabs && tabs.tabContributionSummary;
-  if (contribBtn && !contribBtn.__wired){
-    contribBtn.addEventListener('click', function(){
-      showTab('contribSummary');
-      try { if (typeof window.renderContributionSummary === 'function') window.renderContributionSummary(); } catch(e){}
-    });
-    contribBtn.__wired = true;
-  }
-
-  const contribSidebar = document.getElementById('old-tabContributionSummary');
-  if (contribSidebar && !contribSidebar.__wired){
-    contribSidebar.addEventListener('click', function(){
-      showTab('contribSummary');
-      try { if (typeof window.renderContributionSummary === 'function') window.renderContributionSummary(); } catch(e){}
-    });
-    contribSidebar.__wired = true;
-  }
-
   const settingsBtn = tabs && tabs.tabSettings;
   if (settingsBtn && !settingsBtn.__wired){
     settingsBtn.addEventListener('click', function(){
@@ -19149,49 +18380,6 @@ function restoreData(file) {
       showTab('settings');
     });
     settingsSidebar.__wired = true;
-  }
-
-  const auditBtn = tabs && tabs.tabAudit;
-  if (auditBtn && !auditBtn.__wired){
-    auditBtn.addEventListener('click', function(){
-      showTab('audit');
-    });
-    auditBtn.__wired = true;
-  }
-
-  const auditSidebar = document.getElementById('old-tabAudit');
-  if (auditSidebar && !auditSidebar.__wired){
-    auditSidebar.addEventListener('click', function(){
-      showTab('audit');
-    });
-    auditSidebar.__wired = true;
-  }
-
-  document.querySelectorAll('#auditSubtabBar .audit-subtab-btn').forEach(function(btn){
-    if (btn.__wired) return;
-    btn.addEventListener('click', function(){
-      const tabName = btn.dataset.auditTab || 'dtr';
-      if (typeof window.setAuditSubtab === 'function') {
-        window.setAuditSubtab(tabName);
-      }
-    });
-    btn.__wired = true;
-  });
-
-  const auditLoadBtn = document.getElementById('auditLoadBtn');
-  if (auditLoadBtn && !auditLoadBtn.__wired) {
-    auditLoadBtn.addEventListener('click', async function(){
-      const select = document.getElementById('auditPeriodSelect');
-      const val = select && select.value ? select.value : '';
-      const parts = val.split('|');
-      const startDate = parts[0] || '';
-      const endDate = parts[1] || '';
-      if (!startDate || !endDate) return;
-      if (typeof window.loadAuditSnapshot === 'function') {
-        await window.loadAuditSnapshot(startDate, endDate);
-      }
-    });
-    auditLoadBtn.__wired = true;
   }
 
   // Re-render when date range changes while active
