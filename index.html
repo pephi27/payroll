@@ -4,7 +4,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>PayrollPro</title>
+  <title>EdificeGroup</title>
 
   <!-- Performance: preconnect to critical origins and modulepreload -->
   <link rel="preconnect" href="https://qzkzugzfpegozpiqutdv.supabase.co" crossorigin>
@@ -2058,6 +2058,50 @@ window.addEventListener('load', dashReports);
         align-items: center;
         gap: 10px;
       }
+      .brand-logo {
+        display: inline-flex;
+        align-items: center;
+        gap: 10px;
+        color: #111827;
+      }
+      .brand-mark {
+        display: inline-flex;
+        align-items: flex-end;
+        gap: 2px;
+        height: 28px;
+      }
+      .brand-mark .bar {
+        display: inline-block;
+        width: 10px;
+        border-radius: 2px 2px 0 0;
+        transform: skewY(-22deg);
+        box-shadow: 0 2px 4px rgba(0,0,0,0.15);
+      }
+      .brand-mark .bar-a { height: 18px; background: #111111; }
+      .brand-mark .bar-b { height: 24px; background: #000000; }
+      .brand-mark .bar-c { height: 28px; background: #facc15; }
+      .brand-mark .bar-d { height: 22px; background: #eab308; }
+      .brand-wordmark {
+        display: inline-flex;
+        align-items: baseline;
+        font-weight: 700;
+        letter-spacing: 0.02em;
+        font-size: 24px;
+        line-height: 1;
+      }
+      .brand-wordmark .primary { color: #111111; }
+      .brand-wordmark .accent { color: #eab308; font-weight: 500; }
+      .header .brand-wordmark { font-size: 22px; }
+      .sidebar .brand-wordmark { font-size: 23px; }
+      @media (max-width: 768px) {
+        .header .brand-wordmark { font-size: 18px; }
+        .header .brand-mark { height: 22px; }
+        .header .brand-mark .bar { width: 8px; }
+        .header .brand-mark .bar-a { height: 14px; }
+        .header .brand-mark .bar-b { height: 18px; }
+        .header .brand-mark .bar-c { height: 22px; }
+        .header .brand-mark .bar-d { height: 16px; }
+      }
       .header .nav-menu {
         list-style: none;
         display: flex;
@@ -2174,9 +2218,6 @@ window.addEventListener('load', dashReports);
   .mobile-menu-btn span::before { content: "☰"; font-size: 20px; }
   .mobile-menu-btn[aria-expanded="true"] span::before { content: "✕"; }
 
-  /* Sidebar logo: render clean text */
-  .sidebar .logo { font-size: 0; }
-  .sidebar .logo::before { content: "💰 PayrollHub"; font-size: 24px; }
 
   /* Page title icon */
   .page-title > span:first-child { font-size: 0; } .page-title > span:first-child::before { content: "📊"; font-size: 32px; } .page-title > span.icon-emoji { font-size: 32px !important; } .page-title > span.icon-emoji::before { content: none !important; }
@@ -2279,7 +2320,15 @@ window.addEventListener('load', dashReports);
       <!-- Added top navigation header to adapt payroll UI -->
       <header class="header">
         <div class="header-content">
-          <div class="logo">PayrollPro</div>
+          <div class="logo brand-logo" aria-label="Edifice Group">
+            <span class="brand-mark" aria-hidden="true">
+              <span class="bar bar-a"></span>
+              <span class="bar bar-b"></span>
+              <span class="bar bar-c"></span>
+              <span class="bar bar-d"></span>
+            </span>
+            <span class="brand-wordmark"><span class="primary">Edifice</span><span class="accent">Group</span></span>
+          </div>
           <button class="mobile-menu-btn" type="button" aria-expanded="false" aria-controls="primaryNav" aria-label="Toggle navigation" onclick="toggleMobileMenu(this)">
             <span aria-hidden="true"></span>
           </button>
@@ -2299,8 +2348,14 @@ window.addEventListener('load', dashReports);
       </header>
     <aside class="sidebar" id="sidebar">
       <div class="sidebar-header">
-        <div class="logo">
-          ðŸ’¼ PayrollHub
+        <div class="logo brand-logo" aria-label="Edifice Group">
+          <span class="brand-mark" aria-hidden="true">
+            <span class="bar bar-a"></span>
+            <span class="bar bar-b"></span>
+            <span class="bar bar-c"></span>
+            <span class="bar bar-d"></span>
+          </span>
+          <span class="brand-wordmark"><span class="primary">Edifice</span><span class="accent">Group</span></span>
         </div>
       </div>
       <nav>
@@ -9654,7 +9709,7 @@ function getDeductionsReportCompanyName() {
   if (typeof COMPANY_OPTIONS !== 'undefined' && Array.isArray(COMPANY_OPTIONS) && COMPANY_OPTIONS[0]) {
     return normalizePrintCompanyName(COMPANY_OPTIONS[0]);
   }
-  return normalizePrintCompanyName('PayrollPro');
+  return normalizePrintCompanyName('EdificeGroup');
 }
 
 function getEmployeeCompanyBucket(empId) {
@@ -9851,7 +9906,7 @@ function getOvertimeReportCompanyName() {
   if (typeof COMPANY_OPTIONS !== 'undefined' && Array.isArray(COMPANY_OPTIONS) && COMPANY_OPTIONS[0]) {
     return normalizePrintCompanyName(COMPANY_OPTIONS[0]);
   }
-  return normalizePrintCompanyName('PayrollPro');
+  return normalizePrintCompanyName('EdificeGroup');
 }
 
 function buildOvertimeReportData() {
@@ -14822,7 +14877,7 @@ rows += `<tr class="allowance">
         <div class="contrib-hero">
           <div>
             <h3>Government contributions at a glance</h3>
-            <p>Configure the tables below so PayrollPro can match each worker to the correct statutory contribution.</p>
+            <p>Configure the tables below so EdificeGroup can match each worker to the correct statutory contribution.</p>
             <ul class="contrib-key-list">
               <li>Ranges are matched against <strong>monthly income</strong> from payroll calculations.</li>
               <li>Each edit saves automatically &mdash; no extra confirmation needed.</li>
@@ -14850,7 +14905,7 @@ rows += `<tr class="allowance">
             <div>
               <p class="table-card__tag">SSS</p>
               <h4 class="table-card__title">Monthly SSS shares</h4>
-              <p class="table-card__subtitle">Use the peso amounts that apply to each bracket. PayrollPro will pick the row where <em>min &le; income &le; max</em>.</p>
+              <p class="table-card__subtitle">Use the peso amounts that apply to each bracket. EdificeGroup will pick the row where <em>min &le; income &le; max</em>.</p>
             </div>
             <div class="table-card__tags">
               <span class="table-card__tag">Peso values</span>
@@ -18773,7 +18828,7 @@ document.addEventListener('DOMContentLoaded', function(){
     if (typeof COMPANY_OPTIONS !== 'undefined' && Array.isArray(COMPANY_OPTIONS) && COMPANY_OPTIONS[0]) {
       return normalizePrintCompanyName(COMPANY_OPTIONS[0]);
     }
-    return normalizePrintCompanyName('PayrollPro');
+    return normalizePrintCompanyName('EdificeGroup');
   }
   function getDtrPeriodText(){
     var start = (document.getElementById('weekStart') || {}).value || '';
