@@ -662,7 +662,7 @@
     });
   </script>
 
-<!-- === Supabase KV Sync Adapter (auth-enabled, per-session sync) === -->
+<!-- === Supabase KV Sync Adapter (no-login, auto-sync) === -->
 <script>
   // Global KV helpers for classic scripts; Supabase-aware if available.
   (function () {
@@ -673,7 +673,7 @@
     if (!window.readKV) {
       window.readKV = async function readKV(key, defaultValue = null) {
         try {
-          if (window.supabase && window.SUPABASE_TABLE && (!window.__bpCanSyncCloud || window.__bpCanSyncCloud())) {
+          if (window.supabase && window.SUPABASE_TABLE) {
             const { data, error } = await window.supabase
               .from(window.SUPABASE_TABLE)
               .select('value')
@@ -708,7 +708,7 @@
         };
         window.__kvSleep = window.__kvSleep || (ms => new Promise(r => setTimeout(r, ms)));
         try {
-          if (window.supabase && window.SUPABASE_TABLE && (!window.__bpCanSyncCloud || window.__bpCanSyncCloud())) {
+          if (window.supabase && window.SUPABASE_TABLE) {
             let lastErr = null;
             for (let attempt = 0; attempt < 3; attempt++) {
               const { error } = await window.supabase
@@ -751,7 +751,7 @@
         const chunkSize = Math.max(1, Math.min(25, Number(opts.chunkSize || 10)));
 
         // No Supabase? Just local cache.
-        if (!(window.supabase && window.SUPABASE_TABLE && (!window.__bpCanSyncCloud || window.__bpCanSyncCloud()))) {
+        if (!(window.supabase && window.SUPABASE_TABLE)) {
           for (const p of items) trySetLocalPair(p.key, p.value);
           return true;
         }
@@ -786,14 +786,17 @@
   })();
 </script>
 <script type="module">
-// Minimal cloud persistence by mirroring localStorage to Supabase.
+// Minimal, no-login cloud persistence by mirroring localStorage to Supabase.
 // 1) Create a table in Supabase named: kv_store
 //    Columns:
 //      key text PRIMARY KEY
 //      value jsonb
 //      updated_at timestamptz DEFAULT now()
-// 2) Turn RLS ON and add policies that match your auth rules.
-//    This file now includes sign in/sign out UI hooks via Supabase Auth.
+// 2) Turn RLS ON and add permissive policies if you truly want no-login use:
+//    - SELECT: USING (true)
+//    - INSERT: WITH CHECK (true)
+//    - UPDATE: USING (true)  WITH CHECK (true)   // optional; you can omit to prevent edits
+//    - DELETE: USING (false)                      // optional; disallow deletes
 // 3) Paste your Supabase project URL and anon key below.
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2?bundle"
@@ -859,9 +862,10 @@ const KNOWN_KEYS = [
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY, {
   auth: {
-    // Keep user sessions so login survives refresh.
-    persistSession: true,
-    autoRefreshToken: true,
+    // We use anon access + RLS policies; no interactive auth needed.
+    // Disabling session persistence avoids Navigator Lock timeouts on sb-*-auth-token.
+    persistSession: false,
+    autoRefreshToken: false,
     detectSessionInUrl: false
   }
 })
@@ -877,114 +881,6 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_KEY, {
 // provides a simple, predictable global reference.
 window.supabase = supabase;
 window.SUPABASE_TABLE = TABLE;
-
-function bpAuthEnsureStyles() {
-  if (document.getElementById('bpAuthStyles')) return;
-  const style = document.createElement('style');
-  style.id = 'bpAuthStyles';
-  style.textContent = `
-    .bp-auth-wrap{position:relative}
-    .bp-auth-toggle{background:#181c23;border:1px solid #2e3747;color:#e2e8f0;border-radius:10px;padding:8px 10px;cursor:pointer;font:13px/1 'Barlow',system-ui,sans-serif}
-    .bp-auth-panel{position:absolute;right:0;top:calc(100% + 8px);z-index:95;background:#111318;border:1px solid #2e3747;border-radius:12px;padding:10px;min-width:260px;box-shadow:0 14px 28px rgba(0,0,0,.35);color:#e2e8f0;font:13px/1.3 'Barlow',system-ui,sans-serif;display:none}
-    .bp-auth-panel.open{display:block}
-    .bp-auth-row{display:flex;gap:8px;margin-top:8px}
-    .bp-auth-panel input{width:100%;box-sizing:border-box;background:#181c23;border:1px solid #2e3747;color:#e2e8f0;border-radius:8px;padding:8px;margin-top:8px}
-    .bp-auth-panel button{flex:1;background:#181c23;border:1px solid #2e3747;color:#e2e8f0;border-radius:8px;padding:8px;cursor:pointer}
-    .bp-auth-panel button.primary{background:linear-gradient(135deg,#f97316,#c2580f);color:#0b0d10;font-weight:700}
-    .bp-auth-meta{font-size:11px;color:#94a3b8}
-  `;
-  document.head.appendChild(style);
-}
-
-function bpAuthInitUI() {
-  bpAuthEnsureStyles();
-  if (document.getElementById('bpAuthPanel')) return;
-  const wrap = document.createElement('div');
-  wrap.className = 'bp-auth-wrap';
-  wrap.innerHTML = `
-    <button id="bpAuthToggle" class="bp-auth-toggle">Account</button>
-    <div id="bpAuthPanel" class="bp-auth-panel" aria-live="polite">
-      <div id="bpAuthState" class="bp-auth-meta">Checking session…</div>
-      <div id="bpAuthSignedOut">
-        <input id="bpAuthEmail" type="email" placeholder="Email" autocomplete="email" />
-        <input id="bpAuthPassword" type="password" placeholder="Password" autocomplete="current-password" />
-        <div class="bp-auth-row">
-          <button id="bpAuthSignIn" class="primary">Log in</button>
-          <button id="bpAuthSignUp">Sign up</button>
-        </div>
-      </div>
-      <div id="bpAuthSignedIn" style="display:none">
-        <div class="bp-auth-row"><button id="bpAuthSignOut">Log out</button></div>
-      </div>
-    </div>
-  `;
-  const target = document.querySelector('.bp-topbar-period') || document.querySelector('.bp-topbar') || document.body;
-  target.appendChild(wrap);
-
-  const $ = (id) => wrap.querySelector(id);
-  window.__bpHasSession = false;
-  window.__bpCanSyncCloud = () => !!window.__bpHasSession;
-  const setState = (msg, isError = false) => {
-    const el = $('#bpAuthState');
-    if (!el) return;
-    el.textContent = msg;
-    el.style.color = isError ? '#fda4af' : '#94a3b8';
-  };
-  const renderSession = (session) => {
-    const signedIn = !!(session && session.user);
-    window.__bpHasSession = signedIn;
-    $('#bpAuthSignedOut').style.display = signedIn ? 'none' : '';
-    $('#bpAuthSignedIn').style.display = signedIn ? '' : 'none';
-    $('#bpAuthToggle').textContent = signedIn ? (session.user.email || 'Account') : 'Account';
-    if (signedIn) {
-      const email = session.user.email || 'Signed in';
-      setState(`Logged in as ${email}`);
-    } else {
-      setState('Not logged in (local-only mode).');
-    }
-  };
-
-  $('#bpAuthToggle')?.addEventListener('click', () => {
-    $('#bpAuthPanel')?.classList.toggle('open');
-  });
-  document.addEventListener('click', (ev) => {
-    if (!wrap.contains(ev.target)) $('#bpAuthPanel')?.classList.remove('open');
-  });
-
-  $('#bpAuthSignIn')?.addEventListener('click', async () => {
-    const email = ($('#bpAuthEmail')?.value || '').trim();
-    const password = $('#bpAuthPassword')?.value || '';
-    if (!email || !password) return setState('Enter email and password.', true);
-    setState('Signing in…');
-    const { error } = await supabase.auth.signInWithPassword({ email, password });
-    if (error) return setState(error.message || 'Sign in failed.', true);
-  });
-
-  $('#bpAuthSignUp')?.addEventListener('click', async () => {
-    const email = ($('#bpAuthEmail')?.value || '').trim();
-    const password = $('#bpAuthPassword')?.value || '';
-    if (!email || !password) return setState('Enter email and password.', true);
-    setState('Creating account…');
-    const { error } = await supabase.auth.signUp({ email, password });
-    if (error) return setState(error.message || 'Sign up failed.', true);
-    setState('Account created. Check email if confirmation is enabled.');
-  });
-
-  $('#bpAuthSignOut')?.addEventListener('click', async () => {
-    setState('Signing out…');
-    const { error } = await supabase.auth.signOut();
-    if (error) return setState(error.message || 'Sign out failed.', true);
-  });
-
-  supabase.auth.getSession().then(({ data }) => renderSession(data?.session || null));
-  supabase.auth.onAuthStateChange((_event, session) => renderSession(session));
-}
-
-if (document.readyState === 'loading') {
-  document.addEventListener('DOMContentLoaded', bpAuthInitUI, { once: true });
-} else {
-  bpAuthInitUI();
-}
 
 function markHydrated() {
   try { window.__kv_hydrated = true; } catch {}
@@ -1225,7 +1121,6 @@ const __origRemoveItem = Storage.prototype.removeItem
 
 async function cloudUpsert(key, value) {
   try {
-    if (window.__bpCanSyncCloud && !window.__bpCanSyncCloud()) return;
     // Try upsert
     const { error } = await supabase
       .from(TABLE)
@@ -1241,7 +1136,6 @@ async function cloudUpsert(key, value) {
 }
 async function cloudDelete(key) {
   try {
-    if (window.__bpCanSyncCloud && !window.__bpCanSyncCloud()) return;
     const { error } = await supabase.from(TABLE).delete().eq("key", key)
     if (error) console.warn("Supabase delete error:", error.message)
   } catch (e) { console.warn("Supabase delete failed", e) }
@@ -1339,7 +1233,6 @@ Storage.prototype.removeItem = function(k) {
 
 async function __kvHydrateOnce(){
   try {
-    if (window.__bpCanSyncCloud && !window.__bpCanSyncCloud()) { markHydrated(); return false; }
     __kvHydrating = true;
     const { data, error } = await supabase
       .from(TABLE)
