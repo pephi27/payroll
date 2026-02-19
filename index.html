@@ -927,6 +927,13 @@ function queueHydrateRerender() {
   const schedule = () => {
     try { if (__kvRerenderTimer) window.clearTimeout(__kvRerenderTimer); } catch {}
     __kvRerenderTimer = window.setTimeout(() => {
+      try {
+        const active = document.activeElement;
+        if (active && active.closest && active.closest('#resultsTable') && active.tagName === 'SELECT') {
+          schedule();
+          return;
+        }
+      } catch (_) {}
       __kvRerenderTimer = null;
       rerender();
     }, 120);
