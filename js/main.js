@@ -1,0 +1,21781 @@
+(function(){
+  if (window.__bpSafeDom) return;
+  window.__bpSafeDom = {
+    byId: function(id){ return document.getElementById(id); },
+    on: function(el, ev, fn, opts){ if (!el || !el.addEventListener) return false; el.addEventListener(ev, fn, opts); return true; },
+    val: function(el){ return el && typeof el.value !== 'undefined' ? el.value : ''; }
+  };
+})();
+
+
+
+    // Non-invasive performance tweaks: lazy-load offscreen media, async decode images.
+    const onReady = (cb) => {
+      if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', cb, { once: true });
+      else cb();
+    };
+    onReady(() => {
+      try {
+        const vh = window.innerHeight || document.documentElement.clientHeight || 800;
+        document.querySelectorAll('img').forEach(img => {
+          try { if (!img.hasAttribute('decoding')) img.setAttribute('decoding', 'async'); } catch {}
+          if (!img.hasAttribute('loading')) {
+            const rect = img.getBoundingClientRect();
+            if (rect && rect.top > vh) { try { img.setAttribute('loading', 'lazy'); } catch {} }
+          }
+        });
+        document.querySelectorAll('iframe').forEach(el => {
+          if (!el.hasAttribute('loading')) { try { el.setAttribute('loading', 'lazy'); } catch {} }
+        });
+      } catch { /* no-op */ }
+    });
+  
+
+
+  // Global KV helpers for classic scripts; Supabase-aware if available.
+  (function () {
+    if (!window.__kvUnifiedLogged) {
+      console.log("KV: using unified read/write");
+      window.__kvUnifiedLogged = true;
+    }
+    if (!window.readKV) {
+      window.readKV = async function readKV(key, defaultValue = null) {
+        try {
+          if (window.supabase && window.SUPABASE_TABLE) {
+            const { data, error } = await window.supabase
+              .from(window.SUPABASE_TABLE)
+              .select('value')
+              .eq('key', key)
+              .maybeSingle();
+            if (error || !data) return defaultValue;
+            return (data.value ?? defaultValue);
+          } else {
+            const raw = localStorage.getItem(key);
+            if (raw === null) return defaultValue;
+            try { return JSON.parse(raw); } catch { return raw; }
+          }
+        } catch (e) {
+          console.warn('readKV failed', e);
+          return defaultValue;
+        }
+      };
+    }
+    if (!window.writeKV) {
+      const isAbortError = (err) => {
+        if (!err) return false;
+        const message = err.message || err.details || String(err);
+        return err.name === 'AbortError' || /aborterror|signal is aborted/i.test(message);
+      };
+      window.writeKV = async function writeKV(key, value) {
+        const trySetLocal = () => {
+          try { window.__kvBypassNextSetItem = true; __kvBypassNextSetItem = true; localStorage.setItem(key, JSON.stringify(value)); } catch {}
+        };
+        const isNavLockTimeout = (err) => {
+          const msg = (err && err.message) ? String(err.message) : String(err || '');
+          return /Navigator Lock/i.test(msg) && /timed out/i.test(msg);
+        };
+        window.__kvSleep = window.__kvSleep || (ms => new Promise(r => setTimeout(r, ms)));
+        try {
+          if (window.supabase && window.SUPABASE_TABLE) {
+            let lastErr = null;
+            for (let attempt = 0; attempt < 3; attempt++) {
+              const { error } = await window.supabase
+                .from(window.SUPABASE_TABLE)
+                .upsert({ key, value }, { onConflict: 'key' });
+              if (!error) { lastErr = null; break; }
+              if (isAbortError(error)) { lastErr = null; break; }
+              lastErr = error;
+              if (isNavLockTimeout(error) && attempt < 2) {
+                await window.__kvSleep(350 * (attempt + 1));
+                continue;
+              }
+              break;
+            }
+            trySetLocal();
+            if (lastErr && !isAbortError(lastErr)) console.warn('writeKV error', lastErr);
+          } else {
+            trySetLocal();
+          }
+          return true;
+        } catch (e) {
+          if (!isAbortError(e)) console.warn('writeKV failed', e);
+          trySetLocal();
+          return false;
+        }
+      };
+
+      // Batch upsert to reduce Supabase auth-lock contention (especially during Finalize/Snapshot).
+      window.writeKVBatch = async function writeKVBatch(pairs, opts = {}) {
+        const trySetLocalPair = (k, v) => {
+          try { window.__kvBypassNextSetItem = true; __kvBypassNextSetItem = true; localStorage.setItem(k, JSON.stringify(v)); } catch {}
+        };
+        const isNavLockTimeout = (err) => {
+          const msg = (err && err.message) ? String(err.message) : String(err || '');
+          return /Navigator Lock/i.test(msg) && /timed out/i.test(msg);
+        };
+        window.__kvSleep = window.__kvSleep || (ms => new Promise(r => setTimeout(r, ms)));
+
+        const items = Array.isArray(pairs) ? pairs.filter(p => p && p.key) : [];
+        const chunkSize = Math.max(1, Math.min(25, Number(opts.chunkSize || 10)));
+
+        // No Supabase? Just local cache.
+        if (!(window.supabase && window.SUPABASE_TABLE)) {
+          for (const p of items) trySetLocalPair(p.key, p.value);
+          return true;
+        }
+
+        let allOk = true;
+        for (let i = 0; i < items.length; i += chunkSize) {
+          const chunk = items.slice(i, i + chunkSize).map(p => ({ key: p.key, value: p.value }));
+          let lastErr = null;
+          for (let attempt = 0; attempt < 3; attempt++) {
+            const { error } = await window.supabase
+              .from(window.SUPABASE_TABLE)
+              .upsert(chunk, { onConflict: 'key' });
+            if (!error) { lastErr = null; break; }
+            if (isAbortError(error)) { lastErr = null; break; }
+            lastErr = error;
+            if (isNavLockTimeout(error) && attempt < 2) {
+              await window.__kvSleep(500 * (attempt + 1));
+              continue;
+            }
+            break;
+          }
+          if (lastErr && !isAbortError(lastErr)) {
+            console.warn('writeKVBatch error', lastErr);
+            allOk = false;
+          }
+          // Keep local cache aligned (best-effort)
+          for (const p of chunk) trySetLocalPair(p.key, p.value);
+        }
+        return allOk;
+      };
+}
+  })();
+
+
+
+// Minimal cloud persistence by mirroring localStorage to Supabase.
+// 1) Create a table in Supabase named: kv_store
+//    Columns:
+//      key text PRIMARY KEY
+//      value jsonb
+//      updated_at timestamptz DEFAULT now()
+// 2) Turn RLS ON and add policies that match your auth rules.
+//    This file now includes sign in/sign out UI hooks via Supabase Auth.
+// 3) Paste your Supabase project URL and anon key below.
+
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2?bundle"
+
+const SUPABASE_URL = window.SUPABASE_URL || "https://qzkzugzfpegozpiqutdv.supabase.co"
+const SUPABASE_KEY = window.SUPABASE_KEY || "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InF6a3p1Z3pmcGVnb3pwaXF1dGR2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTU4MTc5MDMsImV4cCI6MjA3MTM5MzkwM30.mdFYuFjbRfsILWPkQQmVUCDR7dGqEo-mdPZ6iwolvGk"
+const TABLE = "kv_store"
+// List of localStorage keys that should be mirrored to Supabase.  If you add
+// new keys anywhere in the application that you want to persist across
+// devices, add them here as well.  Without inclusion in this list the
+// `Storage.prototype.setItem` hook will ignore them and they will remain
+// strictly device-local.
+const KNOWN_KEYS = [
+  "att_employees_v2",
+  "att_schedules_v2",
+  "att_schedules_default",
+  "att_projects_v1",
+  "att_filter_project_v1",
+  "att_overrides_schedules",
+  "att_overrides_projects",
+  "att_splits_v1",
+  // payroll configuration keys
+  "payroll_rates",
+  "payroll_reg_hours",
+  "payroll_ot_hours",
+  "payroll_ot_multiplier",
+  "ui_payroll_week_start_local",
+  "ui_payroll_week_end_local",
+  "payroll_week_start",
+  "payroll_week_end",
+  "settings_payroll",
+  "payroll_deduction_divisor",
+  "payroll_sss_table",
+  "payroll_loan_sss",
+  "payroll_loan_pagibig",
+  "payroll_vale",
+  "payroll_vale_wed",
+  "payroll_hist",
+  "payrollColumnWidths",
+  // additional filter & state keys not previously persisted
+  "dtr_filter_from",
+  "dtr_filter_to"
+  ,"payroll_other_deductions_details"
+  ,"payroll_other_deductions_total"
+  ,"payroll_pagibig_rate"
+  ,"payroll_philhealth_rate"
+  ,"payroll_pagibig_table"
+  ,"payroll_philhealth_table"
+  ,"payroll_adjustment_hours"
+  ,"payroll_additional_income_details"
+  ,"payroll_additional_income_total"
+  ,"payroll_bantay"
+  ,"payroll_bantay_proj"
+  ,"payroll_contrib_flags"
+  ,"att_overrides_hours_v1"
+  ,"payroll_lock_state"
+  ,"dtr_overrides_v1"
+  ,"incomeTypeOptions"
+  ,"deductionTypeOptions"
+  ,"payroll_loan_tracker"
+  ,"payroll_print_orientation"
+]
+
+const supabase = createClient(SUPABASE_URL, SUPABASE_KEY, {
+  auth: {
+    // Keep user sessions so login survives refresh.
+    persistSession: true,
+    autoRefreshToken: true,
+    detectSessionInUrl: false
+  }
+})
+
+// Expose the Supabase client on the global window so that other
+// non-module scripts (e.g. the boot guard) can access it without
+// re-importing the library.  Also expose the table name used for
+// key/value storage.  Without this, any attempt to read from
+// Supabase outside of this module would require a duplicate client
+// instantiation, and due to the asynchronous execution order of
+// module scripts it is not guaranteed that the client would be
+// available when the boot guard runs.  Assigning to `window`
+// provides a simple, predictable global reference.
+window.supabase = supabase;
+window.SUPABASE_TABLE = TABLE;
+
+function bpAuthEnsureStyles() {
+  if (document.getElementById('bpAuthStyles')) return;
+  const style = document.createElement('style');
+  style.id = 'bpAuthStyles';
+  style.textContent = `
+    .bp-auth-panel{position:fixed;right:14px;bottom:14px;z-index:90;background:#111318;border:1px solid #2e3747;border-radius:12px;padding:10px;min-width:240px;box-shadow:0 14px 28px rgba(0,0,0,.35);color:#e2e8f0;font:13px/1.3 'Barlow',system-ui,sans-serif}
+    .bp-auth-row{display:flex;gap:8px;margin-top:8px}
+    .bp-auth-panel input{width:100%;box-sizing:border-box;background:#181c23;border:1px solid #2e3747;color:#e2e8f0;border-radius:8px;padding:8px;margin-top:8px}
+    .bp-auth-panel button{flex:1;background:#181c23;border:1px solid #2e3747;color:#e2e8f0;border-radius:8px;padding:8px;cursor:pointer}
+    .bp-auth-panel button.primary{background:linear-gradient(135deg,#f97316,#c2580f);color:#0b0d10;font-weight:700}
+    .bp-auth-meta{font-size:11px;color:#94a3b8}
+  `;
+  document.head.appendChild(style);
+}
+
+function bpAuthInitUI() {
+  bpAuthEnsureStyles();
+  if (document.getElementById('bpAuthPanel')) return;
+  const panel = document.createElement('div');
+  panel.id = 'bpAuthPanel';
+  panel.className = 'bp-auth-panel';
+  panel.innerHTML = `
+    <div id="bpAuthState" class="bp-auth-meta">Checking session…</div>
+    <div id="bpAuthSignedOut">
+      <input id="bpAuthEmail" type="email" placeholder="Email" autocomplete="email" />
+      <input id="bpAuthPassword" type="password" placeholder="Password" autocomplete="current-password" />
+      <div class="bp-auth-row">
+        <button id="bpAuthSignIn" class="primary">Log in</button>
+        <button id="bpAuthSignUp">Sign up</button>
+      </div>
+    </div>
+    <div id="bpAuthSignedIn" style="display:none">
+      <div class="bp-auth-row"><button id="bpAuthSignOut">Log out</button></div>
+    </div>
+  `;
+  document.body.appendChild(panel);
+
+  const $ = (id) => panel.querySelector(id);
+  const setState = (msg, isError = false) => {
+    const el = $('#bpAuthState');
+    if (!el) return;
+    el.textContent = msg;
+    el.style.color = isError ? '#fda4af' : '#94a3b8';
+  };
+  const renderSession = (session) => {
+    const signedIn = !!(session && session.user);
+    $('#bpAuthSignedOut').style.display = signedIn ? 'none' : '';
+    $('#bpAuthSignedIn').style.display = signedIn ? '' : 'none';
+    if (signedIn) {
+      const email = session.user.email || 'Signed in';
+      setState(`Logged in as ${email}`);
+    } else {
+      setState('Not logged in');
+    }
+  };
+
+  $('#bpAuthSignIn')?.addEventListener('click', async () => {
+    const email = ($('#bpAuthEmail')?.value || '').trim();
+    const password = $('#bpAuthPassword')?.value || '';
+    if (!email || !password) return setState('Enter email and password.', true);
+    setState('Signing in…');
+    const { error } = await supabase.auth.signInWithPassword({ email, password });
+    if (error) return setState(error.message || 'Sign in failed.', true);
+  });
+
+  $('#bpAuthSignUp')?.addEventListener('click', async () => {
+    const email = ($('#bpAuthEmail')?.value || '').trim();
+    const password = $('#bpAuthPassword')?.value || '';
+    if (!email || !password) return setState('Enter email and password.', true);
+    setState('Creating account…');
+    const { error } = await supabase.auth.signUp({ email, password });
+    if (error) return setState(error.message || 'Sign up failed.', true);
+    setState('Account created. Check email if confirmation is enabled.');
+  });
+
+  $('#bpAuthSignOut')?.addEventListener('click', async () => {
+    setState('Signing out…');
+    const { error } = await supabase.auth.signOut();
+    if (error) return setState(error.message || 'Sign out failed.', true);
+  });
+
+  supabase.auth.getSession().then(({ data }) => renderSession(data?.session || null));
+  supabase.auth.onAuthStateChange((_event, session) => renderSession(session));
+}
+
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', bpAuthInitUI, { once: true });
+} else {
+  bpAuthInitUI();
+}
+
+function markHydrated() {
+  try { window.__kv_hydrated = true; } catch {}
+  try { window.dispatchEvent(new Event('kv-hydrated')); } catch {}
+}
+
+let __kvRerenderTimer = null;
+function queueHydrateRerender() {
+  markHydrated();
+  try {
+    if (typeof window.refreshCoreStoresFromStorage === 'function') {
+      window.refreshCoreStoresFromStorage();
+    }
+  } catch (_) {}
+  try { if (typeof refreshPeriodScopedCachesFromStorage === 'function') refreshPeriodScopedCachesFromStorage(); } catch {}
+  try { if (typeof refreshLoanTrackerCacheFromStorage === 'function') refreshLoanTrackerCacheFromStorage(); } catch {}
+  const rerender = () => {
+    try {
+      if (typeof renderOtherDeductionsTable === 'function') renderOtherDeductionsTable();
+      if (typeof renderAdjustmentHoursTable === 'function') renderAdjustmentHoursTable();
+    } catch {}
+    try {
+      if (typeof renderAdditionalIncomeTable === 'function') renderAdditionalIncomeTable();
+    } catch {}
+    try {
+      if (typeof renderLoanTrackerTable === 'function') renderLoanTrackerTable();
+    } catch {}
+    try { if (typeof window.calculateAll === 'function') window.calculateAll(); } catch {}
+    try { if (typeof window.renderResults === 'function') window.renderResults(); } catch {}
+  };
+  try {
+    let shouldDefer = false;
+    if (typeof window.isOtherDeductionsInputFocused === 'function' && window.isOtherDeductionsInputFocused()) {
+      window.__otherDeductionsHydratePending = true;
+      shouldDefer = true;
+    }
+    if (typeof window.isAdditionalIncomeInputFocused === 'function' && window.isAdditionalIncomeInputFocused()) {
+      window.__additionalIncomeHydratePending = true;
+      shouldDefer = true;
+    }
+    if (shouldDefer) return;
+  } catch (_) {}
+
+  const schedule = () => {
+    try { if (__kvRerenderTimer) window.clearTimeout(__kvRerenderTimer); } catch {}
+    __kvRerenderTimer = window.setTimeout(() => {
+      __kvRerenderTimer = null;
+      rerender();
+    }, 120);
+  };
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', schedule, { once: true });
+  } else {
+    schedule();
+  }
+}
+
+function __kvHasMeaningfulPeriodMap(obj){
+  try{
+    if (!obj || typeof obj !== 'object') return false;
+    for (const pk of Object.keys(obj)) {
+      if (pk === '__meta') continue;
+      const pv = obj[pk];
+      if (pv == null) continue;
+      if (Array.isArray(pv)) { if (pv.length) return true; continue; }
+      if (typeof pv === 'object') { if (Object.keys(pv).length) return true; continue; }
+      if (pv !== '' && pv !== 0 && pv !== false) return true;
+    }
+  } catch(_) {}
+  return false;
+}
+const __kvBootCloudFirstPeriodKeys = new Set([
+  'payroll_other_deductions_details',
+  'payroll_other_deductions_total',
+  'payroll_additional_income_details',
+  'payroll_additional_income_total',
+  'payroll_lock_state'
+]);
+function __kvBootCloudFirstDecision(k, localObj, cloudObj){
+  if (!__kvBootCloudFirstPeriodKeys.has(k)) return null;
+  const cloudHas = __kvHasMeaningfulPeriodMap(cloudObj);
+  if (cloudHas) return false; // never overwrite meaningful cloud with local
+  const localHas = __kvHasMeaningfulPeriodMap(localObj);
+  if (localHas) return true;  // seed cloud if cloud empty/missing
+  return false;
+}
+function __kvPayrollHistoryLatestTs(list){
+  try{
+    if (!Array.isArray(list) || !list.length) return 0;
+    let maxTs = 0;
+    for (const item of list){
+      if (!item || typeof item !== 'object') continue;
+      const stamp = item.finalizedAt || item.lockedAt || item.createdAt || item.voidedAt || '';
+      const ts = stamp ? new Date(stamp).getTime() : 0;
+      if (Number.isFinite(ts) && ts > maxTs) maxTs = ts;
+    }
+    return maxTs;
+  }catch(_){ return 0; }
+}
+try { window.queueHydrateRerender = queueHydrateRerender; } catch (_) {}
+
+let __kvPeriodicHydrateInFlight = false;
+async function __kvPeriodicHydrate() {
+  if (__kvPeriodicHydrateInFlight) return;
+  __kvPeriodicHydrateInFlight = true;
+  try {
+    if (document.visibilityState && document.visibilityState !== 'visible') return;
+    if (typeof __kvHydrateOnce === 'function') await __kvHydrateOnce();
+  } catch (_) {
+  } finally {
+    __kvPeriodicHydrateInFlight = false;
+  }
+}
+
+function __kvScheduleRealtimeReconnect(delayMs = 1500) {
+  try {
+    if (window.__kvReconnectTimer) return;
+    window.__kvReconnectTimer = window.setTimeout(() => {
+      window.__kvReconnectTimer = null;
+      try { __kvSetupRealtimeChannel(true); } catch (_) {}
+    }, Math.max(400, Number(delayMs) || 1500));
+  } catch (_) {}
+}
+
+function __kvSetupRealtimeChannel(force = false) {
+  try {
+    if (!force && window.__kvSubscribed && window.__kvChannel) return;
+    if (window.__kvChannel) {
+      try {
+        if (typeof window.__kvChannel.unsubscribe === 'function') {
+          window.__kvChannel.unsubscribe();
+        } else if (window.supabase && typeof window.supabase.removeChannel === 'function') {
+          window.supabase.removeChannel(window.__kvChannel);
+        }
+      } catch (_) {}
+      window.__kvChannel = null;
+    }
+
+    const channel = supabase.channel('kv_store_sync');
+    window.__kvSubscribed = true;
+    window.__kvChannel = channel;
+
+    channel.on('postgres_changes', { event: '*', schema: 'public', table: TABLE }, (payload) => {
+      try {
+        const eventType = payload && payload.eventType;
+        const key = (payload && payload.new && payload.new.key) || (payload && payload.old && payload.old.key);
+        if (!key || !KNOWN_KEYS.includes(key)) return;
+        if (eventType === 'INSERT' || eventType === 'UPDATE') {
+          const serialized = safeStringify(payload && payload.new ? payload.new.value : undefined);
+          const nextValue = serialized == null ? 'null' : String(serialized);
+          const current = localStorage.getItem(key);
+          if (nextValue !== current) {
+            try { __origSetItem.call(localStorage, key, nextValue); } catch {}
+            queueHydrateRerender();
+          }
+        } else if (eventType === 'DELETE') {
+          if (localStorage.getItem(key) !== null) {
+            try { __origRemoveItem.call(localStorage, key); } catch {}
+            queueHydrateRerender();
+          }
+        }
+      } catch (err) {
+        console.warn('Supabase realtime sync failed', err);
+      }
+    });
+
+    const subscribeResult = channel.subscribe((status) => {
+      if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
+        console.warn('Supabase channel status issue:', status);
+        __kvScheduleRealtimeReconnect(1800);
+      }
+    });
+
+    if (subscribeResult && typeof subscribeResult.catch === 'function') {
+      subscribeResult.catch((err) => {
+        console.warn('Supabase channel subscribe promise rejected', err);
+        __kvScheduleRealtimeReconnect(1800);
+      });
+    }
+
+    if (!window.__kvRealtimeVisibilityHooked) {
+      document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'hidden') {
+          try { __kvFlushUpsertQueue(true); } catch {}
+        }
+        if (document.visibilityState === 'visible') {
+          __kvPeriodicHydrate();
+          __kvSetupRealtimeChannel(true);
+        }
+      });
+      window.__kvRealtimeVisibilityHooked = true;
+    }
+
+    if (!window.__kvRealtimeFallbackTimer) {
+      window.__kvRealtimeFallbackTimer = window.setInterval(() => {
+        __kvPeriodicHydrate();
+      }, 90000);
+    }
+
+    if (!window.__kvUnloadCleanup) {
+      
+      // Flush any pending debounced upserts when the page is being hidden/unloaded
+      window.addEventListener('pagehide', () => { try { __kvFlushUpsertQueue(true); } catch {} }, { once: true });
+      window.__kvPagehideFlush = true;
+
+window.addEventListener('beforeunload', () => {
+        try {
+          if (window.__kvReconnectTimer) {
+            window.clearTimeout(window.__kvReconnectTimer);
+            window.__kvReconnectTimer = null;
+          }
+          if (window.__kvRealtimeFallbackTimer) {
+            window.clearInterval(window.__kvRealtimeFallbackTimer);
+            window.__kvRealtimeFallbackTimer = null;
+          }
+          if (window.__kvChannel) {
+            if (typeof window.__kvChannel.unsubscribe === 'function') {
+              window.__kvChannel.unsubscribe();
+            } else if (window.supabase && typeof window.supabase.removeChannel === 'function') {
+              window.supabase.removeChannel(window.__kvChannel);
+            }
+          }
+        } catch {}
+      }, { once: true });
+      window.__kvUnloadCleanup = true;
+    }
+  } catch (err) {
+    console.warn('Supabase realtime channel setup failed', err);
+    __kvScheduleRealtimeReconnect(2200);
+  }
+}
+
+if (!window.__kvSubscribed) __kvSetupRealtimeChannel();
+
+const __origSetItem = Storage.prototype.setItem
+const __origRemoveItem = Storage.prototype.removeItem
+
+async function cloudUpsert(key, value) {
+  try {
+    // Try upsert
+    const { error } = await supabase
+      .from(TABLE)
+      .upsert({ key, value: tryParse(value) }, { onConflict: "key" })
+    if (error) {
+      if (error.name === 'AbortError' || String(error.message || '').includes('AbortError')) return
+      console.warn("Supabase upsert error:", error.message)
+    }
+  } catch (e) {
+    if (e && (e.name === 'AbortError' || String(e.message || '').includes('AbortError'))) return
+    console.warn("Supabase upsert failed", e)
+  }
+}
+async function cloudDelete(key) {
+  try {
+    const { error } = await supabase.from(TABLE).delete().eq("key", key)
+    if (error) console.warn("Supabase delete error:", error.message)
+  } catch (e) { console.warn("Supabase delete failed", e) }
+}
+function tryParse(v) {
+  try { return JSON.parse(v) } catch { return v }
+}
+
+const __kvUpsertDebounceMs = 400
+const __kvUpsertQueue = new Map()
+function scheduleCloudUpsert(key, value) {
+  if (!key) return
+  const existing = __kvUpsertQueue.get(key)
+  if (existing && existing.timer) window.clearTimeout(existing.timer)
+  __kvUpsertQueue.set(key, {
+    value,
+    timer: window.setTimeout(async () => {
+      __kvUpsertQueue.delete(key)
+      await cloudUpsert(key, value)
+    }, __kvUpsertDebounceMs)
+  })
+}
+
+async function __kvFlushUpsertQueue(useKeepalive = false) {
+  try {
+    if (!__kvUpsertQueue || __kvUpsertQueue.size === 0) return;
+    const entries = Array.from(__kvUpsertQueue.entries());
+    for (const [k, obj] of entries) {
+      try { if (obj && obj.timer) window.clearTimeout(obj.timer); } catch {}
+      __kvUpsertQueue.delete(k);
+    }
+    const tasks = entries.map(([k, obj]) => {
+      const v = obj ? obj.value : null;
+      return useKeepalive ? cloudUpsertKeepalive(k, v) : cloudUpsert(k, v);
+    });
+    await Promise.allSettled(tasks);
+  } catch (_) {}
+}
+
+// Best-effort keepalive upsert for pagehide/beforeunload so last edits are less likely to be lost
+function cloudUpsertKeepalive(key, value) {
+  try {
+    if (!key) return Promise.resolve();
+    const url = `${SUPABASE_URL}/rest/v1/${TABLE}?on_conflict=key`;
+    const headers = {
+      "apikey": SUPABASE_KEY,
+      "Authorization": `Bearer ${SUPABASE_KEY}`,
+      "Content-Type": "application/json",
+      "Prefer": "resolution=merge-duplicates,return=minimal"
+    };
+    const payload = [{ key, value: tryParse(value) }];
+    return fetch(url, { method: "POST", headers, body: JSON.stringify(payload), keepalive: true }).catch(() => {});
+  } catch (_) {
+    return Promise.resolve();
+  }
+}
+
+
+// Cloud-first syncing:
+// - Cloud is the source of truth on boot
+// - A brand-new/empty PC will NEVER overwrite existing cloud data
+// - We only mirror localStorage -> cloud AFTER we successfully hydrated at least once
+let __kvSyncEnabled = false;
+let __kvHydrating = false;
+try { window.__kvSyncEnabled = () => __kvSyncEnabled; } catch(_) {}
+
+function __kvEnableSync(){ __kvSyncEnabled = true; }
+function __kvDisableSync(){ __kvSyncEnabled = false; }
+try { window.__kvEnableSync = __kvEnableSync; window.__kvDisableSync = __kvDisableSync; } catch(_) {}
+
+let __kvBypassNextSetItem = false;
+const __CLOUD_ONLY_KEYS = new Set(['payroll_loan_tracker','payroll_loan_sss','payroll_loan_pagibig','payroll_vale','payroll_vale_wed','payroll_other_deductions_details','payroll_other_deductions_total','payroll_additional_income_details','payroll_additional_income_total']);
+function __kvShouldMirror(k){ return KNOWN_KEYS.includes(k) && !__CLOUD_ONLY_KEYS.has(k); }
+
+// Write-through on any localStorage change (only after hydrate succeeds)
+Storage.prototype.setItem = function(k, v) {
+  try { __origSetItem.call(this, k, v) } catch {}
+  // Only mirror real localStorage changes (ignore sessionStorage)
+  if (this !== window.localStorage) return;
+  if (!__kvSyncEnabled) return;
+  // If this write came from writeKV's cache update, don't mirror it back to cloud (avoid double writes)
+  if (__kvBypassNextSetItem || window.__kvBypassNextSetItem) {
+    try { __kvBypassNextSetItem = false; window.__kvBypassNextSetItem = false; } catch {}
+    return;
+  }
+  // Mirror normal keys + also mirror cloud-only keys if something still writes them via localStorage directly
+  if (__kvShouldMirror(k) || __CLOUD_ONLY_KEYS.has(k)) scheduleCloudUpsert(k, v);
+}
+Storage.prototype.removeItem = function(k) {
+  try { __origRemoveItem.call(this, k) } catch {}
+  if (this !== window.localStorage) return;
+  if (!__kvSyncEnabled) return;
+  if (__kvShouldMirror(k) || __CLOUD_ONLY_KEYS.has(k)) cloudDelete(k);
+}
+
+async function __kvHydrateOnce(){
+  try {
+    __kvHydrating = true;
+    const { data, error } = await supabase
+      .from(TABLE)
+      .select("key, value")
+      .in("key", KNOWN_KEYS);
+    if (error) { console.warn("Supabase fetch error:", error.message); return false; }
+
+    let changed = false;
+
+    for (const row of (data || [])) {
+      const k = row.key;
+      const cloudStr = safeStringify(row.value);
+      const cur = localStorage.getItem(k);
+
+      // Conflict resolution (period-scoped maps): prefer the newer __meta.lastUpdatedAt side.
+      let preferLocal = false;
+      let cloudObj = null;
+      let localObj = null;
+      try {
+        cloudObj = (row && typeof row.value === 'object') ? row.value : JSON.parse(cloudStr || 'null');
+        localObj = cur ? JSON.parse(cur) : null;
+        const lc = localObj && localObj.__meta && Number(localObj.__meta.lastUpdatedAt);
+        const rc = cloudObj && cloudObj.__meta && Number(cloudObj.__meta.lastUpdatedAt);
+        const localHasMeaningful = __kvHasMeaningfulPeriodMap(localObj);
+        if (localHasMeaningful && lc && rc && lc > rc) preferLocal = true;
+      } catch(_) {}
+
+      // Safety: never auto-push local over cloud for Loan Tracker during boot hydrate.
+      if (k === 'payroll_loan_tracker') preferLocal = false;
+
+      // Safety: cloud-first on startup for Additional Income + Other Deductions to prevent an empty/stale PC overwriting newer cloud data.
+      try {
+        const decision = __kvBootCloudFirstDecision(k, localObj, cloudObj);
+        if (typeof decision === 'boolean') preferLocal = decision;
+      } catch(_) {}
+
+      // Payroll history is append-heavy and does not carry __meta timestamps.
+      // Prefer the side with the newer snapshot timeline so a newly finalized run
+      // is not lost after refresh when cloud replication is delayed.
+      if (k === 'payroll_hist') {
+        const localTs = __kvPayrollHistoryLatestTs(localObj);
+        const cloudTs = __kvPayrollHistoryLatestTs(cloudObj);
+        if (localTs > cloudTs) preferLocal = true;
+      }
+
+      if (preferLocal) {
+        try { await supabase.from(TABLE).upsert({ key: k, value: JSON.parse(cur) }, { onConflict: 'key' }); } catch(_){}
+        continue;
+      }
+
+      if (cloudStr != null && cloudStr !== cur) {
+        // Important: write using the original setItem to avoid triggering mirroring back to cloud.
+        try { __origSetItem.call(localStorage, k, cloudStr); } catch {}
+        changed = true;
+      }
+    }
+
+    // Hydration is done. Now it is safe to enable local->cloud mirroring.
+    __kvEnableSync();
+    try { window.__kv_cloud_ready = true; window.dispatchEvent(new Event('kv-cloud-ready')); } catch(_){ }
+
+    if (changed) {
+      try { sessionStorage.removeItem("__kv_reloaded"); } catch {}
+      queueHydrateRerender();
+    } else {
+      markHydrated();
+    }
+    return true;
+  } catch (e) {
+    console.warn("Initial hydrate failed", e);
+    return false;
+  } finally {
+    __kvHydrating = false;
+  }
+}
+
+// Boot hydrate with retry (prevents an empty PC from wiping cloud data if network is slow/offline).
+;(async function __kvBootHydrate(){
+  const ok = await __kvHydrateOnce();
+  if (ok) return;
+
+  // Allow the app to run locally, but keep sync disabled until we have fetched cloud at least once.
+  markHydrated();
+  let attempts = 0;
+  const retry = async () => {
+    if (__kvSyncEnabled) return;
+    attempts++;
+    const success = await __kvHydrateOnce();
+    if (success) return;
+    // Keep retrying; low overhead because it is just one SELECT for known keys.
+    window.setTimeout(retry, 3000);
+  };
+  window.setTimeout(retry, 3000);
+})();
+
+function safeStringify(v){
+  try { return typeof v === "string" ? v : JSON.stringify(v) } catch { return null }
+}
+
+
+
+// Safe print helper to avoid uncaught errors like
+// "Failed to execute 'print' on 'Window': The provided callback is no longer runnable."
+function safePrint(win){
+  try { (win || window).print(); } catch(e){ console.warn('print failed', e); }
+}
+var PRINT_ORIENTATION_KEY = 'payroll_print_orientation';
+function normalizePrintOrientation(value){
+  var val = String(value || '').toLowerCase();
+  return val === 'landscape' ? 'landscape' : 'portrait';
+}
+function getStoredPrintOrientation(){
+  try {
+    return normalizePrintOrientation(localStorage.getItem(PRINT_ORIENTATION_KEY));
+  } catch (e) {
+    return 'portrait';
+  }
+}
+function setStoredPrintOrientation(orientation){
+  try {
+    localStorage.setItem(PRINT_ORIENTATION_KEY, normalizePrintOrientation(orientation));
+  } catch (e) {}
+}
+function ensurePrintOrientationModal(){
+  var modal = document.getElementById('printOrientationModal');
+  if (modal) return modal;
+  modal = document.createElement('div');
+  modal.id = 'printOrientationModal';
+  modal.innerHTML = '' +
+    '<div class="print-orientation-dialog" role="dialog" aria-modal="true" aria-labelledby="printOrientationTitle">' +
+      '<h3 id="printOrientationTitle">Choose print layout</h3>' +
+      '<label>Layout' +
+        '<select id="printOrientationSelect">' +
+          '<option value="portrait">Portrait</option>' +
+          '<option value="landscape">Landscape</option>' +
+        '</select>' +
+      '</label>' +
+      '<div class="print-orientation-actions">' +
+        '<button type="button" data-action="cancel">Cancel</button>' +
+        '<button type="button" class="primary" data-action="confirm">Print</button>' +
+      '</div>' +
+    '</div>';
+  document.body.appendChild(modal);
+  var select = modal.querySelector('#printOrientationSelect');
+  var confirmBtn = modal.querySelector('[data-action="confirm"]');
+  var cancelBtn = modal.querySelector('[data-action="cancel"]');
+  function close(result){
+    modal.style.display = 'none';
+    modal.setAttribute('aria-hidden', 'true');
+    var resolver = modal.__resolver;
+    modal.__resolver = null;
+    if (typeof resolver === 'function') resolver(result);
+  }
+  modal.addEventListener('click', function(e){
+    if (e.target === modal) close(null);
+  });
+  confirmBtn.addEventListener('click', function(){
+    var orientation = normalizePrintOrientation(select.value);
+    setStoredPrintOrientation(orientation);
+    close(orientation);
+  });
+  cancelBtn.addEventListener('click', function(){
+    close(null);
+  });
+  document.addEventListener('keydown', function(e){
+    if (modal.style.display !== 'flex') return;
+    if (e.key === 'Escape') close(null);
+  });
+  return modal;
+}
+function requestPrintOrientation(){
+  var modal = ensurePrintOrientationModal();
+  var select = modal.querySelector('#printOrientationSelect');
+  var current = getStoredPrintOrientation();
+  if (select) select.value = current;
+  modal.style.display = 'flex';
+  modal.setAttribute('aria-hidden', 'false');
+  try { if (select) select.focus(); } catch (e) {}
+  return new Promise(function(resolve){
+    if (modal.__resolver) modal.__resolver(null);
+    modal.__resolver = resolve;
+  });
+}
+function withPrintOrientation(action){
+  requestPrintOrientation().then(function(orientation){
+    if (!orientation) return;
+    action(orientation);
+  });
+}
+function injectPrintOrientation(html, orientation){
+  var rule = '@page { size: ' + normalizePrintOrientation(orientation) + '; }';
+  var styleTag = '<style id="printOrientationStyle">' + rule + '</style>';
+  if (/<\/head>/i.test(html)) {
+    return html.replace(/<\/head>/i, styleTag + '</head>');
+  }
+  return html + styleTag;
+}
+function normalizePrintCompanyName(name){
+  var raw = String(name || '').trim();
+  var fullName = 'Edifice Group Corp & Portafolio Interiors Inc.';
+  if (!raw) return fullName;
+  if (/^payrollpro$/i.test(raw)) return fullName;
+  if (/^edifice$/i.test(raw) || /^edifice group corp\.?$/i.test(raw)) return fullName;
+  if (/^portafolio$/i.test(raw) || /^portafolio interiors inc\.?$/i.test(raw)) return fullName;
+  if (/^edifice\s*&\s*portafolio$/i.test(raw)) return fullName;
+  return raw;
+}
+function injectPrintHeaderStyle(html){
+  var rule = [
+    '.report-header, .hdr, .proj-title, .mr-project-title{',
+    'text-align:center !important;',
+    'align-items:center !important;',
+    'justify-content:center !important;',
+    '}',
+    '.report-header h1, .report-header h2, .report-header h3, .report-header h4, .report-header h5, .report-header h6,',
+    '.payslip-header h1, .payslip-header h2, .payslip-header h3, .payslip-header h4, .payslip-header h5, .payslip-header h6,',
+    '.hdr h1, .hdr h2, .hdr h3, .hdr h4, .hdr h5, .hdr h6,',
+    '.report-title, .report-period, .company-line, .company-name, .proj-title, .mr-project-title{',
+    'font-size:150% !important;',
+    'line-height:1.2 !important;',
+    '}'
+  ].join('');
+  var styleTag = '<style id="printHeaderStyle">' + rule + '</style>';
+  if (/<\/head>/i.test(html)) {
+    return html.replace(/<\/head>/i, styleTag + '</head>');
+  }
+  return html + styleTag;
+}
+function printReport(html, options){
+  var opts = options || {};
+  var orientation = normalizePrintOrientation(opts.orientation);
+  var doc = injectPrintHeaderStyle(injectPrintOrientation(html, orientation));
+  var target = opts.targetWindow;
+  var w = target || window.open('', opts.name || '_blank', opts.features || 'width=1024,height=768');
+  if (!w) {
+    alert('Popup blocked. Please allow popups to print.');
+    return null;
+  }
+  w.document.open();
+  w.document.write(doc);
+  w.document.close();
+  try {
+    w.addEventListener('load', function(){
+      try { safePrint(w); } catch(e){}
+    }, { once: true });
+  } catch (e) {
+    try { safePrint(w); } catch(_) {}
+  }
+  return w;
+}
+
+
+
+(function(){
+  function toNum(val){
+    var num = parseFloat(String(val == null ? '' : val).replace(/,/g,''));
+    return isNaN(num) ? 0 : num;
+  }
+  function fmt(val){
+    return toNum(val).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  }
+  function currentDivisor(){
+    var key = (typeof LS_DIVISOR !== 'undefined' ? LS_DIVISOR : 'payroll_deduction_divisor');
+    var div = 0;
+    if (typeof window !== 'undefined' && typeof window.divisor !== 'undefined'){
+      var winDiv = Number(window.divisor);
+      if (!isNaN(winDiv) && winDiv > 0) div = winDiv;
+    }
+    if (!(div > 0)){
+      try {
+        if (typeof localStorage !== 'undefined' && localStorage){
+          var stored = localStorage.getItem(key);
+          if (stored != null){
+            var parsed = parseInt(stored, 10);
+            if (!isNaN(parsed) && parsed > 0) div = parsed;
+          }
+        }
+      } catch (e){}
+    }
+    if (!(div > 0)) div = 1;
+    return div;
+  }
+  function loanSharePerPeriod(raw){
+    var amount = toNum(raw);
+    var div = currentDivisor();
+    if (!(div > 0)) div = 1;
+    var per = amount / div;
+    if (!isFinite(per)) per = 0;
+    return per.toFixed(2);
+  }
+  try {
+    if (typeof window !== 'undefined'){
+      window.getCurrentDeductionDivisor = currentDivisor;
+      window.computeLoanPerPeriodShare = loanSharePerPeriod;
+    }
+  } catch(e){}
+  function dash(val){
+    var out = (val == null ? '' : val).toString();
+    if (!out) return '';
+    var num = parseFloat(out.replace(/,/g,''));
+    if (!isNaN(num) && num === 0) return '-';
+    return out;
+  }
+  function readCell(row, selector, mode){
+    if (!row || !selector) return '';
+    var el = row.querySelector(selector);
+    if (!el) return '';
+    if (mode === 'value'){ return (el.value != null ? String(el.value) : String(el.textContent || '')).trim(); }
+    return (el.textContent != null ? String(el.textContent) : (el.value != null ? String(el.value) : '')).trim();
+  }
+  function collectRowData(row){
+    if (!row) return null;
+    var data = {
+      id: (row.cells[0] && row.cells[0].textContent ? row.cells[0].textContent.trim() : ''),
+      name: (row.cells[1] && row.cells[1].textContent ? row.cells[1].textContent.trim() : ''),
+      rate: readCell(row, '.rate', 'value'),
+      regHours: readCell(row, '.regHrs', 'value'),
+      otHours: '',
+      adjustmentHours: '',
+      totalHours: readCell(row, '.totalHrs'),
+      regPay: readCell(row, '.regPay'),
+      adjHours: readCell(row, '.adjHours'),
+      adjPay: readCell(row, '.adjPay'),
+      otPay: readCell(row, '.otPay'),
+      gross: readCell(row, '.grossPay'),
+      pagibig: readCell(row, '.pagibig'),
+      philhealth: readCell(row, '.philhealth'),
+      sss: readCell(row, '.sss'),
+      sssLoan: readCell(row, '.loanSSS', 'value'),
+      piLoan: readCell(row, '.loanPI', 'value'),
+      vale: readCell(row, '.vale', 'value'),
+      valeWed: readCell(row, '.valeWed', 'value') || readCell(row, '.valeWed'),
+      bantay: readCell(row, '.bantay', 'value'),
+      additionalIncomeTotal: readCell(row, '.adjAmt'),
+      totalDeductions: readCell(row, '.totalDed'),
+      net: readCell(row, '.netPay')
+    };
+    if (data.id) {
+      const otTotal = getOvertimeHoursTotal(data.id);
+      const adj = getOvertimeAdjustmentHours(data.id);
+      data.otHours = otTotal.toFixed(2);
+      data.adjustmentHours = adj.toFixed(2);
+    }
+    const datasetEffective = key => readRowDeductionDataset(row, key, 'effective');
+    const applyDatasetValue = (prop, key) => {
+      const value = datasetEffective(key);
+      if (value != null) {
+        data[prop] = value;
+      }
+    };
+    applyDatasetValue('pagibig', 'pagibig');
+    applyDatasetValue('philhealth', 'philhealth');
+    applyDatasetValue('sss', 'sss');
+    applyDatasetValue('totalDeductions', 'total');
+    var sssLoanRaw = toNum(data.sssLoan);
+    var piLoanRaw = toNum(data.piLoan);
+    data.sssLoanRaw = sssLoanRaw;
+    data.piLoanRaw = piLoanRaw;
+    var datasetLoanSss = datasetEffective('loanSSS');
+    var datasetLoanPi = datasetEffective('loanPI');
+    data.sssLoan = datasetLoanSss != null ? datasetLoanSss : loanSharePerPeriod(sssLoanRaw);
+    data.piLoan = datasetLoanPi != null ? datasetLoanPi : loanSharePerPeriod(piLoanRaw);
+    var datasetVale = datasetEffective('vale');
+    if (datasetVale != null) data.vale = datasetVale;
+    var datasetValeWed = datasetEffective('valeWed');
+    if (datasetValeWed != null) data.valeWed = datasetValeWed;
+    var otherDeductionDataset = row && row.dataset ? toNum(row.dataset.otherDeductionsTotal) : 0;
+    var datasetOtherDeduction = datasetEffective('adjustments');
+    if (datasetOtherDeduction != null) {
+      otherDeductionDataset = toNum(datasetOtherDeduction);
+    }
+    if (!(otherDeductionDataset > 0)) {
+      var mapVal = 0;
+      try {
+        if (typeof getOtherDeductionsTotal === 'function' && data.id){
+          mapVal = Number(getOtherDeductionsTotal(data.id)) || 0;
+        }
+      } catch(e){ mapVal = 0; }
+      otherDeductionDataset = mapVal;
+    }
+    data.otherDeductionsTotal = otherDeductionDataset;
+    const additionalFromDataset = row && row.dataset ? toNum(row.dataset.additionalIncomeTotal) : 0;
+    data.additionalIncomeTotal = additionalFromDataset > 0
+      ? additionalFromDataset.toFixed(2)
+      : (data.additionalIncomeTotal || '');
+    data.additionalIncomeDetails = (typeof getAdditionalIncomeDetailsForEmployee === 'function' && data.id)
+      ? getAdditionalIncomeDetailsForEmployee(data.id)
+      : [];
+    data.otherDeductionsDetails = (typeof getOtherDeductionsDetailsForEmployee === 'function' && data.id)
+      ? getOtherDeductionsDetailsForEmployee(data.id)
+      : [];
+    if (!data.totalHours){
+      var r = toNum(data.regHours);
+      var o = toNum(data.otHours);
+      var a = toNum(data.adjustmentHours);
+      var adjReg = toNum(data.adjHours);
+      var total = r + o + a + adjReg;
+      data.totalHours = total ? total.toFixed(2) : '';
+    }
+    return data;
+  }
+  function formatPeriod(ws, we){
+    var start = (ws || '').trim();
+    var end = (we || '').trim();
+    if (start && end) return start + ' to ' + end;
+    return start || end || '';
+  }
+  function buildPayslip(data, periodText){
+    if (!data) return '';
+    var period = (periodText || '').trim();
+    var periodParts = period.split(/\s+to\s+|\s+–\s+|\s+-\s+/);
+    var periodStart = (periodParts[0] || '').trim();
+    var periodEnd = (periodParts[1] || '').trim();
+    var generatedOn = new Date();
+    var generatedText = generatedOn.toLocaleDateString();
+    var payDateText = (data.payDate || periodEnd || generatedText || '').toString();
+    var additionalIncomeItems = Array.isArray(data.additionalIncomeDetails) ? data.additionalIncomeDetails : [];
+    var additionalIncomeTotal = toNum(data.additionalIncomeTotal);
+    if (!(additionalIncomeTotal > 0)) {
+      additionalIncomeTotal = additionalIncomeItems.reduce(function(sum, item){
+        return sum + toNum(item && item.amount);
+      }, 0);
+    }
+    var otherDeductionsItems = Array.isArray(data.otherDeductionsDetails) ? data.otherDeductionsDetails : [];
+    var otherDeductionsTotal = toNum(data.otherDeductionsTotal);
+    if (!(otherDeductionsTotal > 0)) {
+      otherDeductionsTotal = otherDeductionsItems.reduce(function(sum, item){
+        return sum + toNum(item && item.amount);
+      }, 0);
+    }
+    function formatMoney(value){
+      var raw = (value == null ? '' : String(value)).trim();
+      var num = toNum(value);
+      if (!num) return raw ? fmt(raw) : '-';
+      return fmt(num);
+    }
+    function buildItemLines(items, getLabel, maxItems){
+      var sanitizedItems = (Array.isArray(items) ? items : []).map(function(item){
+        var label = getLabel(item);
+        var amount = toNum(item && item.amount);
+        return { label: label, amount: amount };
+      }).filter(function(item){
+        return item.amount > 0;
+      });
+      var visibleItems = sanitizedItems.slice(0, maxItems);
+      var overflowCount = sanitizedItems.length - visibleItems.length;
+      var lines = visibleItems.map(function(item){
+        return `<div class="detail-row item-line"><span>${item.label}</span><span>${fmt(item.amount)}</span></div>`;
+      });
+      if (overflowCount > 0) {
+        lines.push(`<div class="detail-row item-line detail-more"><span>+${overflowCount} more</span><span></span></div>`);
+      }
+      return lines.join('');
+    }
+    var additionalItemsHtml = buildItemLines(additionalIncomeItems, getAdditionalIncomeLabel, 3);
+    var otherDeductionsItemsHtml = buildItemLines(otherDeductionsItems, getOtherDeductionLabel, 3);
+    var nightDiff = toNum(data.bantay);
+    var adjPay = toNum(data.adjPay);
+    var sssLoan = toNum(data.sssLoan);
+    var piLoan = toNum(data.piLoan);
+    var vale = toNum(data.vale);
+    var valeWed = toNum(data.valeWed);
+    var additionalBlock = '';
+    if (additionalIncomeItems.length || additionalIncomeTotal > 0) {
+      additionalBlock = `
+        <div class="detail-row"><span>Additional Income</span><span>${formatMoney(additionalIncomeTotal)}</span></div>
+        ${additionalItemsHtml}`;
+    }
+    var otherDeductionBlock = '';
+    if (otherDeductionsItems.length || otherDeductionsTotal > 0) {
+      otherDeductionBlock = `
+        <div class="detail-row"><span>Other Deductions</span><span>${formatMoney(otherDeductionsTotal)}</span></div>
+        ${otherDeductionsItemsHtml}`;
+    }
+    return `<div class="payslip">
+      <div class="payslip-header">
+        <div class="header-lines">
+          <div class="meta-line"><span class="meta-label">EMPLOYEE:</span> ${data.name || ''} <span class="meta-muted">(ID: ${data.id || ''})</span></div>
+          <div class="meta-line"><span class="meta-label">PAY PERIOD:</span> ${periodStart || '-'} – ${periodEnd || '-'}</div>
+          <div class="meta-line"><span class="meta-label">PAY DATE:</span> ${payDateText || '-'}</div>
+        </div>
+      </div>
+      <div class="summary-row">
+        <div class="summary-box">
+          <div class="summary-label">GROSS PAY</div>
+          <div class="summary-value">${formatMoney(data.gross)}</div>
+        </div>
+        <div class="summary-box">
+          <div class="summary-label">TOTAL DEDUCTIONS</div>
+          <div class="summary-value">${formatMoney(data.totalDeductions)}</div>
+        </div>
+        <div class="summary-box summary-net">
+          <div class="summary-label">NET PAY</div>
+          <div class="summary-value">${formatMoney(data.net)}</div>
+        </div>
+      </div>
+      <div class="details-grid">
+        <div class="details-col">
+          <div class="details-title">EARNINGS</div>
+          <div class="detail-row"><span>Regular Hours</span><span>${dash(data.regHours) || '-'}</span></div>
+          <div class="detail-row"><span>OT Hours</span><span>${dash(data.otHours) || '-'}</span></div>
+          <div class="detail-row"><span>Adj Hours</span><span>${dash(data.adjHours) || '-'}</span></div>
+          <div class="detail-row"><span>Total Hours Worked</span><span>${dash(data.totalHours) || '-'}</span></div>
+          <div class="detail-row"><span>Basic Pay</span><span>${formatMoney(data.regPay)}</span></div>
+          ${adjPay > 0 ? `<div class="detail-row"><span>Adjustment Pay</span><span>${formatMoney(adjPay)}</span></div>` : ''}
+          <div class="detail-row"><span>Overtime Pay</span><span>${formatMoney(data.otPay)}</span></div>
+          ${nightDiff > 0 ? `<div class="detail-row"><span>Night Differential</span><span>${formatMoney(nightDiff)}</span></div>` : ''}
+          ${additionalBlock}
+        </div>
+        <div class="details-col">
+          <div class="details-title">DEDUCTIONS</div>
+          <div class="detail-row"><span>SSS</span><span>${formatMoney(data.sss)}</span></div>
+          <div class="detail-row"><span>PhilHealth</span><span>${formatMoney(data.philhealth)}</span></div>
+          <div class="detail-row"><span>Pag-IBIG</span><span>${formatMoney(data.pagibig)}</span></div>
+          ${sssLoan > 0 ? `<div class="detail-row"><span>SSS Loan</span><span>${formatMoney(sssLoan)}</span></div>` : ''}
+          ${piLoan > 0 ? `<div class="detail-row"><span>Pag-IBIG Loan</span><span>${formatMoney(piLoan)}</span></div>` : ''}
+          ${vale > 0 ? `<div class="detail-row"><span>Cash Advance</span><span>${formatMoney(vale)}</span></div>` : ''}
+          ${valeWed > 0 ? `<div class="detail-row"><span>Vale (Wed)</span><span>${formatMoney(valeWed)}</span></div>` : ''}
+          ${otherDeductionBlock}
+        </div>
+      </div>
+      <div class="payslip-footer">
+        <div>If you have questions about this payslip, contact HR/Accounting.</div>
+        <div>Computer-generated payslip.</div>
+      </div>
+    </div>`;
+  }
+  var styles = `@page { size: letter portrait; margin: 0.25in; }
+html, body { width: 8.5in; height: 11in; margin: 0; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+body{font-family:Arial,Helvetica,sans-serif;margin:0;padding:0 0.1in;}
+.payslip-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:0.03in;}
+.payslip-grid.single{grid-template-columns:repeat(1,1fr);max-width:3in;margin:0 auto;}
+.payslip{box-sizing:border-box;padding:0.06in;border:1px solid #475569;height:2.6in;overflow:hidden;border-radius:3px;background:#fff;box-shadow:0 0 0 1px rgba(15,23,42,0.2);}
+.page-break{page-break-after:always;break-after:page;}
+.payslip-header{display:flex;flex-direction:column;gap:2px;margin-bottom:4px;}
+.company-name{font-size:10px;font-weight:700;}
+.header-lines{font-size:7.8px;line-height:1.2;}
+.meta-line{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.meta-label{font-weight:700;}
+.meta-muted{color:#475569;}
+.summary-row{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:3px;margin:2px 0 4px;}
+.summary-box{border:1px solid #e2e8f0;border-radius:2px;padding:3px 2px;text-align:center;background:#f8fafc;}
+.summary-label{font-size:7px;font-weight:700;letter-spacing:0.02em;color:#475569;}
+.summary-value{font-size:10px;font-weight:700;line-height:1.1;}
+.summary-net .summary-value{font-size:11px;font-weight:800;color:#0f172a;}
+.details-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:4px;}
+.details-title{font-size:7.5px;font-weight:700;margin:0 0 2px;}
+.detail-row{display:flex;justify-content:space-between;gap:4px;font-size:8px;line-height:1.2;padding:1px 0;}
+.detail-row span:last-child{font-variant-numeric:tabular-nums;}
+.item-line{font-size:7.3px;color:#475569;padding:0;}
+.detail-more{font-style:italic;}
+.payslip-footer{margin-top:3px;font-size:7px;line-height:1.2;color:#475569;}`;
+
+  window.collectPayslipRowData = collectRowData;
+  window.buildCompactPayslip = buildPayslip;
+  window.formatPayslipPeriod = formatPeriod;
+  window.PAYSLIP_PRINT_STYLES = styles;
+})();
+
+
+
+document.addEventListener('DOMContentLoaded', function() {
+  var multiBtn = document.getElementById('printAllPayslipsBtn');
+  if (!multiBtn) return;
+  multiBtn.addEventListener('click', function() {
+    var rows = document.querySelectorAll('#payrollTable tbody tr');
+    if (!rows || rows.length === 0) return;
+    var wsEl = document.getElementById('weekStart');
+    var weEl = document.getElementById('weekEnd');
+    var ws = wsEl ? (wsEl.value || '') : '';
+    var we = weEl ? (weEl.value || '') : '';
+    var styles = window.PAYSLIP_PRINT_STYLES || '';
+    if (!styles){
+      styles = `@page { size: letter portrait; margin: 0.25in; }
+html, body { width: 8.5in; height: 11in; margin: 0; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+body{font-family:Arial,Helvetica,sans-serif;margin:0;padding:0 0.1in;}
+.payslip-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:0.03in;}
+.payslip-grid.single{grid-template-columns:repeat(1,1fr);max-width:3in;margin:0 auto;}
+.payslip{box-sizing:border-box;padding:0.06in;border:1px solid #475569;height:2.6in;overflow:hidden;border-radius:3px;background:#fff;box-shadow:0 0 0 1px rgba(15,23,42,0.2);}
+.page-break{page-break-after:always;break-after:page;}
+.payslip-header{display:flex;flex-direction:column;gap:2px;margin-bottom:4px;}
+.company-name{font-size:10px;font-weight:700;}
+.header-lines{font-size:7.8px;line-height:1.2;}
+.meta-line{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.meta-label{font-weight:700;}
+.meta-muted{color:#475569;}
+.summary-row{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:3px;margin:2px 0 4px;}
+.summary-box{border:1px solid #e2e8f0;border-radius:2px;padding:3px 2px;text-align:center;background:#f8fafc;}
+.summary-label{font-size:7px;font-weight:700;letter-spacing:0.02em;color:#475569;}
+.summary-value{font-size:10px;font-weight:700;line-height:1.1;}
+.summary-net .summary-value{font-size:11px;font-weight:800;color:#0f172a;}
+.details-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:4px;}
+.details-title{font-size:7.5px;font-weight:700;margin:0 0 2px;}
+.detail-row{display:flex;justify-content:space-between;gap:4px;font-size:8px;line-height:1.2;padding:1px 0;}
+.detail-row span:last-child{font-variant-numeric:tabular-nums;}
+.item-line{font-size:7.3px;color:#475569;padding:0;}
+.detail-more{font-style:italic;}
+.payslip-footer{margin-top:3px;font-size:7px;line-height:1.2;color:#475569;}`;
+    }
+    var html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>All Payslips</title>
+<style>${styles}</style></head><body><div class="payslip-grid">`;
+    rows.forEach(function(row, idx){
+      var data = (typeof window.collectPayslipRowData === 'function') ? window.collectPayslipRowData(row) : null;
+      if (!data) return;
+      var periodText = (typeof window.formatPayslipPeriod === 'function') ? window.formatPayslipPeriod(ws, we) : ((ws && we) ? (ws + ' to ' + we) : (ws || we || ''));
+      var slip = (typeof window.buildCompactPayslip === 'function') ? window.buildCompactPayslip(data, periodText) : '';
+      if (!slip) return;
+      html += slip;
+      if ((idx + 1) % 12 === 0 && idx !== rows.length - 1) {
+        html += `</div><div class="page-break"></div><div class="payslip-grid">`;
+      }
+    });
+    html += `</div></body></html>`;
+    withPrintOrientation(function(orientation){
+      printReport(html, { orientation: orientation, features: 'width=800,height=900' });
+    });
+  });
+});
+
+
+
+// === PATCH v15: Strong zero formatting in Reports/Payroll tab ===
+(function(){
+  function zeroToDashInTable(){
+    try{
+      const tbl = document.getElementById('payrollTable');
+      if(!tbl || !tbl.tBodies || !tbl.tBodies[0]) return;
+      const tbody = tbl.tBodies[0];
+      // Inputs: blank zeros only for the three computed fields
+      tbody.querySelectorAll('input.regHrs, input.rate').forEach(inp=>{
+        const v = parseFloat((inp.value||'').toString().replace(/,/g,''));
+        if(!isNaN(v) && v===0){ inp.value = ''; }
+      });
+      // Text cells: convert 0/0.00 to '-' (only numeric cells)
+      Array.from(tbody.querySelectorAll('td.num')).forEach(td=>{
+        if(td.querySelector('input')) return; // inputs handled above
+        const raw = (td.textContent||'').replace(/,/g,'').trim();
+        if(raw==='') return;
+        const n = parseFloat(raw);
+        if(!isNaN(n) && isFinite(n) && n===0){
+          td.textContent = '-';
+        }
+      });
+      // Footer totals too
+      if(tbl.tFoot){
+        Array.from(tbl.tFoot.querySelectorAll('td')).forEach(td=>{
+          const raw = (td.textContent||'').replace(/,/g,'').trim();
+          if(!raw) return;
+          const n = parseFloat(raw);
+          if(!isNaN(n) && n===0){ td.textContent = '-'; }
+        });
+      }
+    }catch(e){ /* no-op */ }
+  }
+
+  // Debounced wrapper
+  let __zTimer=null;
+  function applyZeroSoon(){
+    clearTimeout(__zTimer);
+    __zTimer = setTimeout(zeroToDashInTable, 0);
+  }
+
+  // Hook common renderers (if defined later too)
+  ['calculateAll','renderTable','renderDeductionsTable','renderReportTable'].forEach(fn=>{
+    const hook = ()=>{
+      const orig = window[fn];
+      if(typeof orig==='function' && !orig.__zeroWrapped){
+        window[fn] = function(){
+          const out = orig.apply(this, arguments);
+          applyZeroSoon();
+          return out;
+        };
+        window[fn].__zeroWrapped = true;
+      }
+    };
+    hook();
+    document.addEventListener('readystatechange', hook);
+    window.addEventListener('load', hook);
+    setTimeout(hook, 0);
+  });
+
+  // Observe tbody for DOM changes
+  const startObserver = ()=>{
+    const tbl = document.getElementById('payrollTable');
+    if(tbl && tbl.tBodies && tbl.tBodies[0]){
+      // observer removed for perf
+applyZeroSoon();
+    }
+  };
+  if(document.readyState === 'loading'){
+    document.addEventListener('DOMContentLoaded', startObserver);
+  }else{
+    startObserver();
+  }
+
+  // Periodic fallback (lightweight) in case rendering bypasses hooks
+})();
+// === END PATCH v15 ===
+
+
+
+(function(){
+  function zeroBlankInputs(){
+    try{
+    document.querySelectorAll('#payrollTable input.regHrs, #payrollTable input.rate').forEach(function(inp){
+        var v = parseFloat((inp.value||'').toString().replace(/,/g,''));
+        if(!isNaN(v) && v===0){ inp.value = ''; }
+      });
+    }catch(e){}
+  }
+  function hideThenFormat(run){
+    var tbl = document.getElementById('payrollTable');
+    var prevVis = tbl ? tbl.style.visibility : null;
+    if (tbl) tbl.style.visibility = 'hidden';
+    var out;
+    try { out = run(); } catch(e){ out = undefined; }
+    try { zeroBlankInputs(); } catch(e){}
+    if (tbl) tbl.style.visibility = (prevVis==null? '' : prevVis);
+    return out;
+  }
+  ['renderTable','calculateAll'].forEach(function(fn){
+    var orig = window[fn];
+    if (typeof orig === 'function' && !orig.__noflash){
+      window[fn] = function(){ return hideThenFormat(function(){ return orig.apply(this, arguments); }); };
+      window[fn].__noflash = true;
+    }
+  });
+})();
+
+
+
+(function(){
+  function dashReports(){ try { if (typeof applyCommas === 'function') applyCommas(); } catch(e){} }
+  const panel = document.getElementById('panelReports') || document.body;
+  // observer removed for perf
+window.addEventListener('load', dashReports);
+})();
+
+
+
+/*
+  Immediately initialize global data stores used throughout the app.
+  In addition to reading from localStorage, this version attempts to
+  fetch persisted values from Supabase.  Because the Supabase
+  client is exposed on `window.supabase` by the kv sync adapter,
+  we can asynchronously query the kv_store table for each known
+  key.  If a value exists in Supabase, it takes precedence over
+  localStorage; otherwise, the localStorage fallback is used.  This
+  ensures that data entered on one device is available on other
+  devices without relying on cached local storage.
+*/
+(function(){
+  // Helper to fetch a single key from Supabase.  Returns a Promise
+  // that resolves to the parsed JSON value or undefined on error.
+  function fetchFromSupabase(key){
+    return new Promise((resolve) => {
+      try {
+        const client = window.supabase;
+        const table = window.SUPABASE_TABLE;
+        if (!client || !table) return resolve(undefined);
+        client
+          .from(table)
+          .select('value')
+          .eq('key', key)
+          .maybeSingle()
+          .then(({ data, error }) => {
+            if (error || !data) return resolve(undefined);
+            const v = data.value;
+            if (v == null) return resolve(undefined);
+            // If the stored value is a string, assume it is JSON and parse
+            if (typeof v === 'string') {
+              try { return resolve(JSON.parse(v)); } catch { return resolve(undefined); }
+            }
+            // Otherwise return the JSON value directly
+            return resolve(v);
+          })
+          .catch(() => resolve(undefined));
+      } catch (ex) {
+        resolve(undefined);
+      }
+    });
+  }
+  (async function(){
+    try {
+      // Employees store (att_employees_v2)
+      if (typeof window.storedEmployees === 'undefined') {
+        const supaVal = await fetchFromSupabase('att_employees_v2');
+        if (supaVal !== undefined) {
+          window.storedEmployees = supaVal;
+        } else {
+          // fallback to localStorage
+          window.storedEmployees = JSON.parse(localStorage.getItem('att_employees_v2') || '{}');
+        }
+      }
+      // Attendance records store (att_records_v2)
+      if (typeof window.storedRecords === 'undefined') {
+        /*
+         * Always initialize the attendance record array as empty.  Unlike other
+         * data stores, DTR records are persisted in a dedicated Supabase table
+         * (`dtr_records`) and should not be bootstrapped from localStorage.  By
+         * starting with an empty array here, the application ensures that any
+         * locally cached data is ignored until the remote dataset is loaded.
+         */
+        window.storedRecords = window.storedRecords || []; }
+      // Projects store (att_projects_v1)
+      if (typeof window.storedProjects === 'undefined') {
+        const supaVal = await fetchFromSupabase('att_projects_v1');
+        if (supaVal !== undefined) {
+          window.storedProjects = supaVal;
+        } else {
+          window.storedProjects = JSON.parse(localStorage.getItem('att_projects_v1') || '{}');
+        }
+      }
+      // Schedules store (att_schedules_v2) – ensures schedules are available early
+      if (typeof window.storedSchedules === 'undefined') {
+        const supaVal = await fetchFromSupabase('att_schedules_v2');
+        if (supaVal !== undefined) {
+          window.storedSchedules = supaVal;
+        } else {
+          window.storedSchedules = JSON.parse(localStorage.getItem('att_schedules_v2') || '{}');
+        }
+      }
+    } catch (e) {
+      console.warn('Boot guard init failed', e);
+    }
+  })();
+})();
+
+
+
+  // === Dashboard Full Backup & Restore ===
+  (function(){
+    const statusEl = document.getElementById('dashBackupStatus');
+    const logEl = document.getElementById('dashBackupLog');
+    const btnBackup = document.getElementById('dashBackupNow');
+    const btnRestoreFile = document.getElementById('dashRestoreFile');
+    const inputRestore = document.getElementById('dashRestoreInput');
+    // Only keep local backup and file-restore controls
+    if(!btnBackup || !btnRestoreFile || !inputRestore) return;
+
+    // Lazily resolve Supabase to avoid capturing `null` before the module loads
+    const getSupa = () => (window.supabase || null);
+    const KV_TABLE = window.SUPABASE_TABLE || 'kv_store';
+    const DTR_TABLE = 'dtr_punches';
+    const LEGACY_DTR_TABLE = 'dtr_records';
+    const BUCKET = 'backups';
+
+    function setStatus(msg, isError){ if(statusEl){ statusEl.textContent = msg; statusEl.style.color = isError?'#b91c1c':'#334155'; } }
+    function log(msg){ try{ logEl.style.display='block'; const d=document.createElement('div'); d.textContent=msg; logEl.appendChild(d);}catch(e){} }
+    function clearLog(){ try{ logEl.innerHTML=''; logEl.style.display='none'; }catch(e){} }
+    function tryJSON(v){ try{ return JSON.parse(v); }catch{ return v; } }
+
+    async function fetchKVAll(){
+      const supa = getSupa();
+      if(!supa) return { rows:[], error:'No Supabase client' };
+      try{
+        const { data, error } = await supa.from(KV_TABLE).select('key,value');
+        return { rows: data||[], error: error? error.message : null };
+      }catch(e){ return { rows:[], error: String(e) } }
+    }
+    async function fetchDTR(){
+      const supa = getSupa();
+      if(!supa) return { rows:[], error:'No Supabase client' };
+      // Prefer best-practice row-per-punch table, fallback to legacy single-row blob.
+      async function fetchPunches(){
+        const { data, error } = await supa.from(DTR_TABLE).select('id,data').range(0, 9999);
+        if(error) throw error;
+        if(Array.isArray(data) && data.length){
+          // If this is the legacy single-row shape mistakenly stored here:
+          if(data.length === 1 && data[0] && data[0].id === 'records'){
+            const payload = data[0].data;
+            if(Array.isArray(payload)) return payload;
+            if(payload && typeof payload === 'object' && Array.isArray(payload.records)) return payload.records;
+          }
+          // Row-per-punch: each row's `data` is the punch object
+          const recs = data.map(r=>r && r.data).filter(Boolean);
+          return recs;
+        }
+        return [];
+      }
+      async function fetchLegacy(){
+        const { data, error } = await supa.from(LEGACY_DTR_TABLE).select('data').eq('id','records').maybeSingle();
+        if(error) throw error;
+        if(!data) return [];
+        const payload = data.data;
+        if(Array.isArray(payload)) return payload;
+        if(payload && typeof payload === 'object' && Array.isArray(payload.records)) return payload.records;
+        return [];
+      }
+      try{
+        const recs = await fetchPunches();
+        return { rows: recs, error: null };
+      }catch(e){
+        const msg = (e && (e.message || e.details)) ? String(e.message || e.details) : String(e);
+        // If punches table is missing, try legacy
+        try{
+          const recs = await fetchLegacy();
+          return { rows: recs, error: null };
+        }catch(e2){
+          return { rows:[], error: msg };
+        }
+      }
+    }
+
+
+    function snapshotLocalStorage(){
+      const kv = {};
+      try{
+        for(let i=0;i<localStorage.length;i++){
+          const k = localStorage.key(i);
+          if(!k || k.startsWith('__') || k.startsWith('vscode')) continue;
+          kv[k] = tryJSON(localStorage.getItem(k));
+        }
+      }catch(e){}
+      return kv;
+    }
+
+    async function buildBundle(){
+      clearLog(); setStatus('Building backup...', false);
+      const ls = snapshotLocalStorage();
+      log('Collected localStorage keys: ' + Object.keys(ls).length);
+      const kvRes = await fetchKVAll(); if(kvRes.error) log('KV fetch warning: ' + kvRes.error); else log('KV rows: ' + kvRes.rows.length);
+      const dtrRes = await fetchDTR(); if(dtrRes.error) log('DTR fetch warning: ' + dtrRes.error); else log('DTR rows: ' + dtrRes.rows.length);
+      const bundle = {
+        schema: 'payrollhub.full.v1',
+        created_at: new Date().toISOString(),
+        localStorage: ls,
+        kv: kvRes.rows||[],
+        dtr: dtrRes.rows||[]
+      };
+      return bundle;
+    }
+
+    async function uploadBundleToCloud(bundle){
+      const supa = getSupa();
+      if(!supa || !supa.storage){ log('No Supabase storage client (skipping cloud upload)'); return null; }
+      try{
+        const json = JSON.stringify(bundle);
+        const name = 'full_backup_' + new Date().toISOString().replace(/[:.]/g,'_') + '.json';
+        const blob = new Blob([json], { type: 'application/json' });
+        const { error } = await supa.storage.from(BUCKET).upload(name, blob, { upsert: true, contentType: 'application/json' });
+        if(error){ log('Upload failed: ' + error.message); return null; }
+        log('Uploaded to storage: ' + name);
+        return name;
+      }catch(e){ log('Upload failed: ' + String(e)); return null; }
+    }
+
+    // Cloud listing removed
+
+    function applyLocalStorage(ls){
+      try{ Object.keys(ls||{}).forEach(k=>{ try{ localStorage.setItem(k, JSON.stringify(ls[k])); }catch(_){} }); }catch(e){}
+    }
+    async function applyKV(kv){
+      const supa = getSupa();
+      if(!supa) return;
+      try{
+        for(const row of (kv||[])){
+          if(!row || !row.key) continue;
+          try{ await supa.from(KV_TABLE).upsert({ key: row.key, value: row.value }, { onConflict: 'key' }); }catch(_){}
+        }
+      }catch(e){ log('KV upsert error: ' + String(e)); }
+    }
+    async function applyDTR(rows){
+      const supa = getSupa();
+      if(!supa) return;
+      try{
+        await supa.from(DTR_TABLE).upsert({ id:'records', data: Array.isArray(rows)?rows:[] }, { onConflict:'id' });
+        window.storedRecords = Array.isArray(rows)?rows:[];
+        try{ localStorage.setItem('att_records_v2', JSON.stringify(window.storedRecords)); }catch(_){ }
+      }catch(e){ log('DTR upsert error: ' + String(e)); }
+    }
+
+    btnBackup.addEventListener('click', async ()=>{
+      btnBackup.disabled = true; setStatus('Building backup...', false); clearLog();
+      try{
+        const bundle = await buildBundle();
+        // Download locally
+        try{
+          const url = URL.createObjectURL(new Blob([JSON.stringify(bundle)],{type:'application/json'}));
+          const a=document.createElement('a'); a.href=url; a.download='payroll_full_backup_'+ new Date().toISOString().slice(0,10)+'.json'; a.click(); setTimeout(()=>URL.revokeObjectURL(url), 1500);
+          log('Downloaded local backup');
+        }catch(e){ log('Local download failed: ' + String(e)); }
+        // Upload to cloud
+        await uploadBundleToCloud(bundle);
+        setStatus('Backup complete', false);
+      }catch(e){ setStatus('Backup error: ' + String(e), true); }
+      finally{ btnBackup.disabled = false; }
+    });
+
+    btnRestoreFile.addEventListener('click', ()=> inputRestore.click());
+    inputRestore.addEventListener('change', async (ev)=>{
+      const f = ev.target.files && ev.target.files[0]; ev.target.value=''; if(!f) return;
+      setStatus('Restoring from file...', false); clearLog();
+      try{
+        const text = await f.text(); const bundle = JSON.parse(text||'{}');
+        if(!bundle || bundle.schema !== 'payrollhub.full.v1') throw new Error('Invalid bundle schema');
+        applyLocalStorage(bundle.localStorage || {}); log('Applied localStorage');
+        await applyKV(bundle.kv || []); log('Applied KV table');
+        await applyDTR(bundle.dtr || []); log('Applied DTR rows');
+        setStatus('Restore complete', false); alert('Restore complete.');
+      }catch(e){ setStatus('Restore failed: ' + String(e), true); alert('Restore failed: ' + String(e)); }
+    });
+
+    // Cloud restore removed
+  })();
+  // === / Dashboard Full Backup & Restore ===
+  
+
+
+const LS_RATES='payroll_rates', LS_REG_HRS='payroll_reg_hours', LS_OT_HRS='payroll_ot_hours';
+const LS_OTMULT='payroll_ot_multiplier', LS_WEEKSTART='ui_payroll_week_start_local', LS_WEEKEND='ui_payroll_week_end_local';
+const LEGACY_WEEKSTART_KEY = 'payroll_week_start';
+const LEGACY_WEEKEND_KEY = 'payroll_week_end';
+const LS_DIVISOR='payroll_deduction_divisor', LS_SSS_TABLE='payroll_sss_table';
+const LS_LOAN_SSS='payroll_loan_sss', LS_LOAN_PI='payroll_loan_pagibig';
+const LS_VALE='payroll_vale', LS_VALE_WED='payroll_vale_wed';
+const LS_LOAN_TRACKER='payroll_loan_tracker';
+// LocalStorage key for per-employee other deductions details and totals
+const LS_OTHER_DEDUCTIONS_DETAILS='payroll_other_deductions_details';
+const LS_OTHER_DEDUCTIONS_TOTAL='payroll_other_deductions_total';
+// Legacy LocalStorage key for per-employee payroll adjustments
+const LS_ADJ_LEGACY='payroll_adjustments';
+// LocalStorage key for per-employee adjustment hours (OT adjustments)
+const LS_ADJ_HRS='payroll_adjustment_hours';
+// LocalStorage keys for dynamic Pag-IBIG and PhilHealth contribution rates (employee share)
+const LS_PAGIBIG_RATE='payroll_pagibig_rate';
+const LS_PHILHEALTH_RATE='payroll_philhealth_rate';
+// LocalStorage keys for dynamic Pag-IBIG and PhilHealth contribution tables
+const LS_PAGIBIG_TABLE='payroll_pagibig_table';
+const LS_PHILHEALTH_TABLE='payroll_philhealth_table';
+// LocalStorage key for per-employee Bantay allowance
+const LS_BANTAY='payroll_bantay';
+// LocalStorage keys for per-employee additional income details and totals
+const LS_ADDITIONAL_INCOME_DETAILS='payroll_additional_income_details';
+const LS_ADDITIONAL_INCOME_TOTAL='payroll_additional_income_total';
+// LocalStorage key for Additional Income dropdown types
+const LS_INCOME_TYPE_OPTIONS='incomeTypeOptions';
+const DEFAULT_INCOME_TYPE_OPTIONS = ['Allowance','Bantay','Incentive','Bonus','Meal','Transport'];
+// LocalStorage key for Other Deduction dropdown types
+const LS_DEDUCTION_TYPE_OPTIONS='deductionTypeOptions';
+const DEFAULT_DEDUCTION_TYPE_OPTIONS = ['Lacking','Cash Advance','Penalty','Uniform','Tools','Late/Undertime','Absences','Loan Payment'];
+// Supabase-only key for per-employee Bantay→Project assignment map
+const LS_BANTAY_PROJ='payroll_bantay_proj';
+let bantayProj = {};
+;(async function(){
+  try{
+    let v = await window.readKV(LS_BANTAY_PROJ);
+    if (!v) {
+      try { v = JSON.parse(localStorage.getItem(LS_BANTAY_PROJ) || '{}'); } catch(_){}
+    }
+    if (v && typeof v==='object') bantayProj = v;
+    try { localStorage.setItem(LS_BANTAY_PROJ, JSON.stringify(bantayProj)); } catch(_){ }
+    try { if (typeof window.rebuildReports === 'function') window.rebuildReports(); } catch(_){ }
+  }catch(e){}
+})();
+// LocalStorage key for per-employee contribution flags (Pag-IBIG, PhilHealth, SSS)
+const LS_CONTRIB_FLAGS='payroll_contrib_flags';
+const PAYROLL_SETTINGS_KEY = 'settings_payroll';
+const DEFAULT_PAYROLL_SETTINGS = {
+  overtime: { multiplier: 1.25 },
+  nightDifferential: {
+    enabled: true,
+    start: '22:00',
+    end: '06:00',
+    multiplier: 1.10
+  }
+};
+
+function normalizePayrollTime(value, fallback) {
+  const str = String(value || '').trim();
+  if (/^\d{1,2}:\d{2}$/.test(str)) {
+    const parts = str.split(':');
+    const hh = String(Math.min(23, Math.max(0, parseInt(parts[0], 10) || 0))).padStart(2, '0');
+    const mm = String(Math.min(59, Math.max(0, parseInt(parts[1], 10) || 0))).padStart(2, '0');
+    return `${hh}:${mm}`;
+  }
+  return fallback;
+}
+
+function normalizePayrollSettings(raw) {
+  const legacyOt = parseFloat(localStorage.getItem(LS_OTMULT) || '');
+  const base = {
+    overtime: {
+      multiplier: Number.isFinite(legacyOt) && legacyOt > 0
+        ? legacyOt
+        : DEFAULT_PAYROLL_SETTINGS.overtime.multiplier
+    },
+    nightDifferential: {
+      enabled: DEFAULT_PAYROLL_SETTINGS.nightDifferential.enabled,
+      start: DEFAULT_PAYROLL_SETTINGS.nightDifferential.start,
+      end: DEFAULT_PAYROLL_SETTINGS.nightDifferential.end,
+      multiplier: DEFAULT_PAYROLL_SETTINGS.nightDifferential.multiplier
+    }
+  };
+  if (raw && typeof raw === 'object') {
+    if (raw.overtime && typeof raw.overtime === 'object') {
+      const otMult = parseFloat(raw.overtime.multiplier);
+      if (Number.isFinite(otMult) && otMult > 0) base.overtime.multiplier = otMult;
+    }
+    if (raw.nightDifferential && typeof raw.nightDifferential === 'object') {
+      if (typeof raw.nightDifferential.enabled === 'boolean') {
+        base.nightDifferential.enabled = raw.nightDifferential.enabled;
+      }
+      base.nightDifferential.start = normalizePayrollTime(
+        raw.nightDifferential.start,
+        base.nightDifferential.start
+      );
+      base.nightDifferential.end = normalizePayrollTime(
+        raw.nightDifferential.end,
+        base.nightDifferential.end
+      );
+      const ndMult = parseFloat(raw.nightDifferential.multiplier);
+      if (Number.isFinite(ndMult) && ndMult > 0) {
+        base.nightDifferential.multiplier = ndMult;
+      }
+    }
+  }
+  return base;
+}
+
+let payrollSettings = normalizePayrollSettings(null);
+let otMultiplier = payrollSettings.overtime.multiplier;
+
+function getOvertimeMultiplier() {
+  return Number(payrollSettings?.overtime?.multiplier) || DEFAULT_PAYROLL_SETTINGS.overtime.multiplier;
+}
+
+function getNightDifferentialSettings() {
+  return {
+    enabled: !!(payrollSettings?.nightDifferential?.enabled),
+    start: payrollSettings?.nightDifferential?.start || DEFAULT_PAYROLL_SETTINGS.nightDifferential.start,
+    end: payrollSettings?.nightDifferential?.end || DEFAULT_PAYROLL_SETTINGS.nightDifferential.end,
+    multiplier: Number(payrollSettings?.nightDifferential?.multiplier) || DEFAULT_PAYROLL_SETTINGS.nightDifferential.multiplier
+  };
+}
+
+function getEmployeeHourlyRate(empId) {
+  const emp = storedEmployees?.[empId];
+  const rateRaw = emp?.hourlyRate ?? payrollRates?.[empId] ?? 0;
+  const rate = Number(rateRaw);
+  return Number.isFinite(rate) ? rate : 0;
+}
+
+function getOvertimeHoursTotal(empId) {
+  const raw = otHours?.[empId] ?? 0;
+  const num = Number(raw);
+  return Number.isFinite(num) ? num : 0;
+}
+
+function normalizeAdjustmentType(rawType) {
+  const value = String(rawType || '').trim().toLowerCase();
+  if (!value) return '';
+  if (value === 'reg' || value === 'regular' || value.startsWith('reg')) return 'REG';
+  if (value === 'ot' || value.includes('adj ot') || value.includes('ot')) return 'ADJ OT';
+  return '';
+}
+
+function getAdjustmentTotalsForEmployee(empId) {
+  const totals = { reg: 0, ot: 0 };
+  if (!empId) return totals;
+  const raw = adjHrs?.[empId];
+  if (raw == null) return totals;
+  if (Array.isArray(raw)) {
+    raw.forEach(entry => {
+      if (!entry) return;
+      const hours = Number(entry.hours ?? entry.hrs ?? entry.value ?? entry.amount ?? entry.adjHrs ?? 0);
+      if (!Number.isFinite(hours)) return;
+      const type = normalizeAdjustmentType(entry.type ?? entry.kind ?? entry.label ?? entry.name ?? entry.adjustmentType ?? entry.entryType ?? entry.category);
+      if (type === 'REG') totals.reg += hours;
+      else if (type === 'ADJ OT') totals.ot += hours;
+    });
+    totals.reg = roundToCents(totals.reg);
+    totals.ot = roundToCents(totals.ot);
+    return totals;
+  }
+  if (typeof raw === 'number' || typeof raw === 'string') {
+    const num = Number(raw);
+    if (Number.isFinite(num)) totals.ot = roundToCents(num);
+    return totals;
+  }
+  if (typeof raw === 'object') {
+    if (Object.prototype.hasOwnProperty.call(raw, 'reg') || Object.prototype.hasOwnProperty.call(raw, 'ot')) {
+      const regNum = Number(raw.reg);
+      const otNum = Number(raw.ot);
+      totals.reg = Number.isFinite(regNum) ? roundToCents(regNum) : 0;
+      totals.ot = Number.isFinite(otNum) ? roundToCents(otNum) : 0;
+      return totals;
+    }
+    const hours = Number(raw.hours ?? raw.hrs ?? raw.value ?? raw.amount ?? raw.adjHrs ?? 0);
+    if (Number.isFinite(hours)) {
+      const type = normalizeAdjustmentType(raw.type ?? raw.kind ?? raw.label ?? raw.name ?? raw.adjustmentType ?? raw.entryType ?? raw.category);
+      if (type === 'REG') totals.reg = roundToCents(hours);
+      else totals.ot = roundToCents(hours);
+    }
+  }
+  return totals;
+}
+
+function setAdjustmentTotalsForEmployee(empId, regValue, otValue) {
+  if (!empId || !isPlainObject(adjHrs)) return;
+  const regNum = Number(regValue);
+  const otNum = Number(otValue);
+  const reg = Number.isFinite(regNum) ? roundToCents(regNum) : 0;
+  const ot = Number.isFinite(otNum) ? roundToCents(otNum) : 0;
+  const existingType = getAdjustmentProjectType(empId);
+  if (!reg && !ot && !existingType) {
+    delete adjHrs[empId];
+    return;
+  }
+  adjHrs[empId] = { reg, ot };
+  if (existingType) adjHrs[empId].projectType = existingType;
+}
+
+function getAdjustmentProjectType(empId) {
+  if (!empId || !isPlainObject(adjHrs)) return '';
+  const raw = adjHrs?.[empId];
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return '';
+  const hasTotals = Object.prototype.hasOwnProperty.call(raw, 'reg')
+    || Object.prototype.hasOwnProperty.call(raw, 'ot');
+  const typeValue = raw.projectType ?? raw.projectId ?? raw.project;
+  if (typeValue != null) return resolveProjectIdValue(typeValue);
+  if (hasTotals && raw.type != null) return String(raw.type || '').trim();
+  return '';
+}
+
+function setAdjustmentProjectType(empId, value) {
+  if (!empId || !isPlainObject(adjHrs)) return;
+  const totals = getAdjustmentTotalsForEmployee(empId);
+  const reg = totals.reg;
+  const ot = totals.ot;
+  const projectType = resolveProjectIdValue(value);
+  if (!reg && !ot && !projectType) {
+    delete adjHrs[empId];
+    return;
+  }
+  adjHrs[empId] = { reg, ot };
+  if (projectType) {
+    adjHrs[empId].projectId = projectType;
+    adjHrs[empId].projectType = projectType;
+    adjHrs[empId].project = projectType;
+  }
+}
+
+function normalizeAdjustmentProjectIdsInPlace() {
+  if (!isPlainObject(adjHrs)) return false;
+  const projectMap = (typeof storedProjects !== 'undefined' && storedProjects) || {};
+  let changed = false;
+  Object.keys(adjHrs).forEach(empId => {
+    const raw = adjHrs[empId];
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return;
+    const originalValue = raw.projectId ?? raw.projectType ?? raw.project;
+    const resolved = resolveProjectIdValue(originalValue, projectMap);
+    if ((originalValue == null || String(originalValue).trim() === '') && !resolved) {
+      if (raw.projectType || raw.project || raw.projectId) {
+        delete raw.projectType;
+        delete raw.project;
+        delete raw.projectId;
+        changed = true;
+      }
+      return;
+    }
+    if (resolved) {
+      if (raw.projectId !== resolved || raw.projectType !== resolved || raw.project !== resolved) {
+        raw.projectId = resolved;
+        raw.projectType = resolved;
+        raw.project = resolved;
+        changed = true;
+      }
+    }
+  });
+  return changed;
+}
+
+function getRegularAdjustmentHours(empId) {
+  return getAdjustmentTotalsForEmployee(empId).reg;
+}
+
+function getOvertimeAdjustmentHours(empId) {
+  return getAdjustmentTotalsForEmployee(empId).ot;
+}
+
+function getOvertimeFinalHours(empId) {
+  const total = getOvertimeHoursTotal(empId) + getOvertimeAdjustmentHours(empId);
+  return Number.isFinite(total) ? total : 0;
+}
+
+function getEffectiveOvertimeRateForEmployee(empId, rateOverride) {
+  const baseRate = Number.isFinite(Number(rateOverride)) ? Number(rateOverride) : getEmployeeHourlyRate(empId);
+  const multiplier = getOvertimeMultiplier();
+  const effective = baseRate * multiplier;
+  return Number.isFinite(effective) ? effective : 0;
+}
+
+function getOvertimePayForEmployee(empId, rateOverride) {
+  const rate = getEffectiveOvertimeRateForEmployee(empId, rateOverride);
+  const pay = getOvertimeFinalHours(empId) * rate;
+  if (typeof roundToCents === 'function') return roundToCents(pay);
+  return Math.round(pay * 100) / 100;
+}
+
+function getNightDifferentialPayForEmployee(empId) {
+  const value = Number((nightDiffByEmployee && nightDiffByEmployee[empId]) || 0);
+  if (!Number.isFinite(value)) return 0;
+  if (typeof roundToCents === 'function') return roundToCents(value);
+  return Math.round(value * 100) / 100;
+}
+
+async function persistPayrollSettings() {
+  const writer = (typeof window !== 'undefined' && typeof window.writeKV === 'function')
+    ? window.writeKV
+    : null;
+  if (!writer) return;
+  try {
+    const result = writer(PAYROLL_SETTINGS_KEY, payrollSettings);
+    if (result && typeof result.then === 'function') {
+      await result;
+    }
+  } catch (err) {
+    console.warn('Persisting payroll settings failed', err);
+  }
+}
+
+function syncPayrollSettingsInputs() {
+  const otInput = document.getElementById('otMultiplier');
+  if (otInput) otInput.value = String(getOvertimeMultiplier());
+  const settingsOt = document.getElementById('settingsOtMultiplier');
+  if (settingsOt) settingsOt.value = String(getOvertimeMultiplier());
+  const nd = getNightDifferentialSettings();
+  const ndEnabled = document.getElementById('settingsNdEnabled');
+  if (ndEnabled) ndEnabled.checked = nd.enabled;
+  const ndStart = document.getElementById('settingsNdStart');
+  if (ndStart) ndStart.value = nd.start;
+  const ndEnd = document.getElementById('settingsNdEnd');
+  if (ndEnd) ndEnd.value = nd.end;
+  const ndMult = document.getElementById('settingsNdMultiplier');
+  if (ndMult) ndMult.value = String(nd.multiplier);
+}
+
+function updatePayrollSettings(partial, options = {}) {
+  const next = {
+    overtime: { ...(payrollSettings.overtime || {}), ...(partial.overtime || {}) },
+    nightDifferential: { ...(payrollSettings.nightDifferential || {}), ...(partial.nightDifferential || {}) }
+  };
+  payrollSettings = normalizePayrollSettings(next);
+  otMultiplier = getOvertimeMultiplier();
+  syncPayrollSettingsInputs();
+  if (options.persist !== false) {
+    persistPayrollSettings();
+  }
+  if (options.recalculate !== false && typeof calculateAll === 'function') {
+    calculateAll();
+  }
+}
+
+async function loadPayrollSettings() {
+  try {
+    const reader = (typeof window !== 'undefined' && typeof window.readKV === 'function')
+      ? window.readKV
+      : null;
+    const stored = reader ? await reader(PAYROLL_SETTINGS_KEY, null) : null;
+    payrollSettings = normalizePayrollSettings(stored);
+    otMultiplier = getOvertimeMultiplier();
+    syncPayrollSettingsInputs();
+    if (typeof calculateAll === 'function') calculateAll();
+  } catch (err) {
+    console.warn('Loading payroll settings failed', err);
+  }
+}
+
+let incomeTypeOptions = normalizeIncomeTypeOptions(DEFAULT_INCOME_TYPE_OPTIONS);
+let deductionTypeOptions = normalizeDeductionTypeOptions(DEFAULT_DEDUCTION_TYPE_OPTIONS);
+
+function normalizeIncomeTypeOptions(raw){
+  const base = Array.isArray(raw) ? raw : [];
+  const seen = new Set();
+  const cleaned = [];
+  base.forEach(item => {
+    const value = String(item || '').trim();
+    if (!value) return;
+    const key = value.toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    cleaned.push(value);
+  });
+  if (!cleaned.length) return DEFAULT_INCOME_TYPE_OPTIONS.slice();
+  return cleaned;
+}
+
+function normalizeDeductionTypeOptions(raw){
+  const base = Array.isArray(raw) ? raw : [];
+  const seen = new Set();
+  const cleaned = [];
+  base.forEach(item => {
+    const value = String(item || '').trim();
+    if (!value) return;
+    const key = value.toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    cleaned.push(value);
+  });
+  if (!cleaned.length) return DEFAULT_DEDUCTION_TYPE_OPTIONS.slice();
+  return cleaned;
+}
+
+function getIncomeTypeOptions(){
+  if (Array.isArray(incomeTypeOptions) && incomeTypeOptions.length) return incomeTypeOptions.slice();
+  return DEFAULT_INCOME_TYPE_OPTIONS.slice();
+}
+
+function getDeductionTypeOptions(){
+  if (Array.isArray(deductionTypeOptions) && deductionTypeOptions.length) return deductionTypeOptions.slice();
+  return DEFAULT_DEDUCTION_TYPE_OPTIONS.slice();
+}
+
+async function persistIncomeTypeOptions(next){
+  const normalized = normalizeIncomeTypeOptions(next);
+  incomeTypeOptions = normalized;
+  try { localStorage.setItem(LS_INCOME_TYPE_OPTIONS, JSON.stringify(normalized)); } catch (_) {}
+  if (typeof window !== 'undefined' && typeof window.writeKV === 'function') {
+    try {
+      const result = window.writeKV(LS_INCOME_TYPE_OPTIONS, normalized);
+      if (result && typeof result.then === 'function') await result;
+    } catch (err) {
+      console.warn('Persisting income type options failed', err);
+    }
+  }
+}
+
+async function persistDeductionTypeOptions(next){
+  const normalized = normalizeDeductionTypeOptions(next);
+  deductionTypeOptions = normalized;
+  try { localStorage.setItem(LS_DEDUCTION_TYPE_OPTIONS, JSON.stringify(normalized)); } catch (_) {}
+  if (typeof window !== 'undefined' && typeof window.writeKV === 'function') {
+    try {
+      const result = window.writeKV(LS_DEDUCTION_TYPE_OPTIONS, normalized);
+      if (result && typeof result.then === 'function') await result;
+    } catch (err) {
+      console.warn('Persisting deduction type options failed', err);
+    }
+  }
+}
+
+async function loadIncomeTypeOptions(){
+  try {
+    let stored = null;
+    if (typeof window !== 'undefined' && typeof window.readKV === 'function') {
+      stored = await window.readKV(LS_INCOME_TYPE_OPTIONS, null);
+    }
+    if (stored == null) {
+      try { stored = JSON.parse(localStorage.getItem(LS_INCOME_TYPE_OPTIONS) || 'null'); } catch(_) { stored = null; }
+    }
+    incomeTypeOptions = normalizeIncomeTypeOptions(stored);
+    try { localStorage.setItem(LS_INCOME_TYPE_OPTIONS, JSON.stringify(incomeTypeOptions)); } catch(_) {}
+    renderIncomeTypeOptionsUI();
+    try {
+      if (typeof queueAdditionalIncomeRerender === 'function') queueAdditionalIncomeRerender();
+      else if (typeof renderAdditionalIncomeTable === 'function') renderAdditionalIncomeTable();
+    } catch (_) {}
+  } catch (err) {
+    console.warn('Loading income type options failed', err);
+  }
+}
+
+async function loadDeductionTypeOptions(){
+  try {
+    let stored = null;
+    if (typeof window !== 'undefined' && typeof window.readKV === 'function') {
+      stored = await window.readKV(LS_DEDUCTION_TYPE_OPTIONS, null);
+    }
+    if (stored == null) {
+      try { stored = JSON.parse(localStorage.getItem(LS_DEDUCTION_TYPE_OPTIONS) || 'null'); } catch(_) { stored = null; }
+    }
+    deductionTypeOptions = normalizeDeductionTypeOptions(stored);
+    try { localStorage.setItem(LS_DEDUCTION_TYPE_OPTIONS, JSON.stringify(deductionTypeOptions)); } catch(_) {}
+    renderDeductionTypeOptionsUI();
+    try {
+      if (typeof queueOtherDeductionsRerender === 'function') queueOtherDeductionsRerender();
+      else if (typeof renderOtherDeductionsTable === 'function') renderOtherDeductionsTable();
+    } catch (_) {}
+  } catch (err) {
+    console.warn('Loading deduction type options failed', err);
+  }
+}
+
+function renderIncomeTypeOptionsUI(){
+  const listEl = document.getElementById('settingsIncomeTypeList');
+  if (!listEl) return;
+  const options = getIncomeTypeOptions();
+  listEl.innerHTML = '';
+  options.forEach(option => {
+    const row = document.createElement('div');
+    row.className = 'income-type-item';
+    const label = document.createElement('span');
+    label.textContent = option;
+    const removeBtn = document.createElement('button');
+    removeBtn.type = 'button';
+    removeBtn.className = 'income-type-remove';
+    removeBtn.textContent = '✕';
+    removeBtn.setAttribute('aria-label', `Remove ${option}`);
+    removeBtn.addEventListener('click', async () => {
+      const next = getIncomeTypeOptions().filter(item => item !== option);
+      await persistIncomeTypeOptions(next);
+      renderIncomeTypeOptionsUI();
+      try {
+        if (typeof queueAdditionalIncomeRerender === 'function') queueAdditionalIncomeRerender();
+        else if (typeof renderAdditionalIncomeTable === 'function') renderAdditionalIncomeTable();
+      } catch (_) {}
+    });
+    row.appendChild(label);
+    row.appendChild(removeBtn);
+    listEl.appendChild(row);
+  });
+}
+
+function renderDeductionTypeOptionsUI(){
+  const listEl = document.getElementById('settingsDeductionTypeList');
+  if (!listEl) return;
+  const options = getDeductionTypeOptions();
+  listEl.innerHTML = '';
+  options.forEach(option => {
+    const row = document.createElement('div');
+    row.className = 'deduction-type-item';
+    const label = document.createElement('span');
+    label.textContent = option;
+    const removeBtn = document.createElement('button');
+    removeBtn.type = 'button';
+    removeBtn.className = 'deduction-type-remove';
+    removeBtn.textContent = '✕';
+    removeBtn.setAttribute('aria-label', `Remove ${option}`);
+    removeBtn.addEventListener('click', async () => {
+      const next = getDeductionTypeOptions().filter(item => item !== option);
+      await persistDeductionTypeOptions(next);
+      renderDeductionTypeOptionsUI();
+      try {
+        if (typeof queueOtherDeductionsRerender === 'function') queueOtherDeductionsRerender();
+        else if (typeof renderOtherDeductionsTable === 'function') renderOtherDeductionsTable();
+      } catch (_) {}
+    });
+    row.appendChild(label);
+    row.appendChild(removeBtn);
+    listEl.appendChild(row);
+  });
+}
+
+function initIncomeTypeSettingsUI(){
+  const input = document.getElementById('settingsIncomeTypeInput');
+  const addBtn = document.getElementById('settingsIncomeTypeAdd');
+  const addType = async () => {
+    if (!input) return;
+    const value = String(input.value || '').trim();
+    if (!value) return;
+    const options = getIncomeTypeOptions();
+    const exists = options.some(option => option.toLowerCase() === value.toLowerCase());
+    if (exists) {
+      input.value = '';
+      return;
+    }
+    const next = options.concat(value);
+    await persistIncomeTypeOptions(next);
+    input.value = '';
+    renderIncomeTypeOptionsUI();
+    try {
+      if (typeof queueAdditionalIncomeRerender === 'function') queueAdditionalIncomeRerender();
+      else if (typeof renderAdditionalIncomeTable === 'function') renderAdditionalIncomeTable();
+    } catch (_) {}
+  };
+  if (addBtn && !addBtn.__incomeTypeBound) {
+    addBtn.addEventListener('click', addType);
+    addBtn.__incomeTypeBound = true;
+  }
+  if (input && !input.__incomeTypeBound) {
+    input.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') {
+        event.preventDefault();
+        addType();
+      }
+    });
+    input.__incomeTypeBound = true;
+  }
+  renderIncomeTypeOptionsUI();
+}
+
+function initDeductionTypeSettingsUI(){
+  const input = document.getElementById('settingsDeductionTypeInput');
+  const addBtn = document.getElementById('settingsDeductionTypeAdd');
+  const addType = async () => {
+    if (!input) return;
+    const value = String(input.value || '').trim();
+    if (!value) return;
+    const options = getDeductionTypeOptions();
+    const exists = options.some(option => option.toLowerCase() === value.toLowerCase());
+    if (exists) {
+      input.value = '';
+      return;
+    }
+    const next = options.concat(value);
+    await persistDeductionTypeOptions(next);
+    input.value = '';
+    renderDeductionTypeOptionsUI();
+    try {
+      if (typeof queueOtherDeductionsRerender === 'function') queueOtherDeductionsRerender();
+      else if (typeof renderOtherDeductionsTable === 'function') renderOtherDeductionsTable();
+    } catch (_) {}
+  };
+  if (addBtn && !addBtn.__deductionTypeBound) {
+    addBtn.addEventListener('click', addType);
+    addBtn.__deductionTypeBound = true;
+  }
+  if (input && !input.__deductionTypeBound) {
+    input.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') {
+        event.preventDefault();
+        addType();
+      }
+    });
+    input.__deductionTypeBound = true;
+  }
+  renderDeductionTypeOptionsUI();
+}
+
+function initPayrollSettingsUI() {
+  const otInput = document.getElementById('otMultiplier');
+  if (otInput && !otInput.__settingsBound) {
+    otInput.addEventListener('input', () => {
+      updatePayrollSettings({ overtime: { multiplier: parseFloat(otInput.value) || 0 } });
+      try { renderOvertimeTable(); } catch (_) {}
+      try { calculateAll(); } catch (_) {}
+    });
+    otInput.__settingsBound = true;
+  }
+  const settingsOt = document.getElementById('settingsOtMultiplier');
+  if (settingsOt && !settingsOt.__settingsBound) {
+    settingsOt.addEventListener('input', () => {
+      updatePayrollSettings({ overtime: { multiplier: parseFloat(settingsOt.value) || 0 } });
+      try { renderOvertimeTable(); } catch (_) {}
+    });
+    settingsOt.__settingsBound = true;
+  }
+  const ndEnabled = document.getElementById('settingsNdEnabled');
+  if (ndEnabled && !ndEnabled.__settingsBound) {
+    ndEnabled.addEventListener('change', () => {
+      updatePayrollSettings({ nightDifferential: { enabled: ndEnabled.checked } });
+    });
+    ndEnabled.__settingsBound = true;
+  }
+  const ndStart = document.getElementById('settingsNdStart');
+  if (ndStart && !ndStart.__settingsBound) {
+    ndStart.addEventListener('change', () => {
+      updatePayrollSettings({ nightDifferential: { start: ndStart.value } });
+    });
+    ndStart.__settingsBound = true;
+  }
+  const ndEnd = document.getElementById('settingsNdEnd');
+  if (ndEnd && !ndEnd.__settingsBound) {
+    ndEnd.addEventListener('change', () => {
+      updatePayrollSettings({ nightDifferential: { end: ndEnd.value } });
+    });
+    ndEnd.__settingsBound = true;
+  }
+  const ndMult = document.getElementById('settingsNdMultiplier');
+  if (ndMult && !ndMult.__settingsBound) {
+    ndMult.addEventListener('input', () => {
+      updatePayrollSettings({ nightDifferential: { multiplier: parseFloat(ndMult.value) || 0 } });
+    });
+    ndMult.__settingsBound = true;
+  }
+  syncPayrollSettingsInputs();
+}
+
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', () => {
+    initPayrollSettingsUI();
+    initIncomeTypeSettingsUI();
+    initDeductionTypeSettingsUI();
+    loadPayrollSettings();
+    loadIncomeTypeOptions();
+    loadDeductionTypeOptions();
+  });
+} else {
+  initPayrollSettingsUI();
+  initIncomeTypeSettingsUI();
+  initDeductionTypeSettingsUI();
+  loadPayrollSettings();
+  loadIncomeTypeOptions();
+  loadDeductionTypeOptions();
+}
+
+try {
+  window.getOvertimeMultiplier = getOvertimeMultiplier;
+  window.getNightDifferentialSettings = getNightDifferentialSettings;
+} catch (_) {}
+
+// Current employee contribution rates (decimal form).  Defaults: 0.02 (2%) for Pag-IBIG and 0.025 (2.5%) for PhilHealth.
+let pagibigRate = parseFloat(localStorage.getItem(LS_PAGIBIG_RATE) ?? '0.02');
+if (isNaN(pagibigRate)) pagibigRate = 0.02;
+let philhealthRate = parseFloat(localStorage.getItem(LS_PHILHEALTH_RATE) ?? '0.025');
+if (isNaN(philhealthRate)) philhealthRate = 0.025;
+const SSS_SEED_2025 = [
+  [1, 5249.99, 250, 250],
+  [5250, 5749.99, 275, 275],
+  [5750, 6249.99, 300, 300],
+  [6250, 6749.99, 325, 325],
+  [6750, 7249.99, 350, 350],
+  [7250, 7749.99, 375, 375],
+  [7750, 8249.99, 400, 400],
+  [8250, 8749.99, 425, 425],
+  [8750, 9249.99, 450, 450],
+  [9250, 9749.99, 475, 475],
+  [9750, 10249.99, 500, 500],
+  [10250, 10749.99, 525, 525],
+  [10750, 11249.99, 550, 550],
+  [11250, 11749.99, 575, 575],
+  [11750, 12249.99, 600, 600],
+  [12250, 12749.99, 625, 625],
+  [12750, 13249.99, 650, 650],
+  [13250, 13749.99, 675, 675],
+  [13750, 14249.99, 700, 700],
+  [14250, 14749.99, 725, 725],
+  [14750, 15249.99, 750, 750],
+  [15250, 15749.99, 775, 775],
+  [15750, 16249.99, 800, 800],
+  [16250, 16749.99, 825, 825],
+  [16750, 17249.99, 850, 850],
+  [17250, 17749.99, 875, 875],
+  [17750, 18249.99, 900, 900],
+  [18250, 18749.99, 925, 925],
+  [18750, 19249.99, 950, 950],
+  [19250, 19749.99, 975, 975],
+  [19750, 20249.99, 1000, 1000],
+  [20250, 20749.99, 1025, 1025],
+  [20750, 21249.99, 1050, 1050],
+  [21250, 21749.99, 1075, 1075],
+  [21750, 22249.99, 1100, 1100],
+  [22250, 22749.99, 1125, 1125],
+  [22750, 23249.99, 1150, 1150],
+  [23250, 23749.99, 1175, 1175],
+  [23750, 24249.99, 1200, 1200],
+  [24250, 24749.99, 1225, 1225],
+  [24750, 25249.99, 1250, 1250],
+  [25250, 25749.99, 1275, 1275],
+  [25750, 26249.99, 1300, 1300],
+  [26250, 26749.99, 1325, 1325],
+  [26750, 27249.99, 1350, 1350],
+  [27250, 27749.99, 1375, 1375],
+  [27750, 28249.99, 1400, 1400],
+  [28250, 28749.99, 1425, 1425],
+  [28750, 29249.99, 1450, 1450],
+  [29250, 29749.99, 1475, 1475],
+  [29750, 30249.99, 1500, 1500],
+  [30250, 30749.99, 1525, 1525],
+  [30750, 31249.99, 1550, 1550],
+  [31250, 31749.99, 1575, 1575],
+  [31750, 32249.99, 1600, 1600],
+  [32250, 32749.99, 1625, 1625],
+  [32750, 33249.99, 1650, 1650],
+  [33250, 33749.99, 1675, 1675],
+  [33750, 34249.99, 1700, 1700],
+  [34250, 34749.99, 1725, 1725],
+  [34750, 100000000, 1750, 1750]
+];
+
+function ensureSeededSSS() {
+  try {
+    const cur = JSON.parse(localStorage.getItem(LS_SSS_TABLE) || '[]');
+    if (!Array.isArray(cur) || cur.length === 0) {
+      const mapped = SSS_SEED_2025.map(r=>({min:r[0], max:r[1], employee:r[2], employer: (typeof r[3] !== 'undefined' ? r[3] : r[2])}));
+      localStorage.setItem(LS_SSS_TABLE, JSON.stringify(mapped));
+    } else {
+      const normalized = cur.map(row => {
+        const min = Number(row && typeof row.min !== 'undefined' ? row.min : 0) || 0;
+        const max = Number(row && typeof row.max !== 'undefined' ? row.max : 0) || 0;
+        const employee = Number(row && typeof row.employee !== 'undefined' ? row.employee : 0) || 0;
+        const employerRaw = Number(row && typeof row.employer !== 'undefined' ? row.employer : employee);
+        const employer = Number.isFinite(employerRaw) ? employerRaw : employee;
+        return { min, max, employee, employer };
+      });
+      localStorage.setItem(LS_SSS_TABLE, JSON.stringify(normalized));
+    }
+  } catch (e) {
+    const mapped = SSS_SEED_2025.map(r=>({min:r[0], max:r[1], employee:r[2], employer: (typeof r[3] !== 'undefined' ? r[3] : r[2])}));
+    localStorage.setItem(LS_SSS_TABLE, JSON.stringify(mapped));
+  }
+}
+ensureSeededSSS();
+// Seed the Pag-IBIG and PhilHealth tables with default rates if empty.  These tables
+// define income ranges and the corresponding employee contribution rate (decimal).
+const PAGIBIG_SEED = [
+  [0, 100000000, 0.02]
+];
+const PHILHEALTH_SEED = [
+  [0, 100000000, 0.025]
+];
+
+function ensureSeededPagibig() {
+  try {
+    const cur = JSON.parse(localStorage.getItem(LS_PAGIBIG_TABLE) || '[]');
+    if (!Array.isArray(cur) || cur.length === 0) {
+      const mapped = PAGIBIG_SEED.map(r => ({min: r[0], max: r[1], rate: r[2]}));
+      localStorage.setItem(LS_PAGIBIG_TABLE, JSON.stringify(mapped));
+    }
+  } catch (e) {
+    const mapped = PAGIBIG_SEED.map(r => ({min: r[0], max: r[1], rate: r[2]}));
+    localStorage.setItem(LS_PAGIBIG_TABLE, JSON.stringify(mapped));
+  }
+}
+
+function ensureSeededPhilhealth() {
+  try {
+    const cur = JSON.parse(localStorage.getItem(LS_PHILHEALTH_TABLE) || '[]');
+    if (!Array.isArray(cur) || cur.length === 0) {
+      const mapped = PHILHEALTH_SEED.map(r => ({min: r[0], max: r[1], rate: r[2]}));
+      localStorage.setItem(LS_PHILHEALTH_TABLE, JSON.stringify(mapped));
+    }
+  } catch (e) {
+    const mapped = PHILHEALTH_SEED.map(r => ({min: r[0], max: r[1], rate: r[2]}));
+    localStorage.setItem(LS_PHILHEALTH_TABLE, JSON.stringify(mapped));
+  }
+}
+ensureSeededPagibig();
+ensureSeededPhilhealth();
+let payrollRates = JSON.parse(localStorage.getItem(LS_RATES) || '{}');
+let regHours = JSON.parse(localStorage.getItem(LS_REG_HRS) || '{}');
+let otHours = JSON.parse(localStorage.getItem(LS_OT_HRS) || '{}');
+
+// Per-employee contribution deduction flags. Each entry keyed by employee ID holds booleans {pagibig, philhealth, sss}
+let contribFlags = JSON.parse(localStorage.getItem(LS_CONTRIB_FLAGS) || '{}');
+
+function migrateWeekRangeKeys(){
+  try {
+    if (!localStorage.getItem(LS_WEEKSTART)) {
+      const legacyStart = localStorage.getItem(LEGACY_WEEKSTART_KEY);
+      if (legacyStart) localStorage.setItem(LS_WEEKSTART, legacyStart);
+    }
+    if (!localStorage.getItem(LS_WEEKEND)) {
+      const legacyEnd = localStorage.getItem(LEGACY_WEEKEND_KEY);
+      if (legacyEnd) localStorage.setItem(LS_WEEKEND, legacyEnd);
+    }
+    localStorage.removeItem(LEGACY_WEEKSTART_KEY);
+    localStorage.removeItem(LEGACY_WEEKEND_KEY);
+  } catch (e) {}
+}
+
+otMultiplier = getOvertimeMultiplier();
+migrateWeekRangeKeys();
+let weekStartSaved = localStorage.getItem(LS_WEEKSTART) || '';
+let weekEndSaved = localStorage.getItem(LS_WEEKEND) || '';
+let divisor = parseInt(localStorage.getItem(LS_DIVISOR) || '1', 10);
+const weekStartEl = document.getElementById('weekStart');
+const weekEndEl = document.getElementById('weekEnd');
+const otMultiplierEl = document.getElementById('otMultiplier');
+const divisorEl = document.getElementById('deductionDivisor');
+const divisorDedsEl = document.getElementById('deductionDivisorDeds');
+const tbody = document.querySelector('#payrollTable tbody');
+document.querySelectorAll('#panelPayroll .tabs .tab-btn').forEach(btn=>{
+  btn.addEventListener('click', ()=>{
+    try { if (typeof otherDeductionsRefresh?.flush === 'function') otherDeductionsRefresh.flush(); } catch (_) {}
+    document.querySelectorAll('#panelPayroll .tabs .tab-btn').forEach(b=>b.classList.remove('active'));
+    document.querySelectorAll('#panelPayroll .tab').forEach(t=>t.classList.remove('active'));
+    btn.classList.add('active');
+    const panel = document.querySelector('#panelPayroll #' + btn.dataset.tab);
+    if (panel) panel.classList.add('active');
+  });
+});
+if (otMultiplierEl) otMultiplierEl.value = String(getOvertimeMultiplier());
+weekStartEl.value = weekStartSaved;
+weekEndEl.value = weekEndSaved;
+divisorEl.value = divisor;
+
+function periodKey(){return (weekStartEl.value||'')+'_'+(weekEndEl.value||'');}
+const PERIOD_META_KEY='__meta';
+const PERIOD_DEFAULT_KEY='__default';
+function isPlainObject(val){ return !!val && typeof val === 'object' && !Array.isArray(val); }
+function clonePeriodData(src){
+  if(!isPlainObject(src)) return {};
+  try { return JSON.parse(JSON.stringify(src)); } catch (e) {
+    const out = {};
+    Object.keys(src || {}).forEach(k => { out[k] = src[k]; });
+    return out;
+  }
+}
+function splitPeriodKey(key){
+  if (typeof key !== 'string') return { start: '', end: '' };
+  const parts = key.split('_');
+  return { start: parts[0] || '', end: parts[1] || '' };
+}
+function comparePeriodKeys(a, b){
+  if (a === b) return 0;
+  const pa = splitPeriodKey(a);
+  const pb = splitPeriodKey(b);
+  if (pa.start && pb.start && pa.start !== pb.start) return pa.start < pb.start ? -1 : 1;
+  if (pa.start && !pb.start) return 1;
+  if (!pa.start && pb.start) return -1;
+  if (pa.end && pb.end && pa.end !== pb.end) return pa.end < pb.end ? -1 : 1;
+  if (pa.end && !pb.end) return 1;
+  if (!pa.end && pb.end) return -1;
+  const aStr = typeof a === 'string' ? a : '';
+  const bStr = typeof b === 'string' ? b : '';
+  if (aStr === bStr) return 0;
+  return aStr < bStr ? -1 : 1;
+}
+function sortedPeriodKeys(map){
+  return Object.keys(map || {})
+    .filter(k => k !== PERIOD_META_KEY && k !== PERIOD_DEFAULT_KEY)
+    .sort(comparePeriodKeys);
+}
+function ensurePeriodMeta(map){
+  if (!isPlainObject(map)) return { periodScoped: true, latestKey: '' };
+  const meta = isPlainObject(map[PERIOD_META_KEY]) ? map[PERIOD_META_KEY] : {};
+  meta.periodScoped = true;
+  if (typeof meta.latestKey !== 'string') meta.latestKey = '';
+  map[PERIOD_META_KEY] = meta;
+  return meta;
+}
+function loadPeriodScopedMap(lsKey){
+  let parsed;
+  try { parsed = JSON.parse(localStorage.getItem(lsKey) || '{}'); }
+  catch(e){ parsed = {}; }
+  if (!isPlainObject(parsed)) parsed = {};
+  const meta = parsed[PERIOD_META_KEY];
+  if (!isPlainObject(meta) || meta.periodScoped !== true) {
+    const legacy = parsed;
+    parsed = {};
+    parsed[PERIOD_META_KEY] = { periodScoped: true, latestKey: '' };
+    parsed[PERIOD_DEFAULT_KEY] = isPlainObject(legacy) ? legacy : {};
+  } else {
+    parsed[PERIOD_META_KEY] = Object.assign({}, meta, { periodScoped: true });
+  }
+  const ensuredMeta = ensurePeriodMeta(parsed);
+  const keys = sortedPeriodKeys(parsed);
+  if (!ensuredMeta.latestKey && keys.length) {
+    ensuredMeta.latestKey = keys[keys.length - 1];
+  }
+  if (!isPlainObject(parsed[PERIOD_DEFAULT_KEY]) && ensuredMeta.latestKey && isPlainObject(parsed[ensuredMeta.latestKey])) {
+    parsed[PERIOD_DEFAULT_KEY] = clonePeriodData(parsed[ensuredMeta.latestKey]);
+  }
+  return parsed;
+}
+
+// === Loan Tracker (SSS Salary/Calamity, Pag-IBIG Salary/Calamity, Cash Advance) ===
+// Stores SSS principals (total + monthly) with tracked balances (auto-stops when fully paid),
+// Cash Advance principals (total + weekly) with tracked balances,
+// and Pag-IBIG monthly deductions (no total/balance; per-payroll is computed via the divisor).
+const LOAN_TYPES_SSS = ['loanSSS_salary','loanSSS_calamity'];
+const LOAN_TYPES_PI  = ['loanPI_salary','loanPI_calamity'];
+const LOAN_TYPES_CASH = ['vale'];
+
+function isLoanTypeSSS(type){
+  return type === 'loanSSS_salary' || type === 'loanSSS_calamity' || type === 'loanSSS';
+}
+function isLoanTypePagibig(type){
+  return type === 'loanPI_salary' || type === 'loanPI_calamity' || type === 'loanPI';
+}
+function loanEntryDefaults(type){
+  if (isLoanTypePagibig(type)) return { monthly: 0, active: false };
+  if (isLoanTypeSSS(type)) return { principal: 0, monthly: 0, active: false };
+  return { principal: 0, weekly: 0, active: false };
+}
+
+function loanTypeToProviderKind(type){
+  const t = String(type||'');
+  let provider = null;
+  if (t.indexOf('loanSSS') === 0) provider = 'SSS';
+  else if (t.indexOf('loanPI') === 0) provider = 'PAGIBIG';
+  if (!provider) return null;
+  const kind = (t.indexOf('_calamity') !== -1) ? 'CALAMITY' : 'SALARY';
+  return { provider, kind };
+}
+function providerKindToLoanType(provider, kind){
+  const p = String(provider||'').toUpperCase();
+  const k = String(kind||'').toUpperCase();
+  if (p === 'SSS') return (k === 'CALAMITY') ? 'loanSSS_calamity' : 'loanSSS_salary';
+  if (p === 'PAGIBIG') return (k === 'CALAMITY') ? 'loanPI_calamity' : 'loanPI_salary';
+  return null;
+}
+async function getOrCreatePeriodId(sb, startDate, endDate){
+  const start = String(startDate||'').trim();
+  const end = String(endDate||'').trim();
+  if (!start || !end) return null;
+  window.__periodKeyToId = window.__periodKeyToId || {};
+  const key = start + '_' + end;
+  if (window.__periodKeyToId[key]) return window.__periodKeyToId[key];
+
+  let { data, error } = await sb
+    .from(PERIODS_TABLE)
+    .select('id')
+    .eq('period_start', start)
+    .eq('period_end', end)
+    .maybeSingle();
+
+  if (error) console.warn('payroll_periods select error', error);
+
+  if (!data?.id) {
+    const ins = await sb
+      .from(PERIODS_TABLE)
+      .insert({ period_start: start, period_end: end })
+      .select('id')
+      .single();
+    if (ins.error) { console.warn('payroll_periods insert error', ins.error); return null; }
+    data = ins.data;
+  }
+  window.__periodKeyToId[key] = data.id;
+  return data.id;
+}
+async function ensureEmployeesExistByCode(sb, codes){
+  const unique = Array.from(new Set((codes||[]).map(c=>String(c||'').trim()).filter(Boolean)));
+  if (!unique.length) return { codeToId: {}, idToCode: {} };
+
+  const codeToId = {};
+  const idToCode = {};
+
+  const { data: existing, error } = await sb
+    .from(EMPLOYEES_TABLE)
+    .select('id,employee_code')
+    .in('employee_code', unique);
+
+  if (error) console.warn('employees select error', error);
+
+  (existing||[]).forEach(r=>{
+    if (!r) return;
+    const code = String(r.employee_code||'').trim();
+    if (!code) return;
+    codeToId[code] = r.id;
+    idToCode[r.id] = code;
+  });
+
+  const missing = unique.filter(c=>!codeToId[c]);
+  if (missing.length) {
+    const rows = missing.map(code=>{
+      let fullName = code;
+      try {
+        const e = window.storedEmployees && window.storedEmployees[code];
+        fullName = (e && (e.name || e.full_name || e.fullName)) ? (e.name || e.full_name || e.fullName) : code;
+      } catch(_){}
+      return { employee_code: code, full_name: fullName };
+    });
+    const ins = await sb.from(EMPLOYEES_TABLE).insert(rows).select('id,employee_code');
+    if (ins.error) console.warn('employees insert error', ins.error);
+    (ins.data||[]).forEach(r=>{
+      const code = String(r.employee_code||'').trim();
+      if (!code) return;
+      codeToId[code] = r.id;
+      idToCode[r.id] = code;
+    });
+  }
+
+  return { codeToId, idToCode };
+}
+function ensureLoanTrackerShape(obj){
+  if (!isPlainObject(obj)) obj = {};
+  if (!isPlainObject(obj.byEmp)) obj.byEmp = {};
+  if (!isPlainObject(obj.applied)) obj.applied = {};
+  if (!isPlainObject(obj.paymentsByPeriod)) obj.paymentsByPeriod = {};
+  return obj;
+}
+function migrateLoanTrackerLegacy(obj){
+  // Migrate legacy keys: loanSSS -> loanSSS_salary, loanPI -> loanPI_salary
+  obj = ensureLoanTrackerShape(obj);
+  const div = Number(divisor) || 1;
+
+  try {
+    Object.keys(obj.byEmp || {}).forEach(empId => {
+      const emp = obj.byEmp[empId];
+      if (!isPlainObject(emp)) return;
+
+      // Legacy SSS Loan
+      if (isPlainObject(emp.loanSSS) && !isPlainObject(emp.loanSSS_salary) && !isPlainObject(emp.loanSSS_calamity)) {
+        emp.loanSSS_salary = Object.assign(loanEntryDefaults('loanSSS_salary'), emp.loanSSS);
+        delete emp.loanSSS;
+      }
+
+      // Legacy Pag-IBIG Loan (weekly-based) -> monthly-based
+      if (isPlainObject(emp.loanPI) && !isPlainObject(emp.loanPI_salary) && !isPlainObject(emp.loanPI_calamity)) {
+        const legacy = emp.loanPI;
+        const weekly = roundToCents(Number(legacy.weekly) || 0);
+        const principal = roundToCents(Number(legacy.principal) || 0);
+        const monthly = roundToCents(weekly > 0 ? weekly * div : principal);
+        emp.loanPI_salary = { monthly, active: legacy.active === true };
+        delete emp.loanPI;
+      }
+
+      // Normalize new entries
+      LOAN_TYPES_SSS.concat(LOAN_TYPES_PI).concat(LOAN_TYPES_CASH).forEach(type => {
+        if (!isPlainObject(emp[type])) return;
+        if (isLoanTypePagibig(type)) {
+          const e = emp[type];
+          // Drop legacy fields if present
+          e.monthly = roundToCents(Number(e.monthly) || 0);
+          e.active = e.active === true;
+          delete e.principal;
+          delete e.weekly;
+        } else if (isLoanTypeSSS(type)) {
+          const e = emp[type];
+          e.principal = roundToCents(Number(e.principal) || 0);
+          const weekly = roundToCents(Number(e.weekly) || 0);
+          let monthly = roundToCents(Number(e.monthly) || 0);
+          if ((!monthly || monthly <= 0) && weekly > 0) monthly = roundToCents(weekly * div);
+          e.monthly = roundToCents(monthly || 0);
+          e.active = e.active === true;
+          delete e.weekly;
+        } else {
+          // Cash Advance (weekly-based)
+          const e = emp[type];
+          e.principal = roundToCents(Number(e.principal) || 0);
+          e.weekly = roundToCents(Number(e.weekly) || 0);
+          e.active = e.active === true;
+          delete e.monthly;
+        }
+      });
+});
+  } catch(_) {}
+
+  try {
+    Object.keys(obj.applied || {}).forEach(pk => {
+      const period = obj.applied[pk];
+      if (!isPlainObject(period)) return;
+      Object.keys(period || {}).forEach(empId => {
+        const emp = period[empId];
+        if (!isPlainObject(emp)) return;
+
+        // Legacy applied keys: loanSSS -> loanSSS_salary
+        if (Object.prototype.hasOwnProperty.call(emp, 'loanSSS') && !Object.prototype.hasOwnProperty.call(emp, 'loanSSS_salary')) {
+          emp.loanSSS_salary = emp.loanSSS;
+          delete emp.loanSSS;
+        }
+        // Legacy applied keys: loanPI -> loanPI_salary (kept for history; not used for balance)
+        if (Object.prototype.hasOwnProperty.call(emp, 'loanPI') && !Object.prototype.hasOwnProperty.call(emp, 'loanPI_salary')) {
+          emp.loanPI_salary = emp.loanPI;
+          delete emp.loanPI;
+        }
+      });
+    });
+  } catch(_) {}
+
+  return obj;
+}
+function loadLoanTrackerFromStorage(){
+  let parsed = null;
+  try { parsed = JSON.parse(localStorage.getItem(LS_LOAN_TRACKER) || 'null'); } catch(_){ parsed = null; }
+  parsed = ensureLoanTrackerShape(parsed);
+  parsed = migrateLoanTrackerLegacy(parsed);
+  return parsed;
+}
+
+function refreshLoanTrackerCacheFromStorage(){
+  try {
+    loanTracker = loadLoanTrackerFromStorage();
+    try { window.loanTracker = loanTracker; } catch(_){ }
+  } catch(_){ }
+}
+
+async function persistLoanTracker(){
+  // Cross-device realtime sync (auditor-safe):
+  // - localStorage is only a cache for offline use
+  // - kv_store (via writeKV) is the cross-device source of truth (same pattern as Additional Income)
+  // - NEVER push to cloud until kv-cloud-ready to prevent an empty/brand-new PC from overwriting cloud data
+  try { ensureLoanTrackerShape(loanTracker); } catch(_){}
+
+  // No-op if nothing changed since last save (prevents bumping timestamps / noisy realtime updates)
+  try {
+    const curStr = localStorage.getItem(LS_LOAN_TRACKER);
+    const nextStrNoMetaBump = JSON.stringify(loanTracker);
+    if (curStr && curStr === nextStrNoMetaBump) return;
+  } catch(_){}
+
+  // Stamp only when actually changed
+  try {
+    loanTracker.__meta = loanTracker.__meta || {};
+    loanTracker.__meta.lastUpdatedAt = Date.now();
+  } catch(_){}
+
+  let savedStr = null;
+  try { savedStr = JSON.stringify(loanTracker); localStorage.setItem(LS_LOAN_TRACKER, savedStr); } catch(_){}
+
+  // KV sync (realtime across devices): write to kv_store using writeKV, debounced.
+  try {
+    const canCloudWrite = !!(window && window.__kv_cloud_ready === true && typeof window.writeKV === 'function');
+    if (canCloudWrite) {
+      const snapshot = (savedStr != null)
+        ? (function(){ try { return JSON.parse(savedStr); } catch(_){ return loanTracker; } })()
+        : loanTracker;
+
+      if (window.__loanTrackerKVTimer) { try { clearTimeout(window.__loanTrackerKVTimer); } catch(_){ } }
+      window.__loanTrackerKVTimer = setTimeout(() => {
+        try {
+          const p = window.writeKV(LS_LOAN_TRACKER, snapshot);
+          if (p && typeof p.catch === 'function') p.catch(err => console.warn('writeKV loan tracker failed', err));
+        } catch(err) { console.warn('writeKV loan tracker threw', err); }
+      }, 350);
+    } else {
+      // Queue a one-time flush once cloud is ready (prevents empty PC overwrite).
+      window.__loanTrackerKVPending = true;
+      if (!window.__loanTrackerKVPendingHooked) {
+        window.__loanTrackerKVPendingHooked = true;
+        window.addEventListener('kv-cloud-ready', () => {
+          try {
+            if (!window.__loanTrackerKVPending) return;
+            window.__loanTrackerKVPending = false;
+            if (typeof window.writeKV !== 'function') return;
+            (async () => {
+              try {
+                const latest = loadLoanTrackerFromStorage();
+                if (typeof window.readKV === 'function') {
+                  const cloud = await window.readKV(LS_LOAN_TRACKER, null);
+                  const lc = (latest && latest.__meta && Number(latest.__meta.lastUpdatedAt)) || 0;
+                  const rc = (cloud && cloud.__meta && Number(cloud.__meta.lastUpdatedAt)) || 0;
+                  if (rc && lc && rc > lc) return; // cloud newer; don't overwrite
+                }
+                const p = window.writeKV(LS_LOAN_TRACKER, latest);
+                if (p && typeof p.catch === 'function') p.catch(err => console.warn('writeKV loan tracker flush failed', err));
+              } catch(_){ }
+            })();
+          } catch(_) {}
+        }, { once: true });
+      }
+    }
+  } catch(_){}
+
+  if (!__hasSupabase()) return;
+  try {
+    const sb = window.supabase;
+
+    const byEmp = (loanTracker && loanTracker.byEmp) || {};
+    const codes = Object.keys(byEmp || {});
+    const { codeToId } = await ensureEmployeesExistByCode(sb, codes);
+
+    // Build master loan upserts
+    const loanRows = [];
+    const principalByEmpType = {};
+
+    // helper to sum deductions across all periods for a given emp+type
+    function sumAppliedAllPeriods(empCode, type){
+      let s = 0;
+      try {
+        const applied = (loanTracker && loanTracker.applied) || {};
+        Object.keys(applied||{}).forEach(pk=>{
+          const per = applied[pk];
+          if (!per || !per[empCode] || per[empCode][type] == null) return;
+          s += Number(per[empCode][type]) || 0;
+        });
+      } catch(_){}
+      return roundToCents(s);
+    }
+
+    codes.forEach(empCode=>{
+      const empLoans = byEmp[empCode];
+      if (!isPlainObject(empLoans)) return;
+      const employee_id = codeToId[String(empCode).trim()];
+      if (!employee_id) return;
+
+      Object.keys(empLoans).forEach(type=>{
+        const entry = empLoans[type];
+        if (!isPlainObject(entry)) return;
+
+        const map = loanTypeToProviderKind(type);
+        if (!map) return;
+
+        const provider = map.provider;
+        const loan_type = map.kind;
+
+        const row = {
+          employee_id,
+          provider,
+          loan_type,
+          monthly_amount: roundToCents(Number(entry.monthly) || 0),
+          is_active: entry.active === true
+        };
+
+        if (provider === 'SSS') {
+          const principal = roundToCents(Number(entry.principal) || 0);
+          row.total_amount = principal;
+          const paid = sumAppliedAllPeriods(empCode, type);
+          row.balance = Math.max(0, roundToCents(principal - paid));
+          principalByEmpType[employee_id + '|' + provider + '|' + loan_type] = principal;
+          // auto-stop if fully paid
+          if (principal > 0 && row.balance <= 0) row.is_active = false;
+        } else {
+          // PAG-IBIG monthly only (no total/balance tracking by default)
+          row.total_amount = null;
+          row.balance = null;
+        }
+
+        loanRows.push(row);
+      });
+    });
+
+    // Upsert loans and fetch ids
+    let loanKeyToId = {};
+    if (loanRows.length) {
+      const res = await sb
+        .from(LOANS_TABLE)
+        .upsert(loanRows, { onConflict: 'employee_id,provider,loan_type' })
+        .select('id,employee_id,provider,loan_type');
+      if (res.error) console.warn('employee_loans upsert error', res.error);
+      (res.data || []).forEach(r=>{
+        loanKeyToId[r.employee_id + '|' + String(r.provider).toUpperCase() + '|' + String(r.loan_type).toUpperCase()] = r.id;
+      });
+    }
+
+    // Upsert current period deductions (lightweight)
+    const start = (weekStartEl && weekStartEl.value) ? weekStartEl.value : '';
+    const end = (weekEndEl && weekEndEl.value) ? weekEndEl.value : '';
+    const period_id = await getOrCreatePeriodId(sb, start, end);
+    if (!period_id) return;
+
+    const pk = currentPeriodKey || periodKey();
+    const per = loanTracker && loanTracker.applied && loanTracker.applied[pk];
+    const dedRows = [];
+
+    if (isPlainObject(per)) {
+      Object.keys(per).forEach(empCode=>{
+        const emp = per[empCode];
+        if (!isPlainObject(emp)) return;
+        const employee_id = codeToId[String(empCode).trim()];
+        if (!employee_id) return;
+
+        Object.keys(emp).forEach(type=>{
+          const amt = roundToCents(Number(emp[type]) || 0);
+          const map = loanTypeToProviderKind(type);
+          if (!map) return;
+          const key = employee_id + '|' + map.provider.toUpperCase() + '|' + map.kind.toUpperCase();
+          const loan_id = loanKeyToId[key];
+          if (!loan_id) return;
+          dedRows.push({ period_id, loan_id, deducted_amount: amt });
+        });
+      });
+    }
+
+    if (dedRows.length) {
+      const res2 = await sb
+        .from(LOAN_DEDUCTIONS_TABLE)
+        .upsert(dedRows, { onConflict: 'period_id,loan_id' });
+      if (res2.error) console.warn('loan_deductions upsert error', res2.error);
+    }
+
+  } catch (ex) {
+    console.warn('persistLoanTracker failed', ex);
+  }
+}
+
+
+// === Supabase Loan Tables (proper tables, realtime) ===
+// Using: employee_loans + loan_deductions + payroll_periods + employees
+// Expected tables (recommended):
+// - employees (employee_code, full_name)
+// - payroll_periods (period_start, period_end)
+// - employee_loans (employee_id, provider, loan_type, monthly_amount, total_amount, balance, is_active)
+// - loan_deductions (period_id, loan_id, deducted_amount)
+//    - period_key text
+//    - employee_code text
+//    - loan_type text
+//    - amount numeric
+//    - updated_at timestamptz default now()
+//    - PRIMARY KEY (period_key, employee_code, loan_type)
+
+const LOANS_TABLE = "employee_loans";
+const LOAN_DEDUCTIONS_TABLE = "loan_deductions"
+const EMPLOYEES_TABLE = "employees";
+const PERIODS_TABLE = "payroll_periods";
+;
+
+function __hasSupabase(){
+  try { return !!(window && window.supabase && typeof window.supabase.from === 'function'); } catch(_) { return false; }
+}
+
+async function loadLoanTrackerFromSupabaseTables(){
+  if (!__hasSupabase()) return false;
+  try {
+    const sb = window.supabase;
+
+    // Load employee code <-> id maps (create missing employee rows if needed)
+    const localCodes = [];
+    try { localCodes.push(...Object.keys((window.storedEmployees||{}))); } catch(_){}
+    try { localCodes.push(...Object.keys((loanTracker && loanTracker.byEmp) || {})); } catch(_){}
+    const { codeToId, idToCode } = await ensureEmployeesExistByCode(sb, localCodes);
+
+    const byEmp = {};
+    const applied = {};
+
+    // Load loan master rows
+    const { data: loans, error: e1 } = await sb
+      .from(LOANS_TABLE)
+      .select('id,employee_id,provider,loan_type,monthly_amount,total_amount,balance,is_active');
+
+    if (e1) { console.warn('employee_loans fetch error', e1); return false; }
+
+    const loanIdToKey = {};
+    (loans || []).forEach(row => {
+      const empId = idToCode[row.employee_id];
+      if (!empId) return;
+      const type = providerKindToLoanType(row.provider, row.loan_type);
+      if (!type) return;
+
+      if (!isPlainObject(byEmp[empId])) byEmp[empId] = {};
+      const entry = Object.assign({}, loanEntryDefaults(type));
+      entry.active = row.is_active === true;
+
+      // For SSS we track principal and compute balance from applied
+      if (isLoanTypePagibig(type)) {
+        entry.monthly = roundToCents(Number(row.monthly_amount) || 0);
+      } else if (isLoanTypeSSS(type)) {
+        const principal = (row.total_amount != null) ? Number(row.total_amount) : (row.balance != null ? Number(row.balance) : 0);
+        entry.principal = roundToCents(principal || 0);
+        entry.monthly = roundToCents(Number(row.monthly_amount) || 0);
+      } else {
+        // legacy/other
+        entry.principal = roundToCents(Number(row.total_amount) || 0);
+        entry.weekly = roundToCents(Number(row.monthly_amount) || 0);
+      }
+      byEmp[empId][type] = entry;
+
+      // Map for deductions join-less lookup
+      loanIdToKey[row.id] = { empId, type };
+    });
+
+    // Load periods (id -> periodKey)
+    const { data: periods, error: eP } = await sb
+      .from(PERIODS_TABLE)
+      .select('id,period_start,period_end');
+
+    const periodIdToKey = {};
+    if (eP) console.warn('payroll_periods fetch error', eP);
+    (periods || []).forEach(p=>{
+      if (!p?.id) return;
+      periodIdToKey[p.id] = String(p.period_start||'') + '_' + String(p.period_end||'');
+    });
+
+    // Load applied deductions (with embedded loan info if available)
+    const { data: ded, error: e2 } = await sb
+      .from(LOAN_DEDUCTIONS_TABLE)
+      .select('period_id,loan_id,deducted_amount,employee_loans:loan_id (employee_id,provider,loan_type)');
+
+    if (e2) { console.warn('loan_deductions fetch error', e2); return false; }
+
+    (ded || []).forEach(row => {
+      const pk = periodIdToKey[row.period_id];
+      if (!pk) return;
+
+      let empId = null;
+      let type = null;
+
+      if (row.employee_loans && row.employee_loans.employee_id) {
+        empId = idToCode[row.employee_loans.employee_id];
+        type = providerKindToLoanType(row.employee_loans.provider, row.employee_loans.loan_type);
+      } else if (loanIdToKey[row.loan_id]) {
+        empId = loanIdToKey[row.loan_id].empId;
+        type = loanIdToKey[row.loan_id].type;
+      }
+
+      if (!empId || !type) return;
+
+      if (!isPlainObject(applied[pk])) applied[pk] = {};
+      if (!isPlainObject(applied[pk][empId])) applied[pk][empId] = {};
+      applied[pk][empId][type] = roundToCents(Number(row.deducted_amount) || 0);
+    });
+
+    const next = ensureLoanTrackerShape({ byEmp, applied });
+    next.__meta = next.__meta || {};
+    next.__meta.lastUpdatedAt = Date.now();
+
+    loanTracker = migrateLoanTrackerLegacy(next);
+    try { window.loanTracker = loanTracker; } catch(_){}
+    // local cache only
+    try { localStorage.setItem(LS_LOAN_TRACKER, JSON.stringify(loanTracker)); } catch(_){}
+
+    try { applyLoanTrackerToPeriod(currentPeriodKey || periodKey(), { createEntries: true, updateMaps: true }); } catch(_){}
+    try { saveCurrentPeriodDeductions(); } catch(_){}
+
+    return true;
+  } catch (ex) {
+    console.warn('loadLoanTrackerFromSupabaseTables failed', ex);
+    return false;
+  }
+}
+
+
+function setupLoanTablesRealtime(){
+  if (!__hasSupabase()) return;
+  if (window.__loanTablesSubscribed) return;
+  window.__loanTablesSubscribed = true;
+
+  try {
+    const sb = window.supabase;
+    const ch = sb.channel('loan_tables_sync');
+    window.__loanTablesChannel = ch;
+
+    const refresh = () => {
+      // simplest + safest: rehydrate from tables (keeps UI consistent)
+      loadLoanTrackerFromSupabaseTables();
+    };
+
+    ch.on('postgres_changes', { event: '*', schema: 'public', table: LOANS_TABLE }, refresh);
+    ch.on('postgres_changes', { event: '*', schema: 'public', table: LOAN_DEDUCTIONS_TABLE }, refresh);
+
+    ch.subscribe((status) => {
+      if (status === 'CHANNEL_ERROR') console.warn('Loan tables realtime subscribe failed');
+    });
+
+    // Cleanup
+    if (!window.__loanTablesUnloadCleanup) {
+      window.addEventListener('beforeunload', () => {
+        try {
+          if (window.__loanTablesChannel) {
+            if (typeof window.__loanTablesChannel.unsubscribe === 'function') {
+              window.__loanTablesChannel.unsubscribe();
+            } else if (window.supabase && typeof window.supabase.removeChannel === 'function') {
+              window.supabase.removeChannel(window.__loanTablesChannel);
+            }
+          }
+        } catch (_) {}
+      }, { once: true });
+      window.__loanTablesUnloadCleanup = true;
+    }
+  } catch (err) {
+    console.warn('setupLoanTablesRealtime failed', err);
+  }
+}
+
+function getLoanTrackerEntry(empId, type){
+  ensureLoanTrackerShape(loanTracker);
+  if (!empId || !type) return null;
+  if (!isPlainObject(loanTracker.byEmp[empId])) loanTracker.byEmp[empId] = {};
+  if (!isPlainObject(loanTracker.byEmp[empId][type])) loanTracker.byEmp[empId][type] = loanEntryDefaults(type);
+  const entry = loanTracker.byEmp[empId][type];
+
+  if (isLoanTypePagibig(type)) {
+    entry.monthly = roundToCents(Number(entry.monthly) || 0);
+    entry.active = entry.active === true;
+    // Ensure no leftover keys
+    delete entry.principal;
+    delete entry.weekly;
+  } else {
+    entry.principal = roundToCents(Number(entry.principal) || 0);
+    entry.weekly = roundToCents(Number(entry.weekly) || 0);
+    entry.active = entry.active === true;
+  }
+  return entry;
+}
+function isLoanTrackerActive(empId, type){
+  const e = getLoanTrackerEntry(empId, type);
+  if (!e) return false;
+  if (isLoanTypePagibig(type)) return !!(e.active && (Number(e.monthly) > 0));
+  return !!(e.active && (Number(e.principal) > 0) && (Number(e.weekly) > 0));
+}
+function getLoanTrackerApplied(periodKey, empId, type){
+  ensureLoanTrackerShape(loanTracker);
+  if (!periodKey || !empId || !type) return null;
+  const period = loanTracker.applied[periodKey];
+  if (!isPlainObject(period)) return null;
+  const emp = period[empId];
+  if (!isPlainObject(emp)) return null;
+  const val = emp[type];
+  const num = Number(val);
+  return Number.isFinite(num) ? roundToCents(num) : null;
+}
+function setLoanTrackerApplied(periodKey, empId, type, amount){
+  ensureLoanTrackerShape(loanTracker);
+  if (!periodKey || !empId || !type) return;
+  if (!isPlainObject(loanTracker.applied[periodKey])) loanTracker.applied[periodKey] = {};
+  if (!isPlainObject(loanTracker.applied[periodKey][empId])) loanTracker.applied[periodKey][empId] = {};
+  loanTracker.applied[periodKey][empId][type] = roundToCents(amount || 0);
+}
+function getLoanTrackerPayment(periodKey, empId, type){
+  ensureLoanTrackerShape(loanTracker);
+  if (!periodKey || !empId || !type) return null;
+  const period = loanTracker.paymentsByPeriod && loanTracker.paymentsByPeriod[periodKey];
+  if (!isPlainObject(period)) return null;
+  const emp = period[empId];
+  if (!isPlainObject(emp)) return null;
+  const entry = emp[type];
+  return isPlainObject(entry) ? entry : null;
+}
+function setLoanTrackerPayment(periodKey, empId, type, amount, meta){
+  ensureLoanTrackerShape(loanTracker);
+  if (!periodKey || !empId || !type) return;
+  if (!isPlainObject(loanTracker.paymentsByPeriod[periodKey])) loanTracker.paymentsByPeriod[periodKey] = {};
+  if (!isPlainObject(loanTracker.paymentsByPeriod[periodKey][empId])) loanTracker.paymentsByPeriod[periodKey][empId] = {};
+  loanTracker.paymentsByPeriod[periodKey][empId][type] = {
+    amount: roundToCents(amount || 0),
+    timestamp: (meta && meta.timestamp) ? meta.timestamp : new Date().toISOString(),
+    runId: meta && meta.runId ? meta.runId : undefined
+  };
+}
+function sumLoanTrackerAppliedBefore(periodKey, empId, type){
+  ensureLoanTrackerShape(loanTracker);
+  const keys = Object.keys(loanTracker.applied || {});
+  let sum = 0;
+  for (const k of keys){
+    if (!k) continue;
+    if (comparePeriodKeys(k, periodKey) < 0){
+      const v = getLoanTrackerApplied(k, empId, type);
+      if (v) sum += v;
+    }
+  }
+  return roundToCents(sum);
+}
+function sumLoanTrackerAppliedUpTo(periodKey, empId, type){
+  ensureLoanTrackerShape(loanTracker);
+  const keys = Object.keys(loanTracker.applied || {});
+  let sum = 0;
+  for (const k of keys){
+    if (!k) continue;
+    if (comparePeriodKeys(k, periodKey) <= 0){
+      const v = getLoanTrackerApplied(k, empId, type);
+      if (v) sum += v;
+    }
+  }
+  return roundToCents(sum);
+}
+function loanTrackerRemaining(periodKey, empId, type){
+  const entry = getLoanTrackerEntry(empId, type);
+  if (!entry || isLoanTypePagibig(type)) return 0;
+  const principal = roundToCents(entry.principal || 0);
+  const paid = sumLoanTrackerAppliedUpTo(periodKey, empId, type);
+  const rem = principal - paid;
+  return roundToCents(rem < 0 ? 0 : rem);
+}
+function loanTrackerPerPeriodFromMonthly(monthly){
+  const div = Number(divisor) || 1;
+  const m = roundToCents(Number(monthly) || 0);
+  return roundToCents(div > 0 ? (m / div) : m);
+}
+function loanTrackerCurrentPeriodAmount(empId, type){
+  const pk = currentPeriodKey || periodKey();
+  // For SSS/Cash: use scheduled entry if present
+  if (!isLoanTypePagibig(type)) {
+    const v = getLoanTrackerApplied(pk, empId, type);
+    if (v != null) return v;
+    return 0;
+  }
+  // For Pag-IBIG: compute per-period from monthly
+  const entry = getLoanTrackerEntry(empId, type);
+  if (!entry || !entry.active) return 0;
+  return loanTrackerPerPeriodFromMonthly(entry.monthly || 0);
+}
+function clearLoanTrackerApplied(periodKey, empId, type){
+  ensureLoanTrackerShape(loanTracker);
+  if (!periodKey || !empId || !type) return;
+  const period = loanTracker.applied && loanTracker.applied[periodKey];
+  if (!isPlainObject(period)) return;
+  const emp = period[empId];
+  if (!isPlainObject(emp)) return;
+  if (Object.prototype.hasOwnProperty.call(emp, type)) delete emp[type];
+  if (!Object.keys(emp).length) delete period[empId];
+  if (!Object.keys(period).length) delete loanTracker.applied[periodKey];
+}
+
+function applyLoanTrackerToPeriod(pk, options){
+  const opts = options || {};
+  const createEntries = opts.createEntries === true;
+  const force = opts.force === true;
+  const updateMaps = opts.updateMaps === true;
+  const commitCashAdvance = opts.commitCashAdvance === true;
+  const canWriteMaps = createEntries || force || updateMaps;
+  ensureLoanTrackerShape(loanTracker);
+  if (!pk) return;
+  const div = Number(divisor) || 1;
+  if (!getEmployeeList() || !Array.isArray(getEmployeeList())) return;
+  let changed = false;
+
+  const setMapValue = (map, empId, value) => {
+    if (!map || !empId) return;
+    const v = roundToCents(value || 0);
+    if (v > 0) {
+      if ((map[empId] ? roundToCents(map[empId]) : 0) !== v) { map[empId] = v; changed = true; }
+    } else {
+      if (Object.prototype.hasOwnProperty.call(map, empId)) { delete map[empId]; changed = true; }
+    }
+  };
+
+  // Cash Advance (weekly-based)
+  const handlePrincipalWeekly = (empId, type) => {
+    const entry = getLoanTrackerEntry(empId, type);
+    if (!entry) return 0;
+
+    const principal = roundToCents(entry.principal || 0);
+    const weekly = roundToCents(entry.weekly || 0);
+    const shouldRun = (entry.active === true) && (principal > 0) && (weekly > 0);
+    const allowCommit = commitCashAdvance === true;
+    const existingApplied = getLoanTrackerApplied(pk, empId, type);
+    const existingPayment = allowCommit ? getLoanTrackerPayment(pk, empId, type) : null;
+
+    const clearForThisPeriod = () => {
+      if (!allowCommit) return;
+      clearLoanTrackerApplied(pk, empId, type);
+    };
+
+    if (!shouldRun) {
+      if (existingApplied != null) return roundToCents(existingApplied || 0);
+      if (existingPayment) return roundToCents(Number(existingPayment.amount) || 0);
+      clearForThisPeriod();
+      return 0;
+    }
+
+    const paidBefore = sumLoanTrackerAppliedBefore(pk, empId, type);
+    const remainingBefore = roundToCents(principal - paidBefore);
+    if (remainingBefore <= 0) {
+      if (entry.active) { entry.active = false; changed = true; }
+      clearForThisPeriod();
+      return 0;
+    }
+
+    let scheduled = existingApplied;
+    const desired = roundToCents(Math.min(weekly, remainingBefore));
+
+    if (allowCommit && existingPayment && scheduled == null) {
+      const paidAmount = roundToCents(Number(existingPayment.amount) || 0);
+      if (paidAmount > 0) {
+        setLoanTrackerApplied(pk, empId, type, paidAmount);
+        scheduled = paidAmount;
+        changed = true;
+      }
+    }
+
+    if (scheduled == null) {
+      if (!allowCommit) {
+        return roundToCents(desired || 0);
+      }
+      if (desired <= 0) {
+        clearForThisPeriod();
+        return 0;
+      }
+      setLoanTrackerApplied(pk, empId, type, desired);
+      if (!getLoanTrackerPayment(pk, empId, type)) {
+        setLoanTrackerPayment(pk, empId, type, desired);
+      }
+      scheduled = desired;
+      changed = true;
+    } else if (allowCommit) {
+      // If already applied for this period, do not modify (idempotent finalize).
+    }
+
+    if (scheduled == null) return 0;
+
+    return roundToCents(scheduled || 0);
+  };
+
+  // SSS Loans (monthly-based; per-period is monthly ÷ divisor)
+  const handlePrincipalMonthly = (empId, type) => {
+    const entry = getLoanTrackerEntry(empId, type);
+    if (!entry) return 0;
+
+    const principal = roundToCents(entry.principal || 0);
+    const monthly = roundToCents(entry.monthly || 0);
+    const basePerPeriod = (div > 0) ? roundToCents(monthly / div) : roundToCents(monthly);
+    const shouldRun = (entry.active === true) && (principal > 0) && (monthly > 0) && (basePerPeriod > 0);
+
+    const clearForThisPeriod = () => {
+      if (!(createEntries || force)) return;
+      clearLoanTrackerApplied(pk, empId, type);
+    };
+
+    if (!shouldRun) {
+      clearForThisPeriod();
+      return 0;
+    }
+
+    const paidBefore = sumLoanTrackerAppliedBefore(pk, empId, type);
+    const remainingBefore = roundToCents(principal - paidBefore);
+    if (remainingBefore <= 0) {
+      if (entry.active) { entry.active = false; changed = true; }
+      clearForThisPeriod();
+      return 0;
+    }
+
+    const desired = roundToCents(Math.min(basePerPeriod, remainingBefore));
+    if (desired <= 0) {
+      clearForThisPeriod();
+      return 0;
+    }
+
+    let scheduled = getLoanTrackerApplied(pk, empId, type);
+
+    if (scheduled == null || force){
+      if (!createEntries && scheduled == null && !force) {
+        // navigating backwards / initial load: don't create missing entries
+      } else {
+        setLoanTrackerApplied(pk, empId, type, desired);
+        scheduled = desired;
+        changed = true;
+      }
+    } else if (createEntries) {
+      const cur = roundToCents(Number(scheduled) || 0);
+      if (cur !== desired) {
+        setLoanTrackerApplied(pk, empId, type, desired);
+        scheduled = desired;
+        changed = true;
+      }
+    }
+
+    if (scheduled == null) return 0;
+
+    return roundToCents(scheduled || 0);
+  };
+
+  for (const emp of getEmployeeList()){
+    const empId = emp && emp.id;
+    if (!empId) continue;
+
+    // --- SSS (2 types -> combined into the single period field) ---
+    let sssPerPeriod = 0;
+    for (const type of LOAN_TYPES_SSS){
+      sssPerPeriod += handlePrincipalMonthly(empId, type);
+    }
+    // Store as a "raw" value so the deductions table's divisor logic yields the per-period amount
+    const sssRaw = roundToCents(sssPerPeriod * div);
+    if (canWriteMaps) setMapValue(loanSSS, empId, sssRaw);
+
+    // --- Pag-IBIG (monthly only; combined) ---
+    let piMonthly = 0;
+    for (const type of LOAN_TYPES_PI){
+      const entry = getLoanTrackerEntry(empId, type);
+      const monthly = roundToCents(entry && entry.active ? (entry.monthly || 0) : 0);
+      if (monthly > 0) piMonthly += monthly;
+    }
+    if (canWriteMaps) setMapValue(loanPI, empId, roundToCents(piMonthly));
+
+    // --- Cash Advance (principal/weekly/balance) ---
+    const cashPerPeriod = handlePrincipalWeekly(empId, 'vale');
+    if (canWriteMaps) {
+      setMapValue(vale, empId, roundToCents(cashPerPeriod));
+    }
+  }
+
+  if (changed) {
+    try { window.loanTracker = loanTracker; } catch(_){}
+  }
+}
+// === / Loan Tracker ===
+
+
+function findCarryTemplate(map, key, fallbackKey){
+  const keys = sortedPeriodKeys(map);
+  if (!keys.length) return null;
+  let candidate = null;
+  for (const existing of keys){
+    if (comparePeriodKeys(existing, key) <= 0) {
+      candidate = existing;
+    } else {
+      break;
+    }
+  }
+  if (candidate && isPlainObject(map[candidate])) return map[candidate];
+  if (fallbackKey && comparePeriodKeys(fallbackKey, key) <= 0 && isPlainObject(map[fallbackKey])) {
+    return map[fallbackKey];
+  }
+  return null;
+}
+function ensurePeriodData(map, key, template, options){
+  if (!isPlainObject(map)) return {};
+  const allowDefault = !options || options.allowDefault !== false;
+  if (!isPlainObject(map[key])) {
+    let base = {};
+    if (isPlainObject(template)) base = template;
+    else if (allowDefault && isPlainObject(map[PERIOD_DEFAULT_KEY])) base = map[PERIOD_DEFAULT_KEY];
+    map[key] = clonePeriodData(base);
+  }
+  return map[key];
+}
+function updatePeriodLatest(map, key, data, options){
+  if (!isPlainObject(map) || !key) return;
+  const meta = ensurePeriodMeta(map);
+  if (!meta.latestKey || comparePeriodKeys(key, meta.latestKey) >= 0) {
+    meta.latestKey = key;
+    const setDefault = !options || options.setDefault !== false;
+    if (setDefault && isPlainObject(data)) {
+      map[PERIOD_DEFAULT_KEY] = clonePeriodData(data);
+    }
+  }
+}
+function persistPeriodScopedMap(lsKey, map){
+  if (!isPlainObject(map)) return Promise.resolve();
+
+  const bootCloudFirst = !!(typeof __kvBootCloudFirstPeriodKeys !== 'undefined'
+    && __kvBootCloudFirstPeriodKeys
+    && typeof __kvBootCloudFirstPeriodKeys.has === 'function'
+    && __kvBootCloudFirstPeriodKeys.has(lsKey));
+  const userInteracted = !!(typeof window !== 'undefined' && window.__kv_user_interacted === true);
+
+  // Always keep localStorage updated for offline use.
+  ensurePeriodMeta(map);
+
+  // Only bump lastUpdatedAt when this looks like a real user-driven change.
+  // (Prevents a freshly opened empty/stale PC from marking itself "newer" and overwriting cloud.)
+  try {
+    if (!bootCloudFirst || userInteracted) {
+      if (isPlainObject(map.__meta)) map.__meta.lastUpdatedAt = Date.now();
+    }
+  } catch(_){}
+  try { localStorage.setItem(lsKey, JSON.stringify(map)); } catch(e){}
+
+  const writer = (typeof window !== 'undefined' && typeof window.writeKV === 'function')
+    ? window.writeKV
+    : null;
+
+  // Auditor-safe: NEVER write cloud until initial KV hydrate completes.
+  const canCloudWrite = !!(typeof window !== 'undefined' && window.__kv_cloud_ready === true && typeof writer === 'function');
+
+  if (!canCloudWrite) {
+    // For cloud-first keys, don't queue a boot-time flush unless the user already interacted.
+    // This prevents "open PC2" from later flushing placeholders into the cloud.
+    if (bootCloudFirst && !userInteracted) return Promise.resolve();
+
+    // Queue a one-time flush for this key after kv-cloud-ready.
+    try {
+      window.__periodScopedKVPending = window.__periodScopedKVPending || {};
+      window.__periodScopedKVPending[lsKey] = true;
+
+      if (!window.__periodScopedKVPendingHooked) {
+        window.__periodScopedKVPendingHooked = true;
+        window.addEventListener('kv-cloud-ready', () => {
+          (async () => {
+            try {
+              if (!window.__periodScopedKVPending || typeof window.writeKV !== 'function') return;
+              const keys = Object.keys(window.__periodScopedKVPending);
+              window.__periodScopedKVPending = {};
+
+              for (const k of keys) {
+                try {
+                  const raw = localStorage.getItem(k);
+                  if (!raw) continue;
+                  let localVal = null;
+                  try { localVal = JSON.parse(raw); } catch(_){ continue; }
+
+                  // Cloud-first boot protection for Additional Income + Other Deductions:
+                  // only seed cloud if cloud is empty; never overwrite meaningful cloud during boot.
+                  if (typeof window.readKV === 'function' && typeof __kvBootCloudFirstDecision === 'function') {
+                    try {
+                      const cloudVal = await window.readKV(k, null);
+                      const decision = __kvBootCloudFirstDecision(k, localVal, cloudVal);
+                      if (decision === false) continue; // cloud wins
+                      if (decision === true) {
+                        const p0 = window.writeKV(k, localVal);
+                        if (p0 && typeof p0.catch === 'function') p0.catch(err => console.warn('writeKV period map flush failed', err));
+                        continue;
+                      }
+                      // decision === null -> fall through to timestamp checks
+                    } catch(_){}
+                  }
+
+                  // If cloud is newer + meaningful, do not overwrite it.
+                  if (typeof window.readKV === 'function') {
+                    try {
+                      const cloudVal = await window.readKV(k, null);
+                      const cloudHas = (typeof __kvHasMeaningfulPeriodMap === 'function') ? __kvHasMeaningfulPeriodMap(cloudVal) : false;
+                      const localHas = (typeof __kvHasMeaningfulPeriodMap === 'function') ? __kvHasMeaningfulPeriodMap(localVal) : false;
+
+                      const lc = (localVal && localVal.__meta && Number(localVal.__meta.lastUpdatedAt)) || 0;
+                      const rc = (cloudVal && cloudVal.__meta && Number(cloudVal.__meta.lastUpdatedAt)) || 0;
+
+                      if (cloudHas && !localHas) continue;
+                      if (cloudHas && rc && lc && rc > lc) continue;
+                    } catch(_){}
+                  }
+
+                  const p = window.writeKV(k, localVal);
+                  if (p && typeof p.catch === 'function') p.catch(err => console.warn('writeKV period map flush failed', err));
+                } catch(_){}
+              }
+            } catch(_){}
+          })();
+        });
+      }
+    } catch(_){}
+    return Promise.resolve();
+  }
+
+  // Cloud is ready. For cloud-first keys, don't overwrite meaningful cloud on open
+  // unless the user has interacted in this session. Only seed when cloud is empty.
+  if (bootCloudFirst && !userInteracted) {
+    if (typeof window.readKV === 'function' && typeof __kvBootCloudFirstDecision === 'function' && typeof writer === 'function') {
+      return (async () => {
+        try {
+          const cloudVal = await window.readKV(lsKey, null);
+          const decision = __kvBootCloudFirstDecision(lsKey, map, cloudVal);
+          if (decision === true) {
+            const maybe = writer(lsKey, map);
+            if (maybe && typeof maybe.then === 'function') {
+              return maybe.catch(err=>{ console.warn('writeKV persist failed', err); });
+            }
+            return maybe;
+          }
+        } catch(_){}
+        return;
+      })();
+    }
+    return Promise.resolve();
+  }
+
+  // Normal write-through once cloud is ready.
+  if (typeof writer === 'function') {
+    try {
+      const maybe = writer(lsKey, map);
+      if (maybe && typeof maybe.then === 'function') {
+        return maybe.catch(err=>{ console.warn('writeKV persist failed', err); });
+      }
+      return Promise.resolve(maybe);
+    } catch(err){ console.warn('writeKV persist threw', err); }
+  }
+  return Promise.resolve();
+}
+let currentPeriodKey = periodKey();
+var loanTracker = loadLoanTrackerFromStorage();
+try { window.loanTracker = loanTracker; } catch(_){ }
+
+// Prefer KV (kv_store) for Loan Tracker realtime sync (same mechanics as Additional Income).
+// Only fall back to Supabase proper tables if KV/local is empty (prevents overwriting good data).
+(function(){
+  function __loanTrackerHasMeaningfulData(obj){
+    try {
+      obj = ensureLoanTrackerShape(obj);
+      const byEmpCount = obj && obj.byEmp ? Object.keys(obj.byEmp).length : 0;
+      const appliedCount = obj && obj.applied ? Object.keys(obj.applied).length : 0;
+      const paymentCount = obj && obj.paymentsByPeriod ? Object.keys(obj.paymentsByPeriod).length : 0;
+      return (byEmpCount + appliedCount + paymentCount) > 0;
+    } catch(_){ return false; }
+  }
+
+  async function __migrateLocalLoanTrackerToKV(){
+    try {
+      if (!(window && window.__kv_cloud_ready === true)) return;
+      if (typeof window.writeKV !== 'function' || typeof window.readKV !== 'function') return;
+
+      const local = loadLoanTrackerFromStorage();
+      if (!__loanTrackerHasMeaningfulData(local)) return;
+
+      // If cloud is missing/empty, seed it from local to avoid "new PC = empty" data loss.
+      const cloud = await window.readKV(LS_LOAN_TRACKER, null);
+      if (!cloud || !__loanTrackerHasMeaningfulData(cloud)) {
+        local.__meta = local.__meta || {};
+        if (!local.__meta.lastUpdatedAt) local.__meta.lastUpdatedAt = Date.now();
+        await window.writeKV(LS_LOAN_TRACKER, local);
+      }
+    } catch(e){ console.warn('LoanTracker migrate-to-KV failed', e); }
+  }
+
+  const boot = async () => {
+    try {
+      await __migrateLocalLoanTrackerToKV();
+
+      // If KV already hydrated data, DO NOT override it from tables.
+      const localNow = loadLoanTrackerFromStorage();
+      if (__loanTrackerHasMeaningfulData(localNow)) return;
+
+      // Fallback: load from proper loan tables (if you created them), then seed KV for future realtime sync.
+      await loadLoanTrackerFromSupabaseTables();
+      try {
+        if (window && window.__kv_cloud_ready === true && typeof window.writeKV === 'function') {
+          const seeded = loadLoanTrackerFromStorage();
+          if (__loanTrackerHasMeaningfulData(seeded)) await window.writeKV(LS_LOAN_TRACKER, seeded);
+        }
+      } catch(_){}
+      try { setupLoanTablesRealtime(); } catch(_){}
+    } catch(_) {}
+  };
+
+  try {
+    if (window && window.__kv_cloud_ready === true) boot();
+    window.addEventListener('kv-cloud-ready', boot);
+  } catch(_) {}
+})();
+let allLoanSSS = loadPeriodScopedMap(LS_LOAN_SSS);
+let allLoanPI = loadPeriodScopedMap(LS_LOAN_PI);
+let allVale = loadPeriodScopedMap(LS_VALE);
+let allValeWed = loadPeriodScopedMap(LS_VALE_WED);
+let loanSSS = ensurePeriodData(allLoanSSS, currentPeriodKey);
+let loanPI = ensurePeriodData(allLoanPI, currentPeriodKey);
+let vale = ensurePeriodData(allVale, currentPeriodKey);
+let valeWed = ensurePeriodData(allValeWed, currentPeriodKey);
+let periodPersistenceReady = false;
+try {
+  if (typeof window !== 'undefined' && window.__kv_cloud_ready === true) periodPersistenceReady = true;
+} catch(_){}
+let allOtherDeductionsDetails = loadPeriodScopedMap(LS_OTHER_DEDUCTIONS_DETAILS);
+let allOtherDeductionsTotals = loadPeriodScopedMap(LS_OTHER_DEDUCTIONS_TOTAL);
+let otherDeductionsDetails = ensurePeriodData(allOtherDeductionsDetails, currentPeriodKey, null, { allowDefault: false });
+let otherDeductionsTotal = ensurePeriodData(allOtherDeductionsTotals, currentPeriodKey, null, { allowDefault: false });
+let allAdjHrs = JSON.parse(localStorage.getItem(LS_ADJ_HRS) || '{}');
+let adjHrs = isPlainObject(allAdjHrs[currentPeriodKey]) ? allAdjHrs[currentPeriodKey] : {};
+if (!isPlainObject(allAdjHrs[currentPeriodKey])) allAdjHrs[currentPeriodKey] = adjHrs;
+var nightDiffByEmployee = {};
+let allBantay = JSON.parse(localStorage.getItem(LS_BANTAY) || '{}');
+let bantay = allBantay[currentPeriodKey] || {};
+let allAdditionalIncomeDetails = loadPeriodScopedMap(LS_ADDITIONAL_INCOME_DETAILS);
+let allAdditionalIncomeTotals = loadPeriodScopedMap(LS_ADDITIONAL_INCOME_TOTAL);
+let additionalIncomeDetails = ensurePeriodData(allAdditionalIncomeDetails, currentPeriodKey, null, { allowDefault: false });
+let additionalIncomeTotal = ensurePeriodData(allAdditionalIncomeTotals, currentPeriodKey, null, { allowDefault: false });
+
+function persistCurrentOtherDeductions(){
+  if (!isPlainObject(allOtherDeductionsDetails)) allOtherDeductionsDetails = {};
+  if (!isPlainObject(allOtherDeductionsTotals)) allOtherDeductionsTotals = {};
+  if (!isPlainObject(otherDeductionsDetails)) otherDeductionsDetails = {};
+  if (!isPlainObject(otherDeductionsTotal)) otherDeductionsTotal = {};
+  allOtherDeductionsDetails[currentPeriodKey] = otherDeductionsDetails;
+  allOtherDeductionsTotals[currentPeriodKey] = otherDeductionsTotal;
+  updatePeriodLatest(allOtherDeductionsDetails, currentPeriodKey, otherDeductionsDetails, { setDefault: false });
+  updatePeriodLatest(allOtherDeductionsTotals, currentPeriodKey, otherDeductionsTotal, { setDefault: false });
+  const tasks = [
+    persistPeriodScopedMap(LS_OTHER_DEDUCTIONS_DETAILS, allOtherDeductionsDetails),
+    persistPeriodScopedMap(LS_OTHER_DEDUCTIONS_TOTAL, allOtherDeductionsTotals)
+  ];
+  return Promise.all(tasks).catch(err => { console.warn('Other deductions persist failed', err); });
+}
+
+function persistCurrentAdjustmentHours(){
+  if (!isPlainObject(allAdjHrs)) allAdjHrs = {};
+  if (!isPlainObject(adjHrs)) adjHrs = {};
+  allAdjHrs[currentPeriodKey] = adjHrs;
+  updatePeriodLatest(allAdjHrs, currentPeriodKey, adjHrs, { setDefault: false });
+  persistPeriodScopedMap(LS_ADJ_HRS, allAdjHrs);
+}
+
+function persistCurrentAdditionalIncome(){
+  if (!isPlainObject(allAdditionalIncomeDetails)) allAdditionalIncomeDetails = {};
+  if (!isPlainObject(allAdditionalIncomeTotals)) allAdditionalIncomeTotals = {};
+  if (!isPlainObject(additionalIncomeDetails)) additionalIncomeDetails = {};
+  if (!isPlainObject(additionalIncomeTotal)) additionalIncomeTotal = {};
+  allAdditionalIncomeDetails[currentPeriodKey] = additionalIncomeDetails;
+  allAdditionalIncomeTotals[currentPeriodKey] = additionalIncomeTotal;
+  updatePeriodLatest(allAdditionalIncomeDetails, currentPeriodKey, additionalIncomeDetails, { setDefault: false });
+  updatePeriodLatest(allAdditionalIncomeTotals, currentPeriodKey, additionalIncomeTotal, { setDefault: false });
+  const tasks = [
+    persistPeriodScopedMap(LS_ADDITIONAL_INCOME_DETAILS, allAdditionalIncomeDetails),
+    persistPeriodScopedMap(LS_ADDITIONAL_INCOME_TOTAL, allAdditionalIncomeTotals)
+  ];
+  return Promise.all(tasks).catch(err => { console.warn('Additional income persist failed', err); });
+}
+
+function refreshPeriodScopedCachesFromStorage(){
+  allLoanSSS = loadPeriodScopedMap(LS_LOAN_SSS);
+  allLoanPI = loadPeriodScopedMap(LS_LOAN_PI);
+  allVale = loadPeriodScopedMap(LS_VALE);
+  allValeWed = loadPeriodScopedMap(LS_VALE_WED);
+  loanSSS = ensurePeriodData(allLoanSSS, currentPeriodKey);
+  loanPI = ensurePeriodData(allLoanPI, currentPeriodKey);
+  vale = ensurePeriodData(allVale, currentPeriodKey);
+  valeWed = ensurePeriodData(allValeWed, currentPeriodKey);
+  loanTracker = loadLoanTrackerFromStorage();
+  try { window.loanTracker = loanTracker; } catch(_){ }
+  try { applyLoanTrackerToPeriod(currentPeriodKey, { createEntries: false, updateMaps: true }); } catch(_){ }
+  allOtherDeductionsDetails = loadPeriodScopedMap(LS_OTHER_DEDUCTIONS_DETAILS);
+  allOtherDeductionsTotals = loadPeriodScopedMap(LS_OTHER_DEDUCTIONS_TOTAL);
+  otherDeductionsDetails = ensurePeriodData(allOtherDeductionsDetails, currentPeriodKey, null, { allowDefault: false });
+  otherDeductionsTotal = ensurePeriodData(allOtherDeductionsTotals, currentPeriodKey, null, { allowDefault: false });
+  allAdjHrs = JSON.parse(localStorage.getItem(LS_ADJ_HRS) || '{}');
+  adjHrs = isPlainObject(allAdjHrs[currentPeriodKey]) ? allAdjHrs[currentPeriodKey] : {};
+  if (!isPlainObject(allAdjHrs[currentPeriodKey])) allAdjHrs[currentPeriodKey] = adjHrs;
+  allBantay = JSON.parse(localStorage.getItem(LS_BANTAY) || '{}');
+  bantay = allBantay[currentPeriodKey] || {};
+  allAdditionalIncomeDetails = loadPeriodScopedMap(LS_ADDITIONAL_INCOME_DETAILS);
+  allAdditionalIncomeTotals = loadPeriodScopedMap(LS_ADDITIONAL_INCOME_TOTAL);
+  additionalIncomeDetails = ensurePeriodData(allAdditionalIncomeDetails, currentPeriodKey, null, { allowDefault: false });
+  additionalIncomeTotal = ensurePeriodData(allAdditionalIncomeTotals, currentPeriodKey, null, { allowDefault: false });
+  ensureAdditionalIncomeDetailsMap();
+  rebuildAdditionalIncomeTotals();
+  ensureOtherDeductionsDetailsMap();
+  rebuildOtherDeductionsTotals();
+  try {
+    window.loanSSS = loanSSS;
+    window.loanPI = loanPI;
+    window.vale = vale;
+    window.valeWed = valeWed;
+    window.loanTracker = loanTracker;
+  } catch(_){ }
+}
+
+try {
+  if (typeof window !== 'undefined') {
+    window.addEventListener('kv-cloud-ready', () => {
+      periodPersistenceReady = true;
+      refreshPeriodScopedCachesFromStorage();
+      try {
+        if (typeof renderOtherDeductionsTable === 'function') renderOtherDeductionsTable();
+        if (typeof renderAdjustmentHoursTable === 'function') renderAdjustmentHoursTable();
+      } catch (_) {}
+      try {
+        if (typeof renderAdditionalIncomeTable === 'function') renderAdditionalIncomeTable();
+      } catch (_) {}
+    });
+  }
+} catch(_){ }
+if (periodPersistenceReady) {
+  refreshPeriodScopedCachesFromStorage();
+}
+async function saveCurrentPeriodDeductions(){
+  if (!currentPeriodKey) return;
+  allLoanSSS[currentPeriodKey] = loanSSS || {};
+  allLoanPI[currentPeriodKey] = loanPI || {};
+  allVale[currentPeriodKey] = vale || {};
+  allValeWed[currentPeriodKey] = valeWed || {};
+  try {
+    window.loanSSS = loanSSS;
+    window.loanPI = loanPI;
+    window.vale = vale;
+    window.valeWed = valeWed;
+  } catch(e){}
+  if (!periodPersistenceReady) return;
+  updatePeriodLatest(allLoanSSS, currentPeriodKey, loanSSS);
+  updatePeriodLatest(allLoanPI, currentPeriodKey, loanPI);
+  updatePeriodLatest(allVale, currentPeriodKey, vale);
+  updatePeriodLatest(allValeWed, currentPeriodKey, valeWed);
+  const tasks = [
+    persistPeriodScopedMap(LS_LOAN_SSS, allLoanSSS),
+    persistPeriodScopedMap(LS_LOAN_PI, allLoanPI),
+    persistPeriodScopedMap(LS_VALE, allVale),
+    persistPeriodScopedMap(LS_VALE_WED, allValeWed)
+  ];
+  try { await Promise.all(tasks); } catch(_){ }
+}
+saveCurrentPeriodDeductions();
+function syncPeriodScopedData(){
+  const pk = periodKey();
+  if (pk === currentPeriodKey) return false;
+  const prevKey = currentPeriodKey;
+  saveCurrentPeriodDeductions();
+  try { if (typeof window !== 'undefined' && window.__kv_user_interacted === true) persistCurrentAdditionalIncome(); } catch (_) {}
+  const direction = comparePeriodKeys(pk, prevKey);
+  const carryForward = direction >= 0;
+  const tplSSS = carryForward ? findCarryTemplate(allLoanSSS, pk, prevKey) : null;
+  const tplPI = carryForward ? findCarryTemplate(allLoanPI, pk, prevKey) : null;
+  const tplVale = carryForward ? findCarryTemplate(allVale, pk, prevKey) : null;
+  const tplValeWed = carryForward ? findCarryTemplate(allValeWed, pk, prevKey) : null;
+  loanSSS = ensurePeriodData(allLoanSSS, pk, tplSSS, { allowDefault: carryForward });
+  loanPI = ensurePeriodData(allLoanPI, pk, tplPI, { allowDefault: carryForward });
+  vale = ensurePeriodData(allVale, pk, tplVale, { allowDefault: carryForward });
+  valeWed = ensurePeriodData(allValeWed, pk, tplValeWed, { allowDefault: carryForward });
+  try { applyLoanTrackerToPeriod(pk, { createEntries: carryForward, updateMaps: true }); } catch(_){ }
+  try { persistLoanTracker(); } catch(_){ }
+  otherDeductionsDetails = ensurePeriodData(allOtherDeductionsDetails, pk, null, { allowDefault: false });
+  otherDeductionsTotal = ensurePeriodData(allOtherDeductionsTotals, pk, null, { allowDefault: false });
+  if (!isPlainObject(allAdjHrs[pk])) allAdjHrs[pk] = {};
+  adjHrs = allAdjHrs[pk];
+  bantay = allBantay[pk] || {};
+  additionalIncomeDetails = ensurePeriodData(allAdditionalIncomeDetails, pk, null, { allowDefault: false });
+  additionalIncomeTotal = ensurePeriodData(allAdditionalIncomeTotals, pk, null, { allowDefault: false });
+  ensureAdditionalIncomeDetailsMap();
+  rebuildAdditionalIncomeTotals();
+  ensureOtherDeductionsDetailsMap();
+  rebuildOtherDeductionsTotals();
+  currentPeriodKey = pk;
+  try { refreshCurrentDeductionColumnInclusions(); } catch(_){ }
+  try { applyDeductionColumnState(); } catch(_){ }
+  saveCurrentPeriodDeductions();
+  try { if (typeof renderAdditionalIncomeTable === 'function') renderAdditionalIncomeTable(); } catch (_) {}
+  try { if (typeof renderOtherDeductionsTable === 'function') renderOtherDeductionsTable(); } catch (_) {}
+  try { if (typeof renderAdjustmentHoursTable === 'function') renderAdjustmentHoursTable(); } catch (_) {}
+  return true;
+}
+;(async function(){
+  try{
+    let v = await window.readKV(LS_BANTAY);
+    if (!v) {
+      try { v = JSON.parse(localStorage.getItem(LS_BANTAY) || '{}'); } catch(_){ }
+    }
+    if (v && typeof v === 'object') {
+      allBantay = v;
+      bantay = allBantay[currentPeriodKey] || {};
+    }
+    try { localStorage.setItem(LS_BANTAY, JSON.stringify(allBantay)); } catch(_){ }
+    try{ if (typeof renderSssTable==='function') renderSssTable(); }catch(_){ }
+    try { if (typeof window.rebuildReports === 'function') window.rebuildReports(); } catch(_){ }
+  }catch(e){}
+})();
+// Sync the Deductions tab divisor select with the stored divisor value and attach event listener
+if (divisorDedsEl) {
+  divisorDedsEl.value = String(divisor);
+  divisorDedsEl.addEventListener('change', () => {
+    divisor = parseInt(divisorDedsEl.value, 10) || 1;
+    divisorEl.value = String(divisor);
+    localStorage.setItem(LS_DIVISOR, String(divisor));
+    try { applyLoanTrackerToPeriod(currentPeriodKey || periodKey(), { createEntries: false, force: true, updateMaps: true }); } catch(_){ }
+    try { persistLoanTracker(); } catch(_){ }
+    try { saveCurrentPeriodDeductions(); } catch(_){ }
+    calculateAll();
+  });
+}
+
+weekStartEl.addEventListener('input', ()=> localStorage.setItem(LS_WEEKSTART, weekStartEl.value));
+weekEndEl.addEventListener('input', ()=> localStorage.setItem(LS_WEEKEND, weekEndEl.value));
+divisorEl.addEventListener('change', () => {
+  divisor = parseInt(divisorEl.value, 10) || 1;
+  localStorage.setItem(LS_DIVISOR, String(divisor));
+  // Sync the Deductions tab divisor select if it exists
+  if (typeof divisorDedsEl !== 'undefined' && divisorDedsEl) {
+    divisorDedsEl.value = String(divisor);
+  }
+  try { applyLoanTrackerToPeriod(currentPeriodKey || periodKey(), { createEntries: false, force: true, updateMaps: true }); } catch(_){ }
+  try { persistLoanTracker(); } catch(_){ }
+  try { saveCurrentPeriodDeductions(); } catch(_){ }
+  calculateAll();
+});
+function loadEmployees() {
+  const stored = JSON.parse(localStorage.getItem('att_employees_v2') || '{}');
+  let list = Object.keys(stored).filter(id => !(stored[id] && stored[id].active === false)).map(id=>({id, name: stored[id]?.name || ''}));
+  if (list.length === 0) list = [{id:'001', name:'Sample Employee'}];
+  list.sort((a,b)=> (a.name||'').localeCompare(b.name||''));
+  return list;
+}
+function getEmployeeList(){ return loadEmployees(); }
+function getSssTable(){
+  let arr = [];
+  try { arr = JSON.parse(localStorage.getItem(LS_SSS_TABLE) || '[]'); }
+  catch(e){ arr = []; }
+  if (!Array.isArray(arr)) arr = [];
+  arr = arr.map(r=>{
+    const min = Number(r && typeof r.min !== 'undefined' ? r.min : 0) || 0;
+    const max = Number(r && typeof r.max !== 'undefined' ? r.max : 0) || 0;
+    const employee = Number(r && typeof r.employee !== 'undefined' ? r.employee : 0) || 0;
+    const employerRaw = Number(r && typeof r.employer !== 'undefined' ? r.employer : employee);
+    const employer = Number.isFinite(employerRaw) ? employerRaw : employee;
+    return {min, max, employee, employer};
+  }).sort((a,b)=> a.min - b.min);
+  return arr;
+}
+function setSssTable(rows){
+  const clean = Array.isArray(rows) ? rows.map(r => {
+    const min = Number(r && typeof r.min !== 'undefined' ? r.min : 0) || 0;
+    const max = Number(r && typeof r.max !== 'undefined' ? r.max : 0) || 0;
+    const employee = Number(r && typeof r.employee !== 'undefined' ? r.employee : 0) || 0;
+    const employerRaw = Number(r && typeof r.employer !== 'undefined' ? r.employer : employee);
+    const employer = Number.isFinite(employerRaw) ? employerRaw : employee;
+    return { min, max, employee, employer };
+  }) : [];
+  localStorage.setItem(LS_SSS_TABLE, JSON.stringify(clean));
+}
+
+function formatDeductionDisplay(value){
+  const num = Number(value);
+  if (!Number.isFinite(num)) return '-';
+  if (Math.abs(num) < 0.005) return '-';
+  return num.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+function roundToCents(value){
+  const num = Number(value);
+  if (!Number.isFinite(num)) return 0;
+  return Math.round(num * 100) / 100;
+}
+
+function getProjectEntriesSorted(projectMapOverride){
+  const projectMap = projectMapOverride || ((typeof storedProjects !== 'undefined' && storedProjects) || {});
+  return Object.entries(projectMap || {}).sort((a,b)=>{
+    const A = String(a[1]?.name || a[0] || '').toUpperCase();
+    const B = String(b[1]?.name || b[0] || '').toUpperCase();
+    return A.localeCompare(B);
+  });
+}
+
+function resolveProjectIdValue(rawValue, projectMapOverride){
+  const projectMap = projectMapOverride || ((typeof storedProjects !== 'undefined' && storedProjects) || {});
+  const value = String(rawValue || '').trim();
+  if (!value) return '';
+  if (Object.prototype.hasOwnProperty.call(projectMap, value)) return value;
+  const target = value.toLowerCase();
+  const projectEntries = getProjectEntriesSorted(projectMap);
+  const byName = projectEntries.find(([pid, proj]) => String(proj?.name || pid || '').trim().toLowerCase() === target);
+  return byName ? byName[0] : value;
+}
+
+function populateProjectSelectWithActiveOptions(selectEl, currentValue, options = {}){
+  if (!selectEl) return '';
+  const projectMap = options.projectMap || ((typeof storedProjects !== 'undefined' && storedProjects) || {});
+  const noneLabel = options.noneLabel || '(none)';
+  const includeNone = options.includeNone !== false;
+  const resolvedCurrent = resolveProjectIdValue(currentValue, projectMap);
+  const activeEntries = getProjectEntriesSorted(projectMap).filter(([pid, proj]) => !(proj && proj.active === false));
+
+  selectEl.innerHTML = '';
+  if (includeNone) {
+    const opt0 = document.createElement('option');
+    opt0.value = '';
+    opt0.textContent = noneLabel;
+    selectEl.appendChild(opt0);
+  }
+  activeEntries.forEach(([pid, proj]) => {
+    const o = document.createElement('option');
+    o.value = pid;
+    o.textContent = (proj && proj.name) ? proj.name : pid;
+    selectEl.appendChild(o);
+  });
+
+  if (resolvedCurrent && Object.prototype.hasOwnProperty.call(projectMap, resolvedCurrent) && projectMap[resolvedCurrent]?.active === false) {
+    const inactiveOpt = document.createElement('option');
+    inactiveOpt.value = resolvedCurrent;
+    inactiveOpt.textContent = `${projectMap[resolvedCurrent]?.name || resolvedCurrent} (inactive)`;
+    inactiveOpt.selected = true;
+    selectEl.appendChild(inactiveOpt);
+  }
+  selectEl.value = resolvedCurrent || '';
+  return resolvedCurrent;
+}
+
+function formatDeductionInputValue(value){
+  const num = Number(value);
+  if (!Number.isFinite(num)) return '';
+  const rounded = roundToCents(num);
+  return Math.abs(rounded) < 0.005 ? '' : rounded.toFixed(2);
+}
+
+const DEFAULT_ADDITIONAL_INCOME_LABEL = 'Additional Income';
+const CUSTOM_INCOME_TYPE_VALUE = '__custom__';
+
+function sanitizeAdditionalIncomeLabel(value){
+  const label = String(value || '').trim();
+  return label ? label : DEFAULT_ADDITIONAL_INCOME_LABEL;
+}
+
+function sanitizeAdditionalIncomeAmount(value){
+  const num = Number(value);
+  if (!Number.isFinite(num)) return 0;
+  return roundToCents(Math.max(0, num));
+}
+
+function matchIncomeTypeOption(value){
+  const target = String(value || '').trim();
+  if (!target) return '';
+  const options = getIncomeTypeOptions();
+  const lower = target.toLowerCase();
+  for (const option of options) {
+    if (String(option).toLowerCase() === lower) return option;
+  }
+  return '';
+}
+
+function resolveAdditionalIncomeLabel(typeValue, labelValue){
+  const rawLabel = String(labelValue || '').trim();
+  if (rawLabel) return rawLabel;
+  const matched = matchIncomeTypeOption(typeValue);
+  if (matched) return matched;
+  return DEFAULT_ADDITIONAL_INCOME_LABEL;
+}
+
+function normalizeAdditionalIncomeItem(item){
+  const rawLabel = String(item && item.label != null ? item.label : '').trim();
+  const rawType = String(item && item.type != null ? item.type : '').trim();
+  const hasType = !!(item && Object.prototype.hasOwnProperty.call(item, 'type'));
+  const typeMatch = matchIncomeTypeOption(rawType);
+  const labelMatch = matchIncomeTypeOption(rawLabel);
+  let type = '';
+  if (hasType) {
+    if (typeMatch) type = typeMatch;
+    else if (rawType === CUSTOM_INCOME_TYPE_VALUE) type = CUSTOM_INCOME_TYPE_VALUE;
+    else if (labelMatch) type = labelMatch;
+    else type = CUSTOM_INCOME_TYPE_VALUE;
+  } else {
+    type = labelMatch || CUSTOM_INCOME_TYPE_VALUE;
+  }
+  const rawProject = String(item && (item.project != null ? item.project : (item.projectId != null ? item.projectId : ''))).trim();
+  const label = resolveAdditionalIncomeLabel(type, rawLabel);
+  return {
+    type: type || CUSTOM_INCOME_TYPE_VALUE,
+    label,
+    project: rawProject,
+    amount: sanitizeAdditionalIncomeAmount(item && item.amount)
+  };
+}
+
+function getAdditionalIncomeLabel(item){
+  return normalizeAdditionalIncomeItem(item).label;
+}
+
+function normalizeAdditionalIncomeItems(items){
+  if (!Array.isArray(items)) return [];
+  return items.map(item => normalizeAdditionalIncomeItem(item));
+}
+
+function computeAdditionalIncomeTotal(items){
+  if (!Array.isArray(items)) return 0;
+  const total = items.reduce((sum, item) => sum + sanitizeAdditionalIncomeAmount(item && item.amount), 0);
+  return roundToCents(total);
+}
+
+function ensureAdditionalIncomeDetailsMap(){
+  if (!isPlainObject(additionalIncomeDetails)) additionalIncomeDetails = {};
+  Object.keys(additionalIncomeDetails).forEach(empId => {
+    const normalized = normalizeAdditionalIncomeItems(additionalIncomeDetails[empId]);
+    if (normalized.length) {
+      additionalIncomeDetails[empId] = normalized;
+    } else {
+      delete additionalIncomeDetails[empId];
+    }
+  });
+}
+
+function rebuildAdditionalIncomeTotals(){
+  if (!isPlainObject(additionalIncomeTotal)) additionalIncomeTotal = {};
+  additionalIncomeTotal = {};
+  Object.keys(additionalIncomeDetails || {}).forEach(empId => {
+    const total = computeAdditionalIncomeTotal(additionalIncomeDetails[empId]);
+    if (total || (additionalIncomeDetails[empId] && additionalIncomeDetails[empId].length)) {
+      additionalIncomeTotal[empId] = total;
+    }
+  });
+}
+
+function getAdditionalIncomeTotal(empId){
+  if (additionalIncomeTotal && Object.prototype.hasOwnProperty.call(additionalIncomeTotal, empId)) {
+    return Number(additionalIncomeTotal[empId]) || 0;
+  }
+  const total = computeAdditionalIncomeTotal(additionalIncomeDetails ? additionalIncomeDetails[empId] : []);
+  if (total) {
+    if (!additionalIncomeTotal || typeof additionalIncomeTotal !== 'object') additionalIncomeTotal = {};
+    additionalIncomeTotal[empId] = total;
+  }
+  return total;
+}
+
+function updateAdditionalIncomeTotalForEmployee(empId){
+  const total = computeAdditionalIncomeTotal(additionalIncomeDetails ? additionalIncomeDetails[empId] : []);
+  if (!additionalIncomeTotal || typeof additionalIncomeTotal !== 'object') additionalIncomeTotal = {};
+  if (total || (additionalIncomeDetails && additionalIncomeDetails[empId] && additionalIncomeDetails[empId].length)) {
+    additionalIncomeTotal[empId] = total;
+  } else {
+    delete additionalIncomeTotal[empId];
+  }
+  try { updateAdditionalIncomeGrandTotalRow(); } catch (_) {}
+  return total;
+}
+
+const DEFAULT_OTHER_DEDUCTION_LABEL = 'Other Deduction';
+const CUSTOM_DEDUCTION_TYPE_VALUE = 'Custom';
+const CUSTOM_DEDUCTION_TYPE_SELECT_VALUE = '__custom__';
+
+function matchDeductionTypeOption(value){
+  const target = String(value || '').trim();
+  if (!target) return '';
+  const options = getDeductionTypeOptions();
+  const lower = target.toLowerCase();
+  for (const option of options) {
+    if (String(option).toLowerCase() === lower) return option;
+  }
+  return '';
+}
+
+function resolveOtherDeductionLabel(typeValue, labelValue){
+  const rawLabel = String(labelValue || '').trim();
+  if (rawLabel) return rawLabel;
+  const matched = matchDeductionTypeOption(typeValue);
+  if (matched) return matched;
+  return DEFAULT_OTHER_DEDUCTION_LABEL;
+}
+
+function sanitizeOtherDeductionLabel(value){
+  return resolveOtherDeductionLabel(CUSTOM_DEDUCTION_TYPE_VALUE, value);
+}
+
+function normalizeOtherDeductionItem(item){
+  const rawLabel = String(item && item.label != null ? item.label : '').trim();
+  const rawType = String(item && item.type != null ? item.type : '').trim();
+  const hasType = !!(item && Object.prototype.hasOwnProperty.call(item, 'type'));
+  const typeMatch = matchDeductionTypeOption(rawType);
+  const labelMatch = matchDeductionTypeOption(rawLabel);
+  let type = '';
+  if (hasType) {
+    if (typeMatch) type = typeMatch;
+    else if (rawType === CUSTOM_DEDUCTION_TYPE_VALUE || rawType === CUSTOM_DEDUCTION_TYPE_SELECT_VALUE) type = CUSTOM_DEDUCTION_TYPE_VALUE;
+    else if (labelMatch) type = labelMatch;
+    else type = CUSTOM_DEDUCTION_TYPE_VALUE;
+  } else {
+    type = labelMatch || CUSTOM_DEDUCTION_TYPE_VALUE;
+  }
+  const label = resolveOtherDeductionLabel(type, rawLabel);
+  return {
+    type: type || CUSTOM_DEDUCTION_TYPE_VALUE,
+    label,
+    amount: sanitizeOtherDeductionAmount(item && item.amount)
+  };
+}
+
+function getOtherDeductionLabel(item){
+  return normalizeOtherDeductionItem(item).label;
+}
+
+function sanitizeOtherDeductionAmount(value){
+  const num = Number(value);
+  if (!Number.isFinite(num)) return 0;
+  return roundToCents(Math.max(0, num));
+}
+
+function normalizeOtherDeductionItems(items){
+  if (!Array.isArray(items)) return [];
+  return items.map(item => normalizeOtherDeductionItem(item));
+}
+
+function computeOtherDeductionsTotal(items){
+  if (!Array.isArray(items)) return 0;
+  const total = items.reduce((sum, item) => sum + sanitizeOtherDeductionAmount(item && item.amount), 0);
+  return roundToCents(total);
+}
+
+function ensureOtherDeductionsDetailsMap(){
+  if (!isPlainObject(otherDeductionsDetails)) otherDeductionsDetails = {};
+  Object.keys(otherDeductionsDetails).forEach(empId => {
+    const normalized = normalizeOtherDeductionItems(otherDeductionsDetails[empId]);
+    if (normalized.length) {
+      otherDeductionsDetails[empId] = normalized;
+    } else {
+      delete otherDeductionsDetails[empId];
+    }
+  });
+}
+
+function rebuildOtherDeductionsTotals(){
+  if (!isPlainObject(otherDeductionsTotal)) otherDeductionsTotal = {};
+  otherDeductionsTotal = {};
+  Object.keys(otherDeductionsDetails || {}).forEach(empId => {
+    const total = computeOtherDeductionsTotal(otherDeductionsDetails[empId]);
+    if (total || (otherDeductionsDetails[empId] && otherDeductionsDetails[empId].length)) {
+      otherDeductionsTotal[empId] = total;
+    }
+  });
+}
+
+function getOtherDeductionsTotal(empId){
+  if (otherDeductionsTotal && Object.prototype.hasOwnProperty.call(otherDeductionsTotal, empId)) {
+    return Number(otherDeductionsTotal[empId]) || 0;
+  }
+  const total = computeOtherDeductionsTotal(otherDeductionsDetails ? otherDeductionsDetails[empId] : []);
+  if (total) {
+    if (!otherDeductionsTotal || typeof otherDeductionsTotal !== 'object') otherDeductionsTotal = {};
+    otherDeductionsTotal[empId] = total;
+  }
+  return total;
+}
+
+function updateOtherDeductionsTotalForEmployee(empId){
+  const total = computeOtherDeductionsTotal(otherDeductionsDetails ? otherDeductionsDetails[empId] : []);
+  if (!otherDeductionsTotal || typeof otherDeductionsTotal !== 'object') otherDeductionsTotal = {};
+  if (total || (otherDeductionsDetails && otherDeductionsDetails[empId] && otherDeductionsDetails[empId].length)) {
+    otherDeductionsTotal[empId] = total;
+  } else {
+    delete otherDeductionsTotal[empId];
+  }
+  try { updateOtherDeductionsGrandTotalRow(); } catch (_) {}
+  return total;
+}
+
+function getOtherDeductionsDetailsForEmployee(empId){
+  if (!empId) return [];
+  const items = otherDeductionsDetails && otherDeductionsDetails[empId];
+  return Array.isArray(items) ? items.map(item => normalizeOtherDeductionItem(item)) : [];
+}
+
+function migrateLegacyAdjustmentsToOtherDeductions(){
+  if (!LS_ADJ_LEGACY) return;
+  let legacy = {};
+  try { legacy = JSON.parse(localStorage.getItem(LS_ADJ_LEGACY) || '{}'); }
+  catch (e) { legacy = {}; }
+  if (!isPlainObject(legacy)) return;
+  const hasExisting = Object.keys(allOtherDeductionsDetails || {}).some(
+    key => key !== PERIOD_META_KEY && key !== PERIOD_DEFAULT_KEY
+  );
+  if (hasExisting) return;
+  let migrated = false;
+  Object.keys(legacy).forEach(periodKey => {
+    const periodMap = legacy[periodKey];
+    if (!isPlainObject(periodMap)) return;
+    const next = {};
+    Object.keys(periodMap).forEach(empId => {
+      const val = Number(periodMap[empId]) || 0;
+      if (val < 0) {
+        next[empId] = [{ label: DEFAULT_OTHER_DEDUCTION_LABEL, amount: roundToCents(Math.abs(val)) }];
+      }
+    });
+    if (Object.keys(next).length) {
+      allOtherDeductionsDetails[periodKey] = next;
+      migrated = true;
+    }
+  });
+  if (!migrated) return;
+  ensurePeriodMeta(allOtherDeductionsDetails);
+  Object.keys(allOtherDeductionsDetails).forEach(periodKey => {
+    if (periodKey === PERIOD_META_KEY || periodKey === PERIOD_DEFAULT_KEY) return;
+    const details = allOtherDeductionsDetails[periodKey];
+    if (!isPlainObject(details)) return;
+    const totals = {};
+    Object.keys(details).forEach(empId => {
+      const total = computeOtherDeductionsTotal(details[empId]);
+      if (total || (details[empId] && details[empId].length)) {
+        totals[empId] = total;
+      }
+    });
+    allOtherDeductionsTotals[periodKey] = totals;
+  });
+  persistPeriodScopedMap(LS_OTHER_DEDUCTIONS_DETAILS, allOtherDeductionsDetails);
+  persistPeriodScopedMap(LS_OTHER_DEDUCTIONS_TOTAL, allOtherDeductionsTotals);
+}
+
+migrateLegacyAdjustmentsToOtherDeductions();
+
+const DEDUCTION_COLUMN_KEYS = ['pagibig','philhealth','sss','loanSSS','loanPI','vale','adjustments','valeWed','total'];
+const DEDUCTION_EDITABLE_KEYS = new Set(['valeWed']); // SSS Loan, Pag-IBIG Loan, and Account are managed in Loan Tracker
+const DEDUCTION_DATASET_SUFFIX = {
+  pagibig: 'Pagibig',
+  philhealth: 'Philhealth',
+  sss: 'Sss',
+  loanSSS: 'LoanSss',
+  loanPI: 'LoanPi',
+  vale: 'Vale',
+  adjustments: 'OtherDeductions',
+  valeWed: 'ValeWed',
+  total: 'Total'
+};
+const DEDUCTION_COLUMN_KEY_SET = new Set(DEDUCTION_COLUMN_KEYS);
+const LS_DEDUCTION_COLUMN_VISIBILITY = 'deductionColumnVisibility';
+const DEDUCTION_DEFAULT_PERIOD_KEY = '__default';
+const DEDUCTION_INCLUDE_ALL_FLAG = '__includeAll';
+
+function sanitizeDeductionVisibilityObject(obj){
+  const clean = {};
+  if (!obj || typeof obj !== 'object') return clean;
+  const includeAllExplicit = obj && obj[DEDUCTION_INCLUDE_ALL_FLAG] === true;
+  let hasExplicitFalse = false;
+  DEDUCTION_COLUMN_KEYS.forEach(function(key){
+    if (obj[key] === false) {
+      clean[key] = false;
+      hasExplicitFalse = true;
+    }
+  });
+  if (!hasExplicitFalse && includeAllExplicit) {
+    clean[DEDUCTION_INCLUDE_ALL_FLAG] = true;
+  }
+  return clean;
+}
+
+function normalizeDeductionPeriodKey(rawKey){
+  if (typeof rawKey !== 'string') return DEDUCTION_DEFAULT_PERIOD_KEY;
+  const trimmed = rawKey.trim();
+  if (!trimmed || trimmed === '_') return DEDUCTION_DEFAULT_PERIOD_KEY;
+  return trimmed;
+}
+
+function activeDeductionPeriodKey(){
+  const raw = (typeof currentPeriodKey === 'string' && currentPeriodKey) ? currentPeriodKey : '';
+  const fallback = (typeof periodKey === 'function') ? periodKey() : '';
+  return normalizeDeductionPeriodKey(raw || fallback || '');
+}
+
+function getStoredDeductionInclusionsForPeriod(period){
+  const key = normalizeDeductionPeriodKey(period);
+  if (deductionColumnVisibilityByPeriod[key]) {
+    return Object.assign({}, deductionColumnVisibilityByPeriod[key]);
+  }
+  return {};
+}
+
+let deductionColumnVisibilityByPeriod = {};
+try {
+  const stored = localStorage.getItem(LS_DEDUCTION_COLUMN_VISIBILITY);
+  if (stored) {
+    const parsed = JSON.parse(stored);
+    if (parsed && typeof parsed === 'object') {
+      const keys = Object.keys(parsed);
+      const legacyFormat = keys.some(key => DEDUCTION_COLUMN_KEY_SET.has(key));
+      if (legacyFormat) {
+        const legacy = sanitizeDeductionVisibilityObject(parsed);
+        if (Object.keys(legacy).length > 0) {
+          deductionColumnVisibilityByPeriod[DEDUCTION_DEFAULT_PERIOD_KEY] = legacy;
+        }
+      } else {
+        keys.forEach(function(key){
+          const clean = sanitizeDeductionVisibilityObject(parsed[key]);
+          if (Object.keys(clean).length > 0) {
+            deductionColumnVisibilityByPeriod[normalizeDeductionPeriodKey(key)] = clean;
+          }
+        });
+      }
+    }
+  }
+} catch (err) { deductionColumnVisibilityByPeriod = {}; }
+
+let deductionColumnInclusions = getStoredDeductionInclusionsForPeriod(activeDeductionPeriodKey());
+
+function refreshCurrentDeductionColumnInclusions(){
+  deductionColumnInclusions = getStoredDeductionInclusionsForPeriod(activeDeductionPeriodKey());
+}
+
+function isDeductionColumnIncluded(key){
+  if (!key) return true;
+  return !deductionColumnInclusions || deductionColumnInclusions[key] !== false;
+}
+
+function persistDeductionColumnInclusions(){
+  try {
+    const periodKeyForStore = activeDeductionPeriodKey();
+    let cleanCurrent = sanitizeDeductionVisibilityObject(deductionColumnInclusions);
+    const keys = Object.keys(cleanCurrent);
+    const hasColumnOverrides = keys.some(function(key){ return key !== DEDUCTION_INCLUDE_ALL_FLAG; });
+
+    if (!hasColumnOverrides && periodKeyForStore !== DEDUCTION_DEFAULT_PERIOD_KEY) {
+      cleanCurrent = { [DEDUCTION_INCLUDE_ALL_FLAG]: true };
+    }
+
+    deductionColumnInclusions = Object.assign({}, cleanCurrent);
+
+    if (Object.keys(cleanCurrent).length === 0) {
+      delete deductionColumnVisibilityByPeriod[periodKeyForStore];
+    } else {
+      deductionColumnVisibilityByPeriod[periodKeyForStore] = Object.assign({}, cleanCurrent);
+    }
+    const payload = {};
+    Object.keys(deductionColumnVisibilityByPeriod).forEach(function(key){
+      const clean = sanitizeDeductionVisibilityObject(deductionColumnVisibilityByPeriod[key]);
+      if (Object.keys(clean).length > 0) {
+        payload[key] = clean;
+      }
+    });
+    if (Object.keys(payload).length === 0) {
+      localStorage.removeItem(LS_DEDUCTION_COLUMN_VISIBILITY);
+    } else {
+      localStorage.setItem(LS_DEDUCTION_COLUMN_VISIBILITY, JSON.stringify(payload));
+    }
+  } catch (err) {}
+}
+
+function computeEffectiveDeductionValues(rawValues){
+  const effective = {};
+  let runningTotal = 0;
+  DEDUCTION_COLUMN_KEYS.forEach(function(key){
+    if (key === 'total') return;
+    const rawSource = rawValues && Object.prototype.hasOwnProperty.call(rawValues, key) ? Number(rawValues[key]) : 0;
+    const raw = Number.isFinite(rawSource) ? roundToCents(rawSource) : 0;
+    const include = isDeductionColumnIncluded(key);
+    const value = include ? raw : 0;
+    effective[key] = value;
+    runningTotal += value;
+  });
+  const includeTotal = isDeductionColumnIncluded('total');
+  effective.total = includeTotal ? roundToCents(runningTotal) : 0;
+  return effective;
+}
+
+function deductionDatasetKey(key, type){
+  if (!key || !DEDUCTION_DATASET_SUFFIX[key]) return null;
+  const suffix = DEDUCTION_DATASET_SUFFIX[key];
+  const normalized = (type === 'raw') ? 'Raw' : 'Effective';
+  return `deduction${suffix}${normalized}`;
+}
+
+function setRowDeductionDataset(tr, key, rawVal, effectiveVal){
+  if (!tr) return;
+  const rawKey = deductionDatasetKey(key, 'raw');
+  const effectiveKey = deductionDatasetKey(key, 'effective');
+  if (!rawKey || !effectiveKey) return;
+  try {
+    tr.dataset[rawKey] = rawVal;
+    tr.dataset[effectiveKey] = effectiveVal;
+  } catch (_) {}
+}
+
+function readRowDeductionDataset(tr, key, type){
+  if (!tr || !tr.dataset) return null;
+  const dataKey = deductionDatasetKey(key, type);
+  if (!dataKey) return null;
+  const value = tr.dataset[dataKey];
+  return value == null ? null : value;
+}
+
+function updateDeductionCellDisplay(cell, raw, effective, included){
+  if (!cell) return;
+  const cleanRaw = Number.isFinite(raw) ? roundToCents(raw) : 0;
+  const cleanEffective = Number.isFinite(effective) ? roundToCents(effective) : 0;
+  cell.setAttribute('data-raw', cleanRaw);
+  cell.setAttribute('data-effective', cleanEffective);
+  const input = cell.querySelector('input.deduction-input');
+  if (!input) {
+    if (cell.tagName === 'TD' || cell.tagName === 'TH') {
+      cell.textContent = formatDeductionDisplay(cleanEffective);
+    }
+    if (!included && Math.abs(cleanRaw) > 0.004) {
+      cell.classList.add('deduction-excluded');
+      cell.setAttribute('title', `Excluded (was ${cleanRaw.toFixed(2)})`);
+    } else {
+      cell.classList.remove('deduction-excluded');
+      cell.removeAttribute('title');
+    }
+    return;
+  }
+  try {
+    input.dataset.effectiveValue = cleanEffective.toFixed(2);
+    input.dataset.perPeriodValue = cleanRaw.toFixed(2);
+  } catch (_) {}
+  if (input) {
+    if (!included) {
+      try { input.disabled = true; } catch (_) {}
+      input.setAttribute('aria-disabled', 'true');
+      input.tabIndex = -1;
+    } else {
+      try { input.disabled = false; } catch (_) {}
+      input.removeAttribute('aria-disabled');
+      input.tabIndex = 0;
+    }
+  }
+
+  if (!included && Math.abs(cleanRaw) > 0.004) {
+    cell.classList.add('deduction-excluded');
+    cell.setAttribute('title', `Excluded (was ${cleanRaw.toFixed(2)})`);
+    input.classList.add('deduction-excluded');
+    input.setAttribute('title', `Excluded (was ${cleanRaw.toFixed(2)})`);
+  } else {
+    cell.classList.remove('deduction-excluded');
+    cell.removeAttribute('title');
+    input.classList.remove('deduction-excluded');
+    input.removeAttribute('title');
+  }
+}
+
+function applyDeductionColumnState(){
+  try { refreshCurrentDeductionColumnInclusions(); } catch(_){ }
+  const toggles = document.querySelectorAll('#deductionColumnToggles input[data-col]');
+  toggles.forEach(function(input){
+    const col = input.getAttribute('data-col');
+    if (!col) return;
+    input.checked = isDeductionColumnIncluded(col);
+  });
+
+  const table = document.getElementById('deductionsTable');
+  if (!table) return;
+
+  const rows = table.querySelectorAll('tbody tr, tfoot tr');
+  rows.forEach(function(tr){
+    const rawValues = {};
+    DEDUCTION_COLUMN_KEYS.forEach(function(key){
+      if (key === 'total') return;
+      const cell = tr.querySelector(`[data-col="${key}"]`);
+      if (!cell) { rawValues[key] = 0; return; }
+      let raw = Number(cell.getAttribute('data-raw'));
+      if (!Number.isFinite(raw)) {
+        raw = Number(cell.dataset.rawValue);
+      }
+      if (!Number.isFinite(raw)) {
+        const parsed = parseFloat((cell.textContent || '').replace(/,/g,''));
+        raw = Number.isFinite(parsed) ? parsed : 0;
+      }
+      rawValues[key] = roundToCents(raw);
+    });
+    const rawTotal = Object.keys(rawValues).reduce(function(sum, key){ return sum + (key === 'total' ? 0 : Number(rawValues[key]) || 0); }, 0);
+    rawValues.total = roundToCents(rawTotal);
+    const effectiveValues = computeEffectiveDeductionValues(rawValues);
+    DEDUCTION_COLUMN_KEYS.forEach(function(key){
+      const cell = tr.querySelector(`[data-col="${key}"]`);
+      if (!cell) return;
+      const raw = roundToCents(Number(rawValues[key]) || 0);
+      const effective = roundToCents(Number(effectiveValues[key]) || 0);
+      updateDeductionCellDisplay(cell, raw, effective, isDeductionColumnIncluded(key));
+    });
+  });
+}
+
+
+function formatLoanTrackerNumInput(value){
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) return '';
+  return roundToCents(n).toFixed(2);
+}
+function renderLoanTrackerTable(){
+  const table = document.getElementById('loanTrackerTable');
+  if (!table) return;
+  const tbody = table.querySelector('tbody');
+  if (!tbody) return;
+  const pk = currentPeriodKey || periodKey();
+  const div = Number(divisor) || 1;
+  const searchEl = document.getElementById('loanTrackerSearch');
+  const activeOnlyEl = document.getElementById('loanTrackerActiveOnly');
+  const searchNeedle = ((searchEl && searchEl.value) ? String(searchEl.value) : '').trim().toLowerCase();
+  const activeOnly = !!(activeOnlyEl && activeOnlyEl.checked);
+  tbody.innerHTML = '';
+
+  (getEmployeeList() || []).forEach(emp => {
+    if (!emp || !emp.id) return;
+    const empId = String(emp.id);
+    const empName = String(emp.name || '');
+    const matchesSearch = !searchNeedle || empId.toLowerCase().includes(searchNeedle) || empName.toLowerCase().includes(searchNeedle);
+    if (!matchesSearch) return;
+
+    const hasAnyActiveLoan = LOAN_TYPES_SSS.concat(LOAN_TYPES_PI, ['vale']).some(type => {
+      const entry = getLoanTrackerEntry(empId, type);
+      return !!(entry && entry.active);
+    });
+    if (activeOnly && !hasAnyActiveLoan) return;
+
+    const tr = document.createElement('tr');
+
+    const tdId = document.createElement('td'); tdId.textContent = empId; tr.appendChild(tdId);
+    const tdName = document.createElement('td'); tdName.textContent = empName; tr.appendChild(tdName);
+
+    const addPrincipalMonthlyCells = (type) => {
+      const entry = getLoanTrackerEntry(empId, type) || { principal: 0, monthly: 0, active: false };
+      const principal = roundToCents(entry.principal || 0);
+      const monthly = roundToCents(entry.monthly || 0);
+
+      const basePer = (entry.active && monthly > 0) ? roundToCents((div || 1) > 0 ? (monthly / (div || 1)) : monthly) : 0;
+      const paidBefore = sumLoanTrackerAppliedBefore(pk, empId, type);
+      const remainingBefore = roundToCents(principal - paidBefore);
+      const desired = (entry.active && basePer > 0 && remainingBefore > 0) ? roundToCents(Math.min(basePer, remainingBefore)) : 0;
+
+      const scheduled = getLoanTrackerApplied(pk, empId, type);
+      const perPeriod = scheduled != null ? roundToCents(scheduled || 0) : desired;
+      const bal = loanTrackerRemaining(pk, empId, type);
+
+      const tdPrincipal = document.createElement('td');
+      const inPrincipal = document.createElement('input');
+      inPrincipal.type = 'number'; inPrincipal.step = '0.01'; inPrincipal.min = '0';
+      inPrincipal.value = formatLoanTrackerNumInput(principal);
+      inPrincipal.dataset.empId = empId;
+      inPrincipal.dataset.loanType = type;
+      inPrincipal.dataset.field = 'principal';
+      inPrincipal.setAttribute('inputmode', 'decimal');
+      tdPrincipal.appendChild(inPrincipal);
+      tr.appendChild(tdPrincipal);
+
+      const tdMonthly = document.createElement('td');
+      const inMonthly = document.createElement('input');
+      inMonthly.type = 'number'; inMonthly.step = '0.01'; inMonthly.min = '0';
+      inMonthly.value = formatLoanTrackerNumInput(monthly);
+      inMonthly.dataset.empId = empId;
+      inMonthly.dataset.loanType = type;
+      inMonthly.dataset.field = 'monthly';
+      inMonthly.setAttribute('inputmode', 'decimal');
+      tdMonthly.appendChild(inMonthly);
+      tr.appendChild(tdMonthly);
+
+      const tdPer = document.createElement('td');
+      tdPer.classList.add('num');
+      tdPer.textContent = formatDeductionDisplay(perPeriod);
+      tdPer.title = 'Monthly ÷ Divisor (capped by remaining balance)';
+      tr.appendChild(tdPer);
+
+      const tdBal = document.createElement('td');
+      tdBal.classList.add('num','balance-cell');
+      tdBal.textContent = formatDeductionDisplay(bal);
+      tr.appendChild(tdBal);
+
+      const tdActive = document.createElement('td');
+      const chk = document.createElement('input');
+      chk.type = 'checkbox';
+      chk.checked = !!entry.active;
+      chk.dataset.empId = empId;
+      chk.dataset.loanType = type;
+      chk.dataset.field = 'active';
+      tdActive.appendChild(chk);
+      tr.appendChild(tdActive);
+    };
+
+    const addPrincipalWeeklyCells = (type) => {
+      const entry = getLoanTrackerEntry(empId, type) || { principal: 0, weekly: 0, active: false };
+      const principal = roundToCents(entry.principal || 0);
+      const weekly = roundToCents(entry.weekly || 0);
+      const paidBefore = sumLoanTrackerAppliedBefore(pk, empId, type);
+      const remainingBefore = roundToCents(principal - paidBefore);
+      const scheduled = getLoanTrackerApplied(pk, empId, type);
+      const currentDeduction = (scheduled != null)
+        ? roundToCents(Number(scheduled) || 0)
+        : ((entry.active && weekly > 0 && remainingBefore > 0)
+          ? roundToCents(Math.min(weekly, remainingBefore))
+          : 0);
+      const bal = roundToCents(Math.max(0, remainingBefore - currentDeduction));
+
+      const tdPrincipal = document.createElement('td');
+      const inPrincipal = document.createElement('input');
+      inPrincipal.type = 'number'; inPrincipal.step = '0.01'; inPrincipal.min = '0';
+      inPrincipal.value = formatLoanTrackerNumInput(principal);
+      inPrincipal.dataset.empId = empId;
+      inPrincipal.dataset.loanType = type;
+      inPrincipal.dataset.field = 'principal';
+      inPrincipal.setAttribute('inputmode', 'decimal');
+      tdPrincipal.appendChild(inPrincipal);
+      tr.appendChild(tdPrincipal);
+
+      const tdWeekly = document.createElement('td');
+      const inWeekly = document.createElement('input');
+      inWeekly.type = 'number'; inWeekly.step = '0.01'; inWeekly.min = '0';
+      inWeekly.value = formatLoanTrackerNumInput(weekly);
+      inWeekly.dataset.empId = empId;
+      inWeekly.dataset.loanType = type;
+      inWeekly.dataset.field = 'weekly';
+      inWeekly.setAttribute('inputmode', 'decimal');
+      tdWeekly.appendChild(inWeekly);
+      tr.appendChild(tdWeekly);
+
+      const tdBal = document.createElement('td');
+      tdBal.classList.add('num','balance-cell');
+      tdBal.textContent = formatDeductionDisplay(bal);
+      tr.appendChild(tdBal);
+
+      const tdActive = document.createElement('td');
+      const chk = document.createElement('input');
+      chk.type = 'checkbox';
+      chk.checked = !!entry.active;
+      chk.dataset.empId = empId;
+      chk.dataset.loanType = type;
+      chk.dataset.field = 'active';
+      tdActive.appendChild(chk);
+      tr.appendChild(tdActive);
+    };
+
+    const addPagibigMonthlyCells = (type) => {
+      const entry = getLoanTrackerEntry(empId, type) || { monthly: 0, active: false };
+      const monthly = roundToCents(entry.monthly || 0);
+      const perPeriod = (entry.active && monthly > 0) ? roundToCents(monthly / (div || 1)) : 0;
+
+      const tdMonthly = document.createElement('td');
+      const inMonthly = document.createElement('input');
+      inMonthly.type = 'number'; inMonthly.step = '0.01'; inMonthly.min = '0';
+      inMonthly.value = formatLoanTrackerNumInput(monthly);
+      inMonthly.dataset.empId = empId;
+      inMonthly.dataset.loanType = type;
+      inMonthly.dataset.field = 'monthly';
+      inMonthly.setAttribute('inputmode', 'decimal');
+      tdMonthly.appendChild(inMonthly);
+      tr.appendChild(tdMonthly);
+
+      const tdPer = document.createElement('td');
+      tdPer.classList.add('num');
+      tdPer.textContent = formatDeductionDisplay(perPeriod);
+      tdPer.title = 'Monthly ÷ Divisor';
+      tr.appendChild(tdPer);
+
+      const tdActive = document.createElement('td');
+      const chk = document.createElement('input');
+      chk.type = 'checkbox';
+      chk.checked = !!entry.active;
+      chk.dataset.empId = empId;
+      chk.dataset.loanType = type;
+      chk.dataset.field = 'active';
+      tdActive.appendChild(chk);
+      tr.appendChild(tdActive);
+    };
+
+    // SSS (monthly-based, 2 types)
+    addPrincipalMonthlyCells('loanSSS_salary');
+    addPrincipalMonthlyCells('loanSSS_calamity');
+
+    // Pag-IBIG (monthly only, 2 types)
+    addPagibigMonthlyCells('loanPI_salary');
+    addPagibigMonthlyCells('loanPI_calamity');
+
+    // Cash Advance (weekly-based)
+    addPrincipalWeeklyCells('vale');
+
+    tbody.appendChild(tr);
+  });
+  try { setMoneyChangerLockedUI(isSelectedPeriodLocked()); } catch (_) {}
+}
+
+const loanTrackerRefresh = (() => {
+  let timer = null;
+  const statusEl = () => document.getElementById('loanTrackerSaveStatus');
+  const setStatus = (text, cls) => {
+    const el = statusEl();
+    if (!el) return;
+    el.textContent = text;
+    el.classList.remove('saved');
+    el.classList.remove('error');
+    if (cls) el.classList.add(cls);
+  };
+  const run = async (opts) => {
+    timer = null;
+    try {
+      const baseOpts = opts || { createEntries: true };
+      baseOpts.updateMaps = true;
+      applyLoanTrackerToPeriod(currentPeriodKey || periodKey(), baseOpts);
+    } catch(_) {}
+    try { saveCurrentPeriodDeductions(); } catch(_) {}
+    try { await persistLoanTracker(); setStatus('Saved locally', 'saved'); } catch(e){ setStatus('Save failed', 'error'); }
+    try { calculateAll(); } catch(_) {}
+    try { renderLoanTrackerTable(); } catch(_) {}
+  };
+  return {
+    schedule(opts){
+      setStatus('Updating…');
+      if (timer) window.clearTimeout(timer);
+      timer = window.setTimeout(() => run(opts), 350);
+    },
+    flush(opts){
+      if (timer) { window.clearTimeout(timer); timer = null; }
+      return run(opts);
+    }
+  };
+})();
+
+function applyLoanTrackerFieldChange(el){
+  if (!el) return false;
+  if (el.id === 'applyLoanTrackerBtn') return false;
+  if (el.id === 'recalcLoanTrackerBtn') return false;
+  if (!el.closest || !el.closest('#loanTrackerTable')) return false;
+  const empId = el.dataset.empId;
+  const type = el.dataset.loanType;
+  const field = el.dataset.field;
+  if (!empId || !type || !field) return false;
+  const entry = getLoanTrackerEntry(empId, type);
+  if (!entry) return false;
+
+  if (field === 'active') {
+    entry.active = !!el.checked;
+  } else if (field === 'principal') {
+    entry.principal = roundToCents(Number(el.value) || 0);
+  } else if (field === 'weekly') {
+    entry.weekly = roundToCents(Number(el.value) || 0);
+  } else if (field === 'monthly') {
+    entry.monthly = roundToCents(Number(el.value) || 0);
+  } else {
+    return false;
+  }
+
+  if (field === 'active') {
+    loanTrackerRefresh.flush({ createEntries: true });
+  } else {
+    loanTrackerRefresh.schedule({ createEntries: true });
+  }
+  return true;
+}
+
+document.addEventListener('input', function(ev){
+  const el = ev && ev.target;
+  if (!el) return;
+  if (!el.closest || !el.closest('#loanTrackerTable')) return;
+  if (el.dataset && (el.dataset.field === 'principal' || el.dataset.field === 'weekly' || el.dataset.field === 'monthly')) {
+    applyLoanTrackerFieldChange(el);
+  }
+});
+
+document.addEventListener('change', function(ev){
+  const el = ev && ev.target;
+  if (!el) return;
+  if (el.id === 'loanTrackerActiveOnly') return;
+  applyLoanTrackerFieldChange(el);
+});
+
+document.addEventListener('click', function(ev){
+  const el = ev && ev.target;
+  if (!el) return;
+  if (el.id === 'applyLoanTrackerBtn') {
+    loanTrackerRefresh.flush({ createEntries: true });
+  }
+  if (el.id === 'recalcLoanTrackerBtn') {
+    loanTrackerRefresh.flush({ createEntries: true, force: true });
+  }
+});
+
+document.addEventListener('input', function(ev){
+  const el = ev && ev.target;
+  if (!el || el.id !== 'loanTrackerSearch') return;
+  renderLoanTrackerTable();
+});
+
+document.addEventListener('change', function(ev){
+  const el = ev && ev.target;
+  if (!el || el.id !== 'loanTrackerActiveOnly') return;
+  renderLoanTrackerTable();
+});
+
+function renderDeductionsTable(){
+  syncPeriodScopedData();
+  const dtbody = document.querySelector('#deductionsTable tbody');
+  if (!dtbody) return;
+  const isLocked = (typeof isSelectedPeriodLocked === 'function') ? isSelectedPeriodLocked() : false;
+  dtbody.innerHTML = '';
+  getEmployeeList().forEach(emp => {
+    const rH = Number(regHours[emp.id] ?? 0);
+    const rate = Number((storedEmployees[emp.id]?.hourlyRate) ?? (payrollRates[emp.id] ?? 0));
+    payrollRates[emp.id] = isNaN(rate) ? 0 : rate;
+    const lSSS = roundToCents(loanSSS[emp.id] ?? 0);
+    const lPI = roundToCents(loanPI[emp.id] ?? 0);
+    const v = roundToCents(vale[emp.id] ?? 0);
+    const vW = roundToCents(valeWed[emp.id] ?? 0);
+    const otherDeductionsAmount = roundToCents(getOtherDeductionsTotal(emp.id));
+    const regPay = +(rH * rate).toFixed(2);
+    // Use dynamic contribution tables for Pag-IBIG and PhilHealth.  Determine the
+    // applicable rate based on monthly income and multiply by regular pay.
+    const monthly = rate * 8 * 24;
+    const piRate = pagibigRateByMonthly(monthly);
+    const phRate = philhealthRateByMonthly(monthly);
+    const flags = (typeof contribFlags !== 'undefined' && contribFlags[emp.id]) || {};
+    const div = Number(divisor) || 1;
+    const pagibig = (flags.pagibig === false) ? 0 : +((regPay * piRate).toFixed(2));
+    const philhealth = (flags.philhealth === false) ? 0 : +((regPay * phRate).toFixed(2));
+    const sssFull = (flags.sss === false) ? 0 : sssShareByMonthly(monthly);
+    const sss = (flags.sss === false) ? 0 : +((sssFull / div).toFixed(2));
+    const sssLoan = +(lSSS / div).toFixed(2);
+    const piLoan = +(lPI / div).toFixed(2);
+    const rowRaw = {
+      pagibig,
+      philhealth,
+      sss,
+      loanSSS: sssLoan,
+      loanPI: piLoan,
+      vale: v,
+      adjustments: otherDeductionsAmount,
+      valeWed: vW
+    };
+    rowRaw.total = roundToCents(pagibig + philhealth + sss + sssLoan + piLoan + v + vW + otherDeductionsAmount);
+    const rowEffective = computeEffectiveDeductionValues(rowRaw);
+  const editableRawValues = {
+    loanSSS: lSSS,
+    loanPI: lPI,
+    vale: v,
+    valeWed: vW
+  };
+    const tr = document.createElement('tr');
+    const idCell = document.createElement('td');
+    idCell.setAttribute('data-col', 'id');
+    idCell.textContent = emp.id;
+    tr.appendChild(idCell);
+    const nameCell = document.createElement('td');
+    nameCell.classList.add('wrap');
+    nameCell.setAttribute('data-col', 'name');
+    nameCell.textContent = emp.name;
+    tr.appendChild(nameCell);
+    DEDUCTION_COLUMN_KEYS.forEach(function(key){
+      const td = document.createElement('td');
+      td.classList.add('num');
+      td.setAttribute('data-col', key);
+      const raw = Object.prototype.hasOwnProperty.call(rowRaw, key) ? rowRaw[key] : 0;
+      const effective = Object.prototype.hasOwnProperty.call(rowEffective, key) ? rowEffective[key] : 0;
+      if (DEDUCTION_EDITABLE_KEYS.has(key) && !isLocked) {
+        td.classList.add('editable-deduction');
+        const input = document.createElement('input');
+        input.type = 'number';
+        input.step = '0.01';
+        input.min = '0';
+        input.classList.add('deduction-input');
+        input.dataset.empId = emp.id;
+        input.dataset.col = key;
+        input.setAttribute('inputmode', 'decimal');
+        let displayValue = Number(editableRawValues[key] || 0);
+        if (!Number.isFinite(displayValue)) displayValue = 0;
+        input.value = formatDeductionInputValue(displayValue);
+        td.appendChild(input);
+        updateDeductionCellDisplay(td, raw, effective, isDeductionColumnIncluded(key));
+      } else {
+        updateDeductionCellDisplay(td, raw, effective, isDeductionColumnIncluded(key));
+      }
+      tr.appendChild(td);
+    });
+    dtbody.appendChild(tr);
+  });
+  applyDeductionColumnState();
+  try { renderLoanTrackerTable(); } catch(_) {}
+  try { setMoneyChangerLockedUI(isLocked); } catch (_) {}
+}
+document.addEventListener('DOMContentLoaded', function(){
+  try {
+    applyDeductionColumnState();
+  } catch (err) {}
+  try {
+    const toggles = document.getElementById('deductionColumnToggles');
+    if (toggles && !toggles.__boundColumnToggle){
+      toggles.addEventListener('change', function(ev){
+        const input = ev.target;
+        if (!input || !input.matches('input[data-col]')) return;
+        const col = input.getAttribute('data-col');
+        if (!col || DEDUCTION_COLUMN_KEYS.indexOf(col) === -1) return;
+        if (input.checked) {
+          delete deductionColumnInclusions[col];
+        } else {
+          deductionColumnInclusions[col] = false;
+        }
+
+        persistDeductionColumnInclusions();
+        applyDeductionColumnState();
+        try {
+          document.querySelectorAll('#payrollTable tbody tr').forEach(function(tr){
+            try { calculateRow(tr); } catch (calcErr) {}
+          });
+        } catch (calcWrapErr) {}
+        try {
+          (window.scheduleTotals || function(){ try { updatePayrollGrandTotals(); updateDeductionsGrandTotals(); } catch (_) {} })();
+        } catch (totErr) {
+          try { updatePayrollGrandTotals(); } catch (innerErr) {}
+          try { updateDeductionsGrandTotals(); } catch (innerErr2) {}
+        }
+      });
+      toggles.__boundColumnToggle = true;
+    }
+  } catch (err) {}
+});
+
+const PAYROLL_COLUMN_WIDTHS_KEY = 'payrollColumnWidths';
+let payrollColumnWidths = null;
+
+function loadPayrollColumnWidths() {
+  if (payrollColumnWidths) return payrollColumnWidths;
+  try {
+    const raw = localStorage.getItem(PAYROLL_COLUMN_WIDTHS_KEY);
+    if (!raw) {
+      payrollColumnWidths = {};
+      return payrollColumnWidths;
+    }
+    const parsed = JSON.parse(raw);
+    payrollColumnWidths = parsed && typeof parsed === 'object' ? parsed : {};
+    return payrollColumnWidths;
+  } catch (err) {
+    payrollColumnWidths = {};
+    return payrollColumnWidths;
+  }
+}
+
+function savePayrollColumnWidths() {
+  if (!payrollColumnWidths) return;
+  try {
+    localStorage.setItem(PAYROLL_COLUMN_WIDTHS_KEY, JSON.stringify(payrollColumnWidths));
+  } catch (err) {}
+}
+
+function getPayrollColumnKey(th, index) {
+  return th.getAttribute('data-col') || th.dataset.col || String(index);
+}
+
+function applyPayrollColumnWidth(table, columnIndex, width) {
+  const widthPx = `${Math.round(width)}px`;
+  table.querySelectorAll('tr').forEach(row => {
+    const cell = row.children[columnIndex];
+    if (!cell) return;
+    cell.style.width = widthPx;
+    cell.style.minWidth = widthPx;
+  });
+}
+
+function applyPayrollColumnWidthsToRow(tr, table) {
+  const headers = table.querySelectorAll('thead th');
+  const widths = loadPayrollColumnWidths();
+  headers.forEach((th, index) => {
+    const key = getPayrollColumnKey(th, index);
+    const width = Number(widths[key]);
+    if (!Number.isFinite(width)) return;
+    const cell = tr.children[index];
+    if (!cell) return;
+    const widthPx = `${Math.round(width)}px`;
+    cell.style.width = widthPx;
+    cell.style.minWidth = widthPx;
+  });
+}
+
+function applySavedPayrollColumnWidths(table) {
+  const headers = table.querySelectorAll('thead th');
+  const widths = loadPayrollColumnWidths();
+  headers.forEach((th, index) => {
+    const key = getPayrollColumnKey(th, index);
+    const width = Number(widths[key]);
+    if (!Number.isFinite(width)) return;
+    applyPayrollColumnWidth(table, index, width);
+  });
+}
+
+function setupPayrollColumnResizers() {
+  const table = document.getElementById('payrollTable');
+  if (!table) return;
+  const headers = table.querySelectorAll('thead th');
+  headers.forEach((th, index) => {
+    if (th.querySelector('.col-resizer')) return;
+    const resizer = document.createElement('div');
+    resizer.className = 'col-resizer';
+    resizer.setAttribute('data-col-index', String(index));
+    th.appendChild(resizer);
+  });
+  applySavedPayrollColumnWidths(table);
+
+  if (!table.__payrollResizerBound) {
+    let startX = 0;
+    let startWidth = 0;
+    let activeIndex = null;
+    let activeKey = null;
+    const minWidth = 60;
+
+    const onMouseMove = (event) => {
+      if (activeIndex === null) return;
+      const delta = event.clientX - startX;
+      let newWidth = startWidth + delta;
+      if (newWidth < minWidth) newWidth = minWidth;
+      applyPayrollColumnWidth(table, activeIndex, newWidth);
+      if (!payrollColumnWidths) payrollColumnWidths = {};
+      if (activeKey) {
+        payrollColumnWidths[activeKey] = Math.round(newWidth);
+      }
+    };
+
+    const onMouseUp = () => {
+      if (activeIndex === null) return;
+      savePayrollColumnWidths();
+      document.removeEventListener('mousemove', onMouseMove);
+      document.removeEventListener('mouseup', onMouseUp);
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+      activeIndex = null;
+      activeKey = null;
+    };
+
+    table.addEventListener('mousedown', (event) => {
+      const handle = event.target.closest('.col-resizer');
+      if (!handle) return;
+      const th = handle.parentElement;
+      if (!th) return;
+      const style = window.getComputedStyle(th);
+      if (style.display === 'none' || style.visibility === 'hidden') return;
+      activeIndex = th.cellIndex;
+      if (activeIndex === null || activeIndex === undefined) return;
+      startX = event.clientX;
+      startWidth = th.getBoundingClientRect().width;
+      activeKey = getPayrollColumnKey(th, activeIndex);
+      document.body.style.cursor = 'col-resize';
+      document.body.style.userSelect = 'none';
+      document.addEventListener('mousemove', onMouseMove);
+      document.addEventListener('mouseup', onMouseUp);
+      event.preventDefault();
+    });
+    table.__payrollResizerBound = true;
+  }
+
+  const tbody = table.querySelector('tbody');
+  if (tbody && !tbody.__payrollResizeObserver) {
+    const observer = new MutationObserver((mutations) => {
+      mutations.forEach(mutation => {
+        mutation.addedNodes.forEach(node => {
+          if (node.nodeType !== 1) return;
+          if (node.matches('tr')) {
+            applyPayrollColumnWidthsToRow(node, table);
+          } else if (node.querySelectorAll) {
+            node.querySelectorAll('tr').forEach(row => applyPayrollColumnWidthsToRow(row, table));
+          }
+        });
+      });
+    });
+    observer.observe(tbody, { childList: true, subtree: true });
+    tbody.__payrollResizeObserver = observer;
+  }
+}
+
+document.addEventListener('DOMContentLoaded', function() {
+  setupPayrollColumnResizers();
+});
+
+function findPayrollRowById(empId){
+  const rows = document.querySelectorAll('#payrollTable tbody tr');
+  for (const tr of rows){
+    const firstCell = tr.cells && tr.cells[0];
+    if (firstCell && firstCell.textContent && firstCell.textContent.trim() === empId) {
+      return tr;
+    }
+  }
+  return null;
+}
+
+function syncPayrollRowFromDeduction(empId){
+  const row = findPayrollRowById(empId);
+  if (!row) { return; }
+  const setValue = (selector, value) => {
+    const el = row.querySelector(selector);
+    if (el && typeof el.value !== 'undefined') {
+      el.value = roundToCents(value || 0).toFixed(2);
+    }
+  };
+  setValue('.loanSSS', loanSSS?.[empId] ?? 0);
+  setValue('.loanPI', loanPI?.[empId] ?? 0);
+  setValue('.vale', vale?.[empId] ?? 0);
+  setValue('.valeWed', valeWed?.[empId] ?? 0);
+  try { calculateRow(row); } catch (_) {}
+}
+
+function findDeductionRowById(empId){
+  const table = document.getElementById('deductionsTable');
+  if (!table) return null;
+  const rows = table.querySelectorAll('tbody tr');
+  for (const tr of rows) {
+    const idCell = tr.querySelector('[data-col="id"]');
+    if (idCell && idCell.textContent && idCell.textContent.trim() === empId) {
+      return tr;
+    }
+  }
+  return null;
+}
+
+function updateDeductionRowDisplay(empId){
+  const tr = findDeductionRowById(empId);
+  if (!tr) return;
+  const emp = getEmployeeList().find(e => e.id === empId) || { id: empId };
+  const empKey = emp.id || empId;
+  const stored = (typeof storedEmployees !== 'undefined' && storedEmployees) ? storedEmployees : {};
+  let rate = Number((stored[empKey]?.hourlyRate) ?? (payrollRates?.[empKey] ?? 0));
+  if (!Number.isFinite(rate)) rate = 0;
+  try { if (payrollRates && typeof payrollRates === 'object') payrollRates[empKey] = rate; } catch (_) {}
+  const rH = Number(regHours?.[empKey] ?? 0);
+  const lSSS = roundToCents(loanSSS?.[empKey] ?? 0);
+  const lPI = roundToCents(loanPI?.[empKey] ?? 0);
+  const v = roundToCents(vale?.[empKey] ?? 0);
+  const vW = roundToCents(valeWed?.[empKey] ?? 0);
+  const otherDeductionsAmount = roundToCents(getOtherDeductionsTotal(empKey));
+  const regPay = +(rH * rate).toFixed(2);
+  const monthly = rate * 8 * 24;
+  const piRate = pagibigRateByMonthly(monthly);
+  const phRate = philhealthRateByMonthly(monthly);
+  const flags = (typeof contribFlags !== 'undefined' && contribFlags && contribFlags[empKey]) || {};
+  const div = Number(divisor) || 1;
+  const pagibig = (flags.pagibig === false) ? 0 : +((regPay * piRate).toFixed(2));
+  const philhealth = (flags.philhealth === false) ? 0 : +((regPay * phRate).toFixed(2));
+  const sssFull = (flags.sss === false) ? 0 : sssShareByMonthly(monthly);
+  const sss = (flags.sss === false) ? 0 : +((sssFull / div).toFixed(2));
+  const sssLoan = +(lSSS / div).toFixed(2);
+  const piLoan = +(lPI / div).toFixed(2);
+  const rowRaw = {
+    pagibig,
+    philhealth,
+    sss,
+    loanSSS: sssLoan,
+    loanPI: piLoan,
+    vale: v,
+    adjustments: otherDeductionsAmount,
+    valeWed: vW
+  };
+  rowRaw.total = roundToCents(pagibig + philhealth + sss + sssLoan + piLoan + v + vW + otherDeductionsAmount);
+  const rowEffective = computeEffectiveDeductionValues(rowRaw);
+  const editableRawValues = {
+    loanSSS: lSSS,
+    loanPI: lPI,
+    vale: v,
+    adjustments: otherDeductionsAmount,
+    valeWed: vW
+  };
+  DEDUCTION_COLUMN_KEYS.forEach(function(key){
+    const cell = tr.querySelector(`[data-col="${key}"]`);
+    if (!cell) return;
+    const rawVal = Object.prototype.hasOwnProperty.call(rowRaw, key) ? rowRaw[key] : 0;
+    const effectiveVal = Object.prototype.hasOwnProperty.call(rowEffective, key) ? rowEffective[key] : 0;
+    if (DEDUCTION_EDITABLE_KEYS.has(key)) {
+      const input = cell.querySelector('input.deduction-input');
+      if (input) {
+        let displayValue = Number(editableRawValues[key] || 0);
+        if (!Number.isFinite(displayValue)) displayValue = 0;
+        input.value = formatDeductionInputValue(displayValue);
+      }
+    }
+    updateDeductionCellDisplay(cell, rawVal, effectiveVal, isDeductionColumnIncluded(key));
+    try {
+      const cleanRaw = roundToCents(rawVal || 0).toFixed(2);
+      const cleanEffective = roundToCents(effectiveVal || 0).toFixed(2);
+      setRowDeductionDataset(tr, key, cleanRaw, cleanEffective);
+    } catch (_) {}
+  });
+}
+
+document.addEventListener('change', async (event) => {
+  const input = event.target;
+  if (!input || !input.matches('.deduction-input')) return;
+  syncPeriodScopedData();
+  const empId = input.dataset.empId;
+  const key = input.dataset.col;
+  if (!empId || !key) return;
+  let value = parseFloat(input.value);
+  if (!Number.isFinite(value) || value < 0) value = 0;
+  value = roundToCents(value);
+  input.value = formatDeductionInputValue(value);
+  let needsSave = false;
+  switch (key) {
+    case 'loanSSS': {
+      // Read-only in the UI (managed by Loan Tracker). Kept for legacy/manual data imports.
+      loanSSS[empId] = value;
+      needsSave = true;
+      break;
+    }
+    case 'loanPI': {
+      // Read-only in the UI (managed by Loan Tracker). Kept for legacy/manual data imports.
+      loanPI[empId] = value;
+      needsSave = true;
+      break;
+    }
+    case 'vale': {
+      // Read-only in the UI (managed by Loan Tracker). Kept for legacy/manual data imports.
+      vale[empId] = value;
+      needsSave = true;
+      break;
+    }
+    case 'valeWed':
+      valeWed[empId] = value;
+      needsSave = true;
+      break;
+    default:
+      break;
+  }
+  if (needsSave) {
+    try { await saveCurrentPeriodDeductions(); } catch (err) { console.warn('Failed to save deductions', err); }
+  }
+  syncPayrollRowFromDeduction(empId);
+  try { updateDeductionRowDisplay(empId); } catch (err) { console.warn('Failed to update deduction row', err); }
+  try { (typeof scheduleTotals === 'function' ? scheduleTotals : updateDeductionsGrandTotals)(); } catch (_) {}
+});
+function renderTable(){
+  syncPeriodScopedData();
+  // Batch DOM updates to avoid MutationObserver thrash
+  window.__suspendTotals = true;
+  try {
+    const frag = document.createDocumentFragment();
+    tbody.innerHTML = '';
+    getEmployeeList().forEach(emp=>{
+      const tr = document.createElement('tr');
+      const rH = Number(regHours[emp.id] ?? 0);
+      const rate = Number((storedEmployees[emp.id]?.hourlyRate) ?? (payrollRates[emp.id] ?? 0));
+      payrollRates[emp.id] = isNaN(rate) ? 0 : rate;
+      tr.innerHTML = `
+        <td>${emp.id}</td>
+        <td class="wrap">${emp.name}</td>
+        
+        <td><input class="cell rate" name="payroll_rate_${emp.id}" title="Non-editable in Payroll" type="number" step="0.01" value="${rate}" disabled></td>
+        <td><input class="cell regHrs" name="payroll_reg_hours_${emp.id}" title="Non-editable in Payroll" type="number" step="0.01" value="${rH}" disabled></td>
+        <td class="regPay num">0.00</td>
+        <td class="adjHours num">0.00</td>
+        <td class="adjPay num">0.00</td>
+        <td class="adjAmt num">0.00</td>
+        <td class="otPay num">0.00</td>
+        <td class="grossPay num">0.00</td>
+        <td class="totalDed num">0.00</td>
+        <td class="netPay num">0.00</td>
+        <td><button type="button" class="payslipBtn">Payslip</button></td>`;
+      frag.appendChild(tr);
+    });
+    tbody.appendChild(frag);
+    attachRowEvents();
+    // Compute all rows in one pass without updating totals each mutation
+    calculateAll();
+    try { renderOvertimeTable(); } catch (err) { console.warn('renderOvertimeTable failed', err); }
+  } finally {
+    // Resume totals and request one totals update after batch render
+    window.__suspendTotals = false;
+    try { (window.scheduleTotals || window.updatePayrollGrandTotals || function(){})(); } catch(e){}
+    try { (window.scheduleTotals || window.updateDeductionsGrandTotals || function(){})(); } catch(e){}
+  }
+}
+
+function renderOvertimeTable(){
+  syncPeriodScopedData();
+  const tbody = document.querySelector('#overtimeTable tbody');
+  if (!tbody) return;
+  tbody.innerHTML = '';
+  let totalOtHours = 0;
+  let totalAdjHours = 0;
+  let totalFinalHours = 0;
+  let totalNightDiff = 0;
+  let totalOtPay = 0;
+  const formatZeroDisplay = (value) => {
+    const num = Number(value);
+    if (!Number.isFinite(num) || Math.abs(num) < 0.005) return '-';
+    return num.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  };
+  getEmployeeList().forEach(emp => {
+    const id = emp.id;
+    const name = emp.name;
+    const baseRate = getEmployeeHourlyRate(id);
+    const rate = getEffectiveOvertimeRateForEmployee(id, baseRate);
+    const otTotal = getOvertimeHoursTotal(id);
+    const adj = getOvertimeAdjustmentHours(id);
+    const otFinal = otTotal + adj;
+    const nightDiffPay = getNightDifferentialPayForEmployee(id);
+    const otPay = getOvertimePayForEmployee(id, baseRate);
+    const totalOtWithNightDiff = roundToCents(otPay + nightDiffPay);
+    totalOtHours = roundToCents(totalOtHours + otTotal);
+    totalAdjHours = roundToCents(totalAdjHours + adj);
+    totalFinalHours = roundToCents(totalFinalHours + otFinal);
+    totalNightDiff = roundToCents(totalNightDiff + nightDiffPay);
+    totalOtPay = roundToCents(totalOtPay + totalOtWithNightDiff);
+    const tr = document.createElement('tr');
+    tr.dataset.empId = id;
+    tr.innerHTML = `
+      <td>${id}</td>
+      <td class="wrap">${name}</td>
+      <td class="num otRate">${formatZeroDisplay(rate)}</td>
+      <td class="num otHoursTotal">${formatZeroDisplay(otTotal)}</td>
+      <td class="num otAdjustHours">${formatZeroDisplay(adj)}</td>
+      <td class="num otFinalHours">${formatZeroDisplay(otFinal)}</td>
+      <td class="num nightDiff">${formatZeroDisplay(nightDiffPay)}</td>
+      <td class="num otPay">${formatZeroDisplay(totalOtWithNightDiff)}</td>
+    `;
+    tbody.appendChild(tr);
+  });
+  const totalRow = document.createElement('tr');
+  totalRow.className = 'grand-total-row';
+  totalRow.innerHTML = `
+    <td>Grand Total</td>
+    <td></td>
+    <td class="num"></td>
+    <td class="num" data-col="totalOtHours">${formatZeroDisplay(totalOtHours)}</td>
+    <td class="num" data-col="adjOtHours">${formatZeroDisplay(totalAdjHours)}</td>
+    <td class="num" data-col="finalOtHours">${formatZeroDisplay(totalFinalHours)}</td>
+    <td class="num" data-col="nightDiff">${formatZeroDisplay(totalNightDiff)}</td>
+    <td class="num" data-col="otPay">${formatZeroDisplay(totalOtPay)}</td>
+  `;
+  tbody.appendChild(totalRow);
+
+  const updateOvertimeRowDisplay = (tr, empId) => {
+    const baseRate = getEmployeeHourlyRate(empId);
+    const rate = getEffectiveOvertimeRateForEmployee(empId, baseRate);
+    const otTotal = getOvertimeHoursTotal(empId);
+    const adj = getOvertimeAdjustmentHours(empId);
+    const otFinal = otTotal + adj;
+    const nightDiffPay = getNightDifferentialPayForEmployee(empId);
+    const otPay = roundToCents(getOvertimePayForEmployee(empId, baseRate) + nightDiffPay);
+    const rateCell = tr.querySelector('.otRate');
+    if (rateCell) rateCell.textContent = formatZeroDisplay(rate);
+    const totalCell = tr.querySelector('.otHoursTotal');
+    if (totalCell) totalCell.textContent = formatZeroDisplay(otTotal);
+    const adjCell = tr.querySelector('.otAdjustHours');
+    if (adjCell) adjCell.textContent = formatZeroDisplay(adj);
+    const finalCell = tr.querySelector('.otFinalHours');
+    if (finalCell) finalCell.textContent = formatZeroDisplay(otFinal);
+    const nightDiffCell = tr.querySelector('.nightDiff');
+    if (nightDiffCell) nightDiffCell.textContent = formatZeroDisplay(nightDiffPay);
+    const payCell = tr.querySelector('.otPay');
+    if (payCell) payCell.textContent = formatZeroDisplay(otPay);
+  };
+}
+
+function updateOvertimeGrandTotals() {
+  syncPeriodScopedData();
+  const tbody = document.querySelector('#overtimeTable tbody');
+  if (!tbody) return;
+  const totalRow = tbody.querySelector('tr.grand-total-row');
+  if (!totalRow) return;
+  let totalOtHours = 0;
+  let totalAdjHours = 0;
+  let totalFinalHours = 0;
+  let totalNightDiff = 0;
+  let totalOtPay = 0;
+  getEmployeeList().forEach(emp => {
+    const baseRate = getEmployeeHourlyRate(emp.id);
+    const otTotal = getOvertimeHoursTotal(emp.id);
+    const adj = getOvertimeAdjustmentHours(emp.id);
+    const otFinal = otTotal + adj;
+    const nightDiffPay = getNightDifferentialPayForEmployee(emp.id);
+    const otPay = roundToCents(getOvertimePayForEmployee(emp.id, baseRate) + nightDiffPay);
+    totalOtHours = roundToCents(totalOtHours + otTotal);
+    totalAdjHours = roundToCents(totalAdjHours + adj);
+    totalFinalHours = roundToCents(totalFinalHours + otFinal);
+    totalNightDiff = roundToCents(totalNightDiff + nightDiffPay);
+    totalOtPay = roundToCents(totalOtPay + otPay);
+  });
+  const formatZeroDisplay = (value) => {
+    const num = Number(value);
+    if (!Number.isFinite(num) || Math.abs(num) < 0.005) return '-';
+    return num.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  };
+  const setCell = (col, value) => {
+    const cell = totalRow.querySelector(`[data-col="${col}"]`);
+    if (cell) cell.textContent = formatZeroDisplay(value);
+  };
+  setCell('totalOtHours', totalOtHours);
+  setCell('adjOtHours', totalAdjHours);
+  setCell('finalOtHours', totalFinalHours);
+  setCell('nightDiff', totalNightDiff);
+  setCell('otPay', totalOtPay);
+}
+
+function updateOvertimeRowForEmployee(empId){
+  if (!empId) return;
+  const safeId = (window.CSS && typeof window.CSS.escape === 'function')
+    ? window.CSS.escape(empId)
+    : empId.replace(/\"/g, '\\"');
+  const row = document.querySelector(`#overtimeTable tbody tr[data-emp-id="${safeId}"]`);
+  if (!row) return;
+  const baseRate = getEmployeeHourlyRate(empId);
+  const rate = getEffectiveOvertimeRateForEmployee(empId, baseRate);
+  const otTotal = getOvertimeHoursTotal(empId);
+  const adj = getOvertimeAdjustmentHours(empId);
+  const otFinal = otTotal + adj;
+  const nightDiffPay = getNightDifferentialPayForEmployee(empId);
+  const otPay = roundToCents(getOvertimePayForEmployee(empId, baseRate) + nightDiffPay);
+  const formatZeroDisplay = (value) => {
+    const num = Number(value);
+    if (!Number.isFinite(num) || Math.abs(num) < 0.005) return '-';
+    return num.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  };
+  const rateCell = row.querySelector('.otRate');
+  if (rateCell) rateCell.textContent = formatZeroDisplay(rate);
+  const totalCell = row.querySelector('.otHoursTotal');
+  if (totalCell) totalCell.textContent = formatZeroDisplay(otTotal);
+  const adjCell = row.querySelector('.otAdjustHours');
+  if (adjCell) adjCell.textContent = formatZeroDisplay(adj);
+  const finalCell = row.querySelector('.otFinalHours');
+  if (finalCell) finalCell.textContent = formatZeroDisplay(otFinal);
+  const nightDiffCell = row.querySelector('.nightDiff');
+  if (nightDiffCell) nightDiffCell.textContent = formatZeroDisplay(nightDiffPay);
+  const payCell = row.querySelector('.otPay');
+  if (payCell) payCell.textContent = formatZeroDisplay(otPay);
+  updateOvertimeGrandTotals();
+}
+
+
+
+// Quick project picker for Bantay assignment (Supabase-backed) – compact dropdown
+// Shows only project names, auto-saves on selection, then closes.
+function chooseBantayProject(empId, anchorEl){
+  try{
+    // Remove any existing picker first
+    const old = document.getElementById('bantayProjPicker');
+    if (old) old.remove();
+
+    // Build overlay container
+    const box = document.createElement('div');
+    box.id = 'bantayProjPicker';
+    box.style.position = 'absolute';
+    box.style.zIndex = '99999';
+    box.style.background = '#ffffff';
+    box.style.border = '1px solid #e5e7eb';
+    box.style.borderRadius = '8px';
+    box.style.boxShadow = '0 8px 24px rgba(0,0,0,0.12)';
+    box.style.padding = '6px';
+    box.style.display = 'flex';
+    box.style.gap = '6px';
+    box.style.alignItems = 'center';
+
+    // Position near the input
+    const rect = (anchorEl && anchorEl.getBoundingClientRect) ? anchorEl.getBoundingClientRect() : {left:100, top:100, width:0, height:0};
+    const scrollX = window.scrollX || document.documentElement.scrollLeft || 0;
+    const scrollY = window.scrollY || document.documentElement.scrollTop || 0;
+    box.style.left = (rect.left + scrollX) + 'px';
+    box.style.top  = (rect.top  + scrollY + rect.height + 6) + 'px';
+
+    // Build <select> with project options (compact)
+    const sel = document.createElement('select');
+    sel.id = 'bantayProjectSelect';
+    sel.name = 'bantay_project_select';
+    sel.style.minWidth = '160px';
+    sel.style.padding = '4px';
+    sel.style.border = '1px solid #d1d5db';
+    sel.style.borderRadius = '6px';
+
+    // Placeholder + clear option
+    const opt0 = document.createElement('option');
+    opt0.value = '';
+    opt0.textContent = 'Select project';
+    sel.appendChild(opt0);
+    const optClear = document.createElement('option');
+    optClear.value = '__clear__';
+    optClear.textContent = '— Clear assignment —';
+    sel.appendChild(optClear);
+
+    // storedProjects: { [pid]: {name, ...} }
+    const entries = Object.entries(storedProjects || {}).sort((a,b)=>{
+      const A = (a[1]?.name || a[0]).toUpperCase();
+      const B = (b[1]?.name || b[0]).toUpperCase();
+      return A.localeCompare(B);
+    });
+    entries.forEach(([pid, proj])=>{
+      const o = document.createElement('option');
+      o.value = pid;
+      o.textContent = (proj?.name || pid);
+      sel.appendChild(o);
+    });
+
+    // Set current value if any (default to project id key)
+    try { sel.value = (bantayProj && bantayProj[empId]) || ''; } catch(e){}
+
+    box.appendChild(sel);
+    document.body.appendChild(box);
+
+    const close = ()=>{ try{ box.remove(); }catch(e){} };
+
+    // Auto-save on selection and close; refresh report if available
+    sel.addEventListener('change', async ()=>{
+      const v = sel.value;
+      bantayProj = bantayProj || {};
+      if (!v || v === '__clear__'){
+        // Clear assignment
+        try { delete bantayProj[empId]; } catch(e){}
+        try { await window.writeKV(LS_BANTAY_PROJ, bantayProj); } catch(e){}
+        try { if (typeof window.rebuildReports === 'function') window.rebuildReports(); } catch(e){}
+        close();
+        return;
+      }
+      if (storedProjects && storedProjects[v]){
+        bantayProj[empId] = v;
+        try { await window.writeKV(LS_BANTAY_PROJ, bantayProj); } catch(e){}
+        try { if (typeof window.rebuildReports === 'function') window.rebuildReports(); } catch(e){}
+      }
+      close();
+    });
+
+    // Close on outside click
+    setTimeout(()=>{
+      const handler = (e)=>{
+        if (!box.contains(e.target)) {
+          document.removeEventListener('mousedown', handler, true);
+          close();
+        }
+      };
+      document.addEventListener('mousedown', handler, true);
+    }, 0);
+
+  }catch(e){
+    console.warn('chooseBantayProject failed', e);
+  }
+}
+function attachRowEvents(){
+  tbody.querySelectorAll('tr').forEach(row=>{
+    const id = row.cells[0].textContent.trim();
+    const regI = row.querySelector('.regHrs');
+    const rateI = row.querySelector('.rate');
+    const lSSSI = row.querySelector('.loanSSS');
+    const lPII = row.querySelector('.loanPI');
+    const vI = row.querySelector('.vale');
+    const vWI = row.querySelector('.valeWed');
+    const watchedInputs = [regI, rateI, lSSSI, lPII, vI];
+    if (vWI && typeof vWI.value !== 'undefined') watchedInputs.push(vWI);
+    watchedInputs.forEach(inp=>{
+      if (!inp || typeof inp.addEventListener !== 'function') return;
+      inp.addEventListener('input', ()=>{
+        regHours[id] = +(Number(regI.value)||0).toFixed(2);
+        payrollRates[id] = +(Number(rateI.value)||0).toFixed(2);
+        if (lSSSI) {
+          loanSSS[id] = +(Number(lSSSI.value)||0).toFixed(2);
+        }
+        if (lPII) {
+          loanPI[id] = +(Number(lPII.value)||0).toFixed(2);
+        }
+        if (vI) {
+          vale[id] = +(Number(vI.value)||0).toFixed(2);
+        }
+        if (vWI && typeof vWI.value !== 'undefined') {
+          valeWed[id] = +(Number(vWI.value)||0).toFixed(2);
+        }
+        localStorage.setItem(LS_REG_HRS, JSON.stringify(regHours));
+        localStorage.setItem(LS_RATES, JSON.stringify(payrollRates));
+        saveCurrentPeriodDeductions();
+        if (typeof renderDeductionsTable === 'function') renderDeductionsTable();
+        calculateRow(row);
+      });
+    });
+
+    // Add event listener for Bantay allowance input. Store to cloud and recalc net pay.
+    const bantayI = row.querySelector('.bantay');
+      if (bantayI) {
+        bantayI.addEventListener('input', async () => {
+        bantay[id] = bantayI.value;
+        allBantay[currentPeriodKey] = bantay;
+        try { localStorage.setItem(LS_BANTAY, JSON.stringify(allBantay)); } catch(_){ }
+        await window.writeKV(LS_BANTAY, allBantay);
+        calculateRow(row);
+        try { if (typeof window.rebuildReports === 'function') window.rebuildReports(); } catch(e){}
+        // Auto-open project picker when entering a positive amount and no assignment yet
+        const val = parseFloat(bantayI.value) || 0;
+        const hasPicker = !!document.getElementById('bantayProjPicker');
+        if (val > 0 && !bantayProj[id] && !hasPicker) {
+          chooseBantayProject(id, bantayI);
+        }
+        // Auto-clear assignment when reset to zero or blank
+        if (!(val > 0) && bantayProj[id]) {
+          try { delete bantayProj[id]; } catch(_){ }
+          try { await window.writeKV(LS_BANTAY_PROJ, bantayProj); } catch(_){ }
+          try { if (typeof window.rebuildReports === 'function') window.rebuildReports(); } catch(_){ }
+        }
+      });
+      // Also prompt on change if user typed and then blurs
+      bantayI.addEventListener('change', () => {
+        const val = parseFloat(bantayI.value) || 0;
+        if (val > 0) chooseBantayProject(id, bantayI);
+        try { if (typeof window.rebuildReports === 'function') window.rebuildReports(); } catch(e){}
+      });
+      // Allow quick reassign on dblclick
+      bantayI.title = 'Double-click to assign Bantay to a project';
+      bantayI.addEventListener('dblclick', () => chooseBantayProject(id, bantayI));
+    }
+  });
+}
+function renderSssTable(){
+  const tbodyS = document.querySelector('#sssTable tbody');
+  if (!tbodyS) return;
+  tbodyS.innerHTML='';
+  const rows = getSssTable();
+  rows.forEach((r, i)=>{
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td><input type="number" step="0.01" class="cell sssMin" name="sss_min_${i}" value="${r.min}"></td>
+      <td><input type="number" step="0.01" class="cell sssMax" name="sss_max_${i}" value="${r.max}"></td>
+      <td><input type="number" step="0.01" class="cell sssEmp" name="sss_employee_${i}" value="${r.employee}"></td>
+      <td><input type="number" step="0.01" class="cell sssEr" name="sss_employer_${i}" value="${r.employer}"></td>
+      <td><button class="delRow">Delete</button></td>`;
+    tbodyS.appendChild(tr);
+    const minI = tr.querySelector('.sssMin');
+    const maxI = tr.querySelector('.sssMax');
+    const empI = tr.querySelector('.sssEmp');
+    const erI = tr.querySelector('.sssEr');
+    minI.addEventListener('input', ()=>{ updateRow(i, minI, maxI, empI, erI); });
+    maxI.addEventListener('input', ()=>{ updateRow(i, minI, maxI, empI, erI); });
+    empI.addEventListener('input', ()=>{ updateRow(i, minI, maxI, empI, erI); });
+    if (erI) erI.addEventListener('input', ()=>{ updateRow(i, minI, maxI, empI, erI); });
+    tr.querySelector('.delRow').addEventListener('click', ()=>{
+      const cur = getSssTable();
+      cur.splice(i,1);
+      setSssTable(cur);
+      renderSssTable();
+      calculateAll();
+    });
+  });
+}
+function updateRow(i, minI, maxI, empI, erI){
+  const cur = getSssTable();
+  const minVal = Number(minI && typeof minI.value !== 'undefined' ? minI.value : 0) || 0;
+  const maxVal = Number(maxI && typeof maxI.value !== 'undefined' ? maxI.value : 0) || 0;
+  const employeeVal = Number(empI && typeof empI.value !== 'undefined' ? empI.value : 0) || 0;
+  let employerVal = Number(erI && typeof erI.value !== 'undefined' ? erI.value : employeeVal);
+  if (!Number.isFinite(employerVal)) employerVal = employeeVal;
+  cur[i] = {min:minVal, max:maxVal, employee:employeeVal, employer:employerVal};
+  setSssTable(cur);
+  calculateAll();
+}
+
+function bindSssControls(){
+  const addSssBtn = document.getElementById('addSssRow');
+  if (addSssBtn && !addSssBtn.__bound) {
+    addSssBtn.addEventListener('click', ()=>{
+      const cur = getSssTable(); cur.push({min:0,max:0,employee:0, employer:0}); setSssTable(cur); renderSssTable();
+    });
+    addSssBtn.__bound = true;
+  }
+  const resetSssBtn = document.getElementById('resetSss');
+  if (resetSssBtn && !resetSssBtn.__bound) {
+    resetSssBtn.addEventListener('click', ()=>{
+      if(confirm('Reset SSS table to 2025 defaults?')){
+        const mapped = SSS_SEED_2025.map(r=>({min:r[0], max:r[1], employee:r[2], employer: (typeof r[3] !== 'undefined' ? r[3] : r[2])}));
+        setSssTable(mapped);
+        renderSssTable();
+        calculateAll();
+      }
+    });
+    resetSssBtn.__bound = true;
+  }
+  const clearSssBtn = document.getElementById('clearSss');
+  if (clearSssBtn && !clearSssBtn.__bound) {
+    clearSssBtn.addEventListener('click', ()=>{
+      if(confirm('Clear all SSS ranges?')){ setSssTable([]); renderSssTable(); calculateAll(); }
+    });
+    clearSssBtn.__bound = true;
+  }
+  const exportSssBtn = document.getElementById('exportSss');
+  if (exportSssBtn && !exportSssBtn.__bound) {
+    exportSssBtn.addEventListener('click', ()=>{
+      const rows = getSssTable();
+      const csv = ['min,max,employeeShare,employerShare'].concat(rows.map(r=>[r.min,r.max,r.employee,r.employer].join(','))).join('\n');
+      const blob = new Blob([csv], {type:'text/csv'}); const url = URL.createObjectURL(blob);
+      const a = document.createElement('a'); a.href=url; a.download='sss_table.csv'; document.body.appendChild(a); a.click(); a.remove();
+    });
+    exportSssBtn.__bound = true;
+  }
+  const importSssInput = document.getElementById('importSss');
+  if (importSssInput && !importSssInput.__bound) {
+    importSssInput.addEventListener('change', ev=>{
+      const f = ev.target.files[0]; if(!f) return;
+      const reader = new FileReader();
+      reader.onload = e=>{
+        const text = e.target.result;
+        const lines = text.split(/\r?\n/).filter(Boolean);
+        const out=[];
+        for(let i=0;i<lines.length;i++){ const line = lines[i].trim();
+          if(i===0 && /min/i.test(line) && /max/i.test(line)) continue;
+          const p = line.split(',');
+          if(p.length>=3) {
+            const min = Number(p[0])||0;
+            const max = Number(p[1])||0;
+            const employee = Number(p[2])||0;
+            let employer = NaN;
+            if (p.length >= 4) {
+              const parsed = Number(p[3]);
+              if (Number.isFinite(parsed)) employer = parsed;
+            }
+            if (!Number.isFinite(employer)) employer = employee;
+            out.push({min, max, employee, employer});
+          }
+        }
+        setSssTable(out); renderSssTable(); calculateAll();
+      };
+      reader.readAsText(f);
+    });
+    importSssInput.__bound = true;
+  }
+}
+
+// === Begin Pag-IBIG and PhilHealth Table Management ===
+// Pag-IBIG dynamic table helpers.  Defines helper functions for retrieving and
+// setting the table in localStorage, rendering the table in the UI, and applying
+// the employee share rate based on income ranges.
+function getPagibigTable(){
+  let arr = [];
+  try {
+    arr = JSON.parse(localStorage.getItem(LS_PAGIBIG_TABLE) || '[]');
+  } catch(e) { arr = []; }
+  if (!Array.isArray(arr)) arr = [];
+  return arr.map(r => ({
+    min: Number(r.min) || 0,
+    max: Number(r.max) || 0,
+    rate: Number(r.rate) || 0
+  })).sort((a,b) => a.min - b.min);
+}
+function setPagibigTable(rows){
+  localStorage.setItem(LS_PAGIBIG_TABLE, JSON.stringify(rows));
+}
+function renderPagibigTable(){
+  const tbodyP = document.querySelector('#pagibigTable tbody');
+  if(!tbodyP) return;
+  tbodyP.innerHTML = '';
+  const rows = getPagibigTable();
+  rows.forEach((r, idx) => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td><input type="number" step="0.01" class="cell pagibigMin" name="pagibig_min_${idx}" value="${r.min}"></td>
+      <td><input type="number" step="0.01" class="cell pagibigMax" name="pagibig_max_${idx}" value="${r.max}"></td>
+      <td><input type="number" step="0.0001" class="cell pagibigRate" name="pagibig_rate_${idx}" value="${r.rate}"></td>
+      <td><button class="delPagibigRow">Delete</button></td>`;
+    tbodyP.appendChild(tr);
+    const minI = tr.querySelector('.pagibigMin');
+    const maxI = tr.querySelector('.pagibigMax');
+    const rateI = tr.querySelector('.pagibigRate');
+    function update(i){
+      const cur = getPagibigTable();
+      cur[i] = {min: Number(minI.value) || 0, max: Number(maxI.value) || 0, rate: Number(rateI.value) || 0};
+      setPagibigTable(cur);
+      calculateAll();
+      if (typeof renderDeductionsTable === 'function') renderDeductionsTable();
+    }
+    minI.addEventListener('input', () => update(idx));
+    maxI.addEventListener('input', () => update(idx));
+    rateI.addEventListener('input', () => update(idx));
+    tr.querySelector('.delPagibigRow').addEventListener('click', () => {
+      const cur = getPagibigTable();
+      cur.splice(idx, 1);
+      setPagibigTable(cur);
+      renderPagibigTable();
+      calculateAll();
+      if (typeof renderDeductionsTable === 'function') renderDeductionsTable();
+    });
+  });
+}
+function getPhilhealthTable(){
+  let arr = [];
+  try {
+    arr = JSON.parse(localStorage.getItem(LS_PHILHEALTH_TABLE) || '[]');
+  } catch(e) { arr = []; }
+  if (!Array.isArray(arr)) arr = [];
+  return arr.map(r => ({
+    min: Number(r.min) || 0,
+    max: Number(r.max) || 0,
+    rate: Number(r.rate) || 0
+  })).sort((a,b) => a.min - b.min);
+}
+function setPhilhealthTable(rows){
+  localStorage.setItem(LS_PHILHEALTH_TABLE, JSON.stringify(rows));
+}
+function renderPhilhealthTable(){
+  const tbodyPh = document.querySelector('#philhealthTable tbody');
+  if(!tbodyPh) return;
+  tbodyPh.innerHTML = '';
+  const rows = getPhilhealthTable();
+  rows.forEach((r, idx) => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td><input type="number" step="0.01" class="cell philMin" name="philhealth_min_${idx}" value="${r.min}"></td>
+      <td><input type="number" step="0.01" class="cell philMax" name="philhealth_max_${idx}" value="${r.max}"></td>
+      <td><input type="number" step="0.0001" class="cell philRate" name="philhealth_rate_${idx}" value="${r.rate}"></td>
+      <td><button class="delPhilRow">Delete</button></td>`;
+    tbodyPh.appendChild(tr);
+    const minI = tr.querySelector('.philMin');
+    const maxI = tr.querySelector('.philMax');
+    const rateI = tr.querySelector('.philRate');
+    function update(i){
+      const cur = getPhilhealthTable();
+      cur[i] = {min: Number(minI.value) || 0, max: Number(maxI.value) || 0, rate: Number(rateI.value) || 0};
+      setPhilhealthTable(cur);
+      calculateAll();
+      if (typeof renderDeductionsTable === 'function') renderDeductionsTable();
+    }
+    minI.addEventListener('input', () => update(idx));
+    maxI.addEventListener('input', () => update(idx));
+    rateI.addEventListener('input', () => update(idx));
+    tr.querySelector('.delPhilRow').addEventListener('click', () => {
+      const cur = getPhilhealthTable();
+      cur.splice(idx, 1);
+      setPhilhealthTable(cur);
+      renderPhilhealthTable();
+      calculateAll();
+      if (typeof renderDeductionsTable === 'function') renderDeductionsTable();
+    });
+  });
+}
+// Click handler for adding, resetting and clearing rows in Pag-IBIG and PhilHealth tables.
+document.addEventListener('click', (e) => {
+  if (e.target && e.target.id === 'addPagibigRow') {
+    const cur = getPagibigTable();
+    cur.push({min: 0, max: 0, rate: 0});
+    setPagibigTable(cur);
+    renderPagibigTable();
+    calculateAll();
+    if (typeof renderDeductionsTable === 'function') renderDeductionsTable();
+  } else if (e.target && e.target.id === 'resetPagibig') {
+    if (confirm('Reset Pag-IBIG table to defaults?')) {
+      const mapped = PAGIBIG_SEED.map(r => ({min: r[0], max: r[1], rate: r[2]}));
+      setPagibigTable(mapped);
+      renderPagibigTable();
+      calculateAll();
+      if (typeof renderDeductionsTable === 'function') renderDeductionsTable();
+    }
+  } else if (e.target && e.target.id === 'clearPagibig') {
+    if (confirm('Clear all Pag-IBIG ranges?')) {
+      setPagibigTable([]);
+      renderPagibigTable();
+      calculateAll();
+      if (typeof renderDeductionsTable === 'function') renderDeductionsTable();
+    }
+  } else if (e.target && e.target.id === 'addPhilRow') {
+    const cur = getPhilhealthTable();
+    cur.push({min: 0, max: 0, rate: 0});
+    setPhilhealthTable(cur);
+    renderPhilhealthTable();
+    calculateAll();
+    if (typeof renderDeductionsTable === 'function') renderDeductionsTable();
+  } else if (e.target && e.target.id === 'resetPhil') {
+    if (confirm('Reset PhilHealth table to defaults?')) {
+      const mapped = PHILHEALTH_SEED.map(r => ({min: r[0], max: r[1], rate: r[2]}));
+      setPhilhealthTable(mapped);
+      renderPhilhealthTable();
+      calculateAll();
+      if (typeof renderDeductionsTable === 'function') renderDeductionsTable();
+    }
+  } else if (e.target && e.target.id === 'clearPhil') {
+    if (confirm('Clear all PhilHealth ranges?')) {
+      setPhilhealthTable([]);
+      renderPhilhealthTable();
+      calculateAll();
+      if (typeof renderDeductionsTable === 'function') renderDeductionsTable();
+    }
+  }
+});
+// === End Pag-IBIG and PhilHealth Table Management ===
+function sssShareByMonthly(monthly){
+  const rows = getSssTable();
+  if(rows.length===0) return 0;
+  rows.sort((a,b)=>a.min-b.min);
+  if(monthly <= rows[0].min) return Number(rows[0].employee)||0;
+  for(const r of rows){ if(monthly >= r.min && monthly <= r.max) return Number(r.employee)||0; }
+  return Number(rows[rows.length-1].employee)||0;
+}
+
+function sssEmployerShareByMonthly(monthly){
+  const rows = getSssTable();
+  if(rows.length===0) return 0;
+  rows.sort((a,b)=>a.min-b.min);
+  if(monthly <= rows[0].min) return Number(rows[0].employer ?? rows[0].employee) || 0;
+  for(const r of rows){
+    if(monthly >= r.min && monthly <= r.max){
+      return Number(r.employer ?? r.employee) || 0;
+    }
+  }
+  const last = rows[rows.length-1];
+  return Number(last.employer ?? last.employee) || 0;
+}
+
+// Determine Pag-IBIG contribution rate based on the monthly income.  Uses the
+// editable Pag-IBIG table; returns a decimal rate (e.g. 0.02).  If no matching
+// range is found, returns the last row's rate.
+function pagibigRateByMonthly(monthly){
+  const rows = getPagibigTable();
+  if(rows.length===0) return 0;
+  rows.sort((a,b)=>a.min-b.min);
+  if(monthly <= rows[0].min) return Number(rows[0].rate)||0;
+  for(const r of rows){
+    if(monthly >= r.min && monthly <= r.max){
+      return Number(r.rate)||0;
+    }
+  }
+  return Number(rows[rows.length-1].rate)||0;
+}
+
+// Determine PhilHealth contribution rate based on the monthly income.  Uses the
+// editable PhilHealth table; returns a decimal rate.  If no matching range is found,
+// returns the last row's rate.
+function philhealthRateByMonthly(monthly){
+  const rows = getPhilhealthTable();
+  if(rows.length===0) return 0;
+  rows.sort((a,b)=>a.min-b.min);
+  if(monthly <= rows[0].min) return Number(rows[0].rate)||0;
+  for(const r of rows){
+    if(monthly >= r.min && monthly <= r.max){
+      return Number(r.rate)||0;
+    }
+  }
+  return Number(rows[rows.length-1].rate)||0;
+}
+
+function calculateRow(tr){  const readNum = sel => { const el = tr.querySelector(sel); if (!el) return 0; const v = (typeof el.value !== 'undefined' ? el.value : el.textContent); const n = parseFloat(String(v).replace(/,/g,'')); return isNaN(n)?0:n; };
+  const w = (sel, val) => { const el = tr.querySelector(sel); if (!el) return; el.textContent = (val===0 ? '-' : (+val).toFixed(2)); };
+
+
+  const id = tr.cells[0].textContent.trim();
+  const reg = Number(tr.querySelector('.regHrs').value)||0;
+  const otBase = getOvertimeHoursTotal(id);
+  const regAdjHours = getRegularAdjustmentHours(id);
+  const adjOtHours = getOvertimeAdjustmentHours(id);
+  // Combined OT hours including adjustments
+  const otTotal = otBase + adjOtHours;
+  const rate = getEmployeeHourlyRate(id);
+  const getMappedInputValue = (selector, map) => {
+    const input = tr.querySelector(selector);
+    const fallback = input ? Number(input.value) || 0 : readNum(selector);
+    if (!map || !Object.prototype.hasOwnProperty.call(map, id)) {
+      return { value: fallback, input, fromMap: false };
+    }
+    const mappedRaw = Number(map[id]);
+    const mapped = Number.isFinite(mappedRaw) ? mappedRaw : 0;
+    return { value: mapped, input, fromMap: true };
+  };
+
+  const loanSssInput = getMappedInputValue('.loanSSS', loanSSS);
+  const loanPiInput = getMappedInputValue('.loanPI', loanPI);
+  const valeInput = getMappedInputValue('.vale', vale);
+  const valeWedInput = getMappedInputValue('.valeWed', valeWed);
+  const syncInputValue = (entry) => {
+    if (!entry || !entry.input || !entry.fromMap) return;
+    try {
+      entry.input.value = roundToCents(entry.value || 0).toFixed(2);
+    } catch (_) {}
+  };
+  syncInputValue(loanSssInput);
+  syncInputValue(loanPiInput);
+  syncInputValue(valeInput);
+  syncInputValue(valeWedInput);
+  const lSSS = loanSssInput.value || 0;
+  const lPI = loanPiInput.value || 0;
+  const v = valeInput.value || 0;
+  const vW = valeWedInput.value || 0;
+
+  const otherDeductionsAmount = roundToCents(getOtherDeductionsTotal(id));
+  const additionalIncome = getAdditionalIncomeTotal(id);
+  // Bantay allowance (treated as positive allowance).  Parse numeric value from bantay input.
+  const bVal = parseFloat((tr.querySelector('.bantay')?.value || '').trim()) || 0;
+  const additionalIncomeShown = roundToCents(additionalIncome + bVal);
+
+  const regPay = roundToCents(reg * rate);
+  const adjPay = roundToCents(regAdjHours * rate);
+  const effectiveOtRate = getEffectiveOvertimeRateForEmployee(id, rate);
+  const baseOtPay = roundToCents(otTotal * effectiveOtRate);
+  const nightDiffPay = getNightDifferentialPayForEmployee(id);
+  const otPay = roundToCents(baseOtPay + nightDiffPay);
+  const gross = roundToCents(regPay + adjPay + additionalIncomeShown + otPay);
+  // Compute contributions using dynamic tables (employee share).  Determine the
+  // appropriate rate based on the monthly income and multiply by regular pay.
+  const monthly = rate * 8 * 24;
+  const piRate = pagibigRateByMonthly(monthly);
+  const phRate = philhealthRateByMonthly(monthly);
+  // Check per-employee contribution deduction flags; default to true if not set
+  const flags = contribFlags[id] || {};
+  const div = Number(divisor) || 1;
+  const hasCompensation = (reg > 0) || (otTotal > 0) || (regAdjHours > 0) || (additionalIncomeShown > 0);
+  const pagibig = (hasCompensation && flags.pagibig !== false ? +((regPay * piRate)).toFixed(2) : 0);
+  const philhealth = (hasCompensation && flags.philhealth !== false ? +((regPay * phRate)).toFixed(2) : 0);
+  const sssFull = hasCompensation ? sssShareByMonthly(monthly) : 0;
+  const sss = (hasCompensation && flags.sss !== false ? +(sssFull / div).toFixed(2) : 0);
+  const sssLoan = +(lSSS / div).toFixed(2);
+  const piLoan = +(lPI / div).toFixed(2);
+  const valeAmt = v;
+  const wedValeAmt = vW;
+
+  const deductionRaw = {
+    pagibig,
+    philhealth,
+    sss,
+    loanSSS: sssLoan,
+    loanPI: piLoan,
+    vale: valeAmt,
+    adjustments: otherDeductionsAmount,
+    valeWed: wedValeAmt
+  };
+  deductionRaw.total = roundToCents(pagibig + philhealth + sss + sssLoan + piLoan + valeAmt + wedValeAmt + otherDeductionsAmount);
+  const deductionEffective = computeEffectiveDeductionValues(deductionRaw);
+  const total = deductionEffective.total;
+  const net = roundToCents(gross - total);
+
+  w('.regPay', regPay);
+  w('.otPay', otPay);
+  w('.adjHours', regAdjHours);
+  w('.adjPay', adjPay);
+  w('.adjAmt', additionalIncomeShown);
+  w('.grossPay', gross);
+  const applyDeductionCell = (selector, key) => {
+    const applied = roundToCents(deductionEffective[key] || 0);
+    w(selector, applied);
+    const rawVal = roundToCents(deductionRaw[key] || 0);
+    const rawStr = rawVal.toFixed(2);
+    const appliedStr = applied.toFixed(2);
+    setRowDeductionDataset(tr, key, rawStr, appliedStr);
+    const cell = tr.querySelector(selector);
+    if (!cell) return;
+    try {
+      cell.dataset.rawValue = rawStr;
+      cell.dataset.effectiveValue = appliedStr;
+    } catch (_) {}
+    const included = isDeductionColumnIncluded(key);
+    if (!included && Math.abs(rawVal) > 0.004) {
+      cell.classList.add('deduction-excluded');
+      cell.setAttribute('title', `Excluded (was ${rawStr})`);
+    } else {
+      cell.classList.remove('deduction-excluded');
+      cell.removeAttribute('title');
+    }
+  };
+  const applyDeductionInput = (selector, key) => {
+    const input = tr.querySelector(selector);
+    if (!input) {
+      const rawVal = roundToCents(deductionRaw[key] || 0).toFixed(2);
+      const applied = roundToCents(deductionEffective[key] || 0).toFixed(2);
+      setRowDeductionDataset(tr, key, rawVal, applied);
+      return;
+    }
+    const rawVal = roundToCents(deductionRaw[key] || 0);
+    const applied = roundToCents(deductionEffective[key] || 0);
+    const rawStr = rawVal.toFixed(2);
+    const appliedStr = applied.toFixed(2);
+    try {
+      input.dataset.rawValue = rawStr;
+      input.dataset.effectiveValue = appliedStr;
+    } catch (_) {}
+    setRowDeductionDataset(tr, key, rawStr, appliedStr);
+    const included = isDeductionColumnIncluded(key);
+    if (!included && Math.abs(rawVal) > 0.004) {
+      input.classList.add('deduction-excluded');
+      input.setAttribute('title', `Excluded (was ${rawStr})`);
+    } else {
+      input.classList.remove('deduction-excluded');
+      input.removeAttribute('title');
+    }
+  };
+  applyDeductionCell('.pagibig', 'pagibig');
+  applyDeductionCell('.philhealth', 'philhealth');
+  applyDeductionCell('.sss', 'sss');
+  applyDeductionCell('.totalDed', 'total');
+  applyDeductionInput('.loanSSS', 'loanSSS');
+  applyDeductionInput('.loanPI', 'loanPI');
+  applyDeductionInput('.vale', 'vale');
+  applyDeductionInput('.valeWed', 'valeWed');
+  // Other deductions column is derived from the Other Deductions tab and shown as a deduction-only subtotal.
+  setRowDeductionDataset(
+    tr,
+    'adjustments',
+    roundToCents(deductionRaw.adjustments || 0).toFixed(2),
+    roundToCents(deductionEffective.adjustments || 0).toFixed(2)
+  );
+  // Persist additional income metadata and net pay
+  try {
+    tr.dataset.otherDeductionsTotal = otherDeductionsAmount ? otherDeductionsAmount.toFixed(2) : '0.00';
+    tr.dataset.additionalIncomeTotal = additionalIncomeShown ? additionalIncomeShown.toFixed(2) : '0.00';
+  } catch (_) {}
+  w('.netPay', net);
+}
+
+function calculateAll(){
+  syncPeriodScopedData();
+  document.querySelectorAll('#payrollTable tbody tr').forEach(tr=> calculateRow(tr));
+  renderDeductionsTable();
+}
+
+let otherDeductionsRenderPending = false;
+let otherDeductionsFocusCount = 0;
+let adjustmentHoursRenderPending = false;
+let adjustmentHoursFocusCount = 0;
+const isOtherDeductionsInputFocused = () => otherDeductionsFocusCount > 0 || adjustmentHoursFocusCount > 0;
+try { window.isOtherDeductionsInputFocused = isOtherDeductionsInputFocused; } catch (_) {}
+const queueOtherDeductionsRerender = () => {
+  if (isOtherDeductionsInputFocused()) {
+    otherDeductionsRenderPending = true;
+    adjustmentHoursRenderPending = true;
+    return;
+  }
+  otherDeductionsRenderPending = false;
+  adjustmentHoursRenderPending = false;
+  try { renderOtherDeductionsTable(); } catch (_) {}
+  try { renderAdjustmentHoursTable(); } catch (_) {}
+};
+try { window.queueOtherDeductionsRerender = queueOtherDeductionsRerender; } catch (_) {}
+const otherDeductionsRefresh = (() => {
+  let timer = null;
+  const statusEl = () => document.getElementById('otherDeductionsSaveStatus');
+  const run = () => {
+    timer = null;
+    calculateAll();
+    const el = statusEl();
+    if (el) {
+      el.textContent = 'Saved locally';
+      el.classList.remove('error');
+      el.classList.add('saved');
+    }
+  };
+  return {
+    schedule(){
+      try {
+        const el = statusEl();
+        if (el) {
+          el.textContent = 'Updating…';
+          el.classList.remove('error');
+          el.classList.remove('saved');
+        }
+      } catch (_) {}
+      if (timer) window.clearTimeout(timer);
+      timer = window.setTimeout(run, 400);
+    },
+    flush(){
+      if (timer) {
+        window.clearTimeout(timer);
+        run();
+      } else {
+        run();
+      }
+    }
+  };
+})();
+
+function createDebouncedPersistence(persistFn, delay = 150) {
+  let timer = null;
+  const flush = () => {
+    if (timer) {
+      window.clearTimeout(timer);
+      timer = null;
+    }
+    try { persistFn(); } catch (_) {}
+  };
+  return {
+    schedule() {
+      if (timer) window.clearTimeout(timer);
+      timer = window.setTimeout(() => { timer = null; try { persistFn(); } catch (_) {} }, delay);
+    },
+    flush
+  };
+}
+const otherDeductionsPersist = createDebouncedPersistence(persistCurrentOtherDeductions, 200);
+const adjustmentHoursPersist = createDebouncedPersistence(persistCurrentAdjustmentHours);
+const additionalIncomePersist = createDebouncedPersistence(persistCurrentAdditionalIncome, 200);
+
+// === Additional Income Tab ===
+let additionalIncomeRenderPending = false;
+let additionalIncomeFocusCount = 0;
+const isAdditionalIncomeInputFocused = () => additionalIncomeFocusCount > 0;
+try { window.isAdditionalIncomeInputFocused = isAdditionalIncomeInputFocused; } catch (_) {}
+const queueAdditionalIncomeRerender = () => {
+  if (isAdditionalIncomeInputFocused()) {
+    additionalIncomeRenderPending = true;
+    return;
+  }
+  additionalIncomeRenderPending = false;
+  try { renderAdditionalIncomeTable(); } catch (_) {}
+};
+function updatePayrollRowForEmployee(empId){
+  if (!empId) return;
+  const rows = document.querySelectorAll('#payrollTable tbody tr');
+  if (!rows || !rows.length) return;
+  for (const tr of rows) {
+    const idCell = tr.cells && tr.cells[0];
+    const rowId = idCell ? (idCell.textContent || '').trim() : '';
+    if (rowId === empId) {
+      calculateRow(tr);
+      break;
+    }
+  }
+  try { if (typeof scheduleTotals === 'function') scheduleTotals(); } catch (_) {}
+}
+
+function getAdditionalIncomeDetailsForEmployee(empId){
+  if (!empId) return [];
+  const items = additionalIncomeDetails && additionalIncomeDetails[empId];
+  return Array.isArray(items) ? normalizeAdditionalIncomeItems(items) : [];
+}
+
+function renderAdditionalIncomeTable(){
+  if (isAdditionalIncomeInputFocused()) {
+    additionalIncomeRenderPending = true;
+    return;
+  }
+  additionalIncomeRenderPending = false;
+  syncPeriodScopedData();
+  ensureAdditionalIncomeDetailsMap();
+  rebuildAdditionalIncomeTotals();
+  const atbody = document.querySelector('#additionalIncomeTable tbody');
+  if (!atbody) return;
+  const incomeOptions = getIncomeTypeOptions();
+  const defaultType = incomeOptions[0] || CUSTOM_INCOME_TYPE_VALUE;
+  const projectMap = (typeof storedProjects !== 'undefined' && storedProjects) || {};
+  const handleBlur = () => {
+    additionalIncomeFocusCount = Math.max(0, additionalIncomeFocusCount - 1);
+    setTimeout(() => {
+      if (additionalIncomeFocusCount === 0 && additionalIncomeRenderPending) queueAdditionalIncomeRerender();
+      if (additionalIncomeFocusCount === 0 && window.__additionalIncomeHydratePending) {
+        window.__additionalIncomeHydratePending = false;
+        try {
+          if (typeof window.queueHydrateRerender === 'function') window.queueHydrateRerender();
+        } catch (_) {}
+      }
+    }, 0);
+  };
+  atbody.innerHTML = '';
+  let grandTotal = 0;
+  getEmployeeList().forEach(emp => {
+    const empId = emp.id;
+    grandTotal = roundToCents(grandTotal + getAdditionalIncomeTotal(empId));
+    const items = Array.isArray(additionalIncomeDetails[empId]) ? additionalIncomeDetails[empId] : [];
+    const renderItems = items.length ? items : [{ label: '', amount: '', __placeholder: true }];
+    renderItems.forEach((item, idx) => {
+      const tr = document.createElement('tr');
+      tr.dataset.empId = empId;
+      tr.dataset.index = String(idx);
+      tr.innerHTML = `
+        <td class="wrap"></td>
+        <td class="incomeTypeCell"></td>
+        <td class="incomeProjectCell"></td>
+        <td><input type="number" min="0" step="0.01" class="incomeAmount" data-emp="${empId}" data-index="${idx}"></td>
+        <td><button type="button" class="removeIncomeItemBtn" data-emp="${empId}" data-index="${idx}">Remove</button></td>
+      `;
+      const empCell = tr.querySelector('td');
+      if (idx === 0) {
+        const wrapper = document.createElement('div');
+        wrapper.style.display = 'flex';
+        wrapper.style.flexDirection = 'column';
+        wrapper.style.alignItems = 'flex-start';
+        wrapper.style.gap = '6px';
+        const nameEl = document.createElement('span');
+        nameEl.textContent = emp.name;
+        const addBtn = document.createElement('button');
+        addBtn.type = 'button';
+        addBtn.className = 'addIncomeItemBtn';
+        addBtn.dataset.emp = empId;
+        addBtn.textContent = 'Add item';
+        addBtn.addEventListener('click', () => {
+          if (!Array.isArray(additionalIncomeDetails[empId])) additionalIncomeDetails[empId] = [];
+          additionalIncomeDetails[empId].push({
+            type: defaultType,
+            label: resolveAdditionalIncomeLabel(defaultType, ''),
+            project: '',
+            amount: 0
+          });
+          updateAdditionalIncomeTotalForEmployee(empId);
+          additionalIncomePersist.flush();
+          renderAdditionalIncomeTable();
+          updatePayrollRowForEmployee(empId);
+        });
+        wrapper.appendChild(nameEl);
+        wrapper.appendChild(addBtn);
+        empCell.appendChild(wrapper);
+      } else {
+        empCell.innerHTML = '&nbsp;';
+      }
+      const typeCell = tr.querySelector('.incomeTypeCell');
+      const projectCell = tr.querySelector('.incomeProjectCell');
+      const amountInput = tr.querySelector('.incomeAmount');
+      const removeBtn = tr.querySelector('.removeIncomeItemBtn');
+      const isPlaceholder = !!item.__placeholder;
+      const normalizedItem = isPlaceholder
+        ? { type: defaultType, label: '', project: '', amount: '', __placeholder: true }
+        : normalizeAdditionalIncomeItem(item);
+      const typeMatch = matchIncomeTypeOption(normalizedItem.type);
+      const labelMatch = matchIncomeTypeOption(normalizedItem.label);
+      const selectedType = typeMatch
+        || (normalizedItem.type === CUSTOM_INCOME_TYPE_VALUE ? CUSTOM_INCOME_TYPE_VALUE : (labelMatch || CUSTOM_INCOME_TYPE_VALUE));
+      const amountValue = isPlaceholder ? '' : sanitizeAdditionalIncomeAmount(normalizedItem.amount);
+      let typeSelect = null;
+      let customInput = null;
+      let projectSelect = null;
+      if (typeCell) {
+        const field = document.createElement('div');
+        field.className = 'incomeTypeField';
+        typeSelect = document.createElement('select');
+        typeSelect.className = 'incomeTypeSelect';
+        typeSelect.dataset.emp = empId;
+        typeSelect.dataset.index = String(idx);
+        incomeOptions.forEach(option => {
+          const opt = document.createElement('option');
+          opt.value = option;
+          opt.textContent = option;
+          typeSelect.appendChild(opt);
+        });
+        const customOption = document.createElement('option');
+        customOption.value = CUSTOM_INCOME_TYPE_VALUE;
+        customOption.textContent = 'Custom...';
+        typeSelect.appendChild(customOption);
+        customInput = document.createElement('input');
+        customInput.type = 'text';
+        customInput.className = 'incomeCustomLabel';
+        customInput.placeholder = 'Custom label';
+        customInput.dataset.emp = empId;
+        customInput.dataset.index = String(idx);
+        field.appendChild(typeSelect);
+        field.appendChild(customInput);
+        typeCell.appendChild(field);
+      }
+      if (projectCell) {
+        projectSelect = document.createElement('select');
+        projectSelect.className = 'incomeProjectSelect';
+        projectSelect.dataset.emp = empId;
+        projectSelect.dataset.index = String(idx);
+
+        const currentRaw = isPlaceholder ? '' : String((normalizedItem && (normalizedItem.project || normalizedItem.projectId)) || '').trim();
+        const currentResolved = populateProjectSelectWithActiveOptions(projectSelect, currentRaw, {
+          projectMap,
+          noneLabel: 'Select project'
+        });
+        if (!isPlaceholder && currentResolved !== currentRaw) {
+          if (!Array.isArray(additionalIncomeDetails[empId])) additionalIncomeDetails[empId] = [];
+          if (!additionalIncomeDetails[empId][idx]) additionalIncomeDetails[empId][idx] = {};
+          additionalIncomeDetails[empId][idx].project = currentResolved;
+          additionalIncomeDetails[empId][idx].projectId = currentResolved;
+          additionalIncomePersist.schedule();
+        }
+        projectCell.appendChild(projectSelect);
+      }
+      const setCustomVisibility = (show) => {
+        if (!customInput) return;
+        customInput.style.display = show ? '' : 'none';
+      };
+      if (typeSelect) {
+        typeSelect.value = selectedType;
+      }
+      if (customInput) {
+        customInput.value = selectedType === CUSTOM_INCOME_TYPE_VALUE ? (normalizedItem.label || '') : '';
+        setCustomVisibility(selectedType === CUSTOM_INCOME_TYPE_VALUE);
+      }
+      if (amountInput && amountValue !== '') {
+        amountInput.value = Number(amountValue).toFixed(2);
+      }
+      if (removeBtn && isPlaceholder) {
+        removeBtn.disabled = true;
+      }
+      if (typeSelect) {
+        typeSelect.addEventListener('focus', () => { additionalIncomeFocusCount += 1; });
+        typeSelect.addEventListener('change', () => {
+          if (!Array.isArray(additionalIncomeDetails[empId])) additionalIncomeDetails[empId] = [];
+          if (!additionalIncomeDetails[empId][idx]) {
+            additionalIncomeDetails[empId][idx] = { type: defaultType, label: resolveAdditionalIncomeLabel(defaultType, ''), project: projectSelect ? String(projectSelect.value || '').trim() : '', amount: 0 };
+          }
+          const selection = typeSelect.value;
+          const isCustom = selection === CUSTOM_INCOME_TYPE_VALUE;
+          setCustomVisibility(isCustom);
+          if (customInput && !isCustom) customInput.value = '';
+          if (isCustom) {
+            const label = resolveAdditionalIncomeLabel(CUSTOM_INCOME_TYPE_VALUE, customInput ? customInput.value : '');
+            additionalIncomeDetails[empId][idx].type = CUSTOM_INCOME_TYPE_VALUE;
+            additionalIncomeDetails[empId][idx].label = label;
+            if (customInput) customInput.value = label;
+          } else {
+            const normalized = matchIncomeTypeOption(selection) || selection;
+            additionalIncomeDetails[empId][idx].type = normalized;
+            additionalIncomeDetails[empId][idx].label = resolveAdditionalIncomeLabel(normalized, '');
+          }
+          updateAdditionalIncomeTotalForEmployee(empId);
+          additionalIncomePersist.schedule();
+          updatePayrollRowForEmployee(empId);
+        });
+        typeSelect.addEventListener('blur', handleBlur);
+      }
+      if (projectSelect) {
+        projectSelect.addEventListener('focus', () => { additionalIncomeFocusCount += 1; });
+        projectSelect.addEventListener('change', () => {
+          if (!Array.isArray(additionalIncomeDetails[empId])) additionalIncomeDetails[empId] = [];
+          if (!additionalIncomeDetails[empId][idx]) {
+            additionalIncomeDetails[empId][idx] = {
+              type: defaultType,
+              label: resolveAdditionalIncomeLabel(defaultType, ''),
+              project: '',
+              amount: 0
+            };
+          }
+          additionalIncomeDetails[empId][idx].project = String(projectSelect.value || '').trim();
+          additionalIncomePersist.schedule();
+          updatePayrollRowForEmployee(empId);
+        });
+        projectSelect.addEventListener('blur', handleBlur);
+      }
+      if (customInput) {
+        customInput.addEventListener('focus', () => { additionalIncomeFocusCount += 1; });
+        customInput.addEventListener('input', () => {
+          if (!typeSelect || typeSelect.value !== CUSTOM_INCOME_TYPE_VALUE) return;
+          if (!Array.isArray(additionalIncomeDetails[empId])) additionalIncomeDetails[empId] = [];
+          if (!additionalIncomeDetails[empId][idx]) {
+            additionalIncomeDetails[empId][idx] = { type: CUSTOM_INCOME_TYPE_VALUE, label: '', project: projectSelect ? String(projectSelect.value || '').trim() : '', amount: 0 };
+          }
+          additionalIncomeDetails[empId][idx].type = CUSTOM_INCOME_TYPE_VALUE;
+          additionalIncomeDetails[empId][idx].label = customInput.value;
+          additionalIncomePersist.schedule();
+          updatePayrollRowForEmployee(empId);
+        });
+        customInput.addEventListener('blur', () => {
+          if (!Array.isArray(additionalIncomeDetails[empId])) additionalIncomeDetails[empId] = [];
+          if (!additionalIncomeDetails[empId][idx]) {
+            additionalIncomeDetails[empId][idx] = { type: CUSTOM_INCOME_TYPE_VALUE, label: '', project: projectSelect ? String(projectSelect.value || '').trim() : '', amount: 0 };
+          }
+          const label = resolveAdditionalIncomeLabel(CUSTOM_INCOME_TYPE_VALUE, customInput.value);
+          additionalIncomeDetails[empId][idx].type = CUSTOM_INCOME_TYPE_VALUE;
+          additionalIncomeDetails[empId][idx].label = label;
+          customInput.value = label;
+          additionalIncomePersist.flush();
+          updatePayrollRowForEmployee(empId);
+          handleBlur();
+        });
+      }
+      if (amountInput) {
+        amountInput.addEventListener('focus', () => { additionalIncomeFocusCount += 1; });
+        amountInput.addEventListener('input', () => {
+          if (!Array.isArray(additionalIncomeDetails[empId])) additionalIncomeDetails[empId] = [];
+          if (!additionalIncomeDetails[empId][idx]) {
+            additionalIncomeDetails[empId][idx] = {
+              type: defaultType,
+              label: resolveAdditionalIncomeLabel(defaultType, ''),
+              project: projectSelect ? String(projectSelect.value || '').trim() : '',
+              amount: 0
+            };
+          }
+          const raw = parseFloat(amountInput.value);
+          const amount = Number.isFinite(raw) ? sanitizeAdditionalIncomeAmount(raw) : 0;
+          additionalIncomeDetails[empId][idx].amount = amount;
+          updateAdditionalIncomeTotalForEmployee(empId);
+          additionalIncomePersist.schedule();
+          updatePayrollRowForEmployee(empId);
+        });
+        amountInput.addEventListener('blur', () => {
+          if (!Array.isArray(additionalIncomeDetails[empId])) additionalIncomeDetails[empId] = [];
+          if (!additionalIncomeDetails[empId][idx]) {
+            additionalIncomeDetails[empId][idx] = {
+              type: defaultType,
+              label: resolveAdditionalIncomeLabel(defaultType, ''),
+              project: projectSelect ? String(projectSelect.value || '').trim() : '',
+              amount: 0
+            };
+          }
+          const raw = parseFloat(amountInput.value);
+          const amount = Number.isFinite(raw) ? sanitizeAdditionalIncomeAmount(raw) : 0;
+          additionalIncomeDetails[empId][idx].amount = amount;
+          amountInput.value = amount ? amount.toFixed(2) : '';
+          updateAdditionalIncomeTotalForEmployee(empId);
+          additionalIncomePersist.flush();
+          updatePayrollRowForEmployee(empId);
+          handleBlur();
+        });
+      }
+      if (removeBtn) {
+        removeBtn.addEventListener('click', () => {
+          if (!Array.isArray(additionalIncomeDetails[empId])) additionalIncomeDetails[empId] = [];
+          additionalIncomeDetails[empId].splice(idx, 1);
+          if (!additionalIncomeDetails[empId].length) delete additionalIncomeDetails[empId];
+          updateAdditionalIncomeTotalForEmployee(empId);
+          additionalIncomePersist.flush();
+          renderAdditionalIncomeTable();
+          updatePayrollRowForEmployee(empId);
+        });
+      }
+      atbody.appendChild(tr);
+    });
+  });
+  const totalRow = document.createElement('tr');
+  totalRow.className = 'grand-total-row';
+  totalRow.innerHTML = `
+    <td class="wrap">Grand Total</td>
+    <td></td>
+    <td></td>
+    <td class="num" data-col="amount">${formatDeductionDisplay(grandTotal)}</td>
+    <td></td>
+  `;
+  atbody.appendChild(totalRow);
+}
+
+function updateAdditionalIncomeGrandTotalRow() {
+  const row = document.querySelector('#additionalIncomeTable tbody tr.grand-total-row');
+  if (!row) return;
+  let grandTotal = 0;
+  getEmployeeList().forEach(emp => {
+    grandTotal = roundToCents(grandTotal + getAdditionalIncomeTotal(emp.id));
+  });
+  const cell = row.querySelector('[data-col="amount"]');
+  if (cell) cell.textContent = formatDeductionDisplay(grandTotal);
+}
+
+function buildAdditionalIncomeReportData() {
+  syncPeriodScopedData();
+  ensureAdditionalIncomeDetailsMap();
+  rebuildAdditionalIncomeTotals();
+  const incomeOptions = getIncomeTypeOptions();
+  const optionsLower = new Set(incomeOptions.map(opt => String(opt || '').toLowerCase()));
+  const seenTypes = new Map();
+  const rows = getEmployeeList().map(emp => {
+    const empId = emp.id;
+    const items = getAdditionalIncomeDetailsForEmployee(empId);
+    const totals = {};
+    let rowTotal = 0;
+    items.forEach(item => {
+      const normalized = normalizeAdditionalIncomeItem(item);
+      const label = resolveAdditionalIncomeLabel(normalized.type, normalized.label);
+      const key = String(label || '').trim();
+      if (!key) return;
+      const keyLower = key.toLowerCase();
+      if (!seenTypes.has(keyLower)) seenTypes.set(keyLower, key);
+      const amount = sanitizeAdditionalIncomeAmount(normalized.amount);
+      totals[keyLower] = roundToCents((totals[keyLower] || 0) + amount);
+      rowTotal = roundToCents(rowTotal + amount);
+    });
+    return {
+      id: empId,
+      name: emp.name,
+      totals,
+      total: rowTotal
+    };
+  });
+  const customLabels = [];
+  seenTypes.forEach((label, keyLower) => {
+    if (!optionsLower.has(keyLower)) customLabels.push(label);
+  });
+  customLabels.sort((a, b) => String(a).localeCompare(String(b)));
+  const columnLabels = [];
+  const dedupe = new Set();
+  incomeOptions.forEach(label => {
+    const keyLower = String(label || '').toLowerCase();
+    if (dedupe.has(keyLower)) return;
+    dedupe.add(keyLower);
+    columnLabels.push(label);
+  });
+  customLabels.forEach(label => {
+    const keyLower = String(label || '').toLowerCase();
+    if (dedupe.has(keyLower)) return;
+    dedupe.add(keyLower);
+    columnLabels.push(label);
+  });
+  return { rows, columnLabels };
+}
+
+const PRINT_PIVOT_MAX_TYPES = 6;
+
+function getPrintablePivotColumns(rows, types) {
+  const typeList = Array.isArray(types) ? types : [];
+  const optionsLower = new Set(typeList.map(opt => String(opt || '').toLowerCase()));
+  const totalsMap = new Map();
+  typeList.forEach(label => {
+    const keyLower = String(label || '').toLowerCase();
+    if (!keyLower || totalsMap.has(keyLower)) return;
+    totalsMap.set(keyLower, { label, keyLower, total: 0 });
+  });
+  let customTotal = 0;
+  rows.forEach(row => {
+    const totals = row && row.totals ? row.totals : {};
+    totalsMap.forEach(entry => {
+      entry.total = roundToCents(entry.total + (totals[entry.keyLower] || 0));
+    });
+    Object.keys(totals).forEach(keyLower => {
+      if (!optionsLower.has(keyLower)) {
+        customTotal = roundToCents(customTotal + (totals[keyLower] || 0));
+      }
+    });
+  });
+  const columns = Array.from(totalsMap.values()).filter(col => col.total > 0);
+  if (customTotal > 0) {
+    columns.push({ label: 'Custom/Others', keyLower: '__custom__', total: customTotal, isCustom: true });
+  }
+  return columns;
+}
+
+function exportAdditionalIncomePivotExcel(report) {
+  if (typeof XLSX === 'undefined' || !XLSX || !XLSX.utils) {
+    alert('Excel library not available');
+    return false;
+  }
+  const ws = document.getElementById('weekStart');
+  const we = document.getElementById('weekEnd');
+  const startDate = ws && ws.value ? ws.value : '';
+  const endDate = we && we.value ? we.value : '';
+  const title = (startDate && endDate)
+    ? `Additional Income Report (${startDate} to ${endDate})`
+    : 'Additional Income Report';
+  const header = ['ID', 'Employee', ...report.columnLabels, 'Total'];
+  const rows = [];
+  rows.push([title]);
+  rows.push([]);
+  rows.push(header);
+  report.rows.forEach(row => {
+    const rowCells = [row.id, row.name];
+    report.columnLabels.forEach(label => {
+      const keyLower = String(label || '').toLowerCase();
+      const value = row.totals[keyLower] || 0;
+      rowCells.push(value ? value : 0);
+    });
+    rowCells.push(row.total || 0);
+    rows.push(rowCells);
+  });
+  const totalsRow = ['','Grand Total'];
+  report.columnLabels.forEach(label => {
+    const keyLower = String(label || '').toLowerCase();
+    let sum = 0;
+    report.rows.forEach(row => { sum = roundToCents(sum + (row.totals[keyLower] || 0)); });
+    totalsRow.push(sum);
+  });
+  let grandTotal = 0;
+  report.rows.forEach(row => { grandTotal = roundToCents(grandTotal + (row.total || 0)); });
+  totalsRow.push(grandTotal);
+  rows.push(totalsRow);
+
+  const wb = XLSX.utils.book_new();
+  const sheet = XLSX.utils.aoa_to_sheet(rows);
+  XLSX.utils.book_append_sheet(wb, sheet, 'Additional Income');
+
+  const rangeLabel = (startDate && endDate) ? `${startDate}_to_${endDate}` : '';
+  const safeLabel = rangeLabel.replace(/[^0-9A-Za-z_-]/g, '');
+  const filename = safeLabel ? `Additional_Income_${safeLabel}.xlsx` : 'Additional_Income.xlsx';
+  XLSX.writeFile(wb, filename);
+  return true;
+}
+
+function printAdditionalIncomePivot(report, orientation) {
+  const formatAmount = (value) => {
+    const num = Number(value);
+    if (!Number.isFinite(num) || Math.abs(num) < 0.005) return '-';
+    return num.toFixed(2);
+  };
+  const incomeOptions = getIncomeTypeOptions();
+  const optionsLower = new Set(incomeOptions.map(opt => String(opt || '').toLowerCase()));
+  const printableColumns = getPrintablePivotColumns(report.rows, incomeOptions);
+  const customColumn = printableColumns.find(col => col.isCustom);
+  const standardColumns = printableColumns.filter(col => !col.isCustom);
+  let columnsToPrint = [];
+  if (standardColumns.length > PRINT_PIVOT_MAX_TYPES) {
+    const sorted = [...standardColumns].sort((a, b) => b.total - a.total);
+    const primary = sorted.slice(0, PRINT_PIVOT_MAX_TYPES);
+    const overflow = sorted.slice(PRINT_PIVOT_MAX_TYPES);
+    columnsToPrint = [...primary];
+    if (overflow.length) {
+      const overflowTotal = overflow.reduce((sum, col) => roundToCents(sum + (col.total || 0)), 0);
+      if (overflowTotal > 0) {
+        columnsToPrint.push({
+          label: 'Others',
+          keyLower: '__others__',
+          total: overflowTotal,
+          isOthers: true,
+          sourceKeys: overflow.map(col => col.keyLower)
+        });
+      }
+    }
+  } else {
+    columnsToPrint = [...standardColumns];
+  }
+  if (customColumn) columnsToPrint.push(customColumn);
+  const ws = document.getElementById('weekStart');
+  const we = document.getElementById('weekEnd');
+  const startDate = ws && ws.value ? ws.value : '';
+  const endDate = we && we.value ? we.value : '';
+  const title = (startDate && endDate)
+    ? `Additional Income Report (${startDate} to ${endDate})`
+    : 'Additional Income Report';
+  const getRowValue = (row, column) => {
+    if (!row || !row.totals) return 0;
+    if (column.isCustom) {
+      return Object.keys(row.totals).reduce((sum, keyLower) => {
+        if (optionsLower.has(keyLower)) return sum;
+        return roundToCents(sum + (row.totals[keyLower] || 0));
+      }, 0);
+    }
+    if (column.isOthers) {
+      const keys = column.sourceKeys || [];
+      return keys.reduce((sum, keyLower) => roundToCents(sum + (row.totals[keyLower] || 0)), 0);
+    }
+    return row.totals[column.keyLower] || 0;
+  };
+  let html = '<div id="printReportContainer" class="print-scale"><table><thead><tr><th>Employee ID</th><th>Employee Name</th>';
+  columnsToPrint.forEach(column => {
+    html += `<th class="num">${column.label}</th>`;
+  });
+  html += '<th class="num">Total Additional Income</th></tr></thead><tbody>';
+  report.rows.forEach(row => {
+    html += `<tr><td>${row.id || ''}</td><td>${row.name || ''}</td>`;
+    columnsToPrint.forEach(column => {
+      html += `<td class="num">${formatAmount(getRowValue(row, column))}</td>`;
+    });
+    html += `<td class="num">${formatAmount(row.total || 0)}</td></tr>`;
+  });
+  html += '</tbody><tfoot><tr><td></td><td>Grand Total</td>';
+  columnsToPrint.forEach(column => {
+    let sum = 0;
+    report.rows.forEach(row => { sum = roundToCents(sum + getRowValue(row, column)); });
+    html += `<td class="num">${formatAmount(sum)}</td>`;
+  });
+  let grandTotal = 0;
+  report.rows.forEach(row => { grandTotal = roundToCents(grandTotal + (row.total || 0)); });
+  html += `<td class="num">${formatAmount(grandTotal)}</td></tr></tfoot></table></div>`;
+  const doc = '<html><head><meta charset="utf-8"><title>Additional Income Report</title>' +
+    '<style>@page{size:letter portrait;margin:8mm} body{font-family:Arial,Helvetica,sans-serif;margin:0} h2{margin:0 0 6px;font-size:13px} table{border-collapse:collapse;width:100%;table-layout:fixed} th,td{border:1pt solid #000;padding:2px 4px;font-size:9px;white-space:nowrap} th{background:#f1f5f9} td.num, th.num{text-align:right} thead{display:table-header-group} tfoot{display:table-footer-group} tfoot td{font-weight:700;background:#fff7ed;border-top:2pt solid #000} .print-scale{transform:scale(0.95);transform-origin:top left} @media print{body{font-size:9px} button,input,select,textarea,nav{display:none !important} #printReportContainer{display:block}} </style>' +
+    '</head><body>' +
+    `<h2>${title}</h2>` +
+    html +
+    '</body></html>';
+  printReport(doc, { orientation: orientation, features: 'width=1100,height=700' });
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  const printBtn = document.getElementById('printAdditionalIncomePivotBtn');
+  const exportBtn = document.getElementById('exportAdditionalIncomePivotExcelBtn');
+  if (!printBtn && !exportBtn) return;
+  const getReport = () => {
+    if (!getEmployeeList() || !getEmployeeList().length) {
+      alert('No employees available for the report.');
+      return null;
+    }
+    const report = buildAdditionalIncomeReportData();
+    if (!report.columnLabels.length) {
+      alert('No additional income data to report.');
+      return null;
+    }
+    return report;
+  };
+  if (printBtn) {
+    printBtn.addEventListener('click', () => {
+      const report = getReport();
+      if (!report) return;
+      withPrintOrientation(function(orientation){
+        printAdditionalIncomePivot(report, orientation);
+      });
+    });
+  }
+  if (exportBtn) {
+    exportBtn.addEventListener('click', () => {
+      const report = getReport();
+      if (!report) return;
+      exportAdditionalIncomePivotExcel(report);
+    });
+  }
+});
+
+// === Other Deductions Tab ===
+function renderOtherDeductionsTable(){
+  if (isOtherDeductionsInputFocused()) {
+    otherDeductionsRenderPending = true;
+    return;
+  }
+  otherDeductionsRenderPending = false;
+  syncPeriodScopedData();
+  ensureOtherDeductionsDetailsMap();
+  rebuildOtherDeductionsTotals();
+  const tbody = document.querySelector('#otherDeductionsTable tbody');
+  if (!tbody) return;
+  const deductionOptions = getDeductionTypeOptions();
+  const defaultType = deductionOptions[0] || CUSTOM_DEDUCTION_TYPE_VALUE;
+  const handleBlur = () => {
+    otherDeductionsFocusCount = Math.max(0, otherDeductionsFocusCount - 1);
+    setTimeout(() => {
+      if (otherDeductionsFocusCount === 0 && otherDeductionsRenderPending) queueOtherDeductionsRerender();
+      if (otherDeductionsFocusCount === 0 && window.__otherDeductionsHydratePending) {
+        window.__otherDeductionsHydratePending = false;
+        try {
+          if (typeof window.queueHydrateRerender === 'function') window.queueHydrateRerender();
+        } catch (_) {}
+      }
+    }, 0);
+  };
+  tbody.innerHTML = '';
+  let grandTotal = 0;
+  getEmployeeList().forEach(emp => {
+    const empId = emp.id;
+    grandTotal = roundToCents(grandTotal + getOtherDeductionsTotal(empId));
+    const items = Array.isArray(otherDeductionsDetails[empId]) ? otherDeductionsDetails[empId] : [];
+    const renderItems = items.length ? items : [{ type: defaultType, label: '', amount: '', __placeholder: true }];
+    renderItems.forEach((item, idx) => {
+      const tr = document.createElement('tr');
+      tr.dataset.empId = empId;
+      tr.dataset.index = String(idx);
+      tr.innerHTML = `
+        <td class="wrap"></td>
+        <td class="otherDeductionTypeCell"></td>
+        <td><input type="number" min="0" step="0.01" class="otherDeductionAmount" data-emp="${empId}" data-index="${idx}"></td>
+        <td><button type="button" class="removeOtherDeductionBtn" data-emp="${empId}" data-index="${idx}">Remove</button></td>
+      `;
+      const empCell = tr.querySelector('td');
+      if (idx === 0) {
+        const wrapper = document.createElement('div');
+        wrapper.style.display = 'flex';
+        wrapper.style.flexDirection = 'column';
+        wrapper.style.alignItems = 'flex-start';
+        wrapper.style.gap = '6px';
+        const nameEl = document.createElement('span');
+        nameEl.textContent = emp.name;
+        const addBtn = document.createElement('button');
+        addBtn.type = 'button';
+        addBtn.className = 'addOtherDeductionBtn';
+        addBtn.dataset.emp = empId;
+        addBtn.textContent = 'Add item';
+        addBtn.addEventListener('click', () => {
+          if (!Array.isArray(otherDeductionsDetails[empId])) otherDeductionsDetails[empId] = [];
+          otherDeductionsDetails[empId].push({
+            type: defaultType,
+            label: resolveOtherDeductionLabel(defaultType, ''),
+            amount: 0
+          });
+          updateOtherDeductionsTotalForEmployee(empId);
+          otherDeductionsPersist.flush();
+          otherDeductionsRefresh.flush();
+          renderOtherDeductionsTable();
+          updatePayrollRowForEmployee(empId);
+        });
+        wrapper.appendChild(nameEl);
+        wrapper.appendChild(addBtn);
+        empCell.appendChild(wrapper);
+      } else {
+        empCell.innerHTML = '&nbsp;';
+      }
+      const typeCell = tr.querySelector('.otherDeductionTypeCell');
+      const amountInput = tr.querySelector('.otherDeductionAmount');
+      const removeBtn = tr.querySelector('.removeOtherDeductionBtn');
+      const isPlaceholder = !!item.__placeholder;
+      const enableRemove = () => { try { if (removeBtn) removeBtn.disabled = false; } catch(_){} };
+      const normalizedItem = isPlaceholder
+        ? { type: defaultType, label: '', amount: '', __placeholder: true }
+        : normalizeOtherDeductionItem(item);
+      const typeMatch = matchDeductionTypeOption(normalizedItem.type);
+      const labelMatch = matchDeductionTypeOption(normalizedItem.label);
+      const selectedType = typeMatch
+        || (normalizedItem.type === CUSTOM_DEDUCTION_TYPE_VALUE ? CUSTOM_DEDUCTION_TYPE_SELECT_VALUE : (labelMatch || CUSTOM_DEDUCTION_TYPE_SELECT_VALUE));
+      const amountValue = isPlaceholder ? '' : sanitizeOtherDeductionAmount(normalizedItem.amount);
+      let typeSelect = null;
+      let customInput = null;
+      if (typeCell) {
+        const field = document.createElement('div');
+        field.className = 'otherDeductionTypeField';
+        typeSelect = document.createElement('select');
+        typeSelect.className = 'otherDeductionTypeSelect';
+        typeSelect.dataset.emp = empId;
+        typeSelect.dataset.index = String(idx);
+        deductionOptions.forEach(option => {
+          const opt = document.createElement('option');
+          opt.value = option;
+          opt.textContent = option;
+          typeSelect.appendChild(opt);
+        });
+        const customOption = document.createElement('option');
+        customOption.value = CUSTOM_DEDUCTION_TYPE_SELECT_VALUE;
+        customOption.textContent = 'Custom...';
+        typeSelect.appendChild(customOption);
+        customInput = document.createElement('input');
+        customInput.type = 'text';
+        customInput.className = 'otherDeductionCustomLabel';
+        customInput.placeholder = 'Custom label';
+        customInput.dataset.emp = empId;
+        customInput.dataset.index = String(idx);
+        field.appendChild(typeSelect);
+        field.appendChild(customInput);
+        typeCell.appendChild(field);
+      }
+      const setCustomVisibility = (show) => {
+        if (!customInput) return;
+        customInput.style.display = show ? '' : 'none';
+      };
+      if (typeSelect) {
+        typeSelect.value = selectedType;
+      }
+      if (customInput) {
+        customInput.value = selectedType === CUSTOM_DEDUCTION_TYPE_SELECT_VALUE ? (normalizedItem.label || '') : '';
+        setCustomVisibility(selectedType === CUSTOM_DEDUCTION_TYPE_SELECT_VALUE);
+      }
+      if (amountInput && amountValue !== '') {
+        amountInput.value = Number(amountValue).toFixed(2);
+      }
+      if (removeBtn && isPlaceholder) {
+        removeBtn.disabled = true;
+      }
+      if (typeSelect) {
+        typeSelect.addEventListener('focus', () => { otherDeductionsFocusCount += 1; });
+        typeSelect.addEventListener('change', () => {
+          enableRemove();
+          if (!Array.isArray(otherDeductionsDetails[empId])) otherDeductionsDetails[empId] = [];
+          if (!otherDeductionsDetails[empId][idx]) {
+            otherDeductionsDetails[empId][idx] = {
+              type: defaultType,
+              label: resolveOtherDeductionLabel(defaultType, ''),
+              amount: 0
+            };
+          }
+          const selection = typeSelect.value;
+          const isCustom = selection === CUSTOM_DEDUCTION_TYPE_SELECT_VALUE;
+          setCustomVisibility(isCustom);
+          if (customInput && !isCustom) customInput.value = '';
+          if (isCustom) {
+            const label = resolveOtherDeductionLabel(CUSTOM_DEDUCTION_TYPE_VALUE, customInput ? customInput.value : '');
+            otherDeductionsDetails[empId][idx].type = CUSTOM_DEDUCTION_TYPE_VALUE;
+            otherDeductionsDetails[empId][idx].label = label;
+            if (customInput) customInput.value = label;
+          } else {
+            const normalized = matchDeductionTypeOption(selection) || selection;
+            otherDeductionsDetails[empId][idx].type = normalized;
+            otherDeductionsDetails[empId][idx].label = resolveOtherDeductionLabel(normalized, '');
+          }
+          updateOtherDeductionsTotalForEmployee(empId);
+          otherDeductionsPersist.schedule();
+          otherDeductionsRefresh.schedule();
+          updatePayrollRowForEmployee(empId);
+        });
+        typeSelect.addEventListener('blur', handleBlur);
+      }
+      if (customInput) {
+        customInput.addEventListener('focus', () => { otherDeductionsFocusCount += 1; });
+        customInput.addEventListener('input', () => {
+          if (!typeSelect || typeSelect.value !== CUSTOM_DEDUCTION_TYPE_SELECT_VALUE) return;
+          enableRemove();
+          if (!Array.isArray(otherDeductionsDetails[empId])) otherDeductionsDetails[empId] = [];
+          if (!otherDeductionsDetails[empId][idx]) {
+            otherDeductionsDetails[empId][idx] = { type: CUSTOM_DEDUCTION_TYPE_VALUE, label: '', amount: 0 };
+          }
+          otherDeductionsDetails[empId][idx].type = CUSTOM_DEDUCTION_TYPE_VALUE;
+          otherDeductionsDetails[empId][idx].label = customInput.value;
+          otherDeductionsPersist.schedule();
+          otherDeductionsRefresh.schedule();
+          updatePayrollRowForEmployee(empId);
+        });
+        customInput.addEventListener('blur', () => {
+          if (!Array.isArray(otherDeductionsDetails[empId])) otherDeductionsDetails[empId] = [];
+          if (!otherDeductionsDetails[empId][idx]) {
+            otherDeductionsDetails[empId][idx] = { type: CUSTOM_DEDUCTION_TYPE_VALUE, label: '', amount: 0 };
+          }
+          const label = resolveOtherDeductionLabel(CUSTOM_DEDUCTION_TYPE_VALUE, customInput.value);
+          otherDeductionsDetails[empId][idx].type = CUSTOM_DEDUCTION_TYPE_VALUE;
+          otherDeductionsDetails[empId][idx].label = label;
+          customInput.value = label;
+          otherDeductionsPersist.flush();
+          otherDeductionsRefresh.flush();
+          updatePayrollRowForEmployee(empId);
+          handleBlur();
+        });
+      }
+      if (amountInput) {
+        amountInput.addEventListener('focus', () => { otherDeductionsFocusCount += 1; });
+        amountInput.addEventListener('input', () => {
+          enableRemove();
+          if (!Array.isArray(otherDeductionsDetails[empId])) otherDeductionsDetails[empId] = [];
+          if (!otherDeductionsDetails[empId][idx]) {
+            otherDeductionsDetails[empId][idx] = {
+              type: defaultType,
+              label: resolveOtherDeductionLabel(defaultType, ''),
+              amount: 0
+            };
+          }
+          const raw = parseFloat(amountInput.value);
+          const amount = Number.isFinite(raw) ? sanitizeOtherDeductionAmount(raw) : 0;
+          otherDeductionsDetails[empId][idx].amount = amount;
+          updateOtherDeductionsTotalForEmployee(empId);
+          otherDeductionsPersist.schedule();
+          otherDeductionsRefresh.schedule();
+          updatePayrollRowForEmployee(empId);
+        });
+        amountInput.addEventListener('blur', () => {
+          if (!Array.isArray(otherDeductionsDetails[empId])) otherDeductionsDetails[empId] = [];
+          if (!otherDeductionsDetails[empId][idx]) {
+            otherDeductionsDetails[empId][idx] = {
+              type: defaultType,
+              label: resolveOtherDeductionLabel(defaultType, ''),
+              amount: 0
+            };
+          }
+          const raw = parseFloat(amountInput.value);
+          const amount = Number.isFinite(raw) ? sanitizeOtherDeductionAmount(raw) : 0;
+          otherDeductionsDetails[empId][idx].amount = amount;
+          amountInput.value = amount ? amount.toFixed(2) : '';
+          updateOtherDeductionsTotalForEmployee(empId);
+          otherDeductionsPersist.flush();
+          otherDeductionsRefresh.flush();
+          updatePayrollRowForEmployee(empId);
+          handleBlur();
+        });
+      }
+      if (removeBtn) {
+        removeBtn.addEventListener('click', () => {
+          if (!Array.isArray(otherDeductionsDetails[empId])) otherDeductionsDetails[empId] = [];
+          otherDeductionsDetails[empId].splice(idx, 1);
+          if (!otherDeductionsDetails[empId].length) delete otherDeductionsDetails[empId];
+          updateOtherDeductionsTotalForEmployee(empId);
+          otherDeductionsPersist.flush();
+          otherDeductionsRefresh.flush();
+          renderOtherDeductionsTable();
+          updatePayrollRowForEmployee(empId);
+        });
+      }
+      tbody.appendChild(tr);
+    });
+  });
+  const totalRow = document.createElement('tr');
+  totalRow.className = 'grand-total-row';
+  totalRow.innerHTML = `
+    <td class="wrap">Grand Total</td>
+    <td></td>
+    <td class="num" data-col="amount">${formatDeductionDisplay(grandTotal)}</td>
+    <td></td>
+  `;
+  tbody.appendChild(totalRow);
+}
+
+function updateOtherDeductionsGrandTotalRow() {
+  const row = document.querySelector('#otherDeductionsTable tbody tr.grand-total-row');
+  if (!row) return;
+  let grandTotal = 0;
+  getEmployeeList().forEach(emp => {
+    grandTotal = roundToCents(grandTotal + getOtherDeductionsTotal(emp.id));
+  });
+  const cell = row.querySelector('[data-col="amount"]');
+  if (cell) cell.textContent = formatDeductionDisplay(grandTotal);
+}
+
+function renderAdjustmentHoursTable(){
+  if (adjustmentHoursFocusCount > 0) {
+    adjustmentHoursRenderPending = true;
+    return;
+  }
+  adjustmentHoursRenderPending = false;
+  syncPeriodScopedData();
+  const normalizedProjectsChanged = normalizeAdjustmentProjectIdsInPlace();
+  if (normalizedProjectsChanged) adjustmentHoursPersist.schedule();
+  const projectMap = (typeof storedProjects !== 'undefined' && storedProjects) || {};
+  const tbody = document.querySelector('#adjustmentHoursTable tbody');
+  if (!tbody) return;
+  tbody.innerHTML = '';
+  let grandRegTotal = 0;
+  let grandOtTotal = 0;
+  const formatZeroDisplay = (value) => {
+    const num = Number(value);
+    if (!Number.isFinite(num) || Math.abs(num) < 0.005) return '-';
+    return num.toFixed(2);
+  };
+  const parseAdjustmentInputValue = (input) => {
+    const raw = String(input.value || '').trim();
+    if (!raw) {
+      return input.dataset.zeroDisplay === '1' ? 0 : null;
+    }
+    if (raw === '-') return 0;
+    const num = Number(raw);
+    if (!Number.isFinite(num)) return null;
+    return roundToCents(num);
+  };
+  const getStoredAdjustmentValue = (empId, type) => {
+    const totals = getAdjustmentTotalsForEmployee(empId);
+    const raw = adjHrs?.[empId];
+    let has = false;
+    if (raw == null) return { value: totals[type], has };
+    if (typeof raw === 'number' || typeof raw === 'string') {
+      has = type === 'ot';
+      return { value: totals[type], has };
+    }
+    if (Array.isArray(raw)) {
+      const target = type === 'reg' ? 'REG' : 'ADJ OT';
+      has = raw.some(entry => normalizeAdjustmentType(entry?.type ?? entry?.label ?? entry?.name) === target);
+      return { value: totals[type], has };
+    }
+    if (typeof raw === 'object') {
+      if (Object.prototype.hasOwnProperty.call(raw, type)) {
+        has = true;
+        return { value: totals[type], has };
+      }
+      const key = type === 'reg' ? 'reg' : 'ot';
+      if (Object.prototype.hasOwnProperty.call(raw, key)) {
+        has = true;
+        return { value: totals[type], has };
+      }
+      const normalized = normalizeAdjustmentType(raw.type ?? raw.label ?? raw.name);
+      if ((normalized === 'REG' && type === 'reg') || (normalized === 'ADJ OT' && type === 'ot')) {
+        has = true;
+      }
+    }
+    return { value: totals[type], has };
+  };
+
+  getEmployeeList().forEach(emp => {
+    const id = emp.id;
+    const name = emp.name;
+    const totals = getAdjustmentTotalsForEmployee(id);
+    grandRegTotal = roundToCents(grandRegTotal + totals.reg);
+    grandOtTotal = roundToCents(grandOtTotal + totals.ot);
+    const regStored = getStoredAdjustmentValue(id, 'reg');
+    const otStored = getStoredAdjustmentValue(id, 'ot');
+    const regValue = regStored.has ? totals.reg : '';
+    const otValue = otStored.has ? totals.ot : '';
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>${id}</td>
+      <td class="wrap">${name}</td>
+      <td class="adjTypeCell"></td>
+      <td><input type="text" inputmode="decimal" step="0.01" class="adjHrsInput" data-id="${id}" data-type="reg" value="${regValue}" /></td>
+      <td><input type="text" inputmode="decimal" step="0.01" class="adjHrsInput" data-id="${id}" data-type="ot" value="${otValue}" /></td>
+    `;
+    const typeCell = tr.querySelector('.adjTypeCell');
+    if (typeCell) {
+      const select = document.createElement('select');
+      select.className = 'adjTypeSelect';
+      select.dataset.id = id;
+      const currentRaw = getAdjustmentProjectType(id);
+      const currentResolved = populateProjectSelectWithActiveOptions(select, currentRaw, {
+        projectMap,
+        noneLabel: '(none)'
+      });
+      select.addEventListener('focus', () => { adjustmentHoursFocusCount += 1; });
+      select.addEventListener('blur', () => {
+        adjustmentHoursFocusCount = Math.max(0, adjustmentHoursFocusCount - 1);
+        setTimeout(() => {
+          if (adjustmentHoursFocusCount === 0 && adjustmentHoursRenderPending) queueOtherDeductionsRerender();
+          if (adjustmentHoursFocusCount === 0 && window.__otherDeductionsHydratePending) {
+            window.__otherDeductionsHydratePending = false;
+            try {
+              if (typeof window.queueHydrateRerender === 'function') window.queueHydrateRerender();
+            } catch (_) {}
+          }
+        }, 0);
+      });
+      select.addEventListener('change', () => {
+        setAdjustmentProjectType(id, String(select.value || '').trim());
+        adjustmentHoursPersist.flush();
+      });
+      typeCell.appendChild(select);
+    }
+    tbody.appendChild(tr);
+  });
+  const totalRow = document.createElement('tr');
+  totalRow.className = 'grand-total-row';
+  totalRow.innerHTML = `
+    <td>Grand Total</td>
+    <td></td>
+    <td></td>
+    <td class="num" data-col="regHours">${formatZeroDisplay(grandRegTotal)}</td>
+    <td class="num" data-col="otHours">${formatZeroDisplay(grandOtTotal)}</td>
+  `;
+  tbody.appendChild(totalRow);
+  const formatAdjustmentHoursInput = (input) => {
+    const empId = input.getAttribute('data-id');
+    const type = input.getAttribute('data-type');
+    if (!empId || !type) return;
+    const stored = getStoredAdjustmentValue(empId, type);
+    const num = Number(stored.value);
+    if (stored.has && Number.isFinite(num)) {
+      input.dataset.zeroDisplay = num === 0 ? '1' : '0';
+      input.value = formatZeroDisplay(num);
+      return;
+    }
+    input.dataset.zeroDisplay = '0';
+    input.value = formatZeroDisplay(0);
+  };
+  const stageAdjustmentHoursInput = (input) => {
+    const empId = input.getAttribute('data-id');
+    const type = input.getAttribute('data-type');
+    if (!empId || !type) return;
+    const rounded = parseAdjustmentInputValue(input);
+    const totals = getAdjustmentTotalsForEmployee(empId);
+    const regValue = type === 'reg' ? rounded : totals.reg;
+    const otValue = type === 'ot' ? rounded : totals.ot;
+    if (rounded === null) {
+      setAdjustmentTotalsForEmployee(empId, regValue || 0, otValue || 0);
+      return;
+    }
+    setAdjustmentTotalsForEmployee(empId, regValue, otValue);
+  };
+  const commitAdjustmentHoursInput = (input) => {
+    const empId = input.getAttribute('data-id');
+    const type = input.getAttribute('data-type');
+    if (!empId || !type) return;
+    const rounded = parseAdjustmentInputValue(input);
+    const totals = getAdjustmentTotalsForEmployee(empId);
+    const regValue = type === 'reg' ? rounded : totals.reg;
+    const otValue = type === 'ot' ? rounded : totals.ot;
+    if (rounded === null) {
+      setAdjustmentTotalsForEmployee(empId, regValue || 0, otValue || 0);
+    } else {
+      setAdjustmentTotalsForEmployee(empId, regValue, otValue);
+    }
+    adjustmentHoursPersist.flush();
+    otherDeductionsRefresh.flush();
+  };
+  tbody.querySelectorAll('.adjHrsInput').forEach(inp => {
+    inp.addEventListener('focus', () => {
+      adjustmentHoursFocusCount += 1;
+      if ((inp.value || '').trim() === '-') {
+        inp.value = '';
+      }
+    });
+    inp.addEventListener('blur', () => {
+      adjustmentHoursFocusCount = Math.max(0, adjustmentHoursFocusCount - 1);
+      commitAdjustmentHoursInput(inp);
+      formatAdjustmentHoursInput(inp);
+      updateAdjustmentHoursGrandTotalRow();
+      const empId = inp.getAttribute('data-id');
+      if (empId) {
+        updateOvertimeRowForEmployee(empId);
+        updatePayrollRowForEmployee(empId);
+      }
+      otherDeductionsRefresh.flush();
+      setTimeout(() => {
+        if (adjustmentHoursFocusCount === 0 && adjustmentHoursRenderPending) queueOtherDeductionsRerender();
+        if (adjustmentHoursFocusCount === 0 && window.__otherDeductionsHydratePending) {
+          window.__otherDeductionsHydratePending = false;
+          try {
+            if (typeof window.queueHydrateRerender === 'function') window.queueHydrateRerender();
+          } catch (_) {}
+        }
+      }, 0);
+    });
+    inp.addEventListener('input', () => {
+      if ((inp.value || '').trim()) {
+        inp.dataset.zeroDisplay = '0';
+      }
+      stageAdjustmentHoursInput(inp);
+      adjustmentHoursPersist.schedule();
+      otherDeductionsRefresh.schedule();
+      updateAdjustmentHoursGrandTotalRow();
+      const empId = inp.getAttribute('data-id');
+      if (empId) {
+        updateOvertimeRowForEmployee(empId);
+        updatePayrollRowForEmployee(empId);
+      }
+    });
+    inp.addEventListener('change', () => {
+      commitAdjustmentHoursInput(inp);
+      formatAdjustmentHoursInput(inp);
+      updateAdjustmentHoursGrandTotalRow();
+      const empId = inp.getAttribute('data-id');
+      if (empId) {
+        updateOvertimeRowForEmployee(empId);
+        updatePayrollRowForEmployee(empId);
+      }
+    });
+    formatAdjustmentHoursInput(inp);
+  });
+}
+
+function updateAdjustmentHoursGrandTotalRow() {
+  const row = document.querySelector('#adjustmentHoursTable tbody tr.grand-total-row');
+  if (!row) return;
+  let grandRegTotal = 0;
+  let grandOtTotal = 0;
+  getEmployeeList().forEach(emp => {
+    const totals = getAdjustmentTotalsForEmployee(emp.id);
+    grandRegTotal = roundToCents(grandRegTotal + totals.reg);
+    grandOtTotal = roundToCents(grandOtTotal + totals.ot);
+  });
+  const formatZeroDisplay = (value) => {
+    const num = Number(value);
+    if (!Number.isFinite(num) || Math.abs(num) < 0.005) return '-';
+    return num.toFixed(2);
+  };
+  const regCell = row.querySelector('[data-col="regHours"]');
+  if (regCell) regCell.textContent = formatZeroDisplay(grandRegTotal);
+  const otCell = row.querySelector('[data-col="otHours"]');
+  if (otCell) otCell.textContent = formatZeroDisplay(grandOtTotal);
+}
+
+function otherDeductionsBackupPayload(){
+  return {
+    otherDeductionsDetails: isPlainObject(allOtherDeductionsDetails) ? allOtherDeductionsDetails : {},
+    otherDeductionsTotals: isPlainObject(allOtherDeductionsTotals) ? allOtherDeductionsTotals : {},
+    adjustmentHours: isPlainObject(allAdjHrs) ? allAdjHrs : {},
+    currentPeriod: currentPeriodKey
+  };
+}
+
+async function copyOtherDeductionsToClipboard(){
+  const payload = JSON.stringify(otherDeductionsBackupPayload());
+  try {
+    await navigator.clipboard.writeText(payload);
+    const el = document.getElementById('otherDeductionsSaveStatus');
+    if (el) {
+      el.textContent = 'Copied to clipboard';
+      el.classList.remove('error');
+      el.classList.add('saved');
+    }
+  } catch (e) {
+    const el = document.getElementById('otherDeductionsSaveStatus');
+    if (el) {
+      el.textContent = 'Clipboard copy failed';
+      el.classList.remove('saved');
+      el.classList.add('error');
+    }
+  }
+}
+
+async function restoreOtherDeductionsFromPrompt(){
+  const text = window.prompt('Paste the other deductions backup JSON to restore it');
+  if (!text) return;
+  try {
+    const parsed = JSON.parse(text);
+    if (isPlainObject(parsed.otherDeductionsDetails)) allOtherDeductionsDetails = parsed.otherDeductionsDetails;
+    if (isPlainObject(parsed.otherDeductionsTotals)) allOtherDeductionsTotals = parsed.otherDeductionsTotals;
+    if (isPlainObject(parsed.adjustmentHours)) allAdjHrs = parsed.adjustmentHours;
+    otherDeductionsDetails = ensurePeriodData(allOtherDeductionsDetails, currentPeriodKey, null, { allowDefault: false });
+    otherDeductionsTotal = ensurePeriodData(allOtherDeductionsTotals, currentPeriodKey, null, { allowDefault: false });
+    if (!isPlainObject(allAdjHrs[currentPeriodKey])) allAdjHrs[currentPeriodKey] = {};
+    adjHrs = allAdjHrs[currentPeriodKey];
+    ensureOtherDeductionsDetailsMap();
+    rebuildOtherDeductionsTotals();
+    persistCurrentOtherDeductions();
+    persistCurrentAdjustmentHours();
+    renderOtherDeductionsTable();
+    renderAdjustmentHoursTable();
+    calculateAll();
+    const el = document.getElementById('otherDeductionsSaveStatus');
+    if (el) {
+      el.textContent = 'Other deductions restored';
+      el.classList.remove('error');
+      el.classList.add('saved');
+    }
+  } catch (e) {
+    const el = document.getElementById('otherDeductionsSaveStatus');
+    if (el) {
+      el.textContent = 'Restore failed: invalid data';
+      el.classList.remove('saved');
+      el.classList.add('error');
+    }
+  }
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  const copyBtn = document.getElementById('copyOtherDeductionsBtn');
+  if (copyBtn) copyBtn.addEventListener('click', copyOtherDeductionsToClipboard);
+  const restoreBtn = document.getElementById('restoreOtherDeductionsBtn');
+  if (restoreBtn) restoreBtn.addEventListener('click', restoreOtherDeductionsFromPrompt);
+});
+
+// Initialize the dynamic Pag-IBIG and PhilHealth rate input fields.  This function
+// sets their values from the current global variables and attaches input
+// listeners to persist changes to localStorage and recalculate payroll.
+function initializeContributionRates() {
+  const pagibigInput = document.getElementById('pagibigRateInput');
+  if (pagibigInput) {
+    // Set current value; show as decimal with 3 decimals
+    pagibigInput.value = typeof pagibigRate === 'number' ? pagibigRate.toFixed(3) : '';
+    pagibigInput.addEventListener('change', function() {
+      let val = parseFloat(pagibigInput.value);
+      if (!isNaN(val)) {
+        // If user enters percent (e.g. 2), convert to decimal
+        if (val > 1) val = val / 100;
+        // Bound to 0–1
+        if (val < 0) val = 0;
+        if (val > 1) val = 1;
+        pagibigRate = val;
+        localStorage.setItem(LS_PAGIBIG_RATE, String(val));
+        calculateAll();
+        updateContributionNote();
+      }
+    });
+  }
+  const philInput = document.getElementById('philhealthRateInput');
+  if (philInput) {
+    philInput.value = typeof philhealthRate === 'number' ? philhealthRate.toFixed(3) : '';
+    philInput.addEventListener('change', function() {
+      let val = parseFloat(philInput.value);
+      if (!isNaN(val)) {
+        if (val > 1) val = val / 100;
+        if (val < 0) val = 0;
+        if (val > 1) val = 1;
+        philhealthRate = val;
+        localStorage.setItem(LS_PHILHEALTH_RATE, String(val));
+        calculateAll();
+        updateContributionNote();
+      }
+    });
+  }
+}
+
+// Update the contribution note in the payroll tab to reflect current rates.  It
+// calculates percentages and updates the HTML of the element with id
+// 'contribNote'.  Called after rate changes and on initial load.
+function updateContributionNote() {
+  const noteEl = document.getElementById('contribNote');
+  if (!noteEl) return;
+  const piPct = (pagibigRate * 100).toFixed(2);
+  const phPct = (philhealthRate * 100).toFixed(2);
+  noteEl.innerHTML = 'Pag-IBIG = Regular Pay &times; ' + piPct + '% (not divided), ' +
+    'PhilHealth = Regular Pay &times; ' + phPct + '% (not divided), ' +
+    'SSS = (Employee Share by Monthly Income) &divide; Divisor. SSS Loan and Pag-IBIG Loan are divided by the Divisor. Vales are manual (not divided).';
+}
+  document.getElementById('downloadPayrollCSV').addEventListener('click', ()=>{
+  // Include Additional Income column in payroll CSV export
+  const header = ['Week Start','Week End','OT Multiplier','Divisor','ID','Name','Regular Hours','Overtime Hours','Hourly Rate','Regular Pay','Adj Hours','Adj Pay','Additional Income','Total Overtime Pay','Gross Pay','Total Deductions','Net Pay'];
+  const rows=[header];
+  const ws = weekStartEl.value||''; const we = weekEndEl.value||''; const otm = String(getOvertimeMultiplier()); const div = String(divisorEl.value||'1');
+  document.querySelectorAll('#payrollTable tbody tr').forEach(tr=>{
+    const tds = tr.querySelectorAll('td');
+    const id = tds[0].textContent.trim(); const name = tds[1].textContent.trim();
+    const regI = tr.querySelector('.regHrs'); const rateI = tr.querySelector('.rate');
+    const otHours = getOvertimeFinalHours(id);
+    const regPay = tr.querySelector('.regPay').textContent.trim();
+    const adjHours = tr.querySelector('.adjHours') ? tr.querySelector('.adjHours').textContent.trim() : '';
+    const adjPay = tr.querySelector('.adjPay') ? tr.querySelector('.adjPay').textContent.trim() : '';
+    const otPay = tr.querySelector('.otPay').textContent.trim();
+    const adj   = tr.querySelector('.adjAmt') ? tr.querySelector('.adjAmt').textContent.trim() : '';
+    const grossPay = tr.querySelector('.grossPay').textContent.trim();
+    const total = tr.querySelector('.totalDed').textContent.trim();
+    const net   = tr.querySelector('.netPay').textContent.trim();
+    rows.push([ws,we,otm,div,id,name,regI.value,otHours.toFixed(2),rateI.value,regPay,adjHours,adjPay,adj,otPay,grossPay,total,net]);
+  });
+  const csv = rows.map(r=>r.map(s=>{
+    s = String(s ?? '');
+    return /[",\n]/.test(s) ? '"' + s.replace(/"/g,'""') + '"' : s;
+  }).join(',')).join('\n');
+  const blob = new Blob([csv], {type:'text/csv'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a'); a.href=url; a.download='payroll.csv'; document.body.appendChild(a); a.click(); a.remove();
+});
+function initContributionTables(){
+  bindSssControls();
+  renderSssTable();
+  renderPagibigTable();
+  renderPhilhealthTable();
+}
+renderTable();
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', initContributionTables, { once: true });
+} else {
+  initContributionTables();
+}
+renderOtherDeductionsTable();
+renderAdjustmentHoursTable();
+renderAdditionalIncomeTable();
+updateContributionNote();
+    
+  // Wire Project Totals CSV download button (global)
+  if (document.getElementById('downloadProjectTotalsCSV')) {
+    document.getElementById('downloadProjectTotalsCSV').addEventListener('click', exportProjectTotalsCSV);
+  }
+
+
+
+// Display a modal dialog with a detailed breakdown of a single project's totals.
+// Takes a row object (result of computeProjectTotals) and builds a table of
+// per-day hours per employee along with grand totals for regular hours, OT,
+// total hours and gross pay. Uses the global weekStart/weekEnd inputs to
+// construct the day labels. The modal is hidden by default and can be
+// dismissed by clicking on the close button or outside the modal.
+function showProjectReport(row) {
+  if (!row || !row.breakdown || !row.breakdown.length) return;
+  const modal = document.getElementById('projectReportModal');
+  const content = document.getElementById('projectReportContent');
+  if (!modal || !content) return;
+  const wsEl = document.getElementById('weekStart');
+  const weEl = document.getElementById('weekEnd');
+  const startDate = wsEl && wsEl.value ? wsEl.value : '';
+  const endDate = weEl && weEl.value ? weEl.value : '';
+  // Helper to build a list of dates between start and end inclusive
+  function dateRangeList(s, e) {
+    const out = [];
+    if (!s || !e) return out;
+    const sd = new Date(s);
+    const ed = new Date(e);
+    for (let d = new Date(sd); d <= ed; d.setDate(d.getDate() + 1)) {
+      out.push(new Date(d));
+    }
+    return out;
+  }
+  const days = dateRangeList(startDate, endDate);
+  let html = '';
+  html += '<h3 style="margin-top:0;">' + (row.project || 'Project') + ' (' + (startDate || '') + ' to ' + (endDate || '') + ')</h3>';
+  html += '<div style="overflow-x:auto;">';
+  html += '<table style="width:100%;border-collapse:collapse;margin-bottom:12px;">';
+  html += '<thead><tr>';
+  html += '<th style="text-align:left;border:1px solid #e2e8f0;padding:4px;">ID</th>';
+  html += '<th style="text-align:left;border:1px solid #e2e8f0;padding:4px;">Name</th>';
+  days.forEach(function(dt) {
+    const label = (dt.getMonth() + 1) + '/' + dt.getDate();
+    html += '<th style="text-align:right;border:1px solid #e2e8f0;padding:4px;">' + label + '</th>';
+  });
+  html += '<th style="text-align:right;border:1px solid #e2e8f0;padding:4px;">Total Hrs</th>';
+  html += '<th style="text-align:right;border:1px solid #e2e8f0;padding:4px;">Total Amount</th>';
+  html += '</tr></thead><tbody>';
+  row.breakdown.forEach(function(emp) {
+    html += '<tr>';
+    html += '<td style="text-align:left;border:1px solid #e2e8f0;padding:4px;">' + (emp.id || '') + '</td>';
+    html += '<td style="text-align:left;border:1px solid #e2e8f0;padding:4px;">' + (emp.name || '') + '</td>';
+    days.forEach(function(dt) {
+      const key = dt.toISOString().slice(0, 10);
+      const val = parseFloat((emp.perDay && emp.perDay[key]) || 0).toFixed(2);
+      html += '<td style="text-align:right;border:1px solid #e2e8f0;padding:4px;">' + val + '</td>';
+    });
+    html += '<td style="text-align:right;border:1px solid #e2e8f0;padding:4px;">' + (Number(emp.total || 0).toFixed(2)) + '</td>';
+    html += '<td style="text-align:right;border:1px solid #e2e8f0;padding:4px;">' + (Number(emp.gross || 0).toFixed(2)) + '</td>';
+    html += '</tr>';
+  });
+  html += '</tbody></table>';
+  html += '</div>';
+  // Grand totals section
+  html += '<div style="font-weight:600;">Grand Totals:</div>';
+  html += '<table style="border-collapse:collapse;margin-top:4px;">';
+  html += '<tr><td style="padding:4px;">Regular Hours:</td><td style="padding:4px;text-align:right;">' + (Number(row.reg || 0).toFixed(2)) + '</td></tr>';
+  html += '<tr><td style="padding:4px;">OT Hours:</td><td style="padding:4px;text-align:right;">' + (Number(row.ot || 0).toFixed(2)) + '</td></tr>';
+  html += '<tr><td style="padding:4px;">Total Hours:</td><td style="padding:4px;text-align:right;">' + (Number(row.total || 0).toFixed(2)) + '</td></tr>';
+  html += '<tr><td style="padding:4px;">Gross Amount:</td><td style="padding:4px;text-align:right;">' + ((row.gross != null) ? Number(row.gross).toFixed(2) : '0.00') + '</td></tr>';
+  html += '</table>';
+  content.innerHTML = html;
+  modal.style.display = 'flex';
+}
+// Attach close handlers once DOM is ready
+document.addEventListener('DOMContentLoaded', function() {
+  const modal = document.getElementById('projectReportModal');
+  const closeBtn = document.getElementById('closeProjectReport');
+  if (closeBtn) closeBtn.addEventListener('click', function() { if (modal) modal.style.display = 'none'; });
+  if (modal) modal.addEventListener('click', function(e) { if (e.target === modal) modal.style.display = 'none'; });
+});
+
+
+
+// Shared helpers for formatting dashboard dates in MM-DD-YYYY layout.
+function formatDisplayDate(value) {
+  if (!value) return '';
+  const str = String(value).trim();
+  if (!str) return '';
+  const isoMatch = str.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+  if (isoMatch) {
+    const [, year, month, day] = isoMatch;
+    return `${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}-${year}`;
+  }
+  const dt = new Date(str);
+  if (!isNaN(dt.getTime())) {
+    const month = String(dt.getMonth() + 1).padStart(2, '0');
+    const day = String(dt.getDate()).padStart(2, '0');
+    const year = dt.getFullYear();
+    return `${month}-${day}-${year}`;
+  }
+  return str;
+}
+function formatDateRange(start, end) {
+  const startText = formatDisplayDate(start);
+  const endText = formatDisplayDate(end);
+  if (startText && endText) return `${startText} - ${endText}`;
+  return startText || endText || '';
+}
+window.formatDisplayDate = formatDisplayDate;
+window.formatDateRange = formatDateRange;
+
+// Print Payroll Report: generate a print-friendly view of the payroll table and open
+// a new window for printing. Inputs are converted to plain text and the final
+// payslip column is removed to preserve confidentiality.
+document.addEventListener('DOMContentLoaded', function(){
+  const btn = document.getElementById('printPayrollBtn');
+  if (btn) btn.addEventListener('click', function(){
+    const srcTable = document.getElementById('payrollTable');
+    if (!srcTable) {
+      alert('Payroll table is missing or empty.');
+      return;
+    }
+    // Clone table so we can modify it without affecting the live DOM
+    const clone = srcTable.cloneNode(true);
+    // Remove the last column (Payslip) from thead, tbody and tfoot
+    const removeLastCell = row => { if (row && row.lastElementChild) row.removeChild(row.lastElementChild); };
+    clone.querySelectorAll('thead tr').forEach(removeLastCell);
+    clone.querySelectorAll('tbody tr').forEach(removeLastCell);
+    clone.querySelectorAll('tfoot tr').forEach(removeLastCell);
+    // Convert input fields to plain text within the cloned table
+    // For loan inputs, show per-period share (divided by the divisor)
+    const divisorKey = (typeof LS_DIVISOR !== 'undefined' ? LS_DIVISOR : 'payroll_deduction_divisor');
+    const divisorVal = (typeof window !== 'undefined' && typeof window.divisor !== 'undefined' && Number(window.divisor)) || parseInt((localStorage && localStorage.getItem(divisorKey)) || '1', 10) || 1;
+    const safeDivide = (raw) => {
+      const base = Number(divisorVal) || 1;
+      const amt = parseFloat((raw || '').toString().replace(/,/g, '')) || 0;
+      return (amt / base).toFixed(2);
+    };
+    const formatEffectiveValue = (value) => {
+      if (value == null) return '';
+      const num = parseFloat(value);
+      if (!Number.isNaN(num)) return num.toFixed(2);
+      return String(value);
+    };
+    const readDeductionEffective = (el) => {
+      if (!el || !el.dataset) return null;
+      if (Object.prototype.hasOwnProperty.call(el.dataset, 'effectiveValue')) {
+        return el.dataset.effectiveValue;
+      }
+      if (Object.prototype.hasOwnProperty.call(el.dataset, 'effective')) {
+        return el.dataset.effective;
+      }
+      return null;
+    };
+    clone.querySelectorAll('input').forEach(inp => {
+      const td = inp.parentElement;
+      const cls = inp.classList || { contains: () => false };
+      const effective = readDeductionEffective(inp);
+      const isLoan = cls.contains('loanSSS') || cls.contains('loanPI');
+      const isDeductionInput = isLoan || cls.contains('vale') || cls.contains('valeWed');
+      if (isDeductionInput && effective != null) {
+        td.textContent = formatEffectiveValue(effective);
+      } else if (isLoan) {
+        td.textContent = formatEffectiveValue(safeDivide(inp.value || '0'));
+      } else {
+        const val = (inp.value || inp.textContent || '').toString();
+        td.textContent = val;
+      }
+    });
+    // Locked payroll snapshots render loan cells as plain text (no inputs). Ensure
+    // they reflect the per-period share by applying the same divisor used above.
+    clone.querySelectorAll('td.loanSSS, td.loanPI').forEach(td => {
+      if (!td) return;
+      if (td.querySelector('input')) return;
+      const effective = readDeductionEffective(td);
+      if (effective != null) {
+        td.textContent = formatEffectiveValue(effective);
+        return;
+      }
+      const divided = safeDivide(td.textContent || '0');
+      td.textContent = formatEffectiveValue(divided);
+    });
+    // Replace numeric zeros with dashes in clone
+    clone.querySelectorAll('td').forEach(function(td){
+      if (td.querySelector('input')) return;
+      var raw = (td.textContent || '').replace(/,/g,'').trim();
+      if (!raw) return;
+      var num = parseFloat(raw);
+      if (!isNaN(num) && num === 0) td.textContent = '-';
+    });
+    // Rename selected header labels for print-only
+    (function(){
+      function norm(s){ return String(s||'').replace(/\s+/g,' ').trim().toLowerCase(); }
+      var map = new Map([
+        ['regular hours','REG HRS'],
+        ['ot hours','OT HRS'],
+        ['adjustment hrs','ADJ HRS'],
+        ['adjustments','OTHER DED'],
+        ['total deductions','TOTAL DEDUC.']
+      ]);
+      clone.querySelectorAll('thead th').forEach(function(th){
+        var key = norm(th.textContent);
+        if (map.has(key)) th.textContent = map.get(key);
+      });
+    })();
+    // Header with date range if available
+    const ws = document.getElementById('weekStart');
+    const we = document.getElementById('weekEnd');
+    const startDate = ws && ws.value ? ws.value : '';
+    const endDate = we && we.value ? we.value : '';
+    const snapMeta = (typeof window !== 'undefined' && window.__snapshotMeta) ? window.__snapshotMeta : null;
+    const isVoided = !!(snapMeta && (typeof window.isSnapshotVoided === 'function' ? window.isSnapshotVoided(snapMeta) : snapMeta.status === 'voided'));
+    const voidedLabel = isVoided ? '<div class="report-voided">VOIDED</div>' : '';
+    const doc = '<html><head><meta charset="utf-8"><title>Payroll Report</title>' +
+      '<style>@page{size:letter landscape;margin:10mm} html,body{-webkit-print-color-adjust:exact;print-color-adjust:exact;width:11in;height:8.5in;margin:0} body{font-family:Arial,Helvetica,sans-serif;margin:0;} .report-header{margin:0 0 8px} .company-name{font-size:14px;font-weight:700} .report-title{font-size:12px;font-weight:600;margin-top:2px} .report-period{font-size:10px;margin-top:2px} .report-voided{display:inline-block;margin-top:4px;padding:2px 8px;border:2px solid #b91c1c;color:#b91c1c;font-weight:700;letter-spacing:1px;font-size:11px} table{border-collapse:collapse;width:100%;table-layout:fixed} thead{display:table-header-group} tfoot{display:table-footer-group} th,td{border:1pt solid #000!important;border-style:solid!important;padding:4px;font-size:11px} table,th,td{border-color:#000!important;border-style:solid!important} th{background:#f1f5f9} td.num{text-align:right} th:nth-child(1),td:nth-child(1),th:nth-child(2),td:nth-child(2){text-align:left} tfoot td{font-weight:700;background:#fff7ed;border-top:2pt solid #000!important} #payrollTable{page-break-inside:auto} #payrollTable tr{page-break-inside:avoid;break-inside:avoid-page} #payrollTable th, #payrollTable td { white-space: nowrap !important; page-break-inside: avoid; } #payrollTable th:nth-child(1), #payrollTable td:nth-child(1) { width:30px; min-width:30px; } #payrollTable th:nth-child(2), #payrollTable td:nth-child(2) { width:150px; min-width:150px; } #payrollTable th:nth-child(3), #payrollTable td:nth-child(3) { width:60px; min-width:60px; } #payrollTable th:nth-child(4), #payrollTable td:nth-child(4) { width:60px; min-width:60px; } #payrollTable th:nth-child(5), #payrollTable td:nth-child(5) { width:60px; min-width:60px; } #payrollTable th:nth-child(6), #payrollTable td:nth-child(6) { width:60px; min-width:60px; } #payrollTable th:nth-child(7), #payrollTable td:nth-child(7) { width:60px; min-width:60px; } #payrollTable th:nth-child(8), #payrollTable td:nth-child(8) { width:60px; min-width:60px; } #payrollTable th:nth-child(9), #payrollTable td:nth-child(9) { width:60px; min-width:60px; } #payrollTable th:nth-child(10), #payrollTable td:nth-child(10) { width:60px; min-width:60px; } #payrollTable th:nth-child(11), #payrollTable td:nth-child(11) { width:60px; min-width:60px; } #payrollTable th:nth-child(12), #payrollTable td:nth-child(12) { width:60px; min-width:60px; } #payrollTable th:nth-child(13), #payrollTable td:nth-child(13) { width:60px; min-width:60px; } #payrollTable th:nth-child(14), #payrollTable td:nth-child(14) { width:60px; min-width:60px; } #payrollTable th:nth-child(15), #payrollTable td:nth-child(15) { width:60px; min-width:60px; } #payrollTable th:nth-child(16), #payrollTable td:nth-child(16) { width:60px; min-width:60px; } #payrollTable th:nth-child(17), #payrollTable td:nth-child(17) { width:60px; min-width:60px; } #payrollTable th:nth-child(18), #payrollTable td:nth-child(18) { width:60px; min-width:60px; } #payrollTable th:nth-child(19), #payrollTable td:nth-child(19) { width:60px; min-width:60px; } #payrollTable th:nth-child(20), #payrollTable td:nth-child(20) { width:60px; min-width:60px; } #payrollTable th:nth-child(21), #payrollTable td:nth-child(21) { width:50px; min-width:50px; } #payrollTable th:nth-child(22), #payrollTable td:nth-child(22) { width:75px; min-width:75px; }</style>' +
+      '</head><body>' +
+      '<div id="printWrap">' +
+      '<div class="report-header">' +
+      '<div class="company-name">Edifice Group Corp & Portafolio Interiors Inc.</div>' +
+      voidedLabel +
+      '<div class="report-title">PAYROLL \u2013 COMPRESSED WORK WEEK</div>' +
+      (startDate && endDate ? '<div class="report-period">Payroll Period: ' + startDate + ' to ' + endDate + '</div>' : '') +
+      '</div>' +
+      clone.outerHTML +
+      '</div></body></html>';
+    withPrintOrientation(function(orientation){
+      printReport(doc, { orientation: orientation, features: 'width=900,height=700' });
+    });
+  });
+});
+
+function getDeductionsReportCompanyName() {
+  if (typeof COMPANY_OPTIONS !== 'undefined' && Array.isArray(COMPANY_OPTIONS) && COMPANY_OPTIONS[0]) {
+    return normalizePrintCompanyName(COMPANY_OPTIONS[0]);
+  }
+  return normalizePrintCompanyName('PayrollPro');
+}
+
+function getEmployeeCompanyBucket(empId) {
+  const companyRaw = String((storedEmployees && storedEmployees[empId] && storedEmployees[empId].company) || '').trim().toLowerCase();
+  if (/edifice/.test(companyRaw)) return 'edifice';
+  if (/(portafolio|portfolio)/.test(companyRaw)) return 'portafolio';
+  return null;
+}
+
+const CONTRIBUTION_SPLIT_KEYS = ['pagibig','philhealth','sss','loanSSS','loanPI'];
+
+function updateDeductionsContributionBreakdownDisplay(split) {
+  const holder = document.getElementById('deductionsContributionBreakdown');
+  if (!holder) return;
+  holder.style.display = 'block';
+  const safe = (bucket, key) => roundToCents(Number(split && split[bucket] && split[bucket][key]) || 0);
+  const map = [
+    ['edifice','Pagibig','pagibig'],
+    ['edifice','Philhealth','philhealth'],
+    ['edifice','Sss','sss'],
+    ['edifice','LoanSss','loanSSS'],
+    ['edifice','LoanPi','loanPI'],
+    ['portafolio','Pagibig','pagibig'],
+    ['portafolio','Philhealth','philhealth'],
+    ['portafolio','Sss','sss'],
+    ['portafolio','LoanSss','loanSSS'],
+    ['portafolio','LoanPi','loanPI']
+  ];
+  map.forEach(([bucket, labelKey, valueKey]) => {
+    const id = `deductions${bucket === 'edifice' ? 'Edifice' : 'Portafolio'}${labelKey}`;
+    const el = document.getElementById(id);
+    if (el) el.textContent = formatDeductionDisplay(safe(bucket, valueKey));
+  });
+  const grandMap = [
+    ['deductionsGrandPagibig', 'pagibig'],
+    ['deductionsGrandPhilhealth', 'philhealth'],
+    ['deductionsGrandSss', 'sss'],
+    ['deductionsGrandLoanSss', 'loanSSS'],
+    ['deductionsGrandLoanPi', 'loanPI']
+  ];
+  grandMap.forEach(([id, key]) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    const val = roundToCents(safe('edifice', key) + safe('portafolio', key));
+    el.textContent = formatDeductionDisplay(val);
+  });
+}
+
+function buildDeductionsReportData() {
+  syncPeriodScopedData();
+  const rows = [];
+  const totals = {};
+  const contributionTotals = { edifice: { pagibig:0, philhealth:0, sss:0, loanSSS:0, loanPI:0 }, portafolio: { pagibig:0, philhealth:0, sss:0, loanSSS:0, loanPI:0 } };
+  DEDUCTION_COLUMN_KEYS.forEach(key => { totals[key] = 0; });
+  getEmployeeList().forEach(emp => {
+    const rH = Number(regHours[emp.id] ?? 0);
+    const rate = Number((storedEmployees[emp.id]?.hourlyRate) ?? (payrollRates[emp.id] ?? 0));
+    payrollRates[emp.id] = isNaN(rate) ? 0 : rate;
+    const lSSS = roundToCents(loanSSS[emp.id] ?? 0);
+    const lPI = roundToCents(loanPI[emp.id] ?? 0);
+    const v = roundToCents(vale[emp.id] ?? 0);
+    const vW = roundToCents(valeWed[emp.id] ?? 0);
+    const otherDeductionsAmount = roundToCents(getOtherDeductionsTotal(emp.id));
+    const regPay = +(rH * rate).toFixed(2);
+    const monthly = rate * 8 * 24;
+    const piRate = pagibigRateByMonthly(monthly);
+    const phRate = philhealthRateByMonthly(monthly);
+    const flags = (typeof contribFlags !== 'undefined' && contribFlags[emp.id]) || {};
+    const div = Number(divisor) || 1;
+    const pagibig = (flags.pagibig === false) ? 0 : +((regPay * piRate).toFixed(2));
+    const philhealth = (flags.philhealth === false) ? 0 : +((regPay * phRate).toFixed(2));
+    const sssFull = (flags.sss === false) ? 0 : sssShareByMonthly(monthly);
+    const sss = (flags.sss === false) ? 0 : +((sssFull / div).toFixed(2));
+    const sssLoan = +(lSSS / div).toFixed(2);
+    const piLoan = +(lPI / div).toFixed(2);
+    const rowRaw = {
+      pagibig,
+      philhealth,
+      sss,
+      loanSSS: sssLoan,
+      loanPI: piLoan,
+      vale: v,
+      adjustments: otherDeductionsAmount,
+      valeWed: vW
+    };
+    rowRaw.total = roundToCents(pagibig + philhealth + sss + sssLoan + piLoan + v + vW + otherDeductionsAmount);
+    const rowEffective = computeEffectiveDeductionValues(rowRaw);
+    const companyBucket = getEmployeeCompanyBucket(emp.id);
+    if (companyBucket) {
+      CONTRIBUTION_SPLIT_KEYS.forEach(key => {
+        contributionTotals[companyBucket][key] = roundToCents((contributionTotals[companyBucket][key] || 0) + (Number(rowEffective[key]) || 0));
+      });
+    }
+    DEDUCTION_COLUMN_KEYS.forEach(key => {
+      totals[key] = roundToCents((totals[key] || 0) + (Number(rowEffective[key]) || 0));
+    });
+    rows.push({
+      id: emp.id,
+      name: emp.name,
+      values: rowEffective
+    });
+  });
+  const visibleColumns = DEDUCTION_COLUMN_KEYS.filter(key => {
+    if (!isDeductionColumnIncluded(key)) return false;
+    return rows.some(row => Math.abs(Number(row.values[key]) || 0) >= 0.005);
+  });
+  return { rows, totals, visibleColumns, contributionTotals };
+}
+
+document.addEventListener('DOMContentLoaded', function(){
+  const btn = document.getElementById('printDeductionsBtn');
+  if (!btn) return;
+  try {
+    const liveReport = buildDeductionsReportData();
+    updateDeductionsContributionBreakdownDisplay(liveReport.contributionTotals);
+  } catch (_) {}
+  btn.addEventListener('click', function(){
+    if (!getEmployeeList() || !getEmployeeList().length) {
+      alert('No employees available for the deductions report.');
+      return;
+    }
+    const report = buildDeductionsReportData();
+    updateDeductionsContributionBreakdownDisplay(report.contributionTotals);
+    if (!report.visibleColumns.length) {
+      alert('No deductions data to print for this period.');
+      return;
+    }
+    const columnLabels = {
+      pagibig: 'Pag-IBIG',
+      philhealth: 'PhilHealth',
+      sss: 'SSS',
+      loanSSS: 'SSS Loan',
+      loanPI: 'Pag-IBIG Loan',
+      vale: 'Account',
+      adjustments: 'Other Deductions',
+      valeWed: 'Wed Vale',
+      total: 'Total Deductions'
+    };
+    let html = '<div id="printDeductionsReport"><table><thead><tr><th>Employee ID</th><th>Employee Name</th>';
+    report.visibleColumns.forEach(col => {
+      html += `<th class="num">${columnLabels[col] || col}</th>`;
+    });
+    html += '</tr></thead><tbody>';
+    report.rows.forEach(row => {
+      html += `<tr><td>${row.id || ''}</td><td>${row.name || ''}</td>`;
+      report.visibleColumns.forEach(col => {
+        html += `<td class="num">${formatDeductionDisplay(row.values[col])}</td>`;
+      });
+      html += '</tr>';
+    });
+    html += '</tbody><tfoot><tr><td></td><td>Total</td>';
+    report.visibleColumns.forEach(col => {
+      html += `<td class="num">${formatDeductionDisplay(report.totals[col])}</td>`;
+    });
+    html += '</tr></tfoot></table>';
+    const e = (k) => Number(report.contributionTotals && report.contributionTotals.edifice && report.contributionTotals.edifice[k]) || 0;
+    const p = (k) => Number(report.contributionTotals && report.contributionTotals.portafolio && report.contributionTotals.portafolio[k]) || 0;
+    html += '<div style="margin-top:8px;font-size:10px;">';
+    html += '<strong>Contribution / Loan Split by Company</strong>';
+    html += '<table style="margin-top:4px;width:100%;border-collapse:collapse;table-layout:fixed;">';
+    html += '<thead><tr><th style="border:1px solid #000;padding:3px;text-align:left;">Company</th><th style="border:1px solid #000;padding:3px;text-align:right;">Pag-IBIG</th><th style="border:1px solid #000;padding:3px;text-align:right;">PhilHealth</th><th style="border:1px solid #000;padding:3px;text-align:right;">SSS</th><th style="border:1px solid #000;padding:3px;text-align:right;">SSS Loan</th><th style="border:1px solid #000;padding:3px;text-align:right;">Pag-IBIG Loan</th></tr></thead>';
+    html += '<tbody>';
+    const g = (k) => roundToCents(e(k) + p(k));
+    html += `<tr><td style="border:1px solid #000;padding:3px;">Edifice</td><td style="border:1px solid #000;padding:3px;text-align:right;">${formatDeductionDisplay(e('pagibig'))}</td><td style="border:1px solid #000;padding:3px;text-align:right;">${formatDeductionDisplay(e('philhealth'))}</td><td style="border:1px solid #000;padding:3px;text-align:right;">${formatDeductionDisplay(e('sss'))}</td><td style="border:1px solid #000;padding:3px;text-align:right;">${formatDeductionDisplay(e('loanSSS'))}</td><td style="border:1px solid #000;padding:3px;text-align:right;">${formatDeductionDisplay(e('loanPI'))}</td></tr>`;
+    html += `<tr><td style="border:1px solid #000;padding:3px;">Portafolio</td><td style="border:1px solid #000;padding:3px;text-align:right;">${formatDeductionDisplay(p('pagibig'))}</td><td style="border:1px solid #000;padding:3px;text-align:right;">${formatDeductionDisplay(p('philhealth'))}</td><td style="border:1px solid #000;padding:3px;text-align:right;">${formatDeductionDisplay(p('sss'))}</td><td style="border:1px solid #000;padding:3px;text-align:right;">${formatDeductionDisplay(p('loanSSS'))}</td><td style="border:1px solid #000;padding:3px;text-align:right;">${formatDeductionDisplay(p('loanPI'))}</td></tr>`;
+    html += `<tr><td style="border:1px solid #000;padding:3px;font-weight:700;background:#fff7ed;">Grand Total</td><td style="border:1px solid #000;padding:3px;text-align:right;font-weight:700;background:#fff7ed;">${formatDeductionDisplay(g('pagibig'))}</td><td style="border:1px solid #000;padding:3px;text-align:right;font-weight:700;background:#fff7ed;">${formatDeductionDisplay(g('philhealth'))}</td><td style="border:1px solid #000;padding:3px;text-align:right;font-weight:700;background:#fff7ed;">${formatDeductionDisplay(g('sss'))}</td><td style="border:1px solid #000;padding:3px;text-align:right;font-weight:700;background:#fff7ed;">${formatDeductionDisplay(g('loanSSS'))}</td><td style="border:1px solid #000;padding:3px;text-align:right;font-weight:700;background:#fff7ed;">${formatDeductionDisplay(g('loanPI'))}</td></tr>`;
+    html += '</tbody></table></div>';
+    html += '</div>';
+
+    const ws = document.getElementById('weekStart');
+    const we = document.getElementById('weekEnd');
+    const startDate = ws && ws.value ? ws.value : '';
+    const endDate = we && we.value ? we.value : '';
+    const periodText = (startDate && endDate) ? `${startDate} to ${endDate}` : (startDate || endDate || '');
+    const companyName = getDeductionsReportCompanyName();
+
+    const doc = '<html><head><meta charset="utf-8"><title>Deductions Report</title>' +
+      '<style>@page{size:letter landscape;margin:10mm} body{font-family:Arial,Helvetica,sans-serif;margin:0} .report-header{margin:0 0 8px} .company-name{font-size:14px;font-weight:700} .report-title{font-size:12px;font-weight:600;margin-top:2px} .report-period{font-size:10px;margin-top:2px} table{border-collapse:collapse;width:100%;table-layout:fixed} th,td{border:1pt solid #000;padding:4px;font-size:10px} th{background:#f1f5f9} td.num, th.num{text-align:right} thead{display:table-header-group} tfoot{display:table-footer-group} tfoot td{font-weight:700;background:#fff7ed;border-top:2pt solid #000}</style>' +
+      '</head><body>' +
+      '<div class="report-header">' +
+      `<div class="company-name">${companyName}</div>` +
+      '<div class="report-title">Deductions Report</div>' +
+      (periodText ? `<div class="report-period">Period: ${periodText}</div>` : '') +
+      '</div>' +
+      html +
+      '</body></html>';
+    withPrintOrientation(function(orientation){
+      printReport(doc, { orientation: orientation, features: 'width=1100,height=700' });
+    });
+  });
+});
+
+function getOvertimeReportCompanyName() {
+  if (typeof COMPANY_OPTIONS !== 'undefined' && Array.isArray(COMPANY_OPTIONS) && COMPANY_OPTIONS[0]) {
+    return normalizePrintCompanyName(COMPANY_OPTIONS[0]);
+  }
+  return normalizePrintCompanyName('PayrollPro');
+}
+
+function buildOvertimeReportData() {
+  syncPeriodScopedData();
+  const rows = [];
+  getEmployeeList().forEach(emp => {
+    const baseRate = getEmployeeHourlyRate(emp.id);
+    const effectiveRate = getEffectiveOvertimeRateForEmployee(emp.id, baseRate);
+    const otTotal = getOvertimeHoursTotal(emp.id);
+    const adj = getOvertimeAdjustmentHours(emp.id);
+    const otFinal = otTotal + adj;
+    const nightDiff = getNightDifferentialPayForEmployee(emp.id);
+    const otPay = roundToCents(getOvertimePayForEmployee(emp.id, baseRate) + nightDiff);
+    rows.push({
+      id: emp.id,
+      name: emp.name,
+      rate: effectiveRate,
+      total: otTotal,
+      adj,
+      final: otFinal,
+      nightDiff,
+      pay: otPay
+    });
+  });
+  return { rows };
+}
+
+document.addEventListener('DOMContentLoaded', function(){
+  const btn = document.getElementById('printOvertimeBtn');
+  if (!btn) return;
+  btn.addEventListener('click', function(){
+    if (!getEmployeeList() || !getEmployeeList().length) {
+      alert('No employees available for the overtime report.');
+      return;
+    }
+    const report = buildOvertimeReportData();
+    const columns = [
+      { key: 'rate', label: 'Hourly Rate', numeric: true },
+      { key: 'total', label: 'Total OT Hrs', numeric: true },
+      { key: 'adj', label: 'ADJ OT hours', numeric: true },
+      { key: 'final', label: 'Overtime Hours Final', numeric: true },
+      { key: 'nightDiff', label: 'Night Diff', numeric: true },
+      { key: 'pay', label: 'Overtime Pay', numeric: true }
+    ];
+    const visibleColumns = columns.filter(col => report.rows.some(row => Number(row[col.key]) !== 0));
+    if (!visibleColumns.length) {
+      alert('No overtime data to print for this period.');
+      return;
+    }
+    const formatAmount = (value) => {
+      const num = Number(value);
+      if (!Number.isFinite(num) || Math.abs(num) < 0.005) return '-';
+      return num.toFixed(2);
+    };
+    const totalOtHrs = report.rows.reduce((sum, row) => roundToCents(sum + (Number(row.total) || 0)), 0);
+    const totalAdjHrs = report.rows.reduce((sum, row) => roundToCents(sum + (Number(row.adj) || 0)), 0);
+    const totalFinalHrs = report.rows.reduce((sum, row) => roundToCents(sum + (Number(row.final) || 0)), 0);
+    const totalNightDiff = report.rows.reduce((sum, row) => roundToCents(sum + (Number(row.nightDiff) || 0)), 0);
+    const totalOtPay = report.rows.reduce((sum, row) => roundToCents(sum + (Number(row.pay) || 0)), 0);
+    const totals = { total: totalOtHrs, adj: totalAdjHrs, final: totalFinalHrs, nightDiff: totalNightDiff, pay: totalOtPay };
+
+    let html = '<div id="printOvertimeReport"><table><thead><tr><th>Employee ID</th><th>Employee Name</th>';
+    visibleColumns.forEach(col => {
+      html += `<th class="num">${col.label}</th>`;
+    });
+    html += '</tr></thead><tbody>';
+    report.rows.forEach(row => {
+      html += `<tr><td>${row.id || ''}</td><td>${row.name || ''}</td>`;
+      visibleColumns.forEach(col => {
+        html += `<td class="num">${formatAmount(row[col.key])}</td>`;
+      });
+      html += '</tr>';
+    });
+    html += '</tbody><tfoot><tr><td></td><td>Grand Total</td>';
+    visibleColumns.forEach(col => {
+      if (Object.prototype.hasOwnProperty.call(totals, col.key)) {
+        html += `<td class="num">${formatAmount(totals[col.key])}</td>`;
+      } else {
+        html += '<td></td>';
+      }
+    });
+    html += '</tr></tfoot></table></div>';
+
+    const ws = document.getElementById('weekStart');
+    const we = document.getElementById('weekEnd');
+    const startDate = ws && ws.value ? ws.value : '';
+    const endDate = we && we.value ? we.value : '';
+    const periodText = (startDate && endDate) ? `${startDate} to ${endDate}` : (startDate || endDate || '');
+    const companyName = getOvertimeReportCompanyName();
+
+    const doc = '<html><head><meta charset="utf-8"><title>Overtime Report</title>' +
+      '<style>@page{size:letter landscape;margin:10mm} body{font-family:Arial,Helvetica,sans-serif;margin:0} .report-header{margin:0 0 8px} .company-name{font-size:14px;font-weight:700} .report-title{font-size:12px;font-weight:600;margin-top:2px} .report-period{font-size:10px;margin-top:2px} table{border-collapse:collapse;width:100%;table-layout:fixed} th,td{border:1pt solid #000;padding:4px;font-size:10px} th{background:#f1f5f9} td.num, th.num{text-align:right} thead{display:table-header-group} tfoot{display:table-footer-group} tfoot td{font-weight:700;background:#fff7ed;border-top:2pt solid #000}</style>' +
+      '</head><body>' +
+      '<div class="report-header">' +
+      `<div class="company-name">${companyName}</div>` +
+      '<div class="report-title">Overtime Report</div>' +
+      (periodText ? `<div class="report-period">Period: ${periodText}</div>` : '') +
+      '</div>' +
+      html +
+      '</body></html>';
+    withPrintOrientation(function(orientation){
+      printReport(doc, { orientation: orientation, features: 'width=1000,height=700' });
+    });
+  });
+});
+
+// Export Payroll Report Excel: mirrors the Print Report table structure but writes to XLSX.
+document.addEventListener('DOMContentLoaded', function(){
+  const btn = document.getElementById('printPayrollExcelBtn');
+  if (!btn) return;
+  btn.addEventListener('click', function(){
+    if (typeof XLSX === 'undefined' || !XLSX || !XLSX.utils) {
+      alert('Excel library not available');
+      return;
+    }
+    const srcTable = document.getElementById('payrollTable');
+    if (!srcTable) {
+      alert('Payroll table is missing or empty.');
+      return;
+    }
+    const clone = srcTable.cloneNode(true);
+    const removeLastCell = row => { if (row && row.lastElementChild) row.removeChild(row.lastElementChild); };
+    clone.querySelectorAll('thead tr').forEach(removeLastCell);
+    clone.querySelectorAll('tbody tr').forEach(removeLastCell);
+    clone.querySelectorAll('tfoot tr').forEach(removeLastCell);
+
+    const divisorKey = (typeof LS_DIVISOR !== 'undefined' ? LS_DIVISOR : 'payroll_deduction_divisor');
+    const divisorVal = (typeof window !== 'undefined' && typeof window.divisor !== 'undefined' && Number(window.divisor)) || parseInt((localStorage && localStorage.getItem(divisorKey)) || '1', 10) || 1;
+    const safeDivide = (raw) => {
+      const base = Number(divisorVal) || 1;
+      const amt = parseFloat((raw || '').toString().replace(/,/g, '')) || 0;
+      return (amt / base).toFixed(2);
+    };
+
+    const formatEffectiveValue = (value) => {
+      if (value == null) return '';
+      const num = parseFloat(value);
+      if (!Number.isNaN(num)) return num.toFixed(2);
+      return String(value);
+    };
+    const readDeductionEffective = (el) => {
+      if (!el || !el.dataset) return null;
+      if (Object.prototype.hasOwnProperty.call(el.dataset, 'effectiveValue')) {
+        return el.dataset.effectiveValue;
+      }
+      if (Object.prototype.hasOwnProperty.call(el.dataset, 'effective')) {
+        return el.dataset.effective;
+      }
+      return null;
+    };
+    clone.querySelectorAll('input').forEach(inp => {
+      const td = inp.parentElement;
+      const cls = inp.classList || { contains: () => false };
+      const effective = readDeductionEffective(inp);
+      const isLoan = cls.contains('loanSSS') || cls.contains('loanPI');
+      const isDeductionInput = isLoan || cls.contains('vale') || cls.contains('valeWed');
+      if (isDeductionInput && effective != null) {
+        td.textContent = formatEffectiveValue(effective);
+      } else if (isLoan) {
+        td.textContent = formatEffectiveValue(safeDivide(inp.value || '0'));
+      } else {
+        const val = (inp.value || inp.textContent || '').toString();
+        td.textContent = val;
+      }
+    });
+
+    clone.querySelectorAll('td.loanSSS, td.loanPI').forEach(td => {
+      if (!td) return;
+      if (td.querySelector('input')) return;
+      const effective = readDeductionEffective(td);
+      if (effective != null) {
+        td.textContent = formatEffectiveValue(effective);
+        return;
+      }
+      const divided = safeDivide(td.textContent || '0');
+      td.textContent = formatEffectiveValue(divided);
+    });
+
+    clone.querySelectorAll('td').forEach(function(td){
+      if (td.querySelector('input')) return;
+      var raw = (td.textContent || '').replace(/,/g,'').trim();
+      if (!raw) return;
+      var num = parseFloat(raw);
+      if (!isNaN(num) && num === 0) td.textContent = '-';
+    });
+
+    (function(){
+      function norm(s){ return String(s||'').replace(/\s+/g,' ').trim().toLowerCase(); }
+      var map = new Map([
+        ['regular hours','REG HRS'],
+        ['ot hours','OT HRS'],
+        ['adjustment hrs','ADJ HRS'],
+        ['adjustments','OTHER DED'],
+        ['other deductions','OTHER DED'],
+        ['total deductions','TOTAL DEDUC.']
+      ]);
+      clone.querySelectorAll('thead th').forEach(function(th){
+        var key = norm(th.textContent);
+        if (map.has(key)) th.textContent = map.get(key);
+      });
+    })();
+
+    const ws = document.getElementById('weekStart');
+    const we = document.getElementById('weekEnd');
+    const startDate = ws && ws.value ? ws.value : '';
+    const endDate = we && we.value ? we.value : '';
+    const title = (startDate && endDate) ? `Payroll Report (${startDate} to ${endDate})` : 'Payroll Report';
+
+    const rows = [];
+    rows.push([title]);
+    rows.push([]);
+
+    const asSheetValue = (text) => {
+      const trimmed = (text || '').trim();
+      if (!trimmed || trimmed === '-') return trimmed;
+      const normalized = trimmed.replace(/,/g, '');
+      if (/^-?\d+(\.\d+)?$/.test(normalized)) {
+        const num = Number(normalized);
+        if (!Number.isNaN(num)) return num;
+      }
+      return trimmed;
+    };
+
+    ['thead','tbody','tfoot'].forEach(section => {
+      clone.querySelectorAll(section + ' tr').forEach(tr => {
+        const cells = [];
+        Array.from(tr.children).forEach(cell => {
+          const text = (cell.textContent || '').trim();
+          const span = parseInt(cell.getAttribute('colspan'), 10) || 1;
+          cells.push(asSheetValue(text));
+          for (let i = 1; i < span; i += 1) {
+            cells.push('');
+          }
+        });
+        rows.push(cells);
+      });
+    });
+
+    const wb = XLSX.utils.book_new();
+    const sheet = XLSX.utils.aoa_to_sheet(rows);
+    XLSX.utils.book_append_sheet(wb, sheet, 'Payroll Report');
+
+    const rangeLabel = (startDate && endDate) ? `${startDate}_to_${endDate}` : '';
+    const safeLabel = rangeLabel.replace(/[^0-9A-Za-z_-]/g, '');
+    const filename = safeLabel ? `Payroll_Report_${safeLabel}.xlsx` : 'Payroll_Report.xlsx';
+    XLSX.writeFile(wb, filename);
+  });
+});
+document.addEventListener('DOMContentLoaded', () => {
+  // Key used to persist payroll history snapshots in localStorage
+  const PAYROLL_HIST_KEY = 'payroll_hist';
+  // Load existing history from localStorage or default to an empty array
+  let payrollHistory;
+  try {
+    payrollHistory = JSON.parse(localStorage.getItem(PAYROLL_HIST_KEY)) || [];
+    if (!Array.isArray(payrollHistory)) payrollHistory = [];
+  } catch (err) {
+    payrollHistory = [];
+  }
+  // Expose payrollHistory on the window so other scripts (like the Active Payroll dropdown) can
+  // append to it directly. Without this, new snapshots added via custom UI would only update
+  // localStorage and would not appear in the current session until a full page reload.
+  window.payrollHistory = payrollHistory;
+  // Grab references to dashboard elements
+  // Use the global weekStart/weekEnd inputs instead of the removed dashStartDate/dashEndDate fields.
+  const dashStart = document.getElementById('weekStart');
+  const dashEnd = document.getElementById('weekEnd');
+  const dashGenerateBtn = document.getElementById('dashGenerate');
+  const dashLockButton = document.getElementById('lockSnapshotBtn');
+  const dashVoidButton = document.getElementById('voidPayRunBtn');
+  const dashLockStatus = document.getElementById('dashLockStatus');
+  const historyTableBody = document.querySelector('#historyTable tbody');
+  const snapshotView = document.getElementById('snapshotView');
+  // Reference to the Active Payrolls table body
+  const activeTableBody = document.querySelector('#activePayrollTable tbody');
+  const voidModal = document.getElementById('voidPayRunModal');
+  const voidReasonInput = document.getElementById('voidReasonInput');
+  const voidReasonError = document.getElementById('voidReasonError');
+  const voidCancelBtn = document.getElementById('cancelVoidPayRun');
+  const voidConfirmBtn = document.getElementById('confirmVoidPayRun');
+  let isGeneratingSnapshot = false;
+  let isFinalizingSnapshot = false;
+
+  const PAYROLL_LOCKS_KEY = 'payroll_lock_state';
+
+  function loadLockMap() {
+    try {
+      const raw = localStorage.getItem(PAYROLL_LOCKS_KEY);
+      if (!raw) return { __meta: { lastUpdatedAt: 0 } };
+      const parsed = JSON.parse(raw);
+      if (!parsed || typeof parsed !== 'object') return { __meta: { lastUpdatedAt: 0 } };
+      if (!parsed.__meta) parsed.__meta = {};
+      return parsed;
+    } catch (err) {
+      return { __meta: {} };
+    }
+  }
+
+  let payrollLocks = loadLockMap();
+  try { window.payrollLocks = payrollLocks; } catch (err) {}
+
+  function persistLocks(changed) {
+    try {
+      if (!payrollLocks || typeof payrollLocks !== 'object') payrollLocks = { __meta: {} };
+      if (!payrollLocks.__meta) payrollLocks.__meta = {};
+      if (changed) payrollLocks.__meta.lastUpdatedAt = Date.now();
+      localStorage.setItem(PAYROLL_LOCKS_KEY, JSON.stringify(payrollLocks));
+    } catch (err) {
+      console.warn('Unable to persist payroll lock state', err);
+    }
+  }
+
+  function periodKey(start, end) {
+    return `${start || ''}__${end || ''}`;
+  }
+
+  function getSnapshotStatus(snap) {
+    if (!snap || typeof snap !== 'object') return 'draft';
+    if (snap.status) return snap.status;
+    if (snap.voidedAt || snap.voidedBy || snap.voidReason) return 'voided';
+    // Backward-compatible finalized detection: older snapshots may have
+    // finalizedAt populated but missing explicit boolean flags.
+    if (snap.locked || snap.finalized || snap.finalizedAt) return 'finalized';
+    return 'draft';
+  }
+
+  function isSnapshotVoided(snap) {
+    return getSnapshotStatus(snap) === 'voided';
+  }
+
+  function snapshotTimestamp(snap) {
+    const stamp = snap?.finalizedAt || snap?.lockedAt || snap?.createdAt || '';
+    const parsed = stamp ? new Date(stamp).getTime() : 0;
+    return Number.isFinite(parsed) ? parsed : 0;
+  }
+
+  function findLatestSnapshotForPeriod(start, end, options = {}) {
+    if (!start || !end || !Array.isArray(payrollHistory)) return null;
+    const includeVoided = !!options.includeVoided;
+    const onlyFinalized = !!options.onlyFinalized;
+    const onlyUnlocked = !!options.onlyUnlocked;
+    const matches = payrollHistory.filter(entry => {
+      if (!entry || entry.startDate !== start || entry.endDate !== end) return false;
+      const status = getSnapshotStatus(entry);
+      if (!includeVoided && status === 'voided') return false;
+      if (onlyFinalized && !(entry.locked || entry.finalized)) return false;
+      if (onlyUnlocked && (entry.locked || entry.finalized)) return false;
+      return true;
+    });
+    if (!matches.length) return null;
+    matches.sort((a, b) => {
+      const diff = snapshotTimestamp(b) - snapshotTimestamp(a);
+      if (diff) return diff;
+      return payrollHistory.indexOf(b) - payrollHistory.indexOf(a);
+    });
+    return matches[0] || null;
+  }
+
+  function findLatestFinalizedSnapshot(start, end) {
+    return findLatestSnapshotForPeriod(start, end, { onlyFinalized: true, includeVoided: false });
+  }
+
+  function getCurrentPeriodRange() {
+    return {
+      start: dashStart && dashStart.value ? dashStart.value : '',
+      end: dashEnd && dashEnd.value ? dashEnd.value : ''
+    };
+  }
+
+  function getLockEntry(start, end) {
+    if (!start || !end) return null;
+    const entry = payrollLocks && payrollLocks[periodKey(start, end)];
+    return entry && typeof entry === 'object' ? entry : null;
+  }
+
+  function captureGrandTotals() {
+    const foot = document.getElementById('payrollTotalsFoot');
+    if (!foot) return null;
+    const totals = {};
+    foot.querySelectorAll('[data-col]').forEach(td => {
+      const col = td.dataset.col;
+      if (!col) return;
+      totals[col] = (td.textContent || '').trim();
+    });
+    return totals;
+  }
+
+  function findHistorySnapshot(start, end) {
+    return findLatestFinalizedSnapshot(start, end);
+  }
+
+  function setSnapshotOverride(snapshot) {
+    if (!snapshot) return;
+    const payload = {
+      rows: Array.isArray(snapshot.rows) ? snapshot.rows : [],
+      totals: snapshot.totals || {},
+      divisor: snapshot.divisor
+    };
+    try { window.__snapshotPayrollOverride = payload; }
+    catch (err) { window.__snapshotPayrollOverride = payload; }
+    try { window.__snapshotMeta = snapshot; } catch (err) { window.__snapshotMeta = snapshot; }
+  }
+
+  function clearSnapshotOverride() {
+    try { delete window.__snapshotPayrollOverride; }
+    catch (err) { window.__snapshotPayrollOverride = undefined; }
+    try { delete window.__snapshotMeta; } catch (err) { window.__snapshotMeta = undefined; }
+  }
+
+  function formatSnapshotNumber(value, options = {}) {
+    const num = Number(value);
+    if (!Number.isFinite(num)) {
+      if (value === '' || value == null) return options.emptyAsDash ? '-' : '0.00';
+      return String(value);
+    }
+    if (options.keepZero) {
+      return num.toFixed(options.decimals ?? 2);
+    }
+    if (Math.abs(num) < 0.0005) return '-';
+    return num.toFixed(options.decimals ?? 2);
+  }
+
+  function formatFootTotal(value) {
+    const num = Number(value);
+    if (!Number.isFinite(num)) {
+      if (value == null) return '0.00';
+      return String(value);
+    }
+    try {
+      return num.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    } catch (err) {
+      return num.toFixed(2);
+    }
+  }
+
+  function applySnapshotToPayrollTable(snapshot) {
+    if (!snapshot || !Array.isArray(snapshot.rows)) return false;
+    const table = document.getElementById('payrollTable');
+    if (!table) return false;
+    const tbody = table.querySelector('tbody');
+    if (!tbody) return false;
+    const bodyRows = Array.from(tbody.querySelectorAll('tr'));
+    const existingIds = new Set();
+    bodyRows.forEach(tr => {
+      const idCell = tr.cells && tr.cells[0];
+      const empId = idCell ? (idCell.textContent || '').trim() : '';
+      if (empId) existingIds.add(empId);
+    });
+    const formatInputValue = (value, decimals = 2) => {
+      const num = Number(value);
+      if (!Number.isFinite(num)) return value == null ? '' : String(value);
+      if (decimals == null) return String(num);
+      return num.toFixed(decimals);
+    };
+    const buildSnapshotRow = (row) => {
+      const empId = row && row.id != null ? String(row.id).trim() : '';
+      const name = row && row.name != null ? String(row.name) : '';
+      const rate = formatInputValue(row?.rate, 2);
+      const regHrs = formatInputValue(row?.regHrs, 2);
+      const tr = document.createElement('tr');
+      tr.dataset.snapshotRow = 'true';
+      tr.innerHTML = `
+        <td>${empId}</td>
+        <td class="wrap">${name}</td>
+        <td><input class="cell rate" name="payroll_rate_${empId}" type="number" step="0.01" value="${rate}" disabled></td>
+        <td><input class="cell regHrs" name="payroll_reg_hours_${empId}" type="number" step="0.01" value="${regHrs}" disabled></td>
+        <td class="regPay num">0.00</td>
+        <td class="adjHours num">0.00</td>
+        <td class="adjPay num">0.00</td>
+        <td class="adjAmt num">0.00</td>
+        <td class="grossPay num">0.00</td>
+        <td class="totalDed num">0.00</td>
+        <td class="otPay num">0.00</td>
+        <td class="netPay num">0.00</td>
+        <td><button type="button" class="payslipBtn">Payslip</button></td>`;
+      return tr;
+    };
+    snapshot.rows.forEach(row => {
+      if (!row) return;
+      const key = row.id != null ? String(row.id).trim() : '';
+      if (!key || existingIds.has(key)) return;
+      const newRow = buildSnapshotRow(row);
+      if (newRow) {
+        tbody.appendChild(newRow);
+        existingIds.add(key);
+      }
+    });
+    const updatedRows = table.querySelectorAll('tbody tr');
+    if (!updatedRows || !updatedRows.length) return false;
+    const byId = new Map();
+    snapshot.rows.forEach(row => {
+      if (!row) return;
+      const key = row.id != null ? String(row.id).trim() : '';
+      if (key) byId.set(key, row);
+    });
+
+    updatedRows.forEach(tr => {
+      const idCell = tr.cells && tr.cells[0];
+      if (!idCell) return;
+      const empId = (idCell.textContent || '').trim();
+      if (!empId) return;
+      const data = byId.get(empId);
+      if (!data) return;
+
+      const applyInput = (selector, value, decimals = 2) => {
+        const el = tr.querySelector(selector);
+        if (!el) return;
+        if (typeof el.value !== 'undefined') {
+          const num = Number(value);
+          if (!Number.isFinite(num)) {
+            el.value = value == null ? '' : String(value);
+          } else if (decimals == null) {
+            el.value = String(num);
+          } else {
+            el.value = num.toFixed(decimals);
+          }
+        } else {
+          el.textContent = formatSnapshotNumber(value, { decimals });
+        }
+      };
+
+      const applyText = (selector, value, options) => {
+        const el = tr.querySelector(selector);
+        if (!el) return;
+        el.textContent = formatSnapshotNumber(value, options || {});
+      };
+
+      applyInput('.rate', data.rate);
+      applyInput('.regHrs', data.regHrs);
+
+      applyText('.regPay', data.regPay);
+      applyText('.otPay', data.otPay);
+      applyText('.adjHours', data.adjRegHrs ?? data.adjHours);
+      applyText('.adjPay', data.adjPay);
+      applyText('.adjAmt', data.adjAmt);
+      applyText('.grossPay', data.grossPay);
+      applyText('.pagibig', data.pagibig);
+      applyText('.philhealth', data.philhealth);
+      applyText('.sss', data.sss);
+      applyInput('.loanSSS', data.loanSSS);
+      applyInput('.loanPI', data.loanPI);
+      applyInput('.vale', data.vale);
+      applyInput('.valeWed', data.valeWed);
+      applyText('.totalDed', data.totalDed);
+      applyText('.netPay', data.netPay);
+
+      const additionalIncome = Number(data.adjAmt) || 0;
+      const otherDeductionsSnapshot = Number((typeof data.otherDeductionsTotal !== 'undefined')
+        ? data.otherDeductionsTotal
+        : data.adjustmentDeduction) || 0;
+      try {
+        tr.dataset.otherDeductionsTotal = otherDeductionsSnapshot.toFixed(2);
+        tr.dataset.additionalIncomeTotal = additionalIncome.toFixed(2);
+      } catch (err) {}
+
+      if (typeof payrollRates === 'object' && payrollRates) payrollRates[empId] = Number(data.rate) || 0;
+      if (typeof regHours === 'object' && regHours) regHours[empId] = Number(data.regHrs) || 0;
+      if (typeof otHours === 'object' && otHours) otHours[empId] = Number(data.otHrs) || 0;
+      if (typeof adjHrs === 'object' && adjHrs) {
+        const regAdj = Number((typeof data.adjRegHrs !== 'undefined') ? data.adjRegHrs : data.adjHours) || 0;
+        const otAdj = Number((typeof data.adjHrs !== 'undefined') ? data.adjHrs : data.adjOtHrs) || 0;
+        setAdjustmentTotalsForEmployee(empId, regAdj, otAdj);
+      }
+      if (typeof additionalIncomeTotal === 'object' && additionalIncomeTotal) {
+        additionalIncomeTotal[empId] = Number(data.adjAmt) || 0;
+      }
+      if (typeof loanSSS === 'object' && loanSSS) loanSSS[empId] = Number(data.loanSSS) || 0;
+      if (typeof loanPI === 'object' && loanPI) loanPI[empId] = Number(data.loanPI) || 0;
+      if (typeof vale === 'object' && vale) vale[empId] = Number(data.vale) || 0;
+      if (typeof valeWed === 'object' && valeWed) valeWed[empId] = Number(data.valeWed) || 0;
+      if (typeof otherDeductionsDetails === 'object' && otherDeductionsDetails) {
+        if (otherDeductionsSnapshot > 0) {
+          otherDeductionsDetails[empId] = [{
+            type: CUSTOM_DEDUCTION_TYPE_VALUE,
+            label: DEFAULT_OTHER_DEDUCTION_LABEL,
+            amount: otherDeductionsSnapshot
+          }];
+        } else {
+          delete otherDeductionsDetails[empId];
+        }
+      }
+      if (typeof otherDeductionsTotal === 'object' && otherDeductionsTotal) {
+        if (otherDeductionsSnapshot > 0) {
+          otherDeductionsTotal[empId] = otherDeductionsSnapshot;
+        } else {
+          delete otherDeductionsTotal[empId];
+        }
+      }
+    });
+
+    persistCurrentOtherDeductions();
+    persistCurrentAdjustmentHours();
+
+    const foot = document.getElementById('payrollTotalsFoot');
+    if (foot && snapshot.totals && typeof snapshot.totals === 'object') {
+      foot.querySelectorAll('[data-col]').forEach(td => {
+        const key = td.dataset.col;
+        if (!key) return;
+        td.textContent = formatFootTotal(snapshot.totals[key]);
+      });
+    }
+
+    try { if (typeof renderDeductionsTable === 'function') renderDeductionsTable(); } catch (err) {}
+    try { if (typeof renderOvertimeTable === 'function') renderOvertimeTable(); } catch (err) {}
+    try { if (typeof updatePayrollGrandTotals === 'function') updatePayrollGrandTotals(); } catch (err) {}
+    return true;
+  }
+
+  async function finalizeCashAdvancesForPeriod(start, end) {
+    try {
+      const pk = periodKey(start, end);
+      if (!pk) return;
+      applyLoanTrackerToPeriod(pk, { updateMaps: true, commitCashAdvance: true });
+      await persistLoanTracker();
+      await saveCurrentPeriodDeductions();
+    } catch (err) {
+      console.warn('Cash advance finalize failed', err);
+    }
+  }
+
+  function syncHistoryLockState(start, end, locked, meta) {
+    if (!Array.isArray(payrollHistory) || !start || !end) return;
+    let snap = null;
+    if (meta && Number.isFinite(meta.targetIndex)) {
+      snap = payrollHistory[meta.targetIndex];
+    }
+    if (!snap) {
+      snap = findLatestSnapshotForPeriod(start, end, { includeVoided: true }) ||
+        payrollHistory.find(entry => entry && entry.startDate === start && entry.endDate === end);
+    }
+    if (!snap && locked) {
+      snap = { startDate: start, endDate: end };
+      payrollHistory.push(snap);
+    }
+    if (!snap) return;
+    snap.locked = locked;
+    snap.lockedAt = locked ? (meta && meta.lockedAt ? meta.lockedAt : new Date().toISOString()) : '';
+    if (locked) {
+      snap.periodKey = meta && meta.periodKey ? meta.periodKey : periodKey(start, end);
+      snap.finalized = (meta && typeof meta.finalized !== 'undefined') ? !!meta.finalized : true;
+      snap.finalizedAt = meta && meta.finalizedAt ? meta.finalizedAt : (meta && meta.lockedAt ? meta.lockedAt : new Date().toISOString());
+      snap.finalizedBy = meta && meta.finalizedBy ? meta.finalizedBy : 'admin';
+      snap.finalizeNote = meta && meta.finalizeNote ? meta.finalizeNote : '';
+      snap.status = 'finalized';
+    } else {
+      snap.finalized = false;
+      snap.finalizedAt = '';
+      snap.finalizedBy = '';
+      snap.finalizeNote = '';
+      if (snap.status !== 'voided') snap.status = 'draft';
+    }
+    if (locked) {
+      const snapMeta = meta && meta.snapshot && typeof meta.snapshot === 'object' ? meta.snapshot : null;
+      if (snapMeta) {
+        if (Array.isArray(snapMeta.rows)) snap.rows = snapMeta.rows;
+        if (snapMeta.totals && typeof snapMeta.totals === 'object') snap.totals = snapMeta.totals;
+        if (typeof snapMeta.divisor !== 'undefined') snap.divisor = snapMeta.divisor;
+        if (snapMeta.settings && typeof snapMeta.settings === 'object') snap.settings = snapMeta.settings;
+        if (snapMeta.hash) snap.hash = snapMeta.hash;
+      } else if (meta && meta.totals) {
+        snap.totals = meta.totals;
+      }
+      if (meta && meta.hash) snap.hash = meta.hash;
+    } else {
+      snap.totals = {};
+      if (typeof snap.hash !== 'undefined') snap.hash = '';
+    }
+    if (typeof saveHistory === 'function') saveHistory();
+    if (typeof renderHistory === 'function') renderHistory();
+    if (typeof renderActivePayrolls === 'function') renderActivePayrolls();
+  }
+
+  function setPeriodLocked(start, end, locked, meta = {}) {
+    if (!start || !end) return;
+    if (!payrollLocks || typeof payrollLocks !== 'object') payrollLocks = { __meta: {} };
+    const key = periodKey(start, end);
+    const hadEntry = !!(payrollLocks && payrollLocks[key]);
+    if (locked) {
+      payrollLocks[key] = {
+        locked: true,
+        lockedAt: meta.lockedAt || new Date().toISOString(),
+        finalizedAt: meta.finalizedAt || meta.lockedAt || new Date().toISOString(),
+        finalizedBy: meta.finalizedBy || 'admin',
+        finalizeNote: meta.finalizeNote || '',
+        totals: meta.totals || null
+      };
+    } else {
+      delete payrollLocks[key];
+    }
+    const changed = locked ? !hadEntry : hadEntry;
+    persistLocks(changed);
+    syncHistoryLockState(start, end, locked, meta);
+    try { window.payrollLocks = payrollLocks; } catch (err) {}
+  }
+
+  function clearPeriodLockEntry(start, end) {
+    if (!start || !end) return;
+    if (!payrollLocks || typeof payrollLocks !== 'object') payrollLocks = { __meta: {} };
+    const key = periodKey(start, end);
+    const hadEntry = !!(payrollLocks && payrollLocks[key]);
+    if (!hadEntry) return;
+    delete payrollLocks[key];
+    persistLocks(true);
+    try { window.payrollLocks = payrollLocks; } catch (err) {}
+  }
+
+  function updateLockStatusDisplay(entry) {
+    if (!dashLockStatus) return;
+    if (!entry || !entry.locked) {
+      dashLockStatus.style.display = 'none';
+      dashLockStatus.textContent = '';
+      return;
+    }
+    const parts = ['Finalized'];
+    if (entry.lockedAt || entry.finalizedAt) {
+      try {
+        const stamp = entry.finalizedAt || entry.lockedAt;
+        parts.push(new Date(stamp).toLocaleString());
+      } catch (err) {}
+    }
+    if (entry.totals && entry.totals.netPay) {
+      parts.push(`Net ${entry.totals.netPay}`);
+    }
+    dashLockStatus.textContent = parts.join(' · ');
+    dashLockStatus.style.display = 'inline';
+  }
+
+  function applyLockUI() {
+    const { start, end } = getCurrentPeriodRange();
+    const hasRange = !!(start && end);
+    if (!hasRange) {
+      enablePayrollInputs();
+      updateLockStatusDisplay(null);
+      clearSnapshotOverride();
+      if (dashLockButton) dashLockButton.disabled = true;
+      if (dashVoidButton) dashVoidButton.disabled = true;
+      return false;
+    }
+    const entry = getLockEntry(start, end);
+    const fallbackSnap = findLatestFinalizedSnapshot(start, end);
+    const fallbackLocked = !!(fallbackSnap && !isSnapshotVoided(fallbackSnap));
+    let locked = !!((entry && entry.locked) || fallbackLocked);
+    if (locked) {
+      disablePayrollInputs();
+      updateLockStatusDisplay(entry);
+      const snap = findHistorySnapshot(start, end) || fallbackSnap;
+      if (!snap) {
+        clearPeriodLockEntry(start, end);
+        locked = false;
+        clearSnapshotOverride();
+        enablePayrollInputs();
+        updateLockStatusDisplay(null);
+        if (dashLockButton) dashLockButton.disabled = false;
+        if (dashVoidButton) dashVoidButton.disabled = true;
+        return false;
+      }
+      if (snap) {
+        setSnapshotOverride(snap);
+        applySnapshotToPayrollTable(snap);
+      } else {
+        clearSnapshotOverride();
+      }
+      if (dashLockButton) dashLockButton.disabled = true;
+      if (dashVoidButton) dashVoidButton.disabled = !(snap && !isSnapshotVoided(snap));
+    } else {
+      enablePayrollInputs();
+      updateLockStatusDisplay(null);
+      const explicitSnap = (typeof window !== 'undefined' && window.__snapshotMeta) ? window.__snapshotMeta : null;
+      const keepSnapshot = !!(explicitSnap
+        && explicitSnap.startDate === start
+        && explicitSnap.endDate === end
+        && isSnapshotVoided(explicitSnap));
+      if (!keepSnapshot) {
+        clearSnapshotOverride();
+      }
+      const table = document.getElementById('payrollTable');
+      if (table) {
+        if (!keepSnapshot) {
+          const snapshotRows = table.querySelectorAll('tbody tr[data-snapshot-row="true"]');
+          if (snapshotRows.length) {
+            snapshotRows.forEach(row => row.remove());
+            try {
+              if (typeof scheduleTotals === 'function') scheduleTotals();
+              else if (typeof updatePayrollGrandTotals === 'function') updatePayrollGrandTotals();
+            } catch (err) {}
+          }
+        }
+      }
+      if (dashLockButton) dashLockButton.disabled = false;
+      if (dashVoidButton) dashVoidButton.disabled = true;
+    }
+    return locked;
+  }
+
+  let pendingVoidIndex = null;
+
+  function setVoidModalState(open) {
+    if (!voidModal) return;
+    voidModal.style.display = open ? 'flex' : 'none';
+    if (open) {
+      try { voidModal.setAttribute('tabindex', '-1'); voidModal.focus(); } catch (err) {}
+    }
+  }
+
+  function updateVoidConfirmState() {
+    if (!voidConfirmBtn || !voidReasonInput) return;
+    const reason = (voidReasonInput.value || '').trim();
+    const ok = reason.length > 0;
+    voidConfirmBtn.disabled = !ok;
+    if (voidReasonError) voidReasonError.style.display = ok ? 'none' : 'block';
+  }
+
+  function openVoidModal(index = null) {
+    pendingVoidIndex = Number.isFinite(index) ? index : null;
+    if (voidReasonInput) voidReasonInput.value = '';
+    if (voidReasonError) voidReasonError.style.display = 'none';
+    if (voidConfirmBtn) voidConfirmBtn.disabled = true;
+    setVoidModalState(true);
+    setTimeout(() => { try { voidReasonInput && voidReasonInput.focus(); } catch (err) {} }, 0);
+  }
+
+  function closeVoidModal() {
+    pendingVoidIndex = null;
+    setVoidModalState(false);
+  }
+
+  function resolveSnapshotToVoid() {
+    if (Number.isFinite(pendingVoidIndex)) {
+      const snap = payrollHistory[pendingVoidIndex];
+      return snap ? { snap, index: pendingVoidIndex } : null;
+    }
+    const { start, end } = getCurrentPeriodRange();
+    const snap = findLatestFinalizedSnapshot(start, end);
+    if (!snap) return null;
+    return { snap, index: payrollHistory.indexOf(snap) };
+  }
+
+  function voidSnapshot(snap, reason) {
+    if (!snap) return;
+    const now = new Date().toISOString();
+    snap.status = 'voided';
+    snap.voidedAt = now;
+    snap.voidedBy = snap.voidedBy || 'admin';
+    snap.voidReason = reason;
+    snap.locked = true;
+    snap.finalized = true;
+    clearPeriodLockEntry(snap.startDate, snap.endDate);
+    saveHistory();
+    if (typeof renderHistory === 'function') renderHistory();
+    if (typeof renderActivePayrolls === 'function') renderActivePayrolls();
+    try { if (typeof window.populatePayrollDropdowns === 'function') window.populatePayrollDropdowns(); } catch (err) {}
+    try { if (typeof window.applyPayrollLockUI === 'function') window.applyPayrollLockUI(); } catch (err) {}
+    try { if (typeof window.checkAndToggleEditState === 'function') window.checkAndToggleEditState(); } catch (err) {}
+  }
+
+  async function lockCurrentPeriod() {
+    const { start, end } = getCurrentPeriodRange();
+    if (!start || !end) {
+      alert('Please select both start and end dates.');
+      return;
+    }
+    const existingLock = getLockEntry(start, end);
+    if (existingLock?.locked) {
+      const latestFinalized = findHistorySnapshot(start, end);
+      if (latestFinalized && !isSnapshotVoided(latestFinalized)) {
+        applyLockUI();
+        return;
+      }
+      const latestIncludingVoided = findLatestSnapshotForPeriod(start, end, { includeVoided: true });
+      if (latestIncludingVoided && isSnapshotVoided(latestIncludingVoided)) {
+        clearPeriodLockEntry(start, end);
+      } else {
+        applyLockUI();
+        return;
+      }
+    }
+    await finalizeCashAdvancesForPeriod(start, end);
+    try {
+      if (typeof calculateAll === 'function') {
+        await Promise.resolve(calculateAll());
+      }
+    } catch (err) {}
+    try {
+      if (typeof updatePayrollGrandTotals === 'function') {
+        updatePayrollGrandTotals();
+      }
+    } catch (err) {}
+    const snapshot = await buildSnapshot(start, end);
+    if (!snapshot || !Array.isArray(snapshot.rows) || !snapshot.rows.length) {
+      alert('Payroll table is missing or empty.');
+      return;
+    }
+
+    const lockedAt = new Date().toISOString();
+
+    // Audit-grade hash: includes DTR + payroll + all payroll subtabs + reports segments.
+    let hashHex = '';
+    let auditMeta = {};
+    try {
+      const audit = await buildAndPersistAuditManifestForPeriod(start, end, lockedAt);
+      if (audit && audit.rootHash) hashHex = audit.rootHash;
+      auditMeta = audit && typeof audit === 'object' ? {
+        auditHash: audit.rootHash || '',
+        manifestHash: audit.manifestHash || '',
+        segmentCount: audit.segmentCount || 0,
+        version: audit.version || 1
+      } : {};
+    } catch (err) {
+      // Fallback: payroll-only hash + segment persistence (best-effort)
+      try {
+        const payload = JSON.stringify({
+          startDate: start,
+          endDate: end,
+          rows: snapshot.rows,
+          totals: snapshot.totals,
+          divisor: snapshot.divisor,
+          settings: snapshot.settings || {}
+        });
+        const hashBuffer = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(payload));
+        const hashArray = Array.from(new Uint8Array(hashBuffer));
+        hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+      } catch (_) {
+        hashHex = '';
+      }
+      try { await persistSnapshotSegmentsForPeriod(start, end); } catch (_) {}
+    }
+
+    try {
+      await upsertSnapshotIndexEntry(start, end, { finalizedAt: lockedAt, hash: hashHex, ...(auditMeta || {}) });
+    } catch (err) {
+      console.warn('Snapshot index update failed', err);
+    }
+
+    let existing = findLatestSnapshotForPeriod(start, end, { onlyUnlocked: true, includeVoided: false });
+    if (!existing) {
+      existing = { startDate: start, endDate: end, createdAt: lockedAt };
+      payrollHistory.push(existing);
+    }
+    existing.startDate = start;
+    existing.endDate = end;
+    existing.periodKey = periodKey(start, end);
+    existing.rows = snapshot.rows;
+    existing.totals = snapshot.totals;
+    existing.divisor = snapshot.divisor;
+    existing.settings = snapshot.settings || {};
+    existing.hash = hashHex;
+    existing.locked = true;
+    existing.lockedAt = lockedAt;
+    existing.finalized = true;
+    existing.finalizedAt = lockedAt;
+    existing.finalizedBy = existing.finalizedBy || 'admin';
+    existing.finalizeNote = existing.finalizeNote || '';
+    existing.status = 'finalized';
+    saveHistory();
+    if (typeof renderHistory === 'function') renderHistory();
+    if (typeof renderActivePayrolls === 'function') renderActivePayrolls();
+    disablePayrollInputs();
+    setSnapshotOverride(existing);
+    setPeriodLocked(start, end, true, {
+      periodKey: existing.periodKey,
+      lockedAt,
+      finalized: true,
+      finalizedAt: lockedAt,
+      finalizedBy: existing.finalizedBy || 'admin',
+      finalizeNote: existing.finalizeNote || '',
+      totals: snapshot.totals,
+      hash: hashHex,
+      targetIndex: payrollHistory.indexOf(existing),
+      snapshot: {
+        rows: snapshot.rows,
+        totals: snapshot.totals,
+        divisor: snapshot.divisor,
+        settings: snapshot.settings || {},
+        hash: hashHex
+      }
+    });
+    applySnapshotToPayrollTable(existing);
+    applyLockUI();
+  }
+
+  if (dashStart) {
+    dashStart.addEventListener('change', () => { checkAndToggleEditState(); });
+  }
+  if (dashEnd) {
+    dashEnd.addEventListener('change', () => { checkAndToggleEditState(); });
+  }
+  checkAndToggleEditState();
+  try {
+    window.getPayrollLockEntry = getLockEntry;
+    window.setPayrollLock = setPeriodLocked;
+    window.applyPayrollLockUI = applyLockUI;
+    window.lockCurrentPeriod = lockCurrentPeriod;
+    window.getSnapshotStatus = getSnapshotStatus;
+    window.isSnapshotVoided = isSnapshotVoided;
+    window.findLatestFinalizedSnapshot = findLatestFinalizedSnapshot;
+  } catch (err) {}
+
+  /**
+   * Render the active payrolls table.
+   * Lists snapshots that are not yet locked with Edit and Delete actions.
+   */
+  window.renderActivePayrolls = function renderActivePayrolls() {
+    if (!activeTableBody) return;
+    activeTableBody.innerHTML = '';
+    payrollHistory.forEach((snap, index) => {
+      const lockEntry = getLockEntry(snap.startDate, snap.endDate);
+      if (snap.locked || (lockEntry && lockEntry.locked)) return;
+      const tr = document.createElement('tr');
+      const startText = formatDisplayDate(snap.startDate);
+      const endText = formatDisplayDate(snap.endDate);
+      // Build the Active Payroll row. Include Edit and Delete actions. Deleting
+      // prompts confirmation and removes the snapshot from payrollHistory.
+      tr.innerHTML = `
+        <td>${startText}</td>
+        <td>${endText}</td>
+        <td>
+          <button type="button" class="editActive" data-index="${index}">Edit</button>
+          <button type="button" class="deleteActive" data-index="${index}">Delete</button>
+        </td>
+      `;
+      activeTableBody.appendChild(tr);
+    });
+  };
+
+  // Delegate edit/delete actions on the Active Payrolls table
+  activeTableBody && activeTableBody.addEventListener('click', async (e) => {
+    const target = e.target;
+    if (!target) return;
+    const idxStr = target.dataset.index;
+    if (typeof idxStr === 'undefined') return;
+    const idx = parseInt(idxStr, 10);
+    const snap = payrollHistory[idx];
+    if (!snap) return;
+    if (target.classList.contains('editActive')) {
+      // Set the global date range to the snapshot dates and switch to Payroll tab
+      const wsEl = document.getElementById('weekStart');
+      const weEl = document.getElementById('weekEnd');
+      if (wsEl) wsEl.value = snap.startDate || '';
+      if (weEl) weEl.value = snap.endDate || '';
+      try {
+        if (typeof calculatePayrollFromResultsTable === 'function') calculatePayrollFromResultsTable();
+        else if (typeof calculatePayrollFromRecords === 'function') calculatePayrollFromRecords();
+      } catch (err) {}
+      // Show the payroll panel
+      try { showTab('payroll'); } catch (err) {}
+    } else if (target.classList.contains('deleteActive')) {
+      // Delete active (unlocked) snapshot after confirmation
+      if (!snap) return;
+      const lockEntry = getLockEntry(snap.startDate, snap.endDate);
+      if (snap.locked || (lockEntry && lockEntry.locked)) {
+        alert('This payroll period is locked and cannot be deleted.');
+        return;
+      }
+      const ok = confirm('Are you sure you want to delete this payroll snapshot? This action cannot be undone.');
+      if (!ok) return;
+      payrollHistory.splice(idx, 1);
+      saveHistory();
+      renderHistory();
+      renderActivePayrolls();
+    }
+  });
+
+  /**
+   * Render the payroll history table.
+   * Each snapshot row contains start/end dates, lock timestamp, truncated hash,
+   * and action buttons for opening and downloading the snapshot.
+   */
+  window.renderHistory = function renderHistory() {
+    if (!historyTableBody) return;
+    historyTableBody.innerHTML = '';
+    payrollHistory.forEach((snap, index) => {
+      const tr = document.createElement('tr');
+      tr.dataset.index = index;
+      tr.tabIndex = 0;
+      const startText = formatDisplayDate(snap.startDate);
+      const endText = formatDisplayDate(snap.endDate);
+      const lockEntry = getLockEntry(snap.startDate, snap.endDate);
+      const netSource = (lockEntry && lockEntry.totals && lockEntry.totals.netPay) || (snap.totals && snap.totals.netPay) || '';
+      const netText = (() => {
+        if (!netSource && netSource !== 0) return '';
+        const numeric = Number(String(netSource).replace(/,/g, ''));
+        if (!Number.isNaN(numeric) && Number.isFinite(numeric)) {
+          return numeric.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        }
+        return String(netSource);
+      })();
+      const status = getSnapshotStatus(snap);
+      const statusTag = status === 'voided'
+        ? '<span class="status-tag status-voided">Voided</span>'
+        : (snap.locked || snap.finalized)
+          ? '<span class="status-tag status-finalized">Finalized</span>'
+          : '<span class="status-tag status-active">Active</span>';
+      // Build row HTML; note small hash display for brevity
+      // Build the actions column depending on lock status.
+      const actions = [];
+      if (status === 'finalized') {
+        actions.push(`<button type="button" class="voidSnapshot" data-index="${index}">Void Pay Run</button>`);
+      }
+      // Keep the Delete button enabled for every row; click handling decides whether
+      // deletion is allowed for the selected snapshot.
+      actions.push(`<button type="button" class="deleteSnapshot" data-index="${index}">Delete</button>`);
+      const finalizedStamp = snap.finalizedAt || snap.lockedAt;
+      tr.innerHTML = `
+        <td>${startText}</td>
+        <td>${endText}</td>
+        <td>${finalizedStamp ? new Date(finalizedStamp).toLocaleString() : ''}</td>
+        <td>${statusTag}</td>
+        <td>${netText}</td>
+        <td>${actions.join(' ')}</td>
+      `;
+      historyTableBody.appendChild(tr);
+    });
+  };
+
+  // Post-lock automation: print DTR, download Employees CSV, print Payroll, export Reports Excel
+  window.runPostLockOutputs = function runPostLockOutputs(){
+    // Only export one Excel workbook with all tabs (no prints or CSVs)
+    try {
+      if (typeof window.rebuildReports === 'function') window.rebuildReports();
+      setTimeout(function(){
+        try {
+          if (typeof window.exportExcelAllTabs === 'function') {
+            Promise.resolve(window.exportExcelAllTabs()).catch(()=>{});
+          }
+        } catch(e){}
+      }, 600);
+    } catch(e){}
+  };
+
+  /**
+   * Build a snapshot from the current payroll table. This captures all row values
+   * and totals in a structured JSON object for persistence.
+   */
+  async function buildSnapshot(startDate, endDate) {
+    const table = document.getElementById('payrollTable');
+    if (!table) return null;
+    const rows = [];
+    table.querySelectorAll('tbody tr').forEach(row => {
+      const data = {};
+      data.id = (row.cells[0]?.textContent || '').trim();
+      data.name = (row.cells[1]?.textContent || '').trim();
+      // Helper to read numeric input or fallback text
+      function readNum(sel, cellIndex) {
+        const el = row.querySelector(sel);
+        if (el) {
+          // Prefer form control .value when available, else textContent
+          const v = (typeof el.value !== 'undefined' && el.matches('input,select,textarea')) ? el.value : el.textContent;
+          const num = parseFloat(String(v).replace(/,/g,''));
+          if (!isNaN(num)) return num;
+        }
+        // Fallback to cell index text if selector not found or not numeric
+        if (typeof cellIndex !== 'number') return 0;
+        const cellVal = row.cells[cellIndex] && row.cells[cellIndex].textContent;
+        const num2 = parseFloat(String(cellVal).replace(/,/g,''));
+        return isNaN(num2) ? 0 : num2;
+    }
+      const readDeduction = (key, sel, cellIndex) => {
+        const datasetVal = readRowDeductionDataset(row, key, 'effective');
+        if (datasetVal != null) {
+          const parsed = parseFloat(String(datasetVal).replace(/,/g,''));
+          if (!isNaN(parsed)) return parsed;
+        }
+        return readNum(sel, cellIndex);
+      };
+      // Column index fallbacks aligned with current payrollTable structure
+      // 0:ID, 1:Name, 2:Rate, 3:RegHrs, 4:RegPay, 5:Adj Hours, 6:Adj Pay,
+      // 7:Additional Income, 8:Total OT Pay, 9:Gross, 10:Total Ded, 11:Net Pay, 12:Payslip
+      data.rate = readNum('.rate', 2);
+      data.regHrs = readNum('.regHrs', 3);
+      data.otHrs = getOvertimeHoursTotal(data.id);
+      data.adjHrs = getOvertimeAdjustmentHours(data.id);
+      data.adjRegHrs = getRegularAdjustmentHours(data.id);
+      data.adjHours = data.adjRegHrs;
+      data.regPay = readNum('.regPay', 4);
+      data.adjPay = readNum('.adjPay', 6);
+      data.adjAmt = readNum('.adjAmt', 7);
+      data.otPay = readNum('.otPay', 8);
+      data.grossPay = readNum('.grossPay', 9);
+      data.pagibig = readDeduction('pagibig', '.pagibig');
+      data.philhealth = readDeduction('philhealth', '.philhealth');
+      data.sss = readDeduction('sss', '.sss');
+      data.loanSSS = readDeduction('loanSSS', '.loanSSS');
+      data.loanPI = readDeduction('loanPI', '.loanPI');
+      data.vale = readDeduction('vale', '.vale');
+      data.valeWed = readDeduction('valeWed', '.valeWed');
+      data.totalDed = readDeduction('total', '.totalDed', 10);
+      data.netPay = readNum('.netPay', 11);
+      try {
+        let otherDeductionTotal = row && row.dataset ? row.dataset.otherDeductionsTotal : null;
+        if (otherDeductionTotal != null && otherDeductionTotal !== '') {
+          const parsed = parseFloat(String(otherDeductionTotal).replace(/,/g,''));
+          if (!isNaN(parsed)) {
+            data.otherDeductionsTotal = parsed;
+          }
+        }
+        if (typeof data.otherDeductionsTotal === 'undefined') {
+          const val = typeof getOtherDeductionsTotal === 'function' && data.id
+            ? Number(getOtherDeductionsTotal(data.id)) || 0
+            : 0;
+          data.otherDeductionsTotal = val;
+        }
+      } catch (e) {
+        const val = typeof getOtherDeductionsTotal === 'function' && data.id
+          ? Number(getOtherDeductionsTotal(data.id)) || 0
+          : 0;
+        data.otherDeductionsTotal = val;
+      }
+      // Capture DTR records for this employee within the selected date range. Stores an array of {date, times}
+      try {
+        /*
+         * Use the in-memory storedRecords array (populated from Supabase) to
+         * derive attendance for payroll exports.  Avoid reading from
+         * localStorage so that stale browser caches do not leak into
+         * cross-device exports.  The records array is filtered by the
+         * current employee and date range, grouped by date, and then
+         * converted into { date, times } objects for export.
+         */
+        const recs = Array.isArray(storedRecords) ? storedRecords : [];
+        const start = startDate || '';
+        const end = endDate || '';
+        const empRecs = recs.filter(r => r && String(r.empId) === String(data.id) && (!start || r.date >= start) && (!end || r.date <= end));
+        const grouped = {};
+        empRecs.forEach(r => {
+          if (!r || !r.date) return;
+          const d = r.date;
+          if (!grouped[d]) grouped[d] = [];
+          if (r.time && !grouped[d].includes(r.time)) grouped[d].push(r.time);
+        });
+        const arr = [];
+        Object.keys(grouped).sort().forEach(dateKey => {
+          const times = grouped[dateKey].sort();
+          arr.push({ date: dateKey, times });
+        });
+        data.dtrs = arr;
+      } catch (e) {
+        // ignore parse errors
+      }
+      rows.push(data);
+    });
+    // Read totals from footer
+    const totals = {};
+    const footRow = document.querySelector('#payrollTable tfoot tr');
+    if (footRow) {
+      footRow.querySelectorAll('[data-col]').forEach(td => {
+        const key = td.dataset.col;
+        const raw = (td.textContent || '').trim();
+        const normalized = raw.replace(/,/g, '');
+        const num = Number(normalized);
+        totals[key] = Number.isFinite(num) ? num : 0;
+      });
+    }
+
+    let divisorValue = 1;
+    try {
+      const input = document.getElementById('deductionDivisor');
+      const maybeInput = input ? parseInt(input.value, 10) : NaN;
+      if (!isNaN(maybeInput) && isFinite(maybeInput) && maybeInput > 0) {
+        divisorValue = maybeInput;
+      } else if (typeof window !== 'undefined' && typeof window.divisor !== 'undefined') {
+        const winDiv = Number(window.divisor);
+        if (!isNaN(winDiv) && isFinite(winDiv) && winDiv > 0) {
+          divisorValue = winDiv;
+        } else if (typeof localStorage !== 'undefined') {
+          const key = (typeof LS_DIVISOR !== 'undefined' ? LS_DIVISOR : 'payroll_deduction_divisor');
+          const stored = parseInt((localStorage && localStorage.getItem(key)) || '1', 10);
+          if (!isNaN(stored) && isFinite(stored) && stored > 0) divisorValue = stored;
+        }
+      } else if (typeof localStorage !== 'undefined') {
+        const key = (typeof LS_DIVISOR !== 'undefined' ? LS_DIVISOR : 'payroll_deduction_divisor');
+        const stored = parseInt((localStorage && localStorage.getItem(key)) || '1', 10);
+        if (!isNaN(stored) && isFinite(stored) && stored > 0) divisorValue = stored;
+      }
+    } catch (e) {}
+    if (!divisorValue || !isFinite(divisorValue) || divisorValue <= 0) divisorValue = 1;
+
+    const settings = {};
+    try {
+      const otm = (typeof getOvertimeMultiplier === 'function') ? getOvertimeMultiplier() : (typeof otMultiplier !== 'undefined' ? otMultiplier : undefined);
+      if (otm != null && otm !== '' && isFinite(Number(otm))) settings.otMultiplier = Number(otm);
+    } catch (e) {}
+    if (divisorValue) settings.deductionDivisor = divisorValue;
+
+    return { startDate, endDate, rows, totals, divisor: divisorValue, settings };
+  }
+  // Expose buildSnapshot globally so it can be called from other scripts
+  window.buildSnapshot = buildSnapshot;
+
+  /**
+   * Disable payroll and DTR editing across the application. Once a payroll
+   * period is locked, users should not be able to adjust hours, rates, or
+   * manually enter or delete DTR entries for that period. This helper
+   * centralizes the logic so both global and per-row lock actions can reuse
+   * it. Date range controls and Generate/Lock buttons are also disabled.
+   */
+  const MONEY_LOCK_MESSAGE = 'This payroll period is finalized. Create an Adjustment in the current period to correct values.';
+  let moneyLockToastTimer = null;
+  function showMoneyLockToast() {
+    let toast = document.getElementById('moneyLockToast');
+    if (!toast) {
+      toast = document.createElement('div');
+      toast.id = 'moneyLockToast';
+      document.body.appendChild(toast);
+    }
+    toast.textContent = MONEY_LOCK_MESSAGE;
+    toast.classList.add('show');
+    if (moneyLockToastTimer) window.clearTimeout(moneyLockToastTimer);
+    moneyLockToastTimer = window.setTimeout(() => {
+      toast.classList.remove('show');
+    }, 2600);
+  }
+
+  function setMoneyChangerLockedUI(locked) {
+    const loanButtons = document.querySelectorAll('#loanTrackerControls button');
+    loanButtons.forEach((btn) => {
+      btn.setAttribute('aria-disabled', locked ? 'true' : 'false');
+      btn.classList.toggle('money-locked-control', locked);
+      btn.dataset.moneyLocked = locked ? 'true' : '';
+      if (locked) {
+        btn.tabIndex = -1;
+      } else {
+        btn.removeAttribute('tabindex');
+      }
+    });
+    const loanInputs = document.querySelectorAll('#loanTrackerTable input');
+    loanInputs.forEach((input) => {
+      if (input.type === 'checkbox') {
+        input.dataset.lockedChecked = String(!!input.checked);
+      } else {
+        input.readOnly = !!locked;
+      }
+      input.setAttribute('aria-disabled', locked ? 'true' : 'false');
+      input.classList.toggle('money-locked-control', locked);
+      input.dataset.moneyLocked = locked ? 'true' : '';
+      if (locked) {
+        input.tabIndex = -1;
+      } else {
+        input.removeAttribute('tabindex');
+      }
+    });
+    const deductionInputs = document.querySelectorAll('#deductionsTable input.deduction-input');
+    deductionInputs.forEach((input) => {
+      input.readOnly = !!locked;
+      input.setAttribute('aria-disabled', locked ? 'true' : 'false');
+      input.classList.toggle('money-locked-control', locked);
+      input.dataset.moneyLocked = locked ? 'true' : '';
+      if (locked) {
+        input.tabIndex = -1;
+      } else {
+        input.removeAttribute('tabindex');
+      }
+    });
+    document.querySelectorAll('#deductionsTable td.editable-deduction').forEach((cell) => {
+      cell.classList.toggle('money-locked-cell', locked);
+    });
+  }
+  window.setMoneyChangerLockedUI = setMoneyChangerLockedUI;
+
+  function shouldBlockMoneyChangerInteraction(target) {
+    if (!target || typeof target.closest !== 'function') return false;
+    if (!isSelectedPeriodLocked()) return false;
+    if (target.closest('#loanTrackerControls') || target.closest('#loanTrackerTable')) return true;
+    if (target.closest('#deductionsTable')) {
+      if (target.matches('input.deduction-input')) return true;
+      const cell = target.closest('td[data-col="valeWed"]');
+      if (cell) return true;
+    }
+    return false;
+  }
+
+  function handleMoneyChangerLockedEvent(event) {
+    const target = event && event.target;
+    if (!shouldBlockMoneyChangerInteraction(target)) return;
+    if (event.cancelable) event.preventDefault();
+    event.stopImmediatePropagation();
+    if (target && target.matches && target.matches('input[type="checkbox"]')) {
+      const lockedChecked = target.dataset.lockedChecked;
+      if (lockedChecked !== undefined) target.checked = lockedChecked === 'true';
+    }
+    showMoneyLockToast();
+  }
+
+  document.addEventListener('click', handleMoneyChangerLockedEvent, true);
+  document.addEventListener('change', handleMoneyChangerLockedEvent, true);
+  document.addEventListener('input', handleMoneyChangerLockedEvent, true);
+
+  function disablePayrollInputs() {
+    // Disable all editable fields in the payroll table
+    document.querySelectorAll('#payrollTable input').forEach(inp => {
+      inp.disabled = true;
+    });
+    // Disable DTR inputs/selects (manual DTR, project/schedule selectors, overrides, etc.)
+    document.querySelectorAll('#resultsTable input, #resultsTable select, #resultsTable textarea').forEach(el => {
+      el.disabled = true;
+    });
+    // Disable key DTR editing controls explicitly by ID. Keep print/export buttons enabled.
+    ['fileInput','manualDtrBtn'].forEach(id => {
+      const el = document.getElementById(id);
+      if (el) el.disabled = true;
+    });
+    // Disable any DTR delete buttons that may have been added
+    document.querySelectorAll('.dtr-del-btn').forEach(btn => {
+      btn.disabled = true;
+    });
+
+    // Add a locked class to the DTR panel for a visual cue. Inputs are disabled
+    // above to enforce the read-only state while keeping print/export available.
+    const pm = document.getElementById('panelMain');
+    if (pm) pm.classList.add('locked');
+    // Also disable inputs and buttons within the manual DTR modal if it exists. The modal is not
+    // nested under #panelMain, so we need to explicitly target it. Without this, users could
+    // potentially enter a manual record even after locking by using the modal fields directly.
+    document.querySelectorAll('#manualDtrModal input, #manualDtrModal button, #manualDtrModal select').forEach(el => {
+      el.disabled = true;
+    });
+    document.querySelectorAll('#dtrPunchModal input, #dtrPunchModal button, #dtrPunchModal select').forEach(el => {
+      el.disabled = true;
+    });
+    // Disable dashboard date range inputs and action buttons
+    const ws = document.getElementById('weekStart');
+    const we = document.getElementById('weekEnd');
+    const genBtn = document.getElementById('dashGenerate');
+    if (ws) ws.disabled = true;
+    if (we) we.disabled = true;
+    if (genBtn) genBtn.disabled = true;
+    // Disable editing buttons in payroll-related tabs while keeping print/export available
+    ['applyLoanTrackerBtn','recalcLoanTrackerBtn','copyOtherDeductionsBtn','restoreOtherDeductionsBtn'].forEach(id => {
+      const el = document.getElementById(id);
+      if (el) el.disabled = true;
+    });
+    document.querySelectorAll('#additionalIncomeTable button, #otherDeductionsTable button, #adjustmentHoursTable button').forEach(btn => {
+      btn.disabled = true;
+    });
+    // Ensure the payroll tab reflects the locked state as well
+    try { setPayrollLockedUI(true); } catch (err) { /* no-op if helper is unavailable */ }
+    try { setMoneyChangerLockedUI(true); } catch (err) { /* no-op if helper is unavailable */ }
+    try { if (typeof renderDeductionsTable === 'function') renderDeductionsTable(); } catch (err) { /* no-op */ }
+  }
+  // Expose helper globally so other scripts can disable editing
+  window.disablePayrollInputs = disablePayrollInputs;
+
+  /**
+   * Re-enable payroll and DTR editing across the application. This should be
+   * called when the user changes the date range after locking, or when a
+   * snapshot is unlocked. It resets disabled fields and action buttons.
+   */
+  function enablePayrollInputs() {
+    // Re-enable payroll table inputs
+    document.querySelectorAll('#payrollTable input').forEach(inp => {
+      inp.disabled = false;
+    });
+    // Re-enable DTR inputs/selects
+    document.querySelectorAll('#resultsTable input, #resultsTable select, #resultsTable textarea').forEach(el => {
+      el.disabled = false;
+    });
+    // Re-enable specific DTR editing controls that were explicitly disabled
+    ['fileInput','manualDtrBtn'].forEach(id => {
+      const el = document.getElementById(id);
+      if (el) el.disabled = false;
+    });
+    // Re-enable any DTR delete buttons
+    document.querySelectorAll('.dtr-del-btn').forEach(btn => {
+      btn.disabled = false;
+    });
+
+    // Remove the locked class from the DTR panel so pointer events and
+    // interaction are restored. When the user switches to an unlocked period or
+    // explicitly unlocks a snapshot, this class must be removed.
+    const pm = document.getElementById('panelMain');
+    if (pm) pm.classList.remove('locked');
+    // Re-enable manual DTR modal fields and buttons. When a payroll is unlocked or the date
+    // range changes, users should be able to enter manual DTR entries again. This undoes the
+    // disablement applied in disablePayrollInputs().
+    document.querySelectorAll('#manualDtrModal input, #manualDtrModal button, #manualDtrModal select').forEach(el => {
+      el.disabled = false;
+    });
+    document.querySelectorAll('#dtrPunchModal input, #dtrPunchModal button, #dtrPunchModal select').forEach(el => {
+      el.disabled = false;
+    });
+    // Re-enable dashboard date range and action buttons
+    const ws = document.getElementById('weekStart');
+    const we = document.getElementById('weekEnd');
+    const genBtn = document.getElementById('dashGenerate');
+    if (ws) ws.disabled = false;
+    if (we) we.disabled = false;
+    if (genBtn) genBtn.disabled = false;
+    // Re-enable editing buttons in payroll-related tabs
+    ['applyLoanTrackerBtn','recalcLoanTrackerBtn','copyOtherDeductionsBtn','restoreOtherDeductionsBtn'].forEach(id => {
+      const el = document.getElementById(id);
+      if (el) el.disabled = false;
+    });
+    document.querySelectorAll('#additionalIncomeTable button, #otherDeductionsTable button, #adjustmentHoursTable button').forEach(btn => {
+      btn.disabled = false;
+    });
+    // Restore interactivity for the payroll tab when unlocked
+    try { setPayrollLockedUI(false); } catch (err) { /* no-op if helper is unavailable */ }
+    try { setMoneyChangerLockedUI(false); } catch (err) { /* no-op if helper is unavailable */ }
+    try { if (typeof renderDeductionsTable === 'function') renderDeductionsTable(); } catch (err) { /* no-op */ }
+  }
+  // Expose helper globally so other scripts can enable editing
+  window.enablePayrollInputs = enablePayrollInputs;
+
+  /**
+   * Determine whether the currently selected payroll period is locked by
+   * consulting the persisted lock map. Returns true when the range has an
+   * active lock entry.
+   */
+  function isSelectedPeriodLocked() {
+    const range = getCurrentPeriodRange();
+    if (!range.start || !range.end) return false;
+    const entry = getLockEntry(range.start, range.end);
+    if (entry && entry.locked) return true;
+    const finalizedSnap = findLatestFinalizedSnapshot(range.start, range.end);
+    return !!(finalizedSnap && !isSnapshotVoided(finalizedSnap));
+  }
+  window.isSelectedPeriodLocked = isSelectedPeriodLocked;
+
+  /**
+   * Check the current payroll period and toggle editing state accordingly. If the
+   * selected period is locked, all payroll/DTR inputs are disabled and the
+   * date inputs are marked as forced. If the period is not locked, editing is
+   * enabled and the forced flags are removed. This helper centralizes the
+   * logic of determining lock status and applying the appropriate UI state.
+  */
+  function checkAndToggleEditState() {
+    const wsEl = document.getElementById('weekStart');
+    const weEl = document.getElementById('weekEnd');
+    if (!wsEl || !weEl) return;
+    const locked = applyLockUI();
+    if (locked) {
+      wsEl.dataset.forced = 'true';
+      weEl.dataset.forced = 'true';
+    } else {
+      if (wsEl.dataset) delete wsEl.dataset.forced;
+      if (weEl.dataset) delete weEl.dataset.forced;
+    }
+  }
+  window.checkAndToggleEditState = checkAndToggleEditState;
+
+  // Persist payrollHistory to localStorage
+  function saveHistory() {
+    localStorage.setItem(PAYROLL_HIST_KEY, JSON.stringify(payrollHistory));
+  }
+  // Expose saveHistory globally so it can be called from other scripts
+  window.saveHistory = saveHistory;
+
+  // Handler for Generate button: build and save a snapshot without locking
+  dashGenerateBtn && dashGenerateBtn.addEventListener('click', async () => {
+    if (isGeneratingSnapshot) return;
+    isGeneratingSnapshot = true;
+    if (dashGenerateBtn) dashGenerateBtn.disabled = true;
+    try {
+      const start = dashStart && dashStart.value;
+      const end = dashEnd && dashEnd.value;
+      if (!start || !end) {
+        alert('Please select both start and end dates.');
+        return;
+      }
+    // Prevent duplicate snapshots for the same date range. If any snapshot (locked or active)
+    // already exists with this start/end, alert the user and skip creation. This avoids
+    // double-entry payroll for the same period.
+      const exists = Array.isArray(payrollHistory) && payrollHistory.some(snap =>
+        snap && snap.startDate === start && snap.endDate === end && getSnapshotStatus(snap) !== 'voided');
+      if (exists) {
+        alert('A payroll snapshot for this date range already exists. Please choose a different range or delete the existing entry.');
+        return;
+      }
+    // Ensure all payroll values are recalculated before taking a snapshot for generation
+      try {
+        if (typeof calculateAll === 'function') {
+          calculateAll();
+        }
+      } catch (e) {
+        // Suppress errors from calculateAll; snapshot will reflect current cell values
+      }
+      const snap = await buildSnapshot(start, end);
+      if (!snap) {
+        alert('Payroll table is missing or empty.');
+        return;
+      }
+      const json = JSON.stringify(snap);
+      const hashBuffer = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(json));
+      const hashArray = Array.from(new Uint8Array(hashBuffer));
+      const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+      const now = new Date().toISOString();
+      payrollHistory.push({ startDate: start, endDate: end, rows: snap.rows, totals: snap.totals, hash: hashHex, lockedAt: now, locked: false, status: 'draft', createdAt: now });
+      saveHistory();
+      // Update both history and active payroll tables after creating a new snapshot
+      renderHistory();
+      if (typeof renderActivePayrolls === 'function') renderActivePayrolls();
+    } finally {
+      isGeneratingSnapshot = false;
+      if (dashGenerateBtn && !isSelectedPeriodLocked()) dashGenerateBtn.disabled = false;
+    }
+  });
+
+  dashLockButton && dashLockButton.addEventListener('click', async () => {
+    if (isFinalizingSnapshot) return;
+    isFinalizingSnapshot = true;
+    if (dashLockButton) dashLockButton.disabled = true;
+    try {
+      await Promise.resolve(lockCurrentPeriod());
+    } catch (err) {
+      console.warn('Finalize & Snapshot failed', err);
+    } finally {
+      isFinalizingSnapshot = false;
+      if (dashLockButton && !isSelectedPeriodLocked()) dashLockButton.disabled = false;
+    }
+  });
+
+  dashVoidButton && dashVoidButton.addEventListener('click', () => {
+    openVoidModal(null);
+  });
+
+  if (voidModal && !voidModal.__bound) {
+    voidModal.__bound = true;
+    voidModal.addEventListener('click', (e) => {
+      if (e.target === voidModal) closeVoidModal();
+    });
+    voidCancelBtn && voidCancelBtn.addEventListener('click', () => closeVoidModal());
+    voidReasonInput && voidReasonInput.addEventListener('input', updateVoidConfirmState);
+    voidConfirmBtn && voidConfirmBtn.addEventListener('click', () => {
+      const reason = (voidReasonInput && voidReasonInput.value ? voidReasonInput.value.trim() : '');
+      if (!reason) {
+        updateVoidConfirmState();
+        return;
+      }
+      const resolved = resolveSnapshotToVoid();
+      if (!resolved || !resolved.snap) {
+        alert('No finalized snapshot found to void for this period.');
+        closeVoidModal();
+        return;
+      }
+      if (isSnapshotVoided(resolved.snap)) {
+        closeVoidModal();
+        return;
+      }
+      voidSnapshot(resolved.snap, reason);
+      closeVoidModal();
+    });
+    voidModal.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Escape') {
+        ev.preventDefault();
+        closeVoidModal();
+      }
+    });
+  }
+
+  // Helper: build snapshot storage key matching lockPeriod persistence
+  function composeSnapshotStorageKey(segment, startDate, endDate) {
+    try {
+      const startPart = normalizeSnapshotKeyPart(startDate);
+      const endPart = normalizeSnapshotKeyPart(endDate);
+      return `snap:${segment}:p:${startPart}:${endPart}`;
+    } catch (err) {
+      console.warn('Failed to compose snapshot key', err);
+      return '';
+    }
+  }
+
+  async function writeSnapshotSegment(segment, startDate, endDate, value) {
+    const key = composeSnapshotStorageKey(segment, startDate, endDate);
+    if (!key) return false;
+    let ok = false;
+    if (typeof window.writeKV === 'function') {
+      try {
+        ok = await window.writeKV(key, value);
+      } catch (err) {
+        console.warn('KV write failed for', key, err);
+      }
+    }
+    if (!ok) {
+      try { localStorage.setItem(key, JSON.stringify(value)); ok = true; }
+      catch (err) { console.warn('Local snapshot write failed for', key, err); }
+    }
+    return ok;
+  }
+
+  function captureTableSnapshot(tableId, options = {}) {
+    const table = document.getElementById(tableId);
+    if (!table) return { headers: [], rows: [], footerRow: [] };
+
+    const dropHeaders = new Set((options.dropHeaders || []).map(h => String(h || '').trim().toLowerCase()));
+    const shouldDrop = (header) => dropHeaders.has(String(header || '').trim().toLowerCase());
+
+    const mapProjectOrScheduleName = (header, value) => {
+      const label = String(header || '').trim().toLowerCase();
+      const raw = String(value ?? '').trim();
+      if (!raw) return raw;
+      if (label.includes('project')) {
+        const proj = (typeof storedProjects !== 'undefined' && storedProjects) ? storedProjects[raw] : null;
+        if (proj && proj.name) return String(proj.name).trim();
+      }
+      if (label.includes('schedule')) {
+        const sched = (typeof storedSchedules !== 'undefined' && storedSchedules) ? storedSchedules[raw] : null;
+        if (sched && sched.name) return String(sched.name).trim();
+      }
+      return raw;
+    };
+
+    const extractCellValue = (td, header) => {
+      const field = td.querySelector('input, select, textarea');
+      if (field) {
+        if (field.type === 'checkbox') return field.checked ? 'Yes' : 'No';
+        if (field.tagName === 'SELECT') {
+          const text = field.selectedOptions && field.selectedOptions[0] ? String(field.selectedOptions[0].textContent || '').trim() : '';
+          return mapProjectOrScheduleName(header, text || String(field.value ?? '').trim());
+        }
+        return mapProjectOrScheduleName(header, String(field.value ?? '').trim());
+      }
+      return mapProjectOrScheduleName(header, String(td.textContent || '').trim());
+    };
+
+    const headerCells = Array.from(table.querySelectorAll('thead tr:last-child th'));
+    const allHeaders = headerCells.map(th => (th.textContent || '').trim());
+    const keepIdx = allHeaders.map((h, i) => shouldDrop(h) ? -1 : i).filter(i => i >= 0);
+    const headers = keepIdx.map(i => allHeaders[i]);
+
+    const rows = Array.from(table.querySelectorAll('tbody tr')).map((tr) => {
+      const cells = Array.from(tr.cells || []);
+      return keepIdx.map((idx) => extractCellValue(cells[idx] || document.createElement('td'), allHeaders[idx]));
+    });
+
+    let footerRow = [];
+    const footRow = table.querySelector('tfoot tr:last-child');
+    if (footRow) {
+      const footCells = Array.from(footRow.querySelectorAll('td,th'));
+      footerRow = keepIdx.map((idx) => extractCellValue(footCells[idx] || document.createElement('td'), allHeaders[idx]));
+    }
+
+    return { headers, rows, footerRow };
+  }
+
+
+  // --- Audit-grade snapshot manifest (hash covers ALL segments) ---
+  function __snapCanonicalize(value) {
+    if (Array.isArray(value)) return value.map(__snapCanonicalize);
+    if (value && typeof value === 'object') {
+      const out = {};
+      Object.keys(value).sort().forEach(k => { out[k] = __snapCanonicalize(value[k]); });
+      return out;
+    }
+    return value;
+  }
+
+  async function __sha256HexFromString(str) {
+    const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(String(str)));
+    return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('');
+  }
+
+  async function __hashJson(value) {
+    const canon = __snapCanonicalize(value);
+    return __sha256HexFromString(JSON.stringify(canon));
+  }
+
+  function captureAuditSegmentsForPeriod(startDate, endDate) {
+    const segs = {
+      dtr: captureTableSnapshot('resultsTable', { dropHeaders: ['split','punches','actions','editor'] }),
+      payroll: captureTableSnapshot('payrollTable', { dropHeaders: ['payslip'] }),
+      overtime: captureTableSnapshot('overtimeTable', { dropHeaders: ['actions'] }),
+      deductions: captureTableSnapshot('deductionsTable', { dropHeaders: ['actions'] }),
+      additionalIncome: captureTableSnapshot('additionalIncomeTable', { dropHeaders: ['actions'] }),
+      otherDeductions: captureTableSnapshot('otherDeductionsTable', { dropHeaders: ['actions'] }),
+      adjustments: captureTableSnapshot('adjustmentHoursTable', { dropHeaders: ['actions'] }),
+      reports: captureTableSnapshot('r_table', { dropHeaders: ['actions'] })
+    };
+    const masterHtml = document.getElementById('masterReportContainer')?.innerHTML || '';
+    if (masterHtml) segs.master = { html: masterHtml };
+    return segs;
+  }
+
+  async function buildAndPersistAuditManifestForPeriod(startDate, endDate, finalizedAt) {
+    const segments = captureAuditSegmentsForPeriod(startDate, endDate);
+
+    const segmentKeys = {};
+    const segmentHashes = {};
+    const segmentBytes = {};
+    const encoder = new TextEncoder();
+
+    for (const [name, value] of Object.entries(segments)) {
+      segmentKeys[name] = composeSnapshotStorageKey(name, startDate, endDate);
+      segmentHashes[name] = await __hashJson(value);
+      try {
+        const bytes = encoder.encode(JSON.stringify(value)).length;
+        segmentBytes[name] = bytes;
+      } catch (_) {
+        segmentBytes[name] = 0;
+      }
+    }
+
+    // Root hash is computed from the segment hashes, so any mutation in any segment is detectable.
+    const rootHash = await __hashJson({
+      startDate,
+      endDate,
+      segmentHashes
+    });
+
+    const manifestBase = {
+      version: 1,
+      algorithm: 'SHA-256',
+      startDate,
+      endDate,
+      finalizedAt,
+      rootHash,
+      segmentHashes,
+      segmentKeys,
+      segmentBytes
+    };
+    const manifestHash = await __hashJson(manifestBase);
+    const manifest = { ...manifestBase, manifestHash };
+
+    // Persist all segments + manifest (cloud-first, local fallback)
+    const batchPairs = [];
+    for (const [name, value] of Object.entries(segments)) {
+      batchPairs.push({ key: segmentKeys[name], value });
+    }
+    batchPairs.push({ key: composeSnapshotStorageKey('manifest', startDate, endDate), value: manifest });
+
+    if (typeof window.writeKVBatch === 'function') {
+      // Chunked to avoid oversized payloads while still minimizing auth-lock contention.
+      await window.writeKVBatch(batchPairs, { chunkSize: 6 });
+    } else {
+      for (const [name, value] of Object.entries(segments)) {
+        await writeSnapshotSegment(name, startDate, endDate, value);
+      }
+      await writeSnapshotSegment('manifest', startDate, endDate, manifest);
+    }
+return { rootHash, manifestHash, segmentCount: Object.keys(segments).length, version: 1 };
+  }
+
+  async function verifyAuditManifestForPeriod(startDate, endDate) {
+    const manifest = await readSnapshotSegment('manifest', startDate, endDate);
+    if (!manifest || !manifest.segmentHashes) return { ok: false, reason: 'Manifest missing.' };
+    const segNames = Object.keys(manifest.segmentHashes);
+    const computed = {};
+    for (const name of segNames) {
+      const seg = await readSnapshotSegment(name, startDate, endDate);
+      computed[name] = await __hashJson(seg);
+    }
+    const rootHash = await __hashJson({ startDate, endDate, segmentHashes: computed });
+    const ok = (String(rootHash) === String(manifest.rootHash));
+    return { ok, rootHash, manifest, computed };
+  }
+
+  // Expose snapshot helpers for the Audit tab (shell navigation).
+  try {
+    window.readSnapshotIndex = readSnapshotIndex;
+    window.readSnapshotSegment = readSnapshotSegment;
+    window.buildTableHtml = buildTableHtml;
+    window.verifyAuditManifestForPeriod = verifyAuditManifestForPeriod;
+  } catch (e) {}
+
+  // --- End audit-grade snapshot manifest ---
+
+  async function persistSnapshotSegmentsForPeriod(startDate, endDate) {
+    await writeSnapshotSegment('dtr', startDate, endDate, captureTableSnapshot('resultsTable', { dropHeaders: ['split','punches','actions','editor'] }));
+    await writeSnapshotSegment('payroll', startDate, endDate, captureTableSnapshot('payrollTable', { dropHeaders: ['payslip'] }));
+    await writeSnapshotSegment('overtime', startDate, endDate, captureTableSnapshot('overtimeTable', { dropHeaders: ['actions'] }));
+    await writeSnapshotSegment('deductions', startDate, endDate, captureTableSnapshot('deductionsTable', { dropHeaders: ['actions'] }));
+    await writeSnapshotSegment('additionalIncome', startDate, endDate, captureTableSnapshot('additionalIncomeTable', { dropHeaders: ['actions'] }));
+    await writeSnapshotSegment('otherDeductions', startDate, endDate, captureTableSnapshot('otherDeductionsTable', { dropHeaders: ['actions'] }));
+    await writeSnapshotSegment('adjustments', startDate, endDate, captureTableSnapshot('adjustmentHoursTable', { dropHeaders: ['actions'] }));
+    await writeSnapshotSegment('reports', startDate, endDate, captureTableSnapshot('r_table', { dropHeaders: ['actions'] }));
+    const masterHtml = document.getElementById('masterReportContainer')?.innerHTML || '';
+    if (masterHtml) await writeSnapshotSegment('master', startDate, endDate, { html: masterHtml });
+  }
+
+  async function readSnapshotIndex() {
+    if (typeof window.readKV === 'function') {
+      try {
+        const idx = await window.readKV('snap:index', null);
+        if (Array.isArray(idx)) return idx;
+      } catch (err) { console.warn('readSnapshotIndex KV failed', err); }
+    }
+    try {
+      const raw = localStorage.getItem('snap:index');
+      const parsed = raw ? JSON.parse(raw) : [];
+      return Array.isArray(parsed) ? parsed : [];
+    } catch (err) {
+      console.warn('readSnapshotIndex local failed', err);
+      return [];
+    }
+  }
+
+  async function writeSnapshotIndex(list) {
+    const normalized = Array.isArray(list) ? list : [];
+    let ok = false;
+    if (typeof window.writeKV === 'function') {
+      try { ok = await window.writeKV('snap:index', normalized); }
+      catch (err) { console.warn('writeSnapshotIndex KV failed', err); }
+    }
+    if (!ok) {
+      try { localStorage.setItem('snap:index', JSON.stringify(normalized)); ok = true; }
+      catch (err) { console.warn('writeSnapshotIndex local failed', err); }
+    }
+    return ok;
+  }
+
+  async function upsertSnapshotIndexEntry(startDate, endDate, meta) {
+    const current = await readSnapshotIndex();
+    const next = current.filter(item => !(item && item.startDate === startDate && item.endDate === endDate));
+    next.push({ startDate, endDate, ...(meta || {}) });
+    next.sort((a, b) => {
+      const aStamp = a?.finalizedAt || '';
+      const bStamp = b?.finalizedAt || '';
+      return String(bStamp).localeCompare(String(aStamp));
+    });
+    await writeSnapshotIndex(next);
+    return next;
+  }
+
+  async function readSnapshotSegment(segment, startDate, endDate) {
+    const key = composeSnapshotStorageKey(segment, startDate, endDate);
+    if (!key) return null;
+    if (typeof window.readKV === 'function') {
+      try {
+        const remote = await window.readKV(key, null);
+        if (remote != null) return remote;
+      } catch (err) {
+        console.warn('KV read failed for', key, err);
+      }
+    }
+    try {
+      const raw = localStorage.getItem(key);
+      if (raw != null) return JSON.parse(raw);
+    } catch (err) {
+      console.warn('Local snapshot read failed for', key, err);
+    }
+    return null;
+  }
+
+  const HTML_ESCAPE = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
+  function escapeHtml(value) {
+    return String(value ?? '').replace(/[&<>"']/g, (ch) => HTML_ESCAPE[ch] || ch);
+  }
+
+  function normalizeRowLength(row, length) {
+    const out = Array.isArray(row) ? row.slice(0, length) : [];
+    while (out.length < length) out.push('');
+    return out;
+  }
+
+  function buildTableHtml(headers, rows, options = {}) {
+    const cols = Array.isArray(headers) ? headers.slice() : [];
+    const bodyRows = Array.isArray(rows) ? rows : [];
+    const numericCols = new Set(options.numericCols || []);
+    const classes = options.columnClasses || {};
+    const thead = cols.map((text, idx) => {
+      const cls = classes[idx] ? ` class="${classes[idx]}"` : '';
+      return `<th${cls}>${escapeHtml(text)}</th>`;
+    }).join('');
+    const tbody = bodyRows.length ? bodyRows.map((row) => {
+      const cells = normalizeRowLength(row, cols.length).map((cell, idx) => {
+        const raw = cell == null ? '' : cell;
+        const numeric = numericCols.has(idx) || (/^-?\d+(?:\.\d+)?$/.test(String(raw).replace(/,/g, '')));
+        const cls = numeric ? ' class="num"' : '';
+        return `<td${cls}>${escapeHtml(raw)}</td>`;
+      }).join('');
+      return `<tr>${cells}</tr>`;
+    }).join('') : `<tr><td class="muted" colspan="${Math.max(cols.length, 1)}">No data</td></tr>`;
+    let foot = '';
+    if (Array.isArray(options.footerRow)) {
+      const footerCells = normalizeRowLength(options.footerRow, cols.length).map((cell, idx) => {
+        const raw = cell == null ? '' : cell;
+        const numeric = numericCols.has(idx) || (/^-?\d+(?:\.\d+)?$/.test(String(raw).replace(/,/g, '')));
+        const cls = numeric ? ' class="num"' : '';
+        return `<td${cls}>${escapeHtml(raw)}</td>`;
+      }).join('');
+      foot = `<tfoot><tr>${footerCells}</tr></tfoot>`;
+    }
+    return `<table class="report-table"><thead><tr>${thead}</tr></thead><tbody>${tbody}</tbody>${foot}</table>`;
+  }
+
+  function dropColumns(headers, rows, predicate) {
+    const cols = Array.isArray(headers) ? headers.slice() : [];
+    const drop = [];
+    cols.forEach((h, idx) => {
+      if (predicate(h, idx)) drop.push(idx);
+    });
+    if (!drop.length) return { headers: cols, rows };
+    const filteredHeaders = cols.filter((_, idx) => !drop.includes(idx));
+    const filteredRows = (rows || []).map((row) => {
+      const arr = Array.isArray(row) ? row : [];
+      return arr.filter((_, idx) => !drop.includes(idx));
+    });
+    return { headers: filteredHeaders, rows: filteredRows };
+  }
+
+  function formatDateRangeInline(start, end) {
+    try {
+      if (typeof formatDateRange === 'function') return formatDateRange(start, end);
+    } catch (err) {}
+    if (start && end) return `${start} - ${end}`;
+    return start || end || '';
+  }
+
+  function formatNumber(val) {
+    const num = Number(val);
+    if (!isFinite(num)) return '';
+    return num.toFixed(2);
+  }
+
+  function buildPayrollSectionFromSnapshot(snap) {
+    const headers = ['ID','Name','Hourly Rate','Regular Hours','Overtime Hours','ADJ OT Hours','Regular Pay','Adj Hours','Adj Pay','Additional Income','Total Overtime Pay','Gross Pay','Total Deductions','Net Pay','Other Deductions'];
+    const numericCols = headers.map((_, idx) => idx).filter(idx => idx > 1);
+    const rows = Array.isArray(snap?.rows) ? snap.rows.map((row) => {
+      return [
+        row.id || '',
+        row.name || '',
+        formatNumber(row.rate),
+        formatNumber(row.regHrs),
+        formatNumber(row.otHrs),
+        formatNumber(row.adjHrs),
+        formatNumber(row.regPay),
+        formatNumber(row.adjRegHrs ?? row.adjHours),
+        formatNumber(row.adjPay),
+        formatNumber(row.adjAmt),
+        formatNumber(row.otPay),
+        formatNumber(row.grossPay),
+        formatNumber(row.totalDed),
+        formatNumber(row.netPay),
+        formatNumber(typeof row.otherDeductionsTotal !== 'undefined' ? row.otherDeductionsTotal : row.adjustmentDeduction)
+      ];
+    }) : [];
+    const totals = snap?.totals || {};
+    const footer = headers.map((label, idx) => {
+      if (idx === 0) return 'Totals';
+      if (idx === 1) return '';
+      const keyMap = ['rate','regHrs','otHrs','adjHrs','regPay','adjHours','adjPay','adjAmt','otPay','grossPay','totalDed','netPay','otherDeductionsTotal'];
+      const key = keyMap[idx - 2];
+      let val = key ? totals[key] : null;
+      if (typeof val === 'undefined' && key === 'otherDeductionsTotal') {
+        val = totals.adjustments;
+      }
+      return formatNumber(val);
+    });
+    const range = formatDateRangeInline(snap?.startDate, snap?.endDate);
+    const subtitle = range ? `<div class="report-subtitle">${escapeHtml(range)}</div>` : '';
+    const voidedBadge = isSnapshotVoided(snap) ? '<div class="report-voided">VOIDED</div>' : '';
+    const table = buildTableHtml(headers, rows, { numericCols, footerRow: footer });
+    return `<section class="report-block"><h2>Payroll Report</h2>${voidedBadge}${subtitle}${table}</section>`;
+  }
+
+  function buildDtrSectionFromSnapshot(data, startDate, endDate) {
+    if (!data) return '';
+    const filtered = dropColumns(data.headers || [], data.rows || [], (header) => {
+      const norm = String(header || '').trim().toLowerCase();
+      return norm === 'actions' || norm === 'split' || norm === 'editor' || norm === 'punches';
+    });
+    const range = formatDateRangeInline(startDate, endDate);
+    const subtitle = range ? `<div class="report-subtitle">${escapeHtml(range)}</div>` : '';
+    const table = buildTableHtml(filtered.headers, filtered.rows, { numericCols: [] });
+    return `<section class="report-block"><h2>Daily Time Records</h2>${subtitle}${table}</section>`;
+  }
+
+  function buildDetailedSectionFromSnapshot(data) {
+    if (!data) return '';
+    const headers = Array.isArray(data.headers) ? data.headers : [];
+    const rows = Array.isArray(data.rows) ? data.rows : [];
+    const table = buildTableHtml(headers, rows, {});
+    return `<section class="report-block"><h2>Detailed Report</h2>${table}</section>`;
+  }
+
+  function buildMasterSectionFromSnapshot(master, startDate, endDate) {
+    const range = formatDateRangeInline(startDate, endDate);
+    const subtitle = range ? `<div class="report-subtitle">${escapeHtml(range)}</div>` : '';
+    const inner = master && typeof master.html === 'string' && master.html.trim() ? master.html : '<p class="muted">No master report data available.</p>';
+    return `<section class="report-block"><h2>Master Report</h2>${subtitle}<div class="master-wrapper">${inner}</div></section>`;
+  }
+
+  async function exportCombinedPdfForSnapshot(snap, orientation) {
+    if (!snap) return;
+    const w = window.open('', '_blank', 'width=1024,height=768');
+    if (!w) {
+      alert('Popup blocked. Please allow popups to generate the PDF.');
+      return;
+    }
+
+    try {
+      w.document.write('<!doctype html><html><head><title>Preparing PDF…</title><style>body{font-family:Arial,Helvetica,sans-serif;margin:0;padding:24px;color:#0f172a;}p{margin:0;font-size:14px;}</style></head><body><p>Preparing PDF…</p></body></html>');
+      w.document.close();
+    } catch (err) {
+      console.warn('Unable to seed PDF window', err);
+    }
+
+    const startDate = snap.startDate || '';
+    const endDate = snap.endDate || '';
+    let dtr, reports, master;
+    try {
+      [dtr, reports, master] = await Promise.all([
+        readSnapshotSegment('dtr', startDate, endDate),
+        readSnapshotSegment('reports', startDate, endDate),
+        readSnapshotSegment('master', startDate, endDate)
+      ]);
+    } catch (err) {
+      console.warn('Failed to read snapshot segments', err);
+      try { w.document.body.innerHTML = '<p style="color:#dc2626;">Unable to load snapshot data for PDF export.</p>'; } catch {}
+      return;
+    }
+
+    const sections = [];
+    sections.push(buildDtrSectionFromSnapshot(dtr, startDate, endDate));
+    sections.push(buildPayrollSectionFromSnapshot({
+      rows: snap.rows || [],
+      totals: snap.totals || {},
+      startDate,
+      endDate
+    }));
+    sections.push(buildDetailedSectionFromSnapshot(reports));
+    sections.push(buildMasterSectionFromSnapshot(master, startDate, endDate));
+
+    const filteredSections = sections.filter(Boolean).join('');
+    if (!filteredSections) {
+      alert('No report data is available for this snapshot.');
+      try { w.close(); } catch {}
+      return;
+    }
+
+    const doc = `<!doctype html><html><head><meta charset="utf-8"><title>Payroll Reports PDF</title><style>
+      @page { margin: 12mm; }
+      html,body{font-family:Arial,Helvetica,sans-serif;margin:0;padding:0;color:#0f172a;}
+      body{padding:16px;background:#fff;}
+      h2{margin:0 0 6px 0;font-size:20px;}
+      .report-subtitle{font-size:12px;color:#475569;margin-bottom:10px;}
+      .report-block{margin-bottom:32px;page-break-inside:avoid;}
+      .report-block:last-of-type{margin-bottom:0;}
+      .report-voided{display:inline-block;margin:4px 0 8px 0;padding:4px 10px;border:2px solid #b91c1c;color:#b91c1c;font-weight:700;letter-spacing:1px}
+      table{width:100%;border-collapse:collapse;font-size:11px;margin-top:8px;}
+      th,td{border:0.6pt solid #1e293b;padding:4px 6px;vertical-align:middle;}
+      th{background:#e2e8f0;text-align:left;}
+      td.num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap;}
+      thead{display:table-header-group;}
+      tfoot td{font-weight:600;background:#f8fafc;}
+      .muted{color:#94a3b8;text-align:center;}
+      .master-wrapper table{border-color:#1e293b;}
+    </style></head><body>${filteredSections}</body></html>`;
+
+    printReport(doc, { orientation: orientation, targetWindow: w });
+  }
+
+  // Delegate open/download actions on history table
+  function normalizeSnapshotKeyPart(value) {
+    if (!value) return '';
+    if (value instanceof Date && !isNaN(value.getTime())) {
+      return String(value.getFullYear()) + String(value.getMonth() + 1).padStart(2, '0') + String(value.getDate()).padStart(2, '0');
+    }
+    const str = String(value);
+    const iso = str.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (iso) return iso[1] + iso[2] + iso[3];
+    const parsed = new Date(str);
+    if (!isNaN(parsed)) {
+      return String(parsed.getFullYear()) + String(parsed.getMonth() + 1).padStart(2, '0') + String(parsed.getDate()).padStart(2, '0');
+    }
+    return str.replace(/[^0-9]/g, '');
+  }
+
+  function buildSnapshotStorageKeys(startDate, endDate) {
+    const pid = `p:${normalizeSnapshotKeyPart(startDate)}:${normalizeSnapshotKeyPart(endDate)}`;
+    return [
+      `snap:dtr:${pid}`,
+      `snap:payroll:${pid}`,
+      `snap:reports:${pid}`,
+      `snap:deductions:${pid}`,
+      `snap:overtime:${pid}`,
+      `snap:additionalIncome:${pid}`,
+      `snap:otherDeductions:${pid}`,
+      `snap:adjustments:${pid}`,
+      `snap:master:${pid}`
+    ];
+  }
+
+  async function purgeStoredSnapshot(startDate, endDate) {
+    const keys = buildSnapshotStorageKeys(startDate, endDate);
+    if (typeof localStorage !== 'undefined') {
+      keys.forEach((key) => {
+        try { localStorage.removeItem(key); }
+        catch (err) { console.warn('localStorage remove failed', err); }
+      });
+    }
+    try {
+      if (window.supabase && window.SUPABASE_TABLE && typeof window.supabase.from === 'function') {
+        const { error } = await window.supabase
+          .from(window.SUPABASE_TABLE)
+          .delete()
+          .in('key', keys);
+        if (error) console.warn('Supabase delete error', error);
+      }
+    } catch (err) {
+      console.warn('Supabase purge failed', err);
+    }
+  }
+
+  historyTableBody && historyTableBody.addEventListener('click', async (e) => {
+    const target = e.target;
+    if (!target) return;
+    const actionBtn = target.closest('button');
+    if (!actionBtn) {
+      const row = target.closest('tr');
+      if (!row || !historyTableBody.contains(row)) return;
+      try { if (typeof row.focus === 'function') row.focus({ preventScroll: true }); } catch {}
+      return;
+    }
+    const idxStr = actionBtn.dataset.index;
+    if (typeof idxStr === 'undefined') return;
+    const idx = parseInt(idxStr, 10);
+    const snap = payrollHistory[idx];
+    if (!snap) return;
+    if (actionBtn.classList.contains('exportAllTabs')) {
+      // Export the All Tabs Excel for this snapshot's date range
+      try {
+        if (typeof window.exportExcelAllTabsForRange === 'function') {
+          window.exportExcelAllTabsForRange(snap.startDate, snap.endDate, {
+            divisorOverride: snap.divisor,
+            snapshot: { rows: snap.rows, totals: snap.totals, divisor: snap.divisor }
+          });
+        } else if (typeof window.exportExcelAllTabs === 'function') {
+          // Fallback: set range, rebuild, then export
+          const ws = document.getElementById('weekStart');
+          const we = document.getElementById('weekEnd');
+          const prevS = ws && ws.value; const prevE = we && we.value;
+          if (ws) ws.value = snap.startDate || prevS; if (we) we.value = snap.endDate || prevE;
+          try{ if (typeof calculatePayrollFromResultsTable==='function') calculatePayrollFromResultsTable(); else if (typeof calculatePayrollFromRecords==='function') calculatePayrollFromRecords(); }catch(e){}
+          try{ if (typeof window.rebuildReports === 'function') window.rebuildReports(); }catch(e){}
+          const overrideVal = Number(snap.divisor);
+          const hasOverride = !isNaN(overrideVal) && isFinite(overrideVal) && overrideVal > 0;
+          setTimeout(function(){
+            let appliedOverride = false;
+            try{
+              if (hasOverride && typeof window !== 'undefined') {
+                window.__snapshotDivisorOverride = overrideVal;
+                appliedOverride = true;
+              }
+              window.exportExcelAllTabs();
+            }catch(e){}
+            // Restore previous range and rebuild
+            setTimeout(function(){
+              try{ if (ws) ws.value = prevS; if (we) we.value = prevE; if (typeof window.rebuildReports==='function') window.rebuildReports(); }catch(e){}
+              if (appliedOverride && typeof window !== 'undefined') {
+                try { delete window.__snapshotDivisorOverride; }
+                catch(err){ window.__snapshotDivisorOverride = undefined; }
+              }
+            }, 0);
+          }, 300);
+        }
+      } catch(e){}
+      return;
+    }
+    if (actionBtn.classList.contains('exportAllPdf')) {
+      try {
+        if (typeof exportCombinedPdfForSnapshot === 'function') {
+          await new Promise((resolve) => {
+            withPrintOrientation(function(orientation){
+              Promise.resolve(exportCombinedPdfForSnapshot(snap, orientation)).then(resolve).catch(resolve);
+            });
+          });
+        }
+      } catch (err) {
+        console.warn('Combined PDF export failed', err);
+        alert('Unable to build the combined PDF for this snapshot.');
+      }
+      return;
+    }
+    if (actionBtn.classList.contains('voidSnapshot')) {
+      openVoidModal(idx);
+      return;
+    }
+    if (actionBtn.classList.contains('deleteSnapshot')) {
+      // Keep button enabled for visibility, but guard deletions for locked/finalized entries.
+      const snapStatus = getSnapshotStatus(snap);
+      const lockEntry = getLockEntry(snap.startDate, snap.endDate);
+      if (snap.locked || (lockEntry && lockEntry.locked) || snapStatus === 'finalized' || snapStatus === 'voided') {
+        alert('This payroll record is locked and cannot be deleted.');
+        return;
+      }
+      const confirmDel = confirm('Are you sure you want to delete this payroll record? This cannot be undone.');
+      if (!confirmDel) return;
+      payrollHistory.splice(idx, 1);
+      saveHistory();
+      renderHistory();
+      renderActivePayrolls();
+      return;
+    }
+  });
+
+
+  // Initial render on page load
+  renderHistory();
+  if (typeof renderActivePayrolls === 'function') renderActivePayrolls();
+
+
+});
+
+
+
+  (function(){
+    let __report = null;
+
+    const $ = s => document.querySelector(s);
+    const $$ = s => Array.from(document.querySelectorAll(s));
+    const toNum = v => { const n = parseFloat(String(v||'').replace(/,/g,'')); return isNaN(n)?0:n; };
+    const f2  = n => { const x = Number(n)||0; return x===0 ? '-' : x.toLocaleString('en-US',{minimumFractionDigits:2, maximumFractionDigits:2}); };
+    const showMsg = (t, id = 'r_msg')=>{
+      const m = document.getElementById(id);
+      if(m){ m.textContent=t; m.style.display=t?'block':'none'; }
+    };
+
+    const isRealProject = (p)=>{
+      if (!p) return false;
+      const s = String(p).trim().toLowerCase();
+      return s && !['(none)','none','-','null','undefined',''].includes(s);
+    };
+
+    function cssEscape(val){ return String(val).replace(/["\\\\]/g, '\\\\$&'); }
+
+    function getPayrollRange(){
+      try{
+        const ws = document.getElementById('weekStart')?.value;
+        const we = document.getElementById('weekEnd')?.value;
+        if (ws && we) return [ws,we];
+      }catch(e){}
+      try{
+        const wsKey = (typeof LS_WEEKSTART !== 'undefined') ? LS_WEEKSTART : 'ui_payroll_week_start_local';
+        const weKey = (typeof LS_WEEKEND !== 'undefined') ? LS_WEEKEND : 'ui_payroll_week_end_local';
+        const ls_ws = localStorage.getItem(wsKey);
+        const ls_we = localStorage.getItem(weKey);
+        if (ls_ws && ls_we) return [String(ls_ws).replace(/\"/g,''), String(ls_we).replace(/\"/g,'')];
+      }catch(e){}
+      try{
+        const sel = document.getElementById('activePayrollSelect');
+        const txt = sel && sel.options && sel.selectedIndex>=0 ? sel.options[sel.selectedIndex].textContent : '';
+        const m = txt && txt.match(/(\d{4}-\d{2}-\d{2}).*?(\d{4}-\d{2}-\d{2})/);
+        if (m) return [m[1], m[2]];
+      }catch(e){}
+      const trs = $$('#resultsTable tbody tr');
+      let minD=1e20, maxD=-1e20;
+      trs.forEach(tr=>{
+        const d = tr.cells[4]?.textContent?.trim();
+        if(!d) return;
+        const t = new Date(d).setHours(0,0,0,0);
+        if (!isNaN(t)){ minD = Math.min(minD,t); maxD = Math.max(maxD,t); }
+      });
+      if (maxD < minD) {
+        const today = new Date().toISOString().slice(0,10);
+        return [today,today];
+      }
+      return [new Date(minD).toISOString().slice(0,10), new Date(maxD).toISOString().slice(0,10)];
+    }
+
+    function eachDate(fromMS,toMS){
+      const out=[]; let t=fromMS;
+      while(t<=toMS){ out.push(new Date(t)); t += 86400000; }
+      return out;
+    }
+
+    function getPayrollTotalOvertimePay(){
+      const readCellAmount = (cell) => {
+        if (!cell) return 0;
+        const raw = String(cell.textContent || '').replace(/,/g, '').trim();
+        if (!raw || raw === '-') return 0;
+        const num = Number(raw);
+        return Number.isFinite(num) ? num : 0;
+      };
+
+      const footerCell = document.querySelector('#payrollTotalsFoot [data-col="otPay"]');
+      const footerValue = readCellAmount(footerCell);
+      if (footerValue > 0) return roundToCents(footerValue);
+
+      let sum = 0;
+      document.querySelectorAll('#payrollTable tbody tr').forEach(tr => {
+        sum += readCellAmount(tr.querySelector('.otPay'));
+      });
+      return roundToCents(sum);
+    }
+
+    // --- Robust rate lookup ---
+    function getRateById(id){
+      try{
+        const se = (window.storedEmployees||{})[id];
+        if (se){
+          const r = toNum(se.hourlyRate ?? se.rate ?? se.hourly_rate ?? se.payRate ?? se.wage);
+          if (r) return r;
+        }
+      }catch(e){}
+      try{
+        const pr = (window.payrollRates||{})[id];
+        if (pr) return toNum(pr);
+      }catch(e){}
+      const inp = document.querySelector(`.emp-rate-input[data-id="${cssEscape(id)}"]`);
+      if (inp) return toNum(inp.value || inp.textContent);
+      return 0;
+    }
+    function getRateByName(name){
+      if (!name) return 0;
+      const target = String(name).toUpperCase();
+      try{
+        const se = window.storedEmployees||{};
+        for (const [id, e] of Object.entries(se)){
+          if ((e?.name||'').toUpperCase() === target){
+            const r = toNum(e.hourlyRate ?? e.rate ?? e.hourly_rate ?? e.payRate ?? e.wage);
+            if (r) return r;
+          }
+        }
+      }catch(e){}
+      const rows = $$('#employeesTable tbody tr');
+      for (const tr of rows){
+        const nm = (tr.querySelector('.emp-name-input')?.value || tr.cells[1]?.textContent || '').trim().toUpperCase();
+        if (nm === target){
+          const inp = tr.querySelector('.emp-rate-input');
+          if (inp) return toNum(inp.value || inp.textContent);
+        }
+      }
+      return 0;
+    }
+    function getRate(id, name){ return getRateById(id) || getRateByName(name); }
+
+
+    function getEmployeeDisplayName(empId){
+      try {
+        const nm = storedEmployees && storedEmployees[empId] && storedEmployees[empId].name;
+        if (nm) return String(nm);
+      } catch (e) {}
+      return String(empId || '');
+    }
+
+    function resolveReportEmployeeId(empId, fallbackName){
+      const rawId = String(empId || '').trim();
+      try {
+        const se = window.storedEmployees || {};
+        if (rawId && Object.prototype.hasOwnProperty.call(se, rawId)) return rawId;
+
+        if (rawId) {
+          const rawNum = Number(rawId);
+          if (Number.isFinite(rawNum)) {
+            for (const id of Object.keys(se)) {
+              const idNum = Number(id);
+              if (Number.isFinite(idNum) && idNum === rawNum) return id;
+            }
+          }
+        }
+
+        const name = String(fallbackName || '').trim().toUpperCase();
+        if (name) {
+          for (const [id, rec] of Object.entries(se)) {
+            if (String(rec?.name || '').trim().toUpperCase() === name) return id;
+          }
+        }
+      } catch (e) {}
+      return rawId;
+    }
+
+    function getReportEmployeeRate(empId, fallbackName){
+      const canonicalId = resolveReportEmployeeId(empId, fallbackName);
+      const payrollRate = Number(getEmployeeHourlyRate(canonicalId) || 0);
+      if (payrollRate > 0) return payrollRate;
+      return getRate(canonicalId || empId, fallbackName);
+    }
+
+    function getReportProjectBucket(projectId){
+      const pid = String(projectId || '').trim();
+      if (!pid) return '__unassigned__';
+      const sp = (typeof storedProjects !== 'undefined' && storedProjects) || {};
+      return Object.prototype.hasOwnProperty.call(sp, pid) ? pid : null;
+    }
+
+    function getReportProjectLabel(bucket){
+      if (bucket === '__unassigned__') return 'Unassigned';
+      const sp = (typeof storedProjects !== 'undefined' && storedProjects) || {};
+      return (sp[bucket] && sp[bucket].name) ? sp[bucket].name : 'Unassigned';
+    }
+
+    function readProjectFromRow(tr){
+      const sel = tr.cells[2]?.querySelector('select');
+      if (sel){
+        const raw = String(sel.value || '').trim();
+        if (raw) return resolveProjectIdValue(raw);
+        const opt = sel.options[sel.selectedIndex];
+        const txt = (opt && (opt.textContent||opt.label)) || '';
+        return resolveProjectIdValue(txt);
+      }
+      const dp = tr.cells[2]?.dataset?.project;
+      if (dp) return resolveProjectIdValue(dp);
+      return resolveProjectIdValue((tr.cells[2]?.textContent||'').trim());
+    }
+
+    function collect(fromStr, toStr){
+      const M = {};
+      const trs = $$('#resultsTable tbody tr');
+      trs.forEach(tr=>{
+        const rawId = (tr.cells[0]?.textContent||'').trim();
+        const name = (tr.cells[1]?.textContent||'').trim();
+        const id = resolveReportEmployeeId(rawId, name);
+        const projId = readProjectFromRow(tr);
+        const proj = getReportProjectBucket(projId);
+        const date = (tr.cells[4]?.textContent||'').trim();
+        const rwh = toNum(tr.cells[11]?.textContent) || toNum(tr.querySelector('.regHrs')?.value);
+        const oth = toNum(tr.cells[12]?.textContent) || toNum(tr.querySelector('.otHrs')?.value);
+        if(!id || !date || !proj) return;
+        const d = new Date(date).setHours(0,0,0,0);
+        if(fromStr){ const f = new Date(fromStr).setHours(0,0,0,0); if(d < f) return; }
+        if(toStr){ const t = new Date(toStr).setHours(0,0,0,0); if(d > t) return; }
+
+        (M[proj] = M[proj]||{});
+        (M[proj][id] = M[proj][id]||{ name, days:{} });
+        const slot = M[proj][id].days[d] || { rwh:0, oth:0 };
+        slot.rwh += rwh; slot.oth += oth;
+        M[proj][id].days[d] = slot;
+      });
+      return M;
+    }
+
+    function buildDetailedAdjustmentsByProject(){
+      const buckets = {};
+      const seenByEmployee = {};
+      const fallbackSource = isPlainObject(adjHrs) ? adjHrs : {};
+      const addEntry = (empId, bucket, entry = {}) => {
+        if (!empId || !bucket) return;
+        const normalizedEmployeeId = resolveReportEmployeeId(empId, entry.name);
+        if (!normalizedEmployeeId) return;
+        const rawId = entry.id ?? entry.adjustmentId ?? entry.rowId ?? entry.uid ?? entry.key ?? null;
+        const serial = rawId != null
+          ? String(rawId)
+          : JSON.stringify({
+            type: entry.type ?? entry.category ?? '',
+            h: entry.hours ?? entry.hrs ?? entry.adjHrs ?? entry.reg ?? entry.ot ?? 0,
+            a: entry.amount ?? entry.adjPay ?? entry.pay ?? 0,
+            p: entry.projectId ?? entry.project ?? ''
+          });
+        seenByEmployee[normalizedEmployeeId] = seenByEmployee[normalizedEmployeeId] || new Set();
+        if (seenByEmployee[normalizedEmployeeId].has(serial)) return;
+        seenByEmployee[normalizedEmployeeId].add(serial);
+
+        const hoursRaw = Number(entry.hours ?? entry.hrs ?? entry.value ?? entry.adjHrs ?? 0);
+        const hours = Number.isFinite(hoursRaw) ? roundToCents(hoursRaw) : 0;
+        const explicitAmount = Number(entry.amount ?? entry.adjPay ?? entry.pay ?? entry.total ?? NaN);
+        const rate = getReportEmployeeRate(normalizedEmployeeId, entry.name);
+        const amount = Number.isFinite(explicitAmount)
+          ? roundToCents(explicitAmount)
+          : roundToCents(hours * rate);
+        const kind = normalizeAdjustmentType(entry.type ?? entry.kind ?? entry.label ?? entry.name ?? entry.category ?? entry.adjustmentType ?? entry.entryType);
+        const effectiveOtRate = getEffectiveOvertimeRateForEmployee(normalizedEmployeeId, rate);
+
+        if (!buckets[bucket]) buckets[bucket] = {};
+        if (!buckets[bucket][normalizedEmployeeId]) {
+          buckets[bucket][normalizedEmployeeId] = {
+            regHours: 0,
+            otHours: 0,
+            adjHrs: 0,
+            regPay: 0,
+            otPay: 0,
+            adjGross: 0
+          };
+        }
+        const slot = buckets[bucket][normalizedEmployeeId];
+        const safeHours = Number.isFinite(hours) ? hours : 0;
+        const safeAmount = Number.isFinite(amount) ? amount : 0;
+        slot.adjHrs = roundToCents(slot.adjHrs + safeHours);
+        slot.adjGross = roundToCents(slot.adjGross + safeAmount);
+        if (kind === 'ADJ OT') {
+          slot.otHours = roundToCents(slot.otHours + safeHours);
+          slot.otPay = roundToCents(slot.otPay + (Number.isFinite(explicitAmount) ? safeAmount : (safeHours * effectiveOtRate)));
+        } else {
+          slot.regHours = roundToCents(slot.regHours + safeHours);
+          slot.regPay = roundToCents(slot.regPay + (Number.isFinite(explicitAmount) ? safeAmount : (safeHours * rate)));
+        }
+      };
+
+      Object.keys(fallbackSource).forEach(empId => {
+        const raw = fallbackSource[empId];
+        if (raw == null) return;
+
+        if (Array.isArray(raw)) {
+          raw.forEach((entry, idx) => {
+            if (!entry) return;
+            const projectId = resolveProjectIdValue(entry.projectId ?? entry.projectType ?? entry.project);
+            const bucket = getReportProjectBucket(projectId || getAdjustmentProjectType(empId));
+            if (!bucket) return;
+            addEntry(empId, bucket, { ...entry, id: entry.id ?? `${empId}-${idx}` });
+          });
+          return;
+        }
+
+        const projectId = resolveProjectIdValue(raw.projectId ?? raw.projectType ?? raw.project ?? getAdjustmentProjectType(empId));
+        const bucket = getReportProjectBucket(projectId);
+        if (!bucket) return;
+
+        if (typeof raw === 'number' || typeof raw === 'string') {
+          addEntry(empId, bucket, { id: `${empId}-legacy-ot`, hours: raw, type: 'ADJ OT' });
+          return;
+        }
+
+        if (typeof raw === 'object') {
+          const hasTotals = Object.prototype.hasOwnProperty.call(raw, 'reg') || Object.prototype.hasOwnProperty.call(raw, 'ot');
+          if (hasTotals) {
+            addEntry(empId, bucket, { id: `${empId}-reg-total`, hours: raw.reg, type: 'REG' });
+            addEntry(empId, bucket, { id: `${empId}-ot-total`, hours: raw.ot, type: 'ADJ OT' });
+            return;
+          }
+          addEntry(empId, bucket, { ...raw, id: raw.id ?? `${empId}-single` });
+        }
+      });
+
+      return buckets;
+    }
+
+    function buildReportData(){
+      const dtrRows = $$('#resultsTable tbody tr');
+      if (dtrRows.length === 0) return null;
+
+      const [from, to] = getPayrollRange();
+      const dates = eachDate(new Date(from).setHours(0,0,0,0), new Date(to).setHours(0,0,0,0));
+      const data = collect(from, to) || {};
+
+      let adjustmentsByProjectEmp = {};
+      try {
+        adjustmentsByProjectEmp = buildDetailedAdjustmentsByProject();
+      } catch (e) { adjustmentsByProjectEmp = {}; }
+
+      // Ensure projects that only have Bantay allowance (no DTR rows) appear as their own blocks
+      try {
+        const bp = (typeof bantayProj !== 'undefined' && bantayProj) || {};
+        const b  = (typeof bantay !== 'undefined' && bantay) || {};
+        const sp = (typeof storedProjects !== 'undefined' && storedProjects) || {};
+        const allowByProj = {};
+        Object.keys(b).forEach(empId => {
+          const amt = parseFloat((b[empId]) || 0) || 0;
+          if (amt <= 0) return;
+          const assigned = bp[empId];
+          if (!assigned) return;
+          const projId = resolveProjectIdValue(assigned, sp);
+          const bucket = getReportProjectBucket(projId);
+          if (!bucket) return;
+          allowByProj[bucket] = (allowByProj[bucket] || 0) + amt;
+        });
+        Object.keys(allowByProj).forEach(pn => { if (!data[pn]) data[pn] = {}; });
+      } catch (e) { /* ignore */ }
+
+      // Additional Income per project (assigned in Additional Income tab)
+      let additionalIncomeByProject = {};
+      try { if (typeof syncPeriodScopedData === 'function') syncPeriodScopedData(); } catch (_) {}
+      try {
+        const sp = (typeof storedProjects !== 'undefined' && storedProjects) || {};
+        const ai = (typeof additionalIncomeDetails !== 'undefined' && additionalIncomeDetails) || {};
+        Object.keys(ai).forEach(empId => {
+          const items = Array.isArray(ai[empId]) ? ai[empId] : [];
+          items.forEach(it => {
+            const amt = parseFloat((it && it.amount) || 0) || 0;
+            if (amt <= 0) return;
+            const assigned = String((it && (it.projectId != null ? it.projectId : (it.project != null ? it.project : ''))) || '').trim();
+            const projId = resolveProjectIdValue(assigned, sp);
+            const bucket = getReportProjectBucket(projId);
+            if (!bucket) return;
+            let label = '';
+            try { if (typeof getAdditionalIncomeLabel === 'function') label = getAdditionalIncomeLabel(it); } catch (e) {}
+            if (!label) label = String((it && (it.label != null ? it.label : it.type)) || 'Additional Income').trim() || 'Additional Income';
+            if (!additionalIncomeByProject[bucket]) additionalIncomeByProject[bucket] = {};
+            additionalIncomeByProject[bucket][label] = (additionalIncomeByProject[bucket][label] || 0) + amt;
+          });
+        });
+        Object.keys(additionalIncomeByProject).forEach(pn => { if (!data[pn]) data[pn] = {}; });
+      } catch (e) { additionalIncomeByProject = {}; }
+
+      Object.keys(adjustmentsByProjectEmp).forEach(pid => { if (!data[pid]) data[pid] = {}; });
+
+      return { data, from, to, dates, additionalIncomeByProject, adjustmentsByProjectEmp };
+    }
+
+    function buildReportTable(report){
+      const table = document.getElementById('r_table');
+      if (!table) return;
+
+      if (!report){
+        showMsg('No DTR rows found. Import DTR or open a period first.', 'r_msg');
+        table.innerHTML = '';
+        return;
+      }
+      showMsg('', 'r_msg');
+
+      const { data, from, to, dates, additionalIncomeByProject, adjustmentsByProjectEmp } = report;
+      const totalCols = 2 + (dates.length * 2) + 7;
+      const hint = document.getElementById('r_range_hint');
+      if (hint) {
+        const fromDay = new Date(from).toLocaleDateString(undefined,{weekday:'long'}).toUpperCase();
+        const toDay = new Date(to).toLocaleDateString(undefined,{weekday:'long'}).toUpperCase();
+        hint.textContent = `Range: ${fromDay} - ${toDay} (${from} - ${to})`;
+      }
+
+      let thead1 = `<tr><th class="left" rowspan="3">PERSONNEL</th><th rowspan="3">RATE</th>`;
+      dates.forEach(d=>{
+        const lbl = d.toLocaleDateString(undefined,{day:'2-digit',month:'short',year:'numeric'});
+        thead1 += `<th colspan="2">${lbl}</th>`;
+      });
+      thead1 += `<th rowspan="3">RWH HRS</th><th rowspan="3">OT HRS</th><th rowspan="3">ADJ HRS</th><th rowspan="3">RWH GROSS</th><th rowspan="3">OT GROSS</th><th rowspan="3">ADJ GROSS</th><th rowspan="3">TOTAL GROSS</th></tr>`;
+      let thead2 = `<tr>${dates.map(d=>`<th colspan="2">${d.toLocaleDateString(undefined,{weekday:'long'}).toUpperCase()}</th>`).join('')}</tr>`;
+      let thead3 = `<tr>${dates.map(()=>`<th>RWH</th><th>OT</th>`).join('')}</tr>`;
+
+      const tbodies = [];
+      let gRegHours=0, gOtHours=0, gAdjHours=0, gRegGross=0, gOtGross=0, gAdjGross=0, gTotalGross=0;
+      const gDayTotals = dates.map(() => ({ rwh:0, oth:0 }));
+      const projects = Object.keys(data).sort((a,b)=>getReportProjectLabel(a).localeCompare(getReportProjectLabel(b)));
+
+      projects.forEach(proj=>{
+        const empMap = data[proj] || {};
+        const projectLabel = getReportProjectLabel(proj);
+        const adjustmentMap = (adjustmentsByProjectEmp && adjustmentsByProjectEmp[proj]) || {};
+        let pRegHours=0, pOtHours=0, pAdjHours=0, pRegGross=0, pOtGross=0, pAdjGross=0, pTotalGross=0;
+        const dayTotals = dates.map(() => ({ rwh:0, oth:0 }));
+        let rows='';
+
+        rows += `<tr class="proj-break"><td colspan="${totalCols}">${projectLabel}</td></tr>`;
+
+        const projectEmpIds = Array.from(new Set([
+          ...Object.keys(empMap),
+          ...Object.keys(adjustmentMap)
+        ])).sort((a,b)=>{
+          const A = ((empMap[a] && empMap[a].name) || getEmployeeDisplayName(a) || a).toUpperCase();
+          const B = ((empMap[b] && empMap[b].name) || getEmployeeDisplayName(b) || b).toUpperCase();
+          return A.localeCompare(B);
+        });
+
+        projectEmpIds.forEach(empId=>{
+          const rec = empMap[empId] || { name: getEmployeeDisplayName(empId), days:{} };
+          const display = rec.name || getEmployeeDisplayName(empId) || empId;
+          const canonicalEmpId = resolveReportEmployeeId(empId, display);
+          const rate = getReportEmployeeRate(canonicalEmpId, display);
+          const effectiveOtRate = getEffectiveOvertimeRateForEmployee(canonicalEmpId, rate);
+          let rowRegHours=0;
+          let rowOtHours=0;
+
+          const cells = dates.map((d,i)=>{
+            const key = d.setHours(0,0,0,0);
+            const v = rec.days[key] || { rwh:0, oth:0 };
+            rowRegHours += v.rwh;
+            rowOtHours += v.oth;
+            dayTotals[i].rwh += v.rwh;
+            dayTotals[i].oth += v.oth;
+            return `<td class="num">${f2(v.rwh)}</td><td class="num">${f2(v.oth)}</td>`;
+          }).join('');
+
+          const adj = adjustmentMap[empId] || { regPay: 0, otPay: 0, otHours: 0, adjHrs: 0, adjGross: 0 };
+          // Keep report buckets aligned with payroll tab totals:
+          // - RWH GROSS reflects only regular pay from rendered regular hours.
+          // - OT GROSS reflects only overtime pay from rendered overtime hours.
+          // - ADJ GROSS captures all adjustment amounts (REG/OT explicit adjustments).
+          // This avoids counting the same adjustment amount twice in both RWH/OT and ADJ columns.
+          const regGross = roundToCents(rowRegHours * rate);
+          const otGross = roundToCents(rowOtHours * effectiveOtRate);
+          const adjHrs = roundToCents(Number(adj.adjHrs || 0));
+          const adjGross = roundToCents(Number(adj.adjGross || 0));
+          const totalGross = roundToCents(regGross + otGross + adjGross);
+          pRegHours += rowRegHours;
+          pOtHours += rowOtHours;
+          pAdjHours += adjHrs;
+          pRegGross += regGross;
+          pOtGross += otGross;
+          pAdjGross += adjGross;
+          pTotalGross += totalGross;
+
+          rows += `<tr>
+            <td class="left">${display}</td>
+            <td class="num">${f2(rate)}</td>
+            ${cells}
+            <td class="num">${f2(rowRegHours)}</td>
+            <td class="num">${f2(rowOtHours)}</td>
+            <td class="num">${f2(adjHrs)}</td>
+            <td class="num">${f2(regGross)}</td>
+            <td class="num">${f2(otGross)}</td>
+            <td class="num">${f2(adjGross)}</td>
+            <td class="num">${f2(totalGross)}</td>
+          </tr>`;
+        });
+
+const allow = (typeof bantay !== 'undefined' && bantay) ? Object.keys(bantay || {}).reduce((sum, empId) => {
+  const assigned = (bantayProj || {})[empId];
+  if (!assigned) return sum;
+  const matchesProject = getReportProjectBucket(resolveProjectIdValue(assigned)) === proj;
+  return matchesProject ? sum + (parseFloat(bantay[empId]) || 0) : sum;
+}, 0) : 0;
+
+if (allow && allow > 0) {
+rows += `<tr class="allowance">
+  <td class="left">Allowance</td>
+  <td class="num">-</td>
+  ${dates.map(()=>`<td class="num">-</td><td class="num">-</td>`).join('')}
+  <td class="num">-</td>
+  <td class="num">-</td>
+  <td class="num">-</td>
+  <td class="num">-</td>
+  <td class="num">-</td>
+  <td class="num">-</td>
+  <td class="num">${f2(allow)}</td>
+</tr>`;
+  pTotalGross += allow;
+}
+
+  try {
+    const aiMap = (additionalIncomeByProject && additionalIncomeByProject[proj]) || {};
+    Object.keys(aiMap).sort((a,b)=>String(a).localeCompare(String(b))).forEach(lbl => {
+      const amt = parseFloat(aiMap[lbl]) || 0;
+      if (amt <= 0) return;
+      const safeLbl = String(lbl || 'Additional Income').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+      rows += `<tr class="add-income">
+  <td class="left">${safeLbl}</td>
+  <td class="num">-</td>
+  ${dates.map(()=>`<td class="num">-</td><td class="num">-</td>`).join('')}
+  <td class="num">-</td>
+  <td class="num">-</td>
+  <td class="num">-</td>
+  <td class="num">-</td>
+  <td class="num">-</td>
+  <td class="num">-</td>
+  <td class="num">${f2(amt)}</td>
+</tr>`;
+      pTotalGross += amt;
+    });
+  } catch (e) { /* ignore */ }
+
+  rows += `<tr class="totals">
+            <td class="left">Project Total</td>
+            <td class="num">-</td>
+            ${dayTotals.map(dt => `<td class="num">${f2(dt.rwh)}</td><td class="num">${f2(dt.oth)}</td>`).join('')}
+            <td class="num">${f2(pRegHours)}</td>
+            <td class="num">${f2(pOtHours)}</td>
+            <td class="num">${f2(pAdjHours)}</td>
+            <td class="num">${f2(pRegGross)}</td>
+            <td class="num">${f2(pOtGross)}</td>
+            <td class="num">${f2(pAdjGross)}</td>
+            <td class="num">${f2(pTotalGross)}</td>
+          </tr>`;
+
+          gRegHours += pRegHours;
+          gOtHours += pOtHours;
+          gAdjHours += pAdjHours;
+          gRegGross += pRegGross;
+          gOtGross += pOtGross;
+          gAdjGross += pAdjGross;
+          gTotalGross += pTotalGross;
+          dayTotals.forEach((dt,i)=>{ gDayTotals[i].rwh += dt.rwh; gDayTotals[i].oth += dt.oth; });
+
+          tbodies.push(`<tbody class="proj-page">${rows}</tbody>`);
+        });
+
+      const computedOtGross = gOtGross;
+      gOtGross = getPayrollTotalOvertimePay();
+      gTotalGross = roundToCents(gTotalGross - computedOtGross + gOtGross);
+
+      const foot = `<tr class="totals">
+          <td class="left">Grand Total</td>
+          <td class="num">-</td>
+          ${gDayTotals.map(dt => `<td class="num">${f2(dt.rwh)}</td><td class="num">${f2(dt.oth)}</td>`).join('')}
+          <td class="num">${f2(gRegHours)}</td>
+          <td class="num">${f2(gOtHours)}</td>
+          <td class="num">${f2(gAdjHours)}</td>
+          <td class="num">${f2(gRegGross)}</td>
+          <td class="num">${f2(gOtGross)}</td>
+          <td class="num">${f2(gAdjGross)}</td>
+          <td class="num">${f2(gTotalGross)}</td>
+        </tr>`;
+
+      table.innerHTML = `<thead>${thead1}${thead2}${thead3}</thead>${tbodies.join('')}<tfoot>${foot}</tfoot>`;
+
+      (function applyCommas(){
+        const fmt = (v)=>{
+          const n = parseFloat(String(v||'').replace(/,/g,''));
+          if (isNaN(n)) return v;
+          return n.toLocaleString('en-US',{minimumFractionDigits:2, maximumFractionDigits:2});
+        };
+        const cells = Array.from(table.querySelectorAll('td.num, tfoot td.num'));
+        cells.forEach(td=>{ td.textContent = fmt(td.textContent); });
+      })();
+    }
+
+    function buildTables(){
+      const report = buildReportData();
+      __report = report;
+      buildReportTable(report);
+    }
+
+    function csvEscape(s){
+      if (s == null) return '';
+      s = String(s);
+      if (/[",\n]/.test(s)) return '"' + s.replace(/"/g,'""') + '"';
+      return s;
+    }
+    function to2(n){ n = parseFloat(String(n).replace(/,/g,'')); if (isNaN(n)) n = 0; return (Math.round(n*100)/100).toFixed(2); }
+
+    function buildReportRows(mode){
+      if (!__report) return null;
+      const { data, dates, from, to, additionalIncomeByProject, adjustmentsByProjectEmp } = __report;
+
+      const dayHeader = dates.flatMap(d=>{
+        const lbl = d.toLocaleDateString(undefined,{day:'2-digit',month:'short',year:'numeric'});
+        return [`RWH ${lbl}`, `OT ${lbl}`];
+      });
+
+      const header = ['PROJECT','PERSONNEL','RATE']
+        .concat(dayHeader)
+        .concat(['RWH HRS', 'OT HRS', 'ADJ HRS', 'RWH GROSS', 'OT GROSS', 'ADJ GROSS', 'TOTAL GROSS']);
+      const rows = [header];
+
+      const projects = Object.keys(data).sort((a,b)=>getReportProjectLabel(a).localeCompare(getReportProjectLabel(b)));
+      let gRegHours=0, gOtHours=0, gAdjHours=0, gRegGross=0, gOtGross=0, gAdjGross=0, gTotalGross=0;
+      const gDayTotals = dates.map(() => ({ rwh:0, oth:0 }));
+
+      projects.forEach(proj=>{
+        const empMap = data[proj] || {};
+        const projectLabel = getReportProjectLabel(proj);
+        const adjustmentMap = (adjustmentsByProjectEmp && adjustmentsByProjectEmp[proj]) || {};
+        let pRegHours=0, pOtHours=0, pAdjHours=0, pRegGross=0, pOtGross=0, pAdjGross=0, pTotalGross=0;
+        const dayTotals = dates.map(() => ({ rwh:0, oth:0 }));
+
+        const projectEmpIds = Array.from(new Set([
+          ...Object.keys(empMap),
+          ...Object.keys(adjustmentMap)
+        ])).sort((a,b)=>{
+          const A = ((empMap[a] && empMap[a].name) || getEmployeeDisplayName(a) || a).toUpperCase();
+          const B = ((empMap[b] && empMap[b].name) || getEmployeeDisplayName(b) || b).toUpperCase();
+          return A.localeCompare(B);
+        });
+
+        projectEmpIds.forEach(empId=>{
+          const rec = empMap[empId] || { name: getEmployeeDisplayName(empId), days:{} };
+          const display = rec.name || getEmployeeDisplayName(empId) || empId;
+
+          const canonicalEmpId = resolveReportEmployeeId(empId, display);
+          const rate = getReportEmployeeRate(canonicalEmpId, display);
+          const effectiveOtRate = getEffectiveOvertimeRateForEmployee(canonicalEmpId, rate);
+
+          let rowRegHours=0;
+          let rowOtHours=0;
+          const dayCells = [];
+          dates.forEach((d,i)=>{
+            const key = d.setHours(0,0,0,0);
+            const v = rec.days[key] || { rwh:0, oth:0 };
+            rowRegHours += v.rwh;
+            rowOtHours += v.oth;
+            dayTotals[i].rwh += v.rwh;
+            dayTotals[i].oth += v.oth;
+            dayCells.push(to2(v.rwh), to2(v.oth));
+          });
+
+          const adj = adjustmentMap[empId] || { regPay: 0, otPay: 0, otHours: 0, adjHrs: 0, adjGross: 0 };
+          const regGross = roundToCents(rowRegHours * rate);
+          const otGross = roundToCents(rowOtHours * effectiveOtRate);
+          const adjHrs = roundToCents(Number(adj.adjHrs || 0));
+          const adjGross = roundToCents(Number(adj.adjGross || 0));
+          const totalGross = roundToCents(regGross + otGross + adjGross);
+          pRegHours += rowRegHours;
+          pOtHours += rowOtHours;
+          pAdjHours += adjHrs;
+          pRegGross += regGross;
+          pOtGross += otGross;
+          pAdjGross += adjGross;
+          pTotalGross += totalGross;
+
+          rows.push([projectLabel, display, to2(rate)].concat(dayCells, [to2(rowRegHours), to2(rowOtHours), to2(adjHrs), to2(regGross), to2(otGross), to2(adjGross), to2(totalGross)]));
+        });
+
+        try {
+          const allow = (typeof bantay !== 'undefined' && bantay) ? Object.keys(bantay || {}).reduce((sum, empId) => {
+            const assigned = (bantayProj || {})[empId];
+            if (!assigned) return sum;
+            const amt = parseFloat((bantay && bantay[empId]) || 0) || 0;
+            const matchesProject = getReportProjectBucket(resolveProjectIdValue(assigned)) === proj;
+            return matchesProject ? (sum + amt) : sum;
+          }, 0) : 0;
+          if (allow && allow > 0) {
+            const zeroCells = new Array(dates.length * 2).fill('0.00');
+            rows.push([projectLabel, 'Allowance', ''].concat(zeroCells, ['0.00', '0.00', '0.00', '0.00', '0.00', '0.00', to2(allow)]));
+            pTotalGross += allow;
+          }
+        } catch (e) { /* no-op if allowance data missing */ }
+
+        try {
+          const aiMap = (additionalIncomeByProject && additionalIncomeByProject[proj]) || {};
+          Object.keys(aiMap).sort((a,b)=>String(a).localeCompare(String(b))).forEach(lbl => {
+            const amt = parseFloat(aiMap[lbl]) || 0;
+            if (amt <= 0) return;
+            const zeroCells = new Array(dates.length * 2).fill('0.00');
+            rows.push([projectLabel, lbl || 'Additional Income', ''].concat(zeroCells, ['0.00', '0.00', '0.00', '0.00', '0.00', '0.00', to2(amt)]));
+            pTotalGross += amt;
+          });
+        } catch (e) { /* ignore */ }
+
+        gRegHours += pRegHours;
+        gOtHours += pOtHours;
+        gAdjHours += pAdjHours;
+        gRegGross += pRegGross;
+        gOtGross += pOtGross;
+        gAdjGross += pAdjGross;
+        gTotalGross += pTotalGross;
+        dayTotals.forEach((dt,i)=>{ gDayTotals[i].rwh += dt.rwh; gDayTotals[i].oth += dt.oth; });
+        const dayTotalsCells = dayTotals.flatMap(dt=>[to2(dt.rwh), to2(dt.oth)]);
+        rows.push([projectLabel, 'Project Total', ''].concat(
+          dayTotalsCells,
+          [to2(pRegHours), to2(pOtHours), to2(pAdjHours), to2(pRegGross), to2(pOtGross), to2(pAdjGross), to2(pTotalGross)]
+        ));
+      });
+
+      const computedOtGross = gOtGross;
+      gOtGross = roundToCents(getPayrollTotalOvertimePay());
+      gTotalGross = roundToCents(gTotalGross - computedOtGross + gOtGross);
+
+      const gDayTotalsCells = gDayTotals.flatMap(dt=>[to2(dt.rwh), to2(dt.oth)]);
+      rows.push(['', 'Grand Total', ''].concat(
+        gDayTotalsCells,
+        [to2(gRegHours), to2(gOtHours), to2(gAdjHours), to2(gRegGross), to2(gOtGross), to2(gAdjGross), to2(gTotalGross)]
+      ));
+
+      return { rows, from, to };
+    }
+
+    // Some report rebuilds rely on async data fetches. Wait briefly for the
+    // detailed rows to populate so Excel exports capture the final dataset.
+    async function waitForDetailedReportBundle(maxWaitMs = 8000, pollMs = 200){
+      const started = Date.now();
+      const hasDataRows = (bundle) => {
+        if (!bundle || !Array.isArray(bundle.rows)) return false;
+        if (bundle.rows.length > 2) return true;
+        return bundle.rows.some((row, idx) => {
+          if (!row || idx === 0) return false;
+          return row.some(cell => String(cell ?? '').trim() !== '');
+        });
+      };
+      while ((Date.now() - started) < maxWaitMs){
+        if (!__report && typeof window.rebuildReports === 'function'){
+          try { window.rebuildReports(); } catch(e){}
+        }
+        const bundle = buildReportRows('rwh');
+        if (hasDataRows(bundle)){
+          return bundle;
+        }
+        const renderedRows = (() => {
+          try {
+            return document.querySelectorAll('#r_table tbody tr').length;
+          } catch(_){ return 0; }
+        })();
+        if (renderedRows > 0){
+          const refreshed = buildReportRows('rwh');
+          if (hasDataRows(refreshed)){
+            return refreshed;
+          }
+        }
+        await new Promise(resolve => setTimeout(resolve, pollMs));
+      }
+      if (!__report && typeof window.rebuildReports === 'function'){
+        try { window.rebuildReports(); } catch(e){}
+      }
+      return buildReportRows('rwh');
+    }
+
+    function exportCSVDetailed(){
+      const bundle = buildReportRows('rwh');
+      if (!bundle){ alert('No report to export yet.'); return; }
+      const { rows, from, to } = bundle;
+      const csv = rows.map(r=>r.map(csvEscape).join(',')).join('\n');
+      const a=document.createElement('a');
+      a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'}));
+      a.download=`reports_all_${from}_to_${to}.csv`;
+      a.click(); URL.revokeObjectURL(a.href);
+    }
+
+    function exportCSVOvertime(){
+      const bundle = buildReportRows('oth');
+      if (!bundle){ alert('No report to export yet.'); return; }
+      const { rows, from, to } = bundle;
+      const csv = rows.map(r=>r.map(csvEscape).join(',')).join('\n');
+      const a=document.createElement('a');
+      a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'}));
+      a.download=`reports_overtime_${from}_to_${to}.csv`;
+      a.click(); URL.revokeObjectURL(a.href);
+    }
+
+    function tableToAoA(tbl){
+      const rows = [];
+      if (!tbl) return rows;
+      const pushRow = (tr) => {
+        if (!tr || !tr.cells) return;
+        const arr = [];
+        for (let i = 0; i < tr.cells.length; i++){
+          const cell = tr.cells[i];
+          arr.push((cell.textContent || '').trim());
+        }
+        rows.push(arr);
+      };
+      if (tbl.tHead){ Array.from(tbl.tHead.rows || []).forEach(pushRow); }
+      Array.from(tbl.tBodies || []).forEach(tb => { Array.from(tb.rows || []).forEach(pushRow); });
+      if (tbl.tFoot){ Array.from(tbl.tFoot.rows || []).forEach(pushRow); }
+      return rows;
+    }
+
+    function buildDtrAoA(){
+      const table = document.getElementById('resultsTable');
+      if (!table) return null;
+
+      const selectedTexts = [];
+      table.querySelectorAll('select').forEach(sel => {
+        let txt = '';
+        try {
+          const idx = sel.selectedIndex;
+          if (idx >= 0 && sel.options && sel.options[idx]){
+            const opt = sel.options[idx];
+            txt = (opt.textContent || opt.innerText || opt.value || '');
+          }
+        } catch(e){}
+        selectedTexts.push((txt || '').trim());
+      });
+
+      const clone = table.cloneNode(true);
+      clone.querySelectorAll('select').forEach((sel, idx) => {
+        const td = sel.closest('td');
+        if (td){ td.textContent = selectedTexts[idx] || ''; }
+      });
+      clone.querySelectorAll('button').forEach(btn => btn.remove());
+
+      const dropIdx = [];
+      if (clone.tHead && clone.tHead.rows && clone.tHead.rows[0]){
+        const headerRow = clone.tHead.rows[0];
+        for (let i = 0; i < headerRow.cells.length; i++){
+          const txt = (headerRow.cells[i].textContent || '').trim().toLowerCase();
+          if (txt === 'split' || txt === 'actions' || txt === 'editor' || txt === 'punches'){ dropIdx.push(i); }
+        }
+      }
+      if (dropIdx.length){
+        const unique = Array.from(new Set(dropIdx)).sort((a,b)=> b - a);
+        const removeCols = (tr) => {
+          if (!tr || !tr.cells) return;
+          unique.forEach(idx => {
+            try { if (idx >=0 && idx < tr.cells.length) tr.deleteCell(idx); } catch(e){}
+          });
+        };
+        if (clone.tHead){ Array.from(clone.tHead.rows || []).forEach(removeCols); }
+        Array.from(clone.tBodies || []).forEach(tb => { Array.from(tb.rows || []).forEach(removeCols); });
+        if (clone.tFoot){ Array.from(clone.tFoot.rows || []).forEach(removeCols); }
+      }
+
+      const aoa = tableToAoA(clone);
+      return (aoa && aoa.length) ? aoa : null;
+    }
+
+    async function buildPayrollAoA(){
+      const src = document.getElementById('payrollTable');
+      if (!src) return null;
+
+      const startDate = document.getElementById('weekStart')?.value || '';
+      const endDate = document.getElementById('weekEnd')?.value || '';
+      const title = (startDate && endDate) ? `Payroll Report (${startDate} to ${endDate})` : 'Payroll Report';
+      const header = [
+        'ID','Name','Hourly Rate','Regular Hours','Overtime Hours','ADJ OT Hours',
+        'Regular Pay','Adj Hours','Adj Pay','Additional Income','Total Overtime Pay','Gross Pay',
+        'Total Deductions','Net Pay'
+      ];
+
+      let snapshotOverride = null;
+      try {
+        if (typeof window !== 'undefined' && window.__snapshotPayrollOverride && typeof window.__snapshotPayrollOverride === 'object') {
+          snapshotOverride = window.__snapshotPayrollOverride;
+        }
+      } catch (e) {}
+
+      const key = (typeof LS_DIVISOR !== 'undefined') ? LS_DIVISOR : 'payroll_deduction_divisor';
+      let divisorOverride = null;
+      try {
+        if (typeof window !== 'undefined' && typeof window.__snapshotDivisorOverride !== 'undefined') {
+          const maybe = Number(window.__snapshotDivisorOverride);
+          if (!isNaN(maybe) && isFinite(maybe) && maybe > 0) divisorOverride = maybe;
+        }
+      } catch (e) {}
+      let divisor = divisorOverride || 1;
+      if (!divisorOverride) {
+        try {
+          if (typeof window !== 'undefined' && typeof window.divisor !== 'undefined') {
+            const winDiv = Number(window.divisor);
+            if (!isNaN(winDiv) && isFinite(winDiv) && winDiv > 0) divisor = winDiv;
+          }
+          if ((!divisor || !isFinite(divisor) || divisor <= 0) && typeof localStorage !== 'undefined') {
+            const stored = Number(localStorage.getItem(key));
+            if (!isNaN(stored) && isFinite(stored) && stored > 0) divisor = stored;
+          }
+        } catch (e) {}
+      }
+      if (!divisor || !isFinite(divisor) || divisor <= 0) divisor = 1;
+
+      const toNum = (value, opts = {}) => {
+        if (value == null || value === '') return 0;
+        let n = value;
+        if (typeof n === 'string') {
+          n = parseFloat(n.replace(/,/g,''));
+        } else if (typeof n !== 'number') {
+          n = Number(n);
+        }
+        if (!isFinite(n) || isNaN(n)) n = 0;
+        if (opts.divideLoan) n = n / divisor;
+        return n;
+      };
+      const fmt = (value, opts = {}) => {
+        const decimals = (typeof opts.decimals === 'number') ? opts.decimals : 2;
+        return toNum(value, opts).toFixed(decimals);
+      };
+
+      async function buildFromSnapshot(){
+        let snap = null;
+        try {
+          if (snapshotOverride) {
+            snap = snapshotOverride;
+          } else {
+            if (typeof buildSnapshot !== 'function') return null;
+            snap = await buildSnapshot(startDate, endDate);
+          }
+          if (!snap || !Array.isArray(snap.rows) || !snap.rows.length) return null;
+          if (!divisorOverride) {
+            const snapDiv = Number(snap.divisor);
+            if (!isNaN(snapDiv) && isFinite(snapDiv) && snapDiv > 0) divisor = snapDiv;
+          }
+
+          const aoa = [[title], [''], header.slice()];
+          const totals = {
+            regHrs:0, otHrs:0, adjHrs:0, adjHours:0,
+            regPay:0, adjPay:0, otPay:0, adjAmt:0, grossPay:0,
+            totalDed:0, netPay:0
+          };
+
+          const rows = Array.isArray(snap.rows) ? snap.rows : [];
+          rows.forEach(row => {
+            const regHrsNum = toNum(row.regHrs);
+            const otHrsNum = toNum(row.otHrs);
+            const adjHrsNum = toNum(row.adjHrs);
+            const regPayNum = toNum(row.regPay);
+            const adjHoursNum = toNum(row.adjRegHrs ?? row.adjHours);
+            const adjPayNum = toNum(row.adjPay);
+            const otPayNum = toNum(row.otPay);
+            const adjAmtNum = toNum(row.adjAmt);
+            const grossNum = toNum(row.grossPay);
+            const totalDedNum = toNum(row.totalDed);
+            const netPayNum = toNum(row.netPay);
+
+            totals.regHrs += regHrsNum;
+            totals.otHrs += otHrsNum;
+            totals.adjHrs += adjHrsNum;
+            totals.regPay += regPayNum;
+            totals.adjHours += adjHoursNum;
+            totals.adjPay += adjPayNum;
+            totals.otPay += otPayNum;
+            totals.adjAmt += adjAmtNum;
+            totals.grossPay += grossNum;
+            totals.totalDed += totalDedNum;
+            totals.netPay += netPayNum;
+
+            aoa.push([
+              row.id || '',
+              row.name || '',
+              fmt(row.rate),
+              fmt(regHrsNum),
+              fmt(otHrsNum),
+              fmt(adjHrsNum),
+              fmt(regPayNum),
+              fmt(adjHoursNum),
+              fmt(adjPayNum),
+              fmt(adjAmtNum),
+              fmt(otPayNum),
+              fmt(grossNum),
+              fmt(totalDedNum),
+              fmt(netPayNum)
+            ]);
+          });
+
+          const storedTotals = (snap && snap.totals && typeof snap.totals === 'object') ? snap.totals : null;
+          if (storedTotals) {
+            const keyMap = {
+              regHrs: 'regHrs',
+              otHrs: 'otHrs',
+              adjHrs: 'adjHrs',
+              adjHours: 'adjHours',
+              regPay: 'regPay',
+              adjPay: 'adjPay',
+              otPay: 'otPay',
+              adjAmt: 'adjAmt',
+              grossPay: 'grossPay',
+              totalDed: 'totalDed',
+              netPay: 'netPay'
+            };
+            Object.keys(keyMap).forEach(destKey => {
+              const sourceKey = keyMap[destKey];
+              if (Object.prototype.hasOwnProperty.call(storedTotals, sourceKey)) {
+                const maybeNum = Number(storedTotals[sourceKey]);
+                if (!isNaN(maybeNum) && isFinite(maybeNum)) {
+                  totals[destKey] = maybeNum;
+                }
+              }
+            });
+          }
+
+          if (aoa.length > 3) {
+            aoa.push([
+              'Grand Total','',
+              '',
+              fmt(totals.regHrs),
+              fmt(totals.otHrs),
+              fmt(totals.adjHrs),
+              fmt(totals.regPay),
+              fmt(totals.adjHours),
+              fmt(totals.adjPay),
+              fmt(totals.adjAmt),
+              fmt(totals.otPay),
+              fmt(totals.grossPay),
+              fmt(totals.totalDed),
+              fmt(totals.netPay)
+            ]);
+          }
+
+          return aoa;
+        } catch (e) {
+          console.warn('buildPayrollAoA snapshot build failed', e);
+          return null;
+        }
+      }
+
+      function buildDomFallback(){
+        const aoa = [[title], [''], header.slice()];
+        src.querySelectorAll('tbody tr').forEach(tr => {
+          const id = (tr.cells[0]?.textContent || '').trim();
+          const name = (tr.cells[1]?.textContent || '').trim();
+          const rate = toNum(tr.querySelector('.rate')?.value);
+          const regHrs = toNum(tr.querySelector('.regHrs')?.value);
+          const otHrs = getOvertimeHoursTotal(id);
+          const adjHrs = getOvertimeAdjustmentHours(id);
+          const regPay = toNum(tr.querySelector('.regPay')?.textContent);
+          const adjHours = toNum(tr.querySelector('.adjHours')?.textContent);
+          const adjPay = toNum(tr.querySelector('.adjPay')?.textContent);
+          const otPay = toNum(tr.querySelector('.otPay')?.textContent);
+          const adjAmt = toNum(tr.querySelector('.adjAmt')?.textContent);
+          const gross = toNum(tr.querySelector('.grossPay')?.textContent);
+          const totalDed = toNum(tr.querySelector('.totalDed')?.textContent);
+          const net = toNum(tr.querySelector('.netPay')?.textContent);
+          aoa.push([
+            id,
+            name,
+            fmt(rate),
+            fmt(regHrs),
+            fmt(otHrs),
+            fmt(adjHrs),
+            fmt(regPay),
+            fmt(adjHours),
+            fmt(adjPay),
+            fmt(adjAmt),
+            fmt(otPay),
+            fmt(gross),
+            fmt(totalDed),
+            fmt(net)
+          ]);
+        });
+        return (aoa && aoa.length > 2) ? aoa : null;
+      }
+
+      const snapshotAoA = await buildFromSnapshot();
+      if (snapshotAoA && snapshotAoA.length > 2) return snapshotAoA;
+      return buildDomFallback();
+    }
+
+    function buildMasterReportAoA(){
+      try { if (typeof window.renderMasterReport === 'function') window.renderMasterReport(); } catch(e){}
+      const container = document.getElementById('masterReportContainer');
+      if (!container) return null;
+      const aoa = [];
+      const pushRow = (cells) => {
+        if (!cells) return;
+        aoa.push(cells.map(val => {
+          if (val == null) return '';
+          return String(val).trim();
+        }));
+      };
+
+      const title = container.querySelector('h2');
+      if (title) pushRow([title.textContent.trim()]);
+      const period = container.querySelector('.mr-period');
+      if (period) pushRow([period.textContent.trim()]);
+
+      let firstSection = true;
+      container.querySelectorAll('.mr-section').forEach(section => {
+        const heading = section.querySelector('h4');
+        const tables = Array.from(section.querySelectorAll('table'));
+        if (!heading && !tables.length) return;
+        if (!firstSection) pushRow(['']);
+        firstSection = false;
+        if (heading) pushRow([heading.textContent.trim()]);
+        tables.forEach((table, idx) => {
+          const before = aoa.length;
+          tableToAoA(table).forEach(row => pushRow(row));
+          if (idx !== tables.length - 1 && aoa.length > before) pushRow(['']);
+        });
+      });
+
+      while (aoa.length && aoa[aoa.length-1].every(cell => !String(cell || '').trim())) aoa.pop();
+      return (aoa && aoa.length) ? aoa : null;
+    }
+
+    // Export an Excel workbook with one sheet per project
+    function exportExcelAllSheets(){
+      try{
+        if (typeof XLSX === 'undefined' || !XLSX || !XLSX.utils) { alert('Excel library not available'); return; }
+        if (!__report) { if (typeof window.rebuildReports==='function') window.rebuildReports(); }
+        if (!__report) { alert('No report to export yet.'); return; }
+        const { data, dates, from, to } = __report;
+        const wb = XLSX.utils.book_new();
+        // Helper: build headers
+        const dayHeader = dates.map(d=>{
+          const lbl = d.toLocaleDateString(undefined,{day:'2-digit',month:'short',year:'numeric'});
+          return `RWH ${lbl}`;
+        });
+        const header = ['PERSONNEL','RATE'].concat(dayHeader, ['RWH HRS','GROSS']);
+        // Build one sheet per project
+        const projects = Object.keys(data).sort();
+        let gReg=0,gGross=0;
+        const gDayTotals = dates.map(()=>0);
+        const summaryRows = [['PROJECT'].concat(header)];
+        projects.forEach(proj=>{
+          const empMap = data[proj];
+          const rows = [header.slice()];
+          let pReg=0,pGross=0;
+          const dayTotals = dates.map(()=>0);
+          Object.keys(empMap).sort((a,b)=>{
+            const A = (empMap[a].name||a).toUpperCase();
+            const B = (empMap[b].name||b).toUpperCase();
+            return A.localeCompare(B);
+          }).forEach(empId=>{
+            const rec = empMap[empId];
+            const display = rec.name || empId;
+            const rate = getRate(empId, display);
+            let rReg=0;
+            const dayCells = [];
+            dates.forEach((d,i)=>{
+              const key = d.setHours(0,0,0,0);
+              const v = rec.days[key] || { rwh:0, oth:0 };
+              rReg += v.rwh;
+              dayTotals[i] += v.rwh;
+              dayCells.push(to2(v.rwh));
+            });
+            const gross = (rReg * rate);
+            pReg += rReg; pGross += gross;
+            rows.push([display, to2(rate)].concat(dayCells, [to2(rReg), to2(gross)]));
+            summaryRows.push([proj, display, to2(rate)].concat(dayCells, [to2(rReg), to2(gross)]));
+          });
+          // Allowance-only row from on-screen report logic
+          try{
+            const allow = (typeof bantay !== 'undefined' && bantay) ? Object.keys(bantay || {}).reduce((sum, empId) => {
+              const assigned = (bantayProj || {})[empId];
+              if (!assigned) return sum;
+              const matchesById   = (assigned === proj);
+              const matchesByName = ((typeof storedProjects !== 'undefined' && storedProjects && storedProjects[assigned]?.name) === proj);
+              const amt = parseFloat((bantay && bantay[empId]) || 0) || 0;
+              return (matchesById || matchesByName) ? (sum + amt) : sum;
+            }, 0) : 0;
+            if (allow && allow > 0){
+              const zeros = new Array(dates.length).fill('0.00');
+              rows.push(['Allowance',''].concat(zeros, ['0.00', to2(allow)]));
+              summaryRows.push([proj, 'Allowance',''].concat(zeros, ['0.00', to2(allow)]));
+              pGross += allow;
+            }
+          }catch(e){}
+          gReg += pReg; gGross += pGross;
+          dayTotals.forEach((dt,i)=>{ gDayTotals[i] += dt; });
+          const dayTotalsCells = dayTotals.map(dt=>to2(dt));
+          rows.push(['Project Total',''].concat(dayTotalsCells, [to2(pReg), to2(pGross)]));
+          summaryRows.push([proj,'Project Total',''].concat(dayTotalsCells,[to2(pReg), to2(pGross)]));
+          const ws = XLSX.utils.aoa_to_sheet(rows);
+          XLSX.utils.book_append_sheet(wb, ws, (proj || 'Project').toString().substring(0,31));
+        });
+        // Summary sheet with grand totals
+        const gDayTotalsCells = gDayTotals.map(dt=>to2(dt));
+        summaryRows.push(['','Grand Total',''].concat(gDayTotalsCells, [to2(gReg), to2(gGross)]));
+        const wsSummary = XLSX.utils.aoa_to_sheet(summaryRows);
+        XLSX.utils.book_append_sheet(wb, wsSummary, 'Summary');
+        const fname = `reports_all_${from}_to_${to}.xlsx`;
+        XLSX.writeFile(wb, fname);
+      }catch(e){ console.warn('Excel export failed', e); alert('Excel export failed.'); }
+    }
+
+    // Expose for external triggers (lock automation)
+    try { window.exportExcelAllSheets = exportExcelAllSheets; } catch(e){}
+
+    // Export a single workbook that includes sheets for DTR, Payroll, and the Master Report
+    async function exportExcelAllTabs(){
+      try{
+        if (typeof XLSX === 'undefined' || !XLSX || !XLSX.utils) { alert('Excel library not available'); return; }
+        if (typeof window.rebuildReports === 'function') window.rebuildReports();
+        const detailBundle = await waitForDetailedReportBundle();
+        if (!detailBundle){ alert('No report to export yet.'); return; }
+        const { from, to } = detailBundle;
+        const wb = XLSX.utils.book_new();
+
+        try {
+          const dtrAoA = buildDtrAoA();
+          if (dtrAoA && dtrAoA.length){
+            XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(dtrAoA), 'DTR');
+          }
+        } catch(e){ console.warn('Failed to build DTR sheet', e); }
+
+        try {
+          const payrollAoA = await buildPayrollAoA();
+          if (payrollAoA && payrollAoA.length){
+            XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(payrollAoA), 'Payroll');
+          }
+        } catch(e){ console.warn('Failed to build Payroll sheet', e); }
+
+        try {
+          const masterAoA = buildMasterReportAoA();
+          if (masterAoA && masterAoA.length){
+            XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(masterAoA), 'Master Report');
+          }
+        } catch(e){ console.warn('Failed to build Master Report sheet', e); }
+
+        if (!wb.SheetNames.length){
+          alert('Nothing to export.');
+          return;
+        }
+
+        const safeFrom = (from && String(from).trim()) || 'start';
+        const safeTo = (to && String(to).trim()) || 'end';
+        const fname = (from || to) ? `all_tabs_${safeFrom}_to_${safeTo}.xlsx` : 'all_tabs.xlsx';
+        XLSX.writeFile(wb, fname);
+      }catch(e){ console.warn('Excel export failed', e); alert('Excel export failed'); }
+    }
+
+    try { window.exportExcelAllTabs = exportExcelAllTabs; } catch(e){}
+
+    function collectPeriodBackupStorageEntries(options = {}){
+      const opts = (options && typeof options === 'object') ? options : {};
+      const includeParsed = !!opts.includeParsed;
+      const denyFragments = ['token', 'auth', 'apikey', 'key', 'supabase', 'secret'];
+
+      const isSafeStorageKey = (name) => {
+        const key = String(name || '').trim();
+        if (!key) return false;
+        const lowered = key.toLowerCase();
+        return !denyFragments.some(fragment => lowered.includes(fragment));
+      };
+
+      const keySet = new Set();
+      const addKey = (name) => {
+        const key = String(name || '').trim();
+        if (!key || !isSafeStorageKey(key)) return;
+        keySet.add(key);
+      };
+
+      const lsConstantValues = [
+        (typeof LS_EMPLOYEES !== 'undefined') ? LS_EMPLOYEES : null,
+        (typeof LS_PROJECTS !== 'undefined') ? LS_PROJECTS : null,
+        (typeof LS_SCHEDULES !== 'undefined') ? LS_SCHEDULES : null,
+        (typeof LS_SCHEDULES_DEFAULT !== 'undefined') ? LS_SCHEDULES_DEFAULT : null,
+        (typeof LS_RECORDS !== 'undefined') ? LS_RECORDS : null,
+        (typeof LS_OVERRIDES_SCHEDULES !== 'undefined') ? LS_OVERRIDES_SCHEDULES : null,
+        (typeof LS_OVERRIDES_PROJECTS !== 'undefined') ? LS_OVERRIDES_PROJECTS : null,
+        (typeof LS_DTR_OVERRIDES !== 'undefined') ? LS_DTR_OVERRIDES : null,
+        (typeof LS_SPLITS !== 'undefined') ? LS_SPLITS : null,
+        (typeof LS_RATES !== 'undefined') ? LS_RATES : null,
+        (typeof LS_REG_HRS !== 'undefined') ? LS_REG_HRS : null,
+        (typeof LS_OT_HRS !== 'undefined') ? LS_OT_HRS : null,
+        (typeof LS_OTMULT !== 'undefined') ? LS_OTMULT : null,
+        (typeof LS_DIVISOR !== 'undefined') ? LS_DIVISOR : null,
+        (typeof LS_SSS_TABLE !== 'undefined') ? LS_SSS_TABLE : null,
+        (typeof LS_LOAN_SSS !== 'undefined') ? LS_LOAN_SSS : null,
+        (typeof LS_LOAN_PI !== 'undefined') ? LS_LOAN_PI : null,
+        (typeof LS_VALE !== 'undefined') ? LS_VALE : null,
+        (typeof LS_VALE_WED !== 'undefined') ? LS_VALE_WED : null,
+        (typeof LS_LOAN_TRACKER !== 'undefined') ? LS_LOAN_TRACKER : null,
+        (typeof LS_OTHER_DEDUCTIONS_DETAILS !== 'undefined') ? LS_OTHER_DEDUCTIONS_DETAILS : null,
+        (typeof LS_OTHER_DEDUCTIONS_TOTAL !== 'undefined') ? LS_OTHER_DEDUCTIONS_TOTAL : null,
+        (typeof LS_ADJ_LEGACY !== 'undefined') ? LS_ADJ_LEGACY : null,
+        (typeof LS_ADJ_HRS !== 'undefined') ? LS_ADJ_HRS : null,
+        (typeof LS_PAGIBIG_RATE !== 'undefined') ? LS_PAGIBIG_RATE : null,
+        (typeof LS_PHILHEALTH_RATE !== 'undefined') ? LS_PHILHEALTH_RATE : null,
+        (typeof LS_PAGIBIG_TABLE !== 'undefined') ? LS_PAGIBIG_TABLE : null,
+        (typeof LS_PHILHEALTH_TABLE !== 'undefined') ? LS_PHILHEALTH_TABLE : null,
+        (typeof LS_BANTAY !== 'undefined') ? LS_BANTAY : null,
+        (typeof LS_BANTAY_PROJ !== 'undefined') ? LS_BANTAY_PROJ : null,
+        (typeof LS_ADDITIONAL_INCOME_DETAILS !== 'undefined') ? LS_ADDITIONAL_INCOME_DETAILS : null,
+        (typeof LS_ADDITIONAL_INCOME_TOTAL !== 'undefined') ? LS_ADDITIONAL_INCOME_TOTAL : null,
+        (typeof LS_INCOME_TYPE_OPTIONS !== 'undefined') ? LS_INCOME_TYPE_OPTIONS : null,
+        (typeof LS_DEDUCTION_TYPE_OPTIONS !== 'undefined') ? LS_DEDUCTION_TYPE_OPTIONS : null,
+        (typeof LS_CONTRIB_FLAGS !== 'undefined') ? LS_CONTRIB_FLAGS : null,
+        (typeof PAYROLL_SETTINGS_KEY !== 'undefined') ? PAYROLL_SETTINGS_KEY : null
+      ];
+      lsConstantValues.forEach(addKey);
+
+      [
+        'payroll_hist',
+        'payroll_lock_state',
+        'payroll_active_index',
+        'att_overrides_hours_v1',
+        'payroll_dtr_tombstones',
+        'payroll_dtr_last_saved_keys',
+        'dtr_overrides_v1'
+      ].forEach(addKey);
+
+      const knownKeys = (typeof KNOWN_KEYS !== 'undefined' && Array.isArray(KNOWN_KEYS))
+        ? KNOWN_KEYS
+        : ((typeof window !== 'undefined' && Array.isArray(window.KNOWN_KEYS)) ? window.KNOWN_KEYS : []);
+      knownKeys.forEach(addKey);
+
+      const prefixAllows = ['att_', 'payroll_'];
+      for (let i = 0; i < localStorage.length; i++){
+        const key = localStorage.key(i);
+        const lowered = String(key || '').toLowerCase();
+        if (prefixAllows.some(prefix => lowered.startsWith(prefix))) addKey(key);
+      }
+
+      return Array.from(keySet).sort().map(key => {
+        const entry = { key, value: localStorage.getItem(key) };
+        if (includeParsed){
+          try { entry.parsed = JSON.parse(entry.value); } catch(e){}
+        }
+        return entry;
+      });
+    }
+
+
+    function buildTableBackupAoA(tableId, options = {}){
+      const opts = (options && typeof options === 'object') ? options : {};
+      const dropHeaders = Array.isArray(opts.dropHeaders) ? opts.dropHeaders.map(v => String(v || '').trim().toLowerCase()) : [];
+      const table = document.getElementById(tableId);
+      if (!table) return null;
+      const clone = table.cloneNode(true);
+      clone.querySelectorAll('input, select, textarea').forEach(el => {
+        const td = el.closest('td');
+        if (!td) return;
+        let txt = '';
+        try {
+          if (el.tagName === 'SELECT') {
+            const idx = el.selectedIndex;
+            txt = (idx >= 0 && el.options && el.options[idx]) ? (el.options[idx].textContent || el.options[idx].innerText || el.options[idx].value || '') : (el.value || '');
+          } else if (el.type === 'checkbox') {
+            txt = el.checked ? 'Yes' : 'No';
+          } else {
+            txt = el.value || el.textContent || '';
+          }
+        } catch(e){}
+        td.textContent = String(txt || '').trim();
+      });
+      clone.querySelectorAll('button').forEach(btn => btn.remove());
+
+      if (dropHeaders.length) {
+        const dropIdx = [];
+        if (clone.tHead && clone.tHead.rows && clone.tHead.rows[0]) {
+          const head = clone.tHead.rows[0];
+          for (let i = 0; i < head.cells.length; i++) {
+            const txt = String(head.cells[i].textContent || '').trim().toLowerCase();
+            if (dropHeaders.includes(txt)) dropIdx.push(i);
+          }
+        }
+        if (dropIdx.length) {
+          const sorted = Array.from(new Set(dropIdx)).sort((a,b)=>b-a);
+          const removeCols = (tr) => {
+            if (!tr || !tr.cells) return;
+            sorted.forEach(idx => { try { if (idx >= 0 && idx < tr.cells.length) tr.deleteCell(idx); } catch(e){} });
+          };
+          if (clone.tHead) Array.from(clone.tHead.rows || []).forEach(removeCols);
+          Array.from(clone.tBodies || []).forEach(tb => Array.from(tb.rows || []).forEach(removeCols));
+          if (clone.tFoot) Array.from(clone.tFoot.rows || []).forEach(removeCols);
+        }
+      }
+
+      const aoa = tableToAoA(clone);
+      return (aoa && aoa.length) ? aoa : null;
+    }
+
+    function buildOvertimeAoA(){
+      try {
+        if (typeof buildOvertimeReportData === 'function') {
+          const report = buildOvertimeReportData();
+          const rows = (report && Array.isArray(report.rows)) ? report.rows : [];
+          if (!rows.length) return null;
+          const aoa = [['Employee ID','Employee Name','Hourly Rate','Total OT Hrs','ADJ OT Hrs','Overtime Hours Final','Overtime Pay']];
+          rows.forEach(row => {
+            aoa.push([
+              row && row.id != null ? row.id : '',
+              row && row.name != null ? row.name : '',
+              Number(row && row.rate || 0),
+              Number(row && row.total || 0),
+              Number(row && row.adj || 0),
+              Number(row && row.final || 0),
+              Number(row && row.pay || 0)
+            ]);
+          });
+          const totals = rows.reduce((acc, row) => {
+            acc.total = roundToCents(acc.total + (Number(row && row.total) || 0));
+            acc.adj = roundToCents(acc.adj + (Number(row && row.adj) || 0));
+            acc.final = roundToCents(acc.final + (Number(row && row.final) || 0));
+            acc.pay = roundToCents(acc.pay + (Number(row && row.pay) || 0));
+            return acc;
+          }, { total:0, adj:0, final:0, pay:0 });
+          aoa.push(['', 'Grand Total', '', totals.total, totals.adj, totals.final, totals.pay]);
+          return aoa;
+        }
+      } catch(e){ console.warn('buildOvertimeAoA failed', e); }
+      return buildTableBackupAoA('overtimeTable');
+    }
+
+    function buildDeductionsAoA(){
+      try {
+        if (typeof buildDeductionsReportData === 'function') {
+          const report = buildDeductionsReportData();
+          const columns = (report && Array.isArray(report.visibleColumns)) ? report.visibleColumns : [];
+          const rows = (report && Array.isArray(report.rows)) ? report.rows : [];
+          if (!columns.length || !rows.length) return null;
+          const labels = {
+            pagibig: 'Pag-IBIG', philhealth: 'PhilHealth', sss: 'SSS', loanSSS: 'SSS Loan',
+            loanPI: 'Pag-IBIG Loan', vale: 'Account', adjustments: 'Other Deductions', valeWed: 'Wed Vale', total: 'Total Deductions'
+          };
+          const aoa = [['Employee ID','Employee Name'].concat(columns.map(c => labels[c] || c))];
+          rows.forEach(row => {
+            const vals = columns.map(c => Number((row && row.values && row.values[c]) || 0));
+            aoa.push([row && row.id != null ? row.id : '', row && row.name != null ? row.name : ''].concat(vals));
+          });
+          const totals = columns.map(c => Number((report && report.totals && report.totals[c]) || 0));
+          aoa.push(['', 'Total'].concat(totals));
+          return aoa;
+        }
+      } catch(e){ console.warn('buildDeductionsAoA failed', e); }
+      return buildTableBackupAoA('deductionsTable', { dropHeaders: ['actions'] });
+    }
+
+    function buildAdditionalIncomeAoA(){
+      try {
+        if (typeof buildAdditionalIncomeReportData === 'function') {
+          const report = buildAdditionalIncomeReportData();
+          const labels = (report && Array.isArray(report.columnLabels)) ? report.columnLabels : [];
+          const rows = (report && Array.isArray(report.rows)) ? report.rows : [];
+          if (!labels.length && !rows.length) return null;
+          const aoa = [['ID','Employee'].concat(labels).concat(['Total'])];
+          rows.forEach(row => {
+            const vals = labels.map(label => Number((row && row.totals && row.totals[String(label || '').toLowerCase()]) || 0));
+            aoa.push([row && row.id != null ? row.id : '', row && row.name != null ? row.name : ''].concat(vals, [Number(row && row.total || 0)]));
+          });
+          const sums = labels.map(label => rows.reduce((sum, row) => roundToCents(sum + (Number((row && row.totals && row.totals[String(label || '').toLowerCase()]) || 0))), 0));
+          const grand = rows.reduce((sum, row) => roundToCents(sum + (Number(row && row.total || 0))), 0);
+          aoa.push(['','Grand Total'].concat(sums,[grand]));
+          return aoa;
+        }
+      } catch(e){ console.warn('buildAdditionalIncomeAoA failed', e); }
+      return buildTableBackupAoA('additionalIncomeTable', { dropHeaders: ['actions'] });
+    }
+
+    function buildOtherDeductionsAoA(){
+      return buildTableBackupAoA('otherDeductionsTable', { dropHeaders: ['actions'] });
+    }
+
+    function buildAdjustmentsAoA(){
+      return buildTableBackupAoA('adjustmentHoursTable');
+    }
+
+    async function buildPeriodBackupPack(from, to, options = {}){
+      const opts = (options && typeof options === 'object') ? options : {};
+      const rangeFrom = String(from || '').trim();
+      const rangeTo = String(to || '').trim();
+      const periodKeyValue = (typeof createPeriodKey === 'function')
+        ? createPeriodKey(rangeFrom, rangeTo)
+        : `${rangeFrom}_${rangeTo}`;
+      let dtrAoA = null;
+      let payrollAoA = null;
+      let masterAoA = null;
+      let overtimeAoA = null;
+      let deductionsAoA = null;
+      let additionalIncomeAoA = null;
+      let otherDeductionsAoA = null;
+      let adjustmentsAoA = null;
+      try { dtrAoA = buildDtrAoA(); } catch(e){ console.warn('buildPeriodBackupPack DTR failed', e); }
+      try { payrollAoA = await buildPayrollAoA(); } catch(e){ console.warn('buildPeriodBackupPack Payroll failed', e); }
+      try { masterAoA = buildMasterReportAoA(); } catch(e){ console.warn('buildPeriodBackupPack Master failed', e); }
+      try {
+        if (typeof buildOvertimeAoA === 'function') overtimeAoA = buildOvertimeAoA();
+      } catch(e){ console.warn('buildPeriodBackupPack Overtime failed', e); }
+      try { deductionsAoA = buildDeductionsAoA(); } catch(e){ console.warn('buildPeriodBackupPack Deductions failed', e); }
+      try { additionalIncomeAoA = buildAdditionalIncomeAoA(); } catch(e){ console.warn('buildPeriodBackupPack Additional Income failed', e); }
+      try { otherDeductionsAoA = buildOtherDeductionsAoA(); } catch(e){ console.warn('buildPeriodBackupPack Other Deductions failed', e); }
+      try { adjustmentsAoA = buildAdjustmentsAoA(); } catch(e){ console.warn('buildPeriodBackupPack Adjustments failed', e); }
+
+      return {
+        meta: {
+          generatedAt: new Date().toISOString(),
+          schemaVersion: 1
+        },
+        range: {
+          from: rangeFrom,
+          to: rangeTo,
+          periodKey: periodKeyValue
+        },
+        computed: {
+          dtrAoA: dtrAoA || [],
+          payrollAoA: payrollAoA || [],
+          masterReportAoA: masterAoA || [],
+          ...(overtimeAoA ? { overtimeAoA } : {}),
+          ...(deductionsAoA ? { deductionsAoA } : {}),
+          ...(additionalIncomeAoA ? { additionalIncomeAoA } : {}),
+          ...(otherDeductionsAoA ? { otherDeductionsAoA } : {}),
+          ...(adjustmentsAoA ? { adjustmentsAoA } : {})
+        },
+        storage: collectPeriodBackupStorageEntries(opts)
+      };
+    }
+
+    async function exportPeriodBackupXlsx(from, to, options = {}){
+      let ws;
+      let we;
+      let prevS = '';
+      let prevE = '';
+      let changed = false;
+      try{
+        if (typeof XLSX === 'undefined' || !XLSX || !XLSX.utils) { alert('Excel library not available'); return; }
+
+        ws = document.getElementById('weekStart');
+        we = document.getElementById('weekEnd');
+        prevS = ws && ws.value;
+        prevE = we && we.value;
+
+        const targetS = String(from || prevS || '').trim();
+        const targetE = String(to || prevE || '').trim();
+        if (!targetS || !targetE) {
+          alert('Please select a payroll period first.');
+          return;
+        }
+        changed = (targetS !== prevS) || (targetE !== prevE);
+
+        function recalcForActiveRange(){
+          try{ if (typeof syncPeriodScopedData === 'function') syncPeriodScopedData(); }catch(e){}
+          try{
+            if (typeof calculatePayrollFromResultsTable === 'function') {
+              calculatePayrollFromResultsTable();
+            } else if (typeof calculatePayrollFromRecords === 'function') {
+              calculatePayrollFromRecords();
+            }
+          }catch(e){}
+          try{ if (typeof checkAndToggleEditState === 'function') checkAndToggleEditState(); }catch(e){}
+          try{ if (typeof window.rebuildReports === 'function') window.rebuildReports(); }catch(e){}
+        }
+
+        if (ws) ws.value = targetS;
+        if (we) we.value = targetE;
+        recalcForActiveRange();
+
+        await new Promise(resolve => setTimeout(resolve, 300));
+
+        const pack = await buildPeriodBackupPack(targetS, targetE, options);
+
+        const wb = XLSX.utils.book_new();
+        const metaRows = [['field', 'value']];
+        Object.entries(pack.meta || {}).forEach(([field, value]) => {
+          metaRows.push([field, String(value == null ? '' : value)]);
+        });
+        Object.entries(pack.range || {}).forEach(([field, value]) => {
+          metaRows.push([`range.${field}`, String(value == null ? '' : value)]);
+        });
+        XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(metaRows), 'META');
+
+        if (pack.computed && Array.isArray(pack.computed.dtrAoA) && pack.computed.dtrAoA.length){
+          XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(pack.computed.dtrAoA), 'DTR');
+        }
+        if (pack.computed && Array.isArray(pack.computed.payrollAoA) && pack.computed.payrollAoA.length){
+          XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(pack.computed.payrollAoA), 'PAYROLL');
+        }
+        if (pack.computed && Array.isArray(pack.computed.masterReportAoA) && pack.computed.masterReportAoA.length){
+          XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(pack.computed.masterReportAoA), 'MASTER_REPORT');
+        }
+        if (pack.computed && Array.isArray(pack.computed.overtimeAoA) && pack.computed.overtimeAoA.length){
+          XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(pack.computed.overtimeAoA), 'OVERTIME');
+        }
+        if (pack.computed && Array.isArray(pack.computed.deductionsAoA) && pack.computed.deductionsAoA.length){
+          XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(pack.computed.deductionsAoA), 'DEDUCTIONS');
+        }
+        if (pack.computed && Array.isArray(pack.computed.additionalIncomeAoA) && pack.computed.additionalIncomeAoA.length){
+          XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(pack.computed.additionalIncomeAoA), 'ADDITIONAL_INCOME');
+        }
+        if (pack.computed && Array.isArray(pack.computed.otherDeductionsAoA) && pack.computed.otherDeductionsAoA.length){
+          XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(pack.computed.otherDeductionsAoA), 'OTHER_DEDUCTIONS');
+        }
+        if (pack.computed && Array.isArray(pack.computed.adjustmentsAoA) && pack.computed.adjustmentsAoA.length){
+          XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(pack.computed.adjustmentsAoA), 'ADJUSTMENTS');
+        }
+
+        const EXCEL_CELL_MAX = 32767;
+        const SAFE_CELL_CHUNK = 30000;
+        function splitForExcelCell(value){
+          const txt = String(value == null ? '' : value);
+          if (txt.length <= EXCEL_CELL_MAX) return [txt];
+          const chunks = [];
+          for (let i = 0; i < txt.length; i += SAFE_CELL_CHUNK){
+            chunks.push(txt.slice(i, i + SAFE_CELL_CHUNK));
+          }
+          return chunks;
+        }
+
+        const storageRows = [['key', 'value']];
+        (pack.storage || []).forEach(entry => {
+          const key = entry && entry.key != null ? String(entry.key) : '';
+          const chunks = splitForExcelCell(entry && entry.value != null ? String(entry.value) : '');
+          const total = chunks.length;
+          chunks.forEach((chunk, idx) => {
+            const chunkKey = total > 1 ? `${key} [part ${idx + 1}/${total}]` : key;
+            storageRows.push([chunkKey, chunk]);
+          });
+        });
+        XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(storageRows), 'STORAGE_KEYS');
+
+        const packJson = JSON.stringify(pack);
+        const jsonChunks = splitForExcelCell(packJson);
+        const jsonRows = [['chunk_index', 'chunk_count', 'json_chunk']];
+        const jsonTotal = jsonChunks.length;
+        jsonChunks.forEach((chunk, idx) => {
+          jsonRows.push([idx + 1, jsonTotal, chunk]);
+        });
+        XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(jsonRows), 'PACK_JSON');
+
+        const filename = `payroll_backup_${targetS}_to_${targetE}.xlsx`;
+        XLSX.writeFile(wb, filename);
+
+      }catch(e){
+        console.warn('Export period backup failed', e);
+        alert('Export period backup failed');
+      } finally {
+        if (ws) ws.value = prevS;
+        if (we) we.value = prevE;
+        if (changed) {
+          try{ if (typeof syncPeriodScopedData === 'function') syncPeriodScopedData(); }catch(e){}
+          try{
+            if (typeof calculatePayrollFromResultsTable === 'function') {
+              calculatePayrollFromResultsTable();
+            } else if (typeof calculatePayrollFromRecords === 'function') {
+              calculatePayrollFromRecords();
+            }
+          }catch(e){}
+          try{ if (typeof checkAndToggleEditState === 'function') checkAndToggleEditState(); }catch(e){}
+          try{ if (typeof window.rebuildReports === 'function') window.rebuildReports(); }catch(e){}
+        } else {
+          try{ if (typeof checkAndToggleEditState === 'function') checkAndToggleEditState(); }catch(e){}
+          try{ if (typeof window.rebuildReports === 'function') window.rebuildReports(); }catch(e){}
+        }
+      }
+    }
+
+    try { window.buildPeriodBackupPack = buildPeriodBackupPack; } catch(e){}
+    try { window.exportPeriodBackupXlsx = exportPeriodBackupXlsx; } catch(e){}
+
+    try {
+      var backupBtn = document.getElementById('payrollBackupXlsxBtn');
+      if (backupBtn && !backupBtn.__periodBackupBound) {
+        backupBtn.addEventListener('click', async function(ev){
+          ev.preventDefault();
+          const from = (document.getElementById('weekStart') || {}).value || '';
+          const to = (document.getElementById('weekEnd') || {}).value || '';
+          await exportPeriodBackupXlsx(from, to);
+        });
+        backupBtn.__periodBackupBound = true;
+      }
+    } catch(e){}
+
+    // Bind UI button for Excel (All Tabs)
+    try {
+      var xBtn = document.getElementById('r_xlsx');
+      if (xBtn && !xBtn.__xlsxBound){ xBtn.addEventListener('click', async function(ev){ ev.preventDefault(); try { await exportExcelAllTabs(); } catch(e){ console.warn('Excel (All Tabs) export failed', e); } }); xBtn.__xlsxBound = true; }
+    } catch(e){}
+
+    // Export for a specific date range (used by Payroll History actions)
+    async function exportExcelAllTabsForRange(from, to, opts = {}){
+      try{
+        const ws = document.getElementById('weekStart');
+        const we = document.getElementById('weekEnd');
+        const prevS = ws && ws.value;
+        const prevE = we && we.value;
+        const targetS = from || prevS;
+        const targetE = to || prevE;
+        const changed = (targetS !== prevS) || (targetE !== prevE);
+        const options = (opts && typeof opts === 'object') ? opts : {};
+        const snapshotOverride = (options.snapshot && typeof options.snapshot === 'object') ? options.snapshot : null;
+        let overrideVal = Number(options.divisorOverride);
+        let hasOverride = !isNaN(overrideVal) && isFinite(overrideVal) && overrideVal > 0;
+        if (!hasOverride && snapshotOverride && typeof snapshotOverride.divisor !== 'undefined') {
+          const snapDivisor = Number(snapshotOverride.divisor);
+          if (!isNaN(snapDivisor) && isFinite(snapDivisor) && snapDivisor > 0) {
+            overrideVal = snapDivisor;
+            hasOverride = true;
+          }
+        }
+
+        function recalcForActiveRange(){
+          try{ if (typeof syncPeriodScopedData === 'function') syncPeriodScopedData(); }catch(e){}
+          try{
+            if (typeof calculatePayrollFromResultsTable === 'function') {
+              calculatePayrollFromResultsTable();
+            } else if (typeof calculatePayrollFromRecords === 'function') {
+              calculatePayrollFromRecords();
+            }
+          }catch(e){}
+          try{ if (typeof checkAndToggleEditState === 'function') checkAndToggleEditState(); }catch(e){}
+          try{ if (typeof window.rebuildReports === 'function') window.rebuildReports(); }catch(e){}
+        }
+
+        if (ws) ws.value = targetS;
+        if (we) we.value = targetE;
+
+        recalcForActiveRange();
+
+        setTimeout(async function(){
+          let appliedOverride = false;
+          let appliedSnapshot = false;
+          try{
+            if (snapshotOverride && typeof window !== 'undefined') {
+              window.__snapshotPayrollOverride = snapshotOverride;
+              appliedSnapshot = true;
+            }
+            if (hasOverride && typeof window !== 'undefined') {
+              window.__snapshotDivisorOverride = overrideVal;
+              appliedOverride = true;
+            }
+            await exportExcelAllTabs();
+          } catch(err){
+            console.warn('Export (all tabs) for range failed', err);
+          } finally {
+            if (appliedSnapshot && typeof window !== 'undefined') {
+              try { delete window.__snapshotPayrollOverride; }
+              catch(e){ window.__snapshotPayrollOverride = undefined; }
+            }
+            if (appliedOverride && typeof window !== 'undefined') {
+              try { delete window.__snapshotDivisorOverride; }
+              catch(e){ window.__snapshotDivisorOverride = undefined; }
+            }
+            if (ws) ws.value = prevS;
+            if (we) we.value = prevE;
+            if (changed) {
+              recalcForActiveRange();
+            } else {
+              try{ if (typeof checkAndToggleEditState === 'function') checkAndToggleEditState(); }catch(e){}
+              try{ if (typeof window.rebuildReports === 'function') window.rebuildReports(); }catch(e){}
+            }
+          }
+        }, 300);
+      }catch(e){ console.warn('Export for range failed', e); }
+    }
+    try { window.exportExcelAllTabsForRange = exportExcelAllTabsForRange; } catch(e){}
+
+    function exportCSVPerProject(){
+      if (!__report){ alert('No report to export yet.'); return; }
+      const { data, dates, from, to } = __report;
+
+      const dayHeader = dates.map(d=>{
+        const lbl = d.toLocaleDateString(undefined,{day:'2-digit',month:'short',year:'numeric'});
+        return `RWH ${lbl}`;
+      });
+      const header = ['PERSONNEL','RATE'].concat(dayHeader, ['RWH HRS','GROSS']);
+
+      const projects = Object.keys(data).sort();
+      projects.forEach(proj=>{
+        const empMap = data[proj];
+        const rows = [header];
+        let pReg=0,pGross=0;
+
+        Object.keys(empMap).sort((a,b)=>{
+          const A = (empMap[a].name||a).toUpperCase();
+          const B = (empMap[b].name||b).toUpperCase();
+          return A.localeCompare(B);
+        }).forEach(empId=>{
+          const rec = empMap[empId];
+          const display = rec.name || empId;
+          const rate = getRate(empId, display);
+
+          let rReg=0;
+          const dayCells = [];
+          dates.forEach(d=>{
+            const key = d.setHours(0,0,0,0);
+            const v = rec.days[key] || { rwh:0, oth:0 };
+            rReg += v.rwh;
+            dayCells.push(to2(v.rwh));
+          });
+
+          const gross = (rReg * rate);
+          pReg += rReg; pGross += gross;
+
+          rows.push([display, to2(rate)].concat(dayCells, [to2(rReg), to2(gross)]));
+        });
+
+        rows.push(['Project Total', ''].concat(
+          new Array(dates.length).fill(''),
+          [to2(pReg), to2(pGross)]
+        ));
+
+        const csv = rows.map(r=>r.map(csvEscape).join(',')).join('\n');
+        const a=document.createElement('a');
+        const safeProj = proj.replace(/[^a-z0-9_\-]+/gi,'_');
+        a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'}));
+        a.download=`report_${safeProj}_${from}_to_${to}.csv`;
+        a.click(); URL.revokeObjectURL(a.href);
+      });
+    }
+
+  // Use the clean per-project print handler defined later; avoid double-binding here.
+  // $('#r_print')?.addEventListener('click', ()=> safePrint());
+    // Subtab wiring for Detailed/Master
+    (function(){
+      const btns = Array.from(document.querySelectorAll('#panelProjectTotals .subtab-btn'));
+      function show(id){
+        btns.forEach(b=>b.classList.remove('active'));
+        document.querySelectorAll('#panelProjectTotals .subtab-panel').forEach(p=>p.classList.remove('active'));
+        const target = document.getElementById(id);
+        if (target) target.classList.add('active');
+        const activator = document.querySelector(`#panelProjectTotals .subtab-btn[data-subtab="${id}"]`);
+        if (activator) activator.classList.add('active');
+        if (id === 'masterReportTab') { try{ renderMasterReport(); }catch(e){} }
+      }
+      btns.forEach(b=>{ if (b._wired) return; b._wired = true; b.addEventListener('click', ()=> show(b.getAttribute('data-subtab'))); });
+    })();
+
+    $('#r_csv')?.addEventListener('click', exportCSVDetailed);
+    const dtr = document.getElementById('resultsTable');
+    if (dtr && 'MutationObserver' in window){
+      const mo = new MutationObserver(()=> { buildTables(); try{ renderMasterReport(); }catch(e){} });
+      mo.observe(dtr, { childList:true, subtree:true });
+    }
+    // Expose a global rebuild hook so other tabs (e.g., Payroll bantay edits)
+    // can refresh the report without a full page reload.
+    try { window.rebuildReports = function(){ try{ buildTables(); }catch(e){} try{ renderMasterReport(); }catch(e){} }; } catch(e){}
+    if (document.readyState === 'loading'){
+      document.addEventListener('DOMContentLoaded', function(){ buildTables(); try{ renderMasterReport(); }catch(e){} }, { once:true });
+    } else { buildTables(); try{ renderMasterReport(); }catch(e){} }
+  })();
+  
+
+
+(function(){
+  // Utilities
+  function num(v){ const n=parseFloat(String(v||'').replace(/,/g,'')); return isNaN(n)?0:n; }
+  function f2(n){ const x=Number(n)||0; return x.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2}); }
+  function safe(val){ return String(val==null?'':val); }
+
+  const CONTRIBUTION_FIELDS = ['piEE','piER','phEE','phER','sssEE','sssER','loanSSS','loanPI'];
+  const makeContributionBucket = () => ({ piEE:0, piER:0, phEE:0, phER:0, sssEE:0, sssER:0, loanSSS:0, loanPI:0 });
+  const renderContributionTable = (bucket, opts = {}) => {
+    const data = bucket || makeContributionBucket();
+    const rowClassAttr = opts.rowClass ? ` class="${opts.rowClass}"` : '';
+    const cellStyleAttr = opts.bold ? ' style="font-weight:600;"' : '';
+    const cell = (value) => `<td${cellStyleAttr}>${f2(value)}</td>`;
+    const toNum = (v) => Number(v || 0);
+    if (opts.combineEEER) {
+      const piTotal = toNum(data.piEE) + toNum(data.piER);
+      const phTotal = toNum(data.phEE) + toNum(data.phER);
+      const sssTotal = toNum(data.sssEE) + toNum(data.sssER);
+      return '<table class="mr-table mr-contrib-table"><thead>'+
+        '<tr><th>PAG-IBIG</th><th>PHILHEALTH</th><th>SSS</th><th>SSS LOAN</th><th>PAG-IBIG LOAN</th></tr>'+
+        `</thead><tbody><tr${rowClassAttr}>${cell(piTotal)}${cell(phTotal)}${cell(sssTotal)}${cell(data.loanSSS)}${cell(data.loanPI)}</tr></tbody></table>`;
+    }
+    return '<table class="mr-table mr-contrib-table"><thead>'+
+      '<tr><th colspan="2">PAG-IBIG</th><th colspan="2">PHILHEALTH</th><th colspan="2">SSS</th><th rowspan="2">SSS LOAN</th><th rowspan="2">PAG-IBIG LOAN</th></tr>'+
+      '<tr><th>EE</th><th>ER</th><th>EE</th><th>ER</th><th>EE</th><th>ER</th></tr>'+
+      `</thead><tbody><tr${rowClassAttr}>${cell(data.piEE)}${cell(data.piER)}${cell(data.phEE)}${cell(data.phER)}${cell(data.sssEE)}${cell(data.sssER)}${cell(data.loanSSS)}${cell(data.loanPI)}</tr></tbody></table>`;
+  };
+
+  const renderSitePayrollTable = (orderedCompanies, totalsByCompany, opts = {}) => {
+    const bucketFactory = (typeof opts.makeBucket === 'function') ? opts.makeBucket : makeContributionBucket;
+    const safeFn = (typeof opts.safe === 'function') ? opts.safe : safe;
+    const companies = Array.isArray(orderedCompanies) ? orderedCompanies : [];
+    const groups = [
+      { label: 'PAG-IBIG', keys: ['piEE', 'piER'] },
+      { label: 'PHILHEALTH', keys: ['phEE', 'phER'] },
+      { label: 'SSS', keys: ['sssEE', 'sssER'] }
+    ];
+    const singles = [
+      { label: 'SSS LOAN', key: 'loanSSS' },
+      { label: 'PAG-IBIG LOAN', key: 'loanPI' }
+    ];
+
+    const ensureBucket = (name) => {
+      const label = (typeof name === 'string' && name.trim().length) ? name.trim() : 'Unassigned';
+      if (totalsByCompany && totalsByCompany[label]) return totalsByCompany[label];
+      return bucketFactory();
+    };
+
+    const totals = bucketFactory();
+    const rows = [];
+
+    companies.forEach(companyName => {
+      const bucket = ensureBucket(companyName);
+      const rowCells = [`<th scope="row" class="mr-site-label">${safeFn(companyName)}</th>`];
+      groups.forEach(group => {
+        group.keys.forEach((key, idx) => {
+          const value = Number(bucket && bucket[key] != null ? bucket[key] : 0);
+          totals[key] += value;
+          rowCells.push(`<td>${f2(value)}</td>`);
+        });
+      });
+      singles.forEach(single => {
+        const value = Number(bucket && bucket[single.key] != null ? bucket[single.key] : 0);
+        totals[single.key] += value;
+        rowCells.push(`<td>${f2(value)}</td>`);
+      });
+      rows.push(`<tr>${rowCells.join('')}</tr>`);
+    });
+
+    const totalRow = () => {
+      if (!companies.length) return '';
+      const cells = [`<th scope="row" class="mr-site-label">TOTAL</th>`];
+      groups.forEach(group => {
+        group.keys.forEach(key => {
+          const value = Number(totals && totals[key] != null ? totals[key] : 0);
+          cells.push(`<td>${f2(value)}</td>`);
+        });
+      });
+      singles.forEach(single => {
+        const value = Number(totals && totals[single.key] != null ? totals[single.key] : 0);
+        cells.push(`<td>${f2(value)}</td>`);
+      });
+      return `<tr class="mr-site-total">${cells.join('')}</tr>`;
+    };
+
+    const headerTop = [
+      '<tr>',
+      '<th rowspan="2" class="mr-site-label">SITE PAYROLL</th>',
+      ...groups.map(group => `<th colspan="${group.keys.length}">${group.label}</th>`),
+      singles.map(single => `<th rowspan="2">${single.label}</th>`).join(''),
+      '</tr>'
+    ].join('');
+
+    const headerBottom = [
+      '<tr>',
+      groups.map(group => group.keys.map((_, idx) => `<th>${idx === 0 ? 'EE' : 'ER'}</th>`).join('')).join(''),
+      '</tr>'
+    ].join('');
+
+    const body = rows.length
+      ? rows.join('')
+      : `<tr><td class="mr-site-label" colspan="${1 + groups.reduce((sum, group) => sum + group.keys.length, 0) + singles.length}">No site payroll data available.</td></tr>`;
+
+    const foot = totalRow();
+
+    return [
+      '<table class="mr-table mr-contrib-table mr-site-payroll">',
+      `<thead>${headerTop}${headerBottom}</thead>`,
+      `<tbody>${body}</tbody>`,
+      foot ? `<tfoot>${foot}</tfoot>` : '',
+      '</table>'
+    ].join('');
+  };
+
+  function getPayrollRange(){
+    try{
+      const ws = document.getElementById('weekStart')?.value || '';
+      const we = document.getElementById('weekEnd')?.value || '';
+      if (ws || we) return [ws, we];
+    }catch(e){}
+    return ['', ''];
+  }
+
+  function formatDateLong(value){
+    if (!value) return '';
+    try{
+      const dt = new Date(value);
+      if (!(dt instanceof Date) || isNaN(dt.getTime())) return String(value || '');
+      return dt.toLocaleDateString(undefined,{ year:'numeric', month:'long', day:'numeric' });
+    }catch(e){
+      return String(value || '');
+    }
+  }
+
+  function formatPayrollPeriodLabel(start, end){
+    const startLabel = formatDateLong(start);
+    const endLabel = formatDateLong(end);
+    if (startLabel && endLabel){
+      return (startLabel === endLabel) ? startLabel : `${startLabel} – ${endLabel}`;
+    }
+    return startLabel || endLabel || '';
+  }
+
+  // Compute contribution totals across employees for the active period
+  function computeContributionTotals(){
+    try{ if (typeof syncPeriodScopedData==='function') syncPeriodScopedData(); }catch(e){}
+    const hasCompanyOptions = (typeof COMPANY_OPTIONS !== 'undefined') && Array.isArray(COMPANY_OPTIONS);
+    const defaults = hasCompanyOptions
+      ? COMPANY_OPTIONS.filter(name => typeof name === 'string' && name.trim().length)
+      : ['Edifice','Portafolio'];
+    const makeBucket = makeContributionBucket;
+    const sums = {};
+    const ensureBucket = (companyName) => {
+      const label = (typeof companyName === 'string' && companyName.trim().length) ? companyName.trim() : 'Unassigned';
+      if (!sums[label]) sums[label] = makeBucket();
+      return sums[label];
+    };
+    const seeds = defaults.length ? defaults : ['Edifice','Portafolio'];
+    seeds.forEach(name => ensureBucket(name));
+    try{
+      const list = (typeof getEmployeeList()!=='undefined' && getEmployeeList()) ? getEmployeeList() : [];
+      const rates = (typeof payrollRates!=='undefined' && payrollRates) ? payrollRates : {};
+      const se = (typeof storedEmployees!=='undefined' && storedEmployees) ? storedEmployees : {};
+      const rHours = (typeof regHours!=='undefined' && regHours) ? regHours : {};
+      const flagsAll = (typeof contribFlags!=='undefined' && contribFlags) ? contribFlags : {};
+      const div = Number(typeof divisor!=='undefined' ? divisor : 1) || 1;
+      const lSSS = (typeof loanSSS!=='undefined' && loanSSS) ? loanSSS : {};
+      const lPI  = (typeof loanPI!=='undefined'  && loanPI ) ? loanPI  : {};
+      const includePagibig = isDeductionColumnIncluded('pagibig');
+      const includePhilhealth = isDeductionColumnIncluded('philhealth');
+      const includeSSS = isDeductionColumnIncluded('sss');
+      const includeLoanSSS = isDeductionColumnIncluded('loanSSS');
+      const includeLoanPI = isDeductionColumnIncluded('loanPI');
+      list.forEach(emp=>{
+        const id = emp.id;
+        const rH = num(rHours[id]);
+        const oH = (typeof otHours !== 'undefined' && otHours) ? num(otHours[id]) : 0;
+        const adjTotals = getAdjustmentTotalsForEmployee(id);
+        const adjH = Math.abs(adjTotals.reg) + Math.abs(adjTotals.ot);
+        const totalHours = rH + oH + adjH;
+        if (totalHours <= 0) return;
+        const bucket = ensureBucket(se?.[id]?.company);
+        const rate = num(se?.[id]?.hourlyRate ?? rates?.[id]);
+        const regPay = +(rH * rate).toFixed(2);
+        const monthly = rate * 8 * 24;
+        const piRate = (typeof pagibigRateByMonthly==='function') ? pagibigRateByMonthly(monthly) : 0;
+        const phRate = (typeof philhealthRateByMonthly==='function') ? philhealthRateByMonthly(monthly) : 0;
+        const sssFull = (typeof sssShareByMonthly==='function') ? sssShareByMonthly(monthly) : 0;
+        const sssEmployerFull = (typeof sssEmployerShareByMonthly==='function') ? sssEmployerShareByMonthly(monthly) : sssFull;
+        const flags = flagsAll[id] || {};
+        const pi = (!includePagibig || flags.pagibig===false) ? 0 : +(regPay * piRate).toFixed(2);
+        const ph = (!includePhilhealth || flags.philhealth===false) ? 0 : +(regPay * phRate).toFixed(2);
+        const sssEE = (!includeSSS || flags.sss===false) ? 0 : +(sssFull/div).toFixed(2);
+        const sssER = (!includeSSS || flags.sss===false) ? 0 : +(sssEmployerFull/div).toFixed(2);
+        const loanSssVal = includeLoanSSS ? +(num(lSSS[id]) / div).toFixed(2) : 0;
+        const loanPiVal  = includeLoanPI  ? +(num(lPI[id])  / div).toFixed(2) : 0;
+        bucket.piEE += pi; bucket.piER += pi;
+        bucket.phEE += ph; bucket.phER += ph;
+        bucket.sssEE += sssEE; bucket.sssER += sssER;
+        bucket.loanSSS += loanSssVal;
+        bucket.loanPI  += loanPiVal;
+      });
+    }catch(e){}
+    return sums;
+  }
+
+  function resolveProjectDetails(projectIdHint, projectLabel){
+    const sp = (typeof storedProjects !== 'undefined' && storedProjects) ? storedProjects : {};
+    const clean = (val) => {
+      if (val == null) return '';
+      return String(val).trim();
+    };
+    const id = clean(projectIdHint);
+    const label = clean(projectLabel);
+    const fallbackName = label || id;
+
+    if (id && sp[id]){
+      const rec = sp[id] || {};
+      return {
+        id,
+        name: clean(rec.name) || fallbackName,
+        company: clean(rec.company)
+      };
+    }
+
+    if (label && sp[label]){
+      const rec = sp[label] || {};
+      return {
+        id: label,
+        name: clean(rec.name) || fallbackName,
+        company: clean(rec.company)
+      };
+    }
+
+    const lowerLabel = label.toLowerCase();
+    if (lowerLabel){
+      for (const [pid, proj] of Object.entries(sp)){
+        const projName = clean(proj && proj.name);
+        if (projName && projName.toLowerCase() === lowerLabel){
+          return {
+            id: clean(pid),
+            name: projName,
+            company: clean(proj && proj.company)
+          };
+        }
+      }
+    }
+
+    const lowerId = id.toLowerCase();
+    if (lowerId){
+      for (const [pid, proj] of Object.entries(sp)){
+        const projName = clean(proj && proj.name);
+        if (projName && projName.toLowerCase() === lowerId){
+          return {
+            id: clean(pid),
+            name: projName,
+            company: clean(proj && proj.company)
+          };
+        }
+      }
+    }
+
+    return {
+      id,
+      name: fallbackName,
+      company: ''
+    };
+  }
+
+  // Read per-project totals by copying values from the Detailed reports table
+  function computeProjectTotalsFromDetailed(){
+    const rows = [];
+    try{
+      const detailMap = {};
+      const ensure = (name, meta) => {
+        const key = String(name || '').trim().toLowerCase();
+        if (!key) return null;
+        if (!detailMap[key]) {
+          detailMap[key] = {
+            name: name,
+            company: meta?.company || '',
+            regHrs: 0,
+            otHrs: 0,
+            regTotal: 0,
+            otTotal: 0,
+            adjPay: 0
+          };
+        } else if (meta?.company && !detailMap[key].company) {
+          detailMap[key].company = meta.company;
+        }
+        return detailMap[key];
+      };
+
+      const harvestTable = (tableId, mode) => {
+        const tbl = document.getElementById(tableId);
+        if (!tbl) return;
+        const blocks = Array.from(tbl.querySelectorAll('tbody.proj-page'));
+        blocks.forEach(tb => {
+          const rawName = (tb.querySelector('.proj-break td')?.textContent || '').trim();
+          let tot = tb.querySelector('tr.totals:last-child');
+          if (!tot) {
+            const trs = Array.from(tb.querySelectorAll('tr'));
+            tot = trs.reverse().find(tr => (tr.cells[0]?.textContent||'').trim().toLowerCase() === 'project total');
+          }
+          if (!tot) return;
+          const cells = tot.querySelectorAll('td');
+          if (!cells || cells.length < 2) return;
+          let regHrs = 0;
+          let otHrs = 0;
+          let regGross = 0;
+          let otGross = 0;
+          let adjPay = 0;
+
+          // Preferred path: the Detailed report's project-total row exposes
+          // dedicated REG/OT hour and gross columns in this order:
+          // [.., RWH HRS, OT HRS, ADJ HRS, RWH GROSS, OT GROSS, ADJ GROSS, TOTAL GROSS].
+          // Read the exact RWH/OT columns so master-report REGULAR PAY mirrors
+          // payroll-tab regular pay and does not drift when ADJ columns exist.
+          if (tableId === 'r_table' && cells.length >= 7) {
+            regHrs = num(cells[cells.length - 7].textContent);
+            otHrs = num(cells[cells.length - 6].textContent);
+            regGross = num(cells[cells.length - 4].textContent);
+            otGross = num(cells[cells.length - 3].textContent);
+
+          } else {
+            // Fallback for legacy table layouts.
+            const gross = num(cells[cells.length - 1].textContent);
+            const hrs = num(cells[cells.length - 2].textContent);
+            if (mode === 'ot') {
+              otHrs = hrs;
+              otGross = gross;
+            } else {
+              regHrs = hrs;
+              regGross = gross;
+            }
+          }
+
+          const meta = resolveProjectDetails('', rawName);
+          const displayName = meta.name || rawName;
+          const bucket = ensure(displayName, meta);
+          if (!bucket) return;
+          bucket.regHrs += regHrs;
+          bucket.otHrs += otHrs;
+          bucket.regTotal += regGross;
+          bucket.otTotal += otGross;
+          bucket.adjPay += adjPay;
+        });
+      };
+
+      harvestTable('r_table', 'reg');
+      harvestTable('r_ot_table', 'ot');
+
+      Object.values(detailMap).forEach(entry => {
+        const regHrs = Number(entry.regHrs) || 0;
+        const otHrs = Number(entry.otHrs) || 0;
+        const regTotal = Number(entry.regTotal) || 0;
+        const otTotal = Number(entry.otTotal) || 0;
+        const adjPay = Number(entry.adjPay) || 0;
+        rows.push({
+          name: entry.name,
+          company: entry.company || '',
+          regHrs,
+          otHrs,
+          regTotal,
+          otTotal,
+          adjPay,
+          totalHrs: regHrs + otHrs,
+          total: regTotal + otTotal + adjPay
+        });
+      });
+
+      rows.sort((a,b)=>{
+        const aComp = (a.company || '').localeCompare(b.company || '');
+        if (aComp) return aComp;
+        return (a.name || '').localeCompare(b.name || '');
+      });
+    }catch(e){}
+    return rows;
+  }
+
+  // Fallback: compute from DTR if detailed table isn’t available
+  function computeProjectTotalsFromDTR(){
+    const rows = [];
+    try{
+      const projMap = {};
+      const trs = Array.from(document.querySelectorAll('#resultsTable tbody tr'));
+      trs.forEach(tr=>{
+        const id = (tr.cells[0]?.textContent||'').trim();
+        const name = (tr.cells[1]?.textContent||'').trim();
+        const cell = tr.cells[2];
+        let proj = '';
+        let projIdHint = '';
+        try{
+          const sel = cell?.querySelector('select');
+          if (sel){
+            const opt = sel.options[sel.selectedIndex];
+            proj = (opt && (opt.textContent||opt.label)) || sel.value || '';
+            projIdHint = sel.value || sel.getAttribute('data-project-id') || '';
+            if (!proj) {
+              proj = cell?.dataset?.projectName || cell?.dataset?.project || '';
+            }
+          }
+          else {
+            proj = cell?.dataset?.projectName || cell?.dataset?.project || (cell?.textContent||'');
+            projIdHint = cell?.dataset?.projectId || cell?.dataset?.project || '';
+          }
+        }catch(_){
+          proj = (cell?.textContent||'');
+          projIdHint = cell?.dataset?.projectId || cell?.dataset?.project || '';
+        }
+        proj = String(proj||'').trim();
+        projIdHint = String(projIdHint||'').trim();
+        if (!proj && projIdHint) proj = projIdHint;
+        const rwh = num(tr.cells[11]?.textContent) || num(tr.querySelector('.regHrs')?.value);
+        const oth = num(tr.cells[12]?.textContent) || num(tr.querySelector('.otHrs')?.value);
+        const adjPay = num(tr.querySelector('.adjPay')?.textContent) || num(tr.cells[15]?.textContent);
+        if (!proj) return;
+        const meta = resolveProjectDetails(projIdHint, proj);
+        const rec = (projMap[proj] = projMap[proj] || { emp:{}, meta:null });
+        if (!rec.meta){
+          rec.meta = { ...meta };
+        } else {
+          if (meta.company && !rec.meta.company) rec.meta.company = meta.company;
+          if (meta.id && !rec.meta.id) rec.meta.id = meta.id;
+          if (meta.name && (!rec.meta.name || rec.meta.name === proj || rec.meta.name === rec.meta.id)) rec.meta.name = meta.name;
+        }
+        const er = (rec.emp[id] = rec.emp[id] || { name, rwh:0, oth:0, adjPay:0 });
+        er.rwh += rwh; er.oth += oth; er.adjPay += adjPay;
+      });
+      const otMult = getOvertimeMultiplier();
+      const rates = (typeof payrollRates!=='undefined' && payrollRates) ? payrollRates : {};
+      const se = (typeof storedEmployees!=='undefined' && storedEmployees) ? storedEmployees : {};
+      Object.keys(projMap).forEach(p=>{
+        const rec = projMap[p]; let regHrs=0, otHrs=0, regTotal=0, otTotal=0, adjPay=0;
+        Object.keys(rec.emp).forEach(id=>{
+          const e = rec.emp[id];
+          const rate = num(se?.[id]?.hourlyRate ?? rates?.[id]);
+          regHrs += e.rwh;
+          otHrs += e.oth;
+          regTotal += (e.rwh * rate);
+          otTotal += (e.oth * rate * otMult);
+          adjPay += (Number(e.adjPay) || 0);
+        });
+        try{
+          const allow = Object.keys((window.bantay||{})).reduce((sum, empId)=>{
+            const assigned = (window.bantayProj||{})[empId]; if(!assigned) return sum;
+            const sp = (typeof storedProjects!=='undefined' && storedProjects) ? storedProjects : {};
+            const matchesById = (assigned === p);
+            const matchesByName = (sp[assigned]?.name === p);
+            const amt = num((window.bantay||{})[empId]);
+            return (matchesById || matchesByName) ? (sum + amt) : sum;
+          }, 0);
+          regTotal += allow;
+        }catch(_){ }
+        const meta = rec.meta || resolveProjectDetails('', p);
+        const displayName = meta.name || p;
+        const company = meta.company || '';
+        const gross = regTotal + otTotal + adjPay;
+        rows.push({
+          name: displayName,
+          company,
+          regHrs: regHrs,
+          otHrs: otHrs,
+          regTotal: regTotal,
+          otTotal: otTotal,
+          adjPay: adjPay,
+          totalHrs: regHrs + otHrs,
+          total: gross
+        });
+      });
+      rows.sort((a,b)=>{
+        const aComp = (a.company || '').localeCompare(b.company || '');
+        if (aComp) return aComp;
+        return (a.name || '').localeCompare(b.name || '');
+      });
+    }catch(e){}
+    return rows;
+  }
+
+  function computeEmployeeProjectLookup(){
+    const byEmployee = {};
+    try {
+      const rows = Array.from(document.querySelectorAll('#resultsTable tbody tr'));
+      rows.forEach(tr => {
+        const rawId = (tr.cells[0]?.textContent || '').trim();
+        const name = (tr.cells[1]?.textContent || '').trim();
+        const empId = (typeof resolveReportEmployeeId === 'function') ? resolveReportEmployeeId(rawId, name) : rawId;
+        if (!empId) return;
+        const regHrs = num(tr.cells[11]?.textContent) || num(tr.querySelector('.regHrs')?.value);
+        const otHrs = num(tr.cells[12]?.textContent) || num(tr.querySelector('.otHrs')?.value);
+        const weight = regHrs + otHrs;
+        const cell = tr.cells[2];
+        let projectIdHint = '';
+        let projectLabel = '';
+        try {
+          const sel = cell?.querySelector('select');
+          if (sel) {
+            projectIdHint = String(sel.value || sel.getAttribute('data-project-id') || '').trim();
+            const opt = sel.options[sel.selectedIndex];
+            projectLabel = String((opt && (opt.textContent || opt.label)) || '').trim();
+          } else {
+            projectIdHint = String(cell?.dataset?.projectId || cell?.dataset?.project || '').trim();
+            projectLabel = String(cell?.dataset?.projectName || cell?.dataset?.project || cell?.textContent || '').trim();
+          }
+        } catch (_) {}
+        const meta = resolveProjectDetails(projectIdHint, projectLabel);
+        const projectName = safe(meta?.name || projectLabel || projectIdHint).trim();
+        if (!projectName) return;
+        const rec = byEmployee[empId] || { projectName: '', weight: -1 };
+        if (weight >= rec.weight) {
+          byEmployee[empId] = { projectName, weight };
+        }
+      });
+    } catch (_) {}
+    return byEmployee;
+  }
+
+  function computeProjectAdjPayAmounts(){
+    const out = {};
+    const addTo = (projectName, amount) => {
+      const label = safe(projectName).trim();
+      if (!label) return;
+      const key = label.toLowerCase();
+      out[key] = roundToCents((Number(out[key]) || 0) + (Number(amount) || 0));
+    };
+
+    const getEmployeeRate = (empId) => {
+      const direct = Number((typeof getEmployeeHourlyRate === 'function') ? getEmployeeHourlyRate(empId) : 0);
+      if (Number.isFinite(direct) && direct > 0) return direct;
+      const se = (typeof storedEmployees !== 'undefined' && storedEmployees) || {};
+      const rates = (typeof payrollRates !== 'undefined' && payrollRates) || {};
+      return Number(se?.[empId]?.hourlyRate ?? rates?.[empId] ?? 0) || 0;
+    };
+
+    const toAmount = (empId, entry = {}) => {
+      const hours = Number(entry.hours ?? entry.hrs ?? entry.value ?? entry.adjHrs ?? entry.reg ?? entry.ot ?? 0);
+      const explicit = Number(entry.amount ?? entry.adjPay ?? entry.pay ?? entry.total ?? NaN);
+      if (Number.isFinite(explicit)) return roundToCents(explicit);
+      const rate = getEmployeeRate(empId);
+      const kind = normalizeAdjustmentType(entry.type ?? entry.kind ?? entry.label ?? entry.name ?? entry.category ?? entry.adjustmentType ?? entry.entryType);
+      if (kind === 'ADJ OT') {
+        const otRate = Number((typeof getEffectiveOvertimeRateForEmployee === 'function')
+          ? getEffectiveOvertimeRateForEmployee(empId, rate)
+          : rate);
+        return roundToCents((Number(hours) || 0) * (Number(otRate) || 0));
+      }
+      return roundToCents((Number(hours) || 0) * (Number(rate) || 0));
+    };
+
+    try {
+      const projectLookup = (typeof computeEmployeeProjectLookup === 'function') ? computeEmployeeProjectLookup() : {};
+      const src = (isPlainObject(adjHrs) ? adjHrs : {});
+      Object.keys(src).forEach(empId => {
+        const raw = src[empId];
+        if (raw == null) return;
+
+        const pushEntry = (entry) => {
+          if (!entry) return;
+          const fallbackProjectName = safe(projectLookup?.[empId]?.projectName || '').trim();
+          const assignedRaw = entry.projectId
+            ?? entry.projectType
+            ?? entry.project
+            ?? (typeof getAdjustmentProjectType === 'function' ? getAdjustmentProjectType(empId) : '')
+            ?? fallbackProjectName;
+          const projId = resolveProjectIdValue(assignedRaw);
+          const meta = resolveProjectDetails(projId, assignedRaw || fallbackProjectName);
+          const projectName = meta.name || String(assignedRaw || fallbackProjectName || '').trim();
+          const amt = toAmount(empId, entry);
+          if (!amt) return;
+          addTo(projectName, amt);
+        };
+
+        if (Array.isArray(raw)) {
+          raw.forEach(pushEntry);
+          return;
+        }
+
+        if (typeof raw === 'object') {
+          const hasTotals = Object.prototype.hasOwnProperty.call(raw, 'reg') || Object.prototype.hasOwnProperty.call(raw, 'ot');
+          if (hasTotals) {
+            pushEntry({ ...raw, type: 'REG', hours: raw.reg });
+            pushEntry({ ...raw, type: 'ADJ OT', hours: raw.ot });
+            return;
+          }
+          pushEntry(raw);
+          return;
+        }
+
+        // Legacy scalar treated as ADJ OT hours.
+        pushEntry({ type: 'ADJ OT', hours: raw });
+      });
+    } catch (_) {}
+
+    return out;
+  }
+
+  function computeProjectSideAmounts(){
+    const out = {};
+    const addTo = (projectName, key, value) => {
+      const label = safe(projectName).trim();
+      if (!label) return;
+      const mapKey = label.toLowerCase();
+      if (!out[mapKey]) out[mapKey] = { additionalIncome: 0 };
+      out[mapKey][key] += Number(value) || 0;
+    };
+
+    try {
+      const lookup = computeEmployeeProjectLookup();
+      const projectMap = (typeof storedProjects !== 'undefined' && storedProjects) || {};
+      const ai = (typeof additionalIncomeDetails !== 'undefined' && additionalIncomeDetails) || {};
+      Object.keys(ai).forEach(empId => {
+        const items = Array.isArray(ai[empId]) ? ai[empId] : [];
+        items.forEach(item => {
+          const amount = num(item && item.amount);
+          if (amount <= 0) return;
+          const assigned = String((item && (item.projectId != null ? item.projectId : item.project)) || '').trim();
+          const fallbackProject = (lookup[empId] && lookup[empId].projectName) || '';
+          const projId = resolveProjectIdValue(assigned, projectMap);
+          const meta = resolveProjectDetails(projId, assigned || fallbackProject);
+          const projectName = meta.name || assigned || fallbackProject;
+          addTo(projectName, 'additionalIncome', amount);
+        });
+      });
+    } catch (_) {}
+
+
+    return out;
+  }
+
+  function computeProjectTotals(){
+    const baseRows = (() => {
+      const fromDetailed = computeProjectTotalsFromDetailed();
+      if (fromDetailed.length) return fromDetailed;
+      return computeProjectTotalsFromDTR();
+    })();
+    const side = computeProjectSideAmounts();
+    const adjByProject = computeProjectAdjPayAmounts();
+    return baseRows.map(row => {
+      const key = safe(row && row.name).trim().toLowerCase();
+      const add = Number((side[key] && side[key].additionalIncome) || 0);
+      const regTotal = Number((row && row.regTotal != null) ? row.regTotal : 0);
+      const otTotal = Number((row && row.otTotal != null) ? row.otTotal : 0);
+      const adjFromPayroll = Object.prototype.hasOwnProperty.call(adjByProject, key)
+        ? Number(adjByProject[key] || 0)
+        : null;
+      const adjPay = (adjFromPayroll != null)
+        ? adjFromPayroll
+        : Number((row && row.adjPay != null) ? row.adjPay : 0);
+      const baseTotal = regTotal + otTotal + adjPay;
+      const totalWithAdditionalIncome = baseTotal + add;
+      return {
+        ...row,
+        adjPay,
+        additionalIncome: add,
+        total: totalWithAdditionalIncome
+      };
+    });
+  }
+
+  function readPayrollGrandTotalValue(key){
+    try {
+      const cell = document.querySelector('#payrollTotalsFoot [data-col="'+key+'"]');
+      if (!cell) return null;
+      const parsed = Number(String(cell.textContent || '').replace(/,/g, '').trim());
+      return Number.isFinite(parsed) ? parsed : null;
+    } catch (_){ return null; }
+  }
+
+  function renderMasterReport(){
+    const host = document.getElementById('masterReportContainer'); if(!host) return;
+    const prows = computeProjectTotals().filter(row => safe(row && row.company).trim().length);
+    const g = prows.reduce((acc,r)=>{
+      acc.regTotal += Number((r && r.regTotal != null) ? r.regTotal : 0);
+      acc.otTotal += Number((r && r.otTotal != null) ? r.otTotal : 0);
+      acc.adjPay += Number((r && r.adjPay != null) ? r.adjPay : 0);
+      acc.additionalIncome += Number((r && r.additionalIncome != null) ? r.additionalIncome : 0);
+      acc.t += Number((r && r.total != null) ? r.total : 0);
+      return acc;
+    }, {regTotal:0, otTotal:0, adjPay:0, additionalIncome:0, t:0});
+    const payrollGrandOtPay = readPayrollGrandTotalValue('otPay');
+    if (payrollGrandOtPay != null) {
+      g.otTotal = payrollGrandOtPay;
+    }
+    let html = '';
+    html += '<h2>PAYROLL REPORT</h2>';
+    const [rangeStart, rangeEnd] = getPayrollRange();
+    const periodLabel = formatPayrollPeriodLabel(rangeStart, rangeEnd);
+    if (periodLabel){
+      html += `<div class="mr-period">Payroll Period: <span>${safe(periodLabel)}</span></div>`;
+    } else {
+      html += '<div class="mr-period">Payroll Period: <span class="mr-period-missing">Not set</span></div>';
+    }
+    const hasCompanyOptions = (typeof COMPANY_OPTIONS !== 'undefined') && Array.isArray(COMPANY_OPTIONS);
+    const defaults = hasCompanyOptions
+      ? COMPANY_OPTIONS.filter(name => typeof name === 'string' && name.trim().length)
+      : ['Edifice','Portafolio'];
+    const normalizeCompanyLabel = (val) => {
+      const label = safe(val).trim();
+      return label.length ? label : '';
+    };
+    const projectGroups = {};
+    const ensureProjectGroup = (companyName) => {
+      const label = normalizeCompanyLabel(companyName);
+      if (!projectGroups[label]) projectGroups[label] = { label, rows: [], regHrs:0, otHrs:0, regTotal:0, otTotal:0, adjPay:0, additionalIncome:0, totalHrs:0, total:0 };
+      return projectGroups[label];
+    };
+    prows.forEach(row => {
+      const group = ensureProjectGroup(row && row.company);
+      group.rows.push(row);
+      group.regHrs += Number((row && row.regHrs != null) ? row.regHrs : 0);
+      group.otHrs += Number((row && row.otHrs != null) ? row.otHrs : 0);
+      group.regTotal += Number((row && row.regTotal != null) ? row.regTotal : 0);
+      group.otTotal += Number((row && row.otTotal != null) ? row.otTotal : 0);
+      group.adjPay += Number((row && row.adjPay != null) ? row.adjPay : 0);
+      group.additionalIncome += Number((row && row.additionalIncome != null) ? row.additionalIncome : 0);
+      group.totalHrs += Number((row && row.totalHrs != null) ? row.totalHrs : 0);
+      group.total += Number((row && row.total != null) ? row.total : 0);
+    });
+    const projectSeen = new Set();
+    const projectOrder = [];
+    const pushProjectCompany = (name) => {
+      const label = normalizeCompanyLabel(name);
+      if (projectSeen.has(label)) return;
+      const grp = projectGroups[label];
+      if (!grp || !grp.rows.length) return;
+      projectSeen.add(label);
+      projectOrder.push(label);
+    };
+    const defaultOrder = (defaults.length ? defaults : ['Edifice','Portafolio']).map(normalizeCompanyLabel);
+    defaultOrder.forEach(pushProjectCompany);
+    Object.keys(projectGroups).sort((a,b)=> a.localeCompare(b)).forEach(pushProjectCompany);
+
+    html += '<div class="mr-section" style="margin-top:16px;">';
+    html += '<h4 class="mr-project-title">PROJECT</h4>';
+    html += '<table class="mr-table"><thead><tr><th class="left">NAME</th><th class="mr-num">REGULAR PAY</th><th class="mr-num">OVERTIME PAY</th><th class="mr-num">ADJ PAY</th><th class="mr-num">ADDITIONAL INCOME</th><th class="mr-num">GRAND TOTAL</th></tr></thead><tbody>';
+    if (!projectOrder.length){
+      if (!prows.length){
+        html += '<tr><td class="left" colspan="6">No project totals available.</td></tr>';
+      } else {
+        prows.forEach(r=>{
+          html += `<tr><td class="left">${safe(r.name)}</td><td class="mr-num">${f2(r.regTotal)}</td><td class="mr-num">${f2(r.otTotal)}</td><td class="mr-num">${f2(r.adjPay)}</td><td class="mr-num">${f2(r.additionalIncome)}</td><td class="mr-num">${f2(r.total)}</td></tr>`;
+        });
+      }
+    } else {
+      projectOrder.forEach(companyName => {
+        const group = projectGroups[companyName];
+        if (!group || !group.rows.length) return;
+        const companyLabel = normalizeCompanyLabel(companyName);
+        html += `<tr class="mr-company"><th colspan="6">${safe(companyLabel)}</th></tr>`;
+        const sortedRows = group.rows.slice().sort((a,b)=> safe(a && a.name).localeCompare(safe(b && b.name)));
+        sortedRows.forEach(r=>{
+          html += `<tr><td class="left">${safe(r && r.name)}</td><td class="mr-num">${f2(r && r.regTotal)}</td><td class="mr-num">${f2(r && r.otTotal)}</td><td class="mr-num">${f2(r && r.adjPay)}</td><td class="mr-num">${f2(r && r.additionalIncome)}</td><td class="mr-num">${f2(r && r.total)}</td></tr>`;
+        });
+        html += `<tr class="mr-subtotal"><td class="left" style="font-weight:600;">Subtotal - ${safe(companyLabel)}</td><td class="mr-num" style="font-weight:600;">${f2(group.regTotal)}</td><td class="mr-num" style="font-weight:600;">${f2(group.otTotal)}</td><td class="mr-num" style="font-weight:600;">${f2(group.adjPay)}</td><td class="mr-num" style="font-weight:600;">${f2(group.additionalIncome)}</td><td class="mr-num" style="font-weight:600;">${f2(group.total)}</td></tr>`;
+      });
+    }
+    html += `</tbody><tfoot><tr><td class="left">Grand Total</td><td class="mr-num">${f2(g.regTotal)}</td><td class="mr-num">${f2(g.otTotal)}</td><td class="mr-num">${f2(g.adjPay)}</td><td class="mr-num">${f2(g.additionalIncome)}</td><td class="mr-num">${f2(g.t)}</td></tr></tfoot></table>`;
+    html += '</div>';
+
+    host.innerHTML = html;
+  }
+
+  try { window.renderMasterReport = renderMasterReport; } catch (e) {}
+
+  function attachMasterPrint(){
+    const btn = document.getElementById('mr_print');
+    if (!btn || btn.__wired) return; btn.__wired = true;
+    btn.addEventListener('click', function(ev){
+      ev.preventDefault();
+      try{
+        const node = document.getElementById('masterReportContainer');
+        if (!node) return; const html = '<!doctype html><html><head><meta charset="utf-8"><title>Master Report</title>'+
+          '<style>body{font-family:Arial,Helvetica,sans-serif;padding:10px} table{width:100%;border-collapse:collapse;font-size:12px} th,td{border:0.6pt solid #000;padding:4px 6px;text-align:left} .mr-num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap} .mr-company th{text-align:center} h2{text-align:center;margin:0 0 10px 0}</style>'+
+          '</head><body>'+ node.innerHTML +'</body></html>';
+        withPrintOrientation(function(orientation){
+          printReport(html, { orientation: orientation, features: 'width=1024,height=768' });
+        });
+      }catch(_){ window.print(); }
+    });
+  }
+
+  function init(){ renderMasterReport(); attachMasterPrint(); }
+  if (document.readyState === 'loading'){ document.addEventListener('DOMContentLoaded', init, { once:true }); }
+  else { init(); }
+
+  try{
+    const old = window.rebuildReports;
+    window.rebuildReports = function(){ try{ old && old(); }catch(e){} try{ renderMasterReport(); }catch(e){} };
+  }catch(e){}
+})();
+
+
+
+    (function(){
+      const ICONS = {
+        dashboard: '📊',
+        dtr: '🕒',
+        schedules: '🗓️',
+        employees: '👥',
+        projects: '🚀',
+        payroll: '💰',
+        totals: '📈',
+        settings: '⚙️'
+      };
+      function setTitleFrom(btn){
+        try{
+          const pg = btn && (btn.dataset.page || btn.getAttribute('data-page')) || '';
+          const label = (btn.textContent || '').replace(/^[^A-Za-z0-9]+/,'').trim();
+          const icon = ICONS[pg] || '📊';
+          const title = document.querySelector('.page-title');
+          if (title){ title.innerHTML = '<span class="icon-emoji" style="font-size:32px">'+icon+'</span> ' + label; }
+        }catch(_){}
+      }
+      document.querySelectorAll('.nav-link').forEach(function(link){
+        link.addEventListener('click', function(e){
+          e.preventDefault();
+          document.querySelectorAll('.nav-link').forEach(function(l){ l.classList.remove('active'); });
+          this.classList.add('active');
+          setTitleFrom(this);
+          closeMobileMenu();
+        });
+      });
+      // Initial set from the currently active tab
+      const active = document.querySelector('.nav-link.active');
+      if (active) setTitleFrom(active);
+    })();
+    function toggleMobileMenu(button){
+        const btn = button || document.querySelector('.mobile-menu-btn');
+        const nav = document.getElementById('primaryNav');
+        if (!btn || !nav) return;
+        const isOpen = !nav.classList.contains('open');
+        nav.classList.toggle('open', isOpen);
+        btn.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
+        nav.setAttribute('aria-hidden', isOpen ? 'false' : (window.innerWidth <= 768 ? 'true' : 'false'));
+        if (isOpen && window.innerWidth <= 768) {
+            const firstLink = nav.querySelector('.nav-link');
+            if (firstLink) {
+                setTimeout(() => { try { firstLink.focus(); } catch (_) {} }, 0);
+            }
+        }
+    }
+    function closeMobileMenu(options){
+        const nav = document.getElementById('primaryNav');
+        const btn = document.querySelector('.mobile-menu-btn');
+        if (!nav || !btn) return;
+        const wasOpen = nav.classList.contains('open');
+        nav.classList.remove('open');
+        btn.setAttribute('aria-expanded', 'false');
+        nav.setAttribute('aria-hidden', window.innerWidth <= 768 ? 'true' : 'false');
+        if (options && options.focusToggle && wasOpen && window.innerWidth <= 768) {
+            try { btn.focus(); } catch (_) {}
+        }
+    }
+    function syncMobileMenuState(){
+        const nav = document.getElementById('primaryNav');
+        const btn = document.querySelector('.mobile-menu-btn');
+        if (!nav || !btn) return;
+        if (window.innerWidth > 768) {
+            nav.classList.remove('open');
+            nav.setAttribute('aria-hidden', 'false');
+            btn.setAttribute('aria-expanded', 'false');
+        } else if (!nav.classList.contains('open')) {
+            nav.setAttribute('aria-hidden', 'true');
+        }
+    }
+    document.addEventListener('click', function(e){
+        const nav = document.getElementById('primaryNav');
+        const btn = document.querySelector('.mobile-menu-btn');
+        if(window.innerWidth <= 768 && nav && nav.classList.contains('open') && btn){
+            if(!nav.contains(e.target) && !btn.contains(e.target)){
+                closeMobileMenu();
+            }
+        }
+    });
+    document.addEventListener('keydown', function(e){
+        if(e.key === 'Escape'){
+            closeMobileMenu({ focusToggle: true });
+        }
+    });
+    window.addEventListener('resize', syncMobileMenuState);
+    syncMobileMenuState();
+    
+
+
+   
+const LS_RECORDS = 'att_records_v2';
+
+const LS_SCHEDULES = 'att_schedules_v2';
+const LS_SCHEDULES_DEFAULT = 'att_schedules_default';
+const LS_EMPLOYEES = 'att_employees_v2';
+const LS_PROJECTS = 'att_projects_v1';
+const LS_FILTER_PROJECT = 'att_filter_project_v1';
+const LS_OVERRIDES_SCHEDULES = 'att_overrides_schedules';
+const LS_OVERRIDES_PROJECTS = 'att_overrides_projects';
+const SPLIT_OVERRIDES_TABLE = 'split_overrides';
+// Optional: Supabase-backed split overrides. Disable by default to avoid 404s if the table isn't present.
+if (typeof window.ENABLE_SPLIT_OVERRIDES === 'undefined') window.ENABLE_SPLIT_OVERRIDES = false;
+
+const COMPANY_OPTIONS = ['Edifice', 'Portafolio'];
+
+let overridesSchedules = JSON.parse(localStorage.getItem(LS_OVERRIDES_SCHEDULES) || '{}');
+let overridesProjects = JSON.parse(localStorage.getItem(LS_OVERRIDES_PROJECTS) || '{}');
+const LS_DTR_OVERRIDES = 'dtr_overrides_v1';
+const OVERNIGHT_CUTOFF_HOUR = 6;
+let dtrOverrides = loadDtrOverrides();
+
+function loadDtrOverrides() {
+  try {
+    const raw = localStorage.getItem(LS_DTR_OVERRIDES);
+    const parsed = raw ? JSON.parse(raw) : {};
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch (e) {
+    console.warn('Failed to load DTR overrides', e);
+    return {};
+  }
+}
+function saveDtrOverrides() {
+  try {
+    localStorage.setItem(LS_DTR_OVERRIDES, JSON.stringify(dtrOverrides || {}));
+  } catch (e) {
+    console.warn('Failed to save DTR overrides', e);
+  }
+}
+function normalizeOverrideValue(value) {
+  if (value == null) return null;
+  const cleaned = String(value).trim();
+  return cleaned ? cleaned : null;
+}
+function stripNextDaySuffix(value) {
+  return String(value || '').replace(/\s*\+\s*\d+\s*$/, '');
+}
+function shiftYmdDate(dateStr, dayDelta) {
+  const m = String(dateStr || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) return null;
+  const y = Number(m[1]);
+  const mon = Number(m[2]);
+  const day = Number(m[3]);
+  if (!isFinite(y) || !isFinite(mon) || !isFinite(day)) return null;
+  const dt = new Date(y, mon - 1, day + (Number(dayDelta) || 0));
+  if (isNaN(dt)) return null;
+  const yy = dt.getFullYear();
+  const mm = String(dt.getMonth() + 1).padStart(2, '0');
+  const dd = String(dt.getDate()).padStart(2, '0');
+  return `${yy}-${mm}-${dd}`;
+}
+function getPreviousDate(dateStr) {
+  return shiftYmdDate(dateStr, -1);
+}
+function isPunchClaimedByPreviousDayOt(empId, dateStr, timeValue) {
+  const prevDate = getPreviousDate(dateStr);
+  if (!prevDate || !dtrOverrides) return false;
+  const key = `${empId}___${prevDate}`;
+  const prevOverride = dtrOverrides[key];
+  if (!prevOverride || typeof prevOverride !== 'object') return false;
+  const base = padHM(stripNextDaySuffix(timeValue));
+  const tagged = `${base}+1`;
+  const prevOtIn = normalizeOverrideValue(prevOverride.otIn);
+  const prevOtOut = normalizeOverrideValue(prevOverride.otOut);
+  return prevOtIn === tagged || prevOtOut === tagged;
+}
+function getNextDayOtTaggedTimes(empId, dateStr) {
+  const out = [];
+  const nextDate = shiftYmdDate(dateStr, 1);
+  if (!nextDate) return out;
+  (storedRecords || [])
+    .filter(r => String(r.empId) === String(empId) && r.date === nextDate)
+    .forEach(r => {
+      const base = padHM(r.time);
+      const mins = toMins(base);
+      if (mins !== null && mins <= OVERNIGHT_CUTOFF_HOUR * 60) out.push(`${base}+1`);
+    });
+  return out;
+}
+function getOtCandidateTimes(empId, dateStr, dayTimes) {
+  const seen = new Set();
+  const out = [];
+  (dayTimes || []).forEach(t => {
+    const base = padHM(stripNextDaySuffix(t));
+    if (!base || seen.has(base)) return;
+    seen.add(base);
+    out.push(base);
+  });
+  // Include real next-day punches as +1 so OT Out auto-detection can attach
+  // overnight work to the previous date row.
+  getNextDayOtTaggedTimes(empId, dateStr).forEach(t => {
+    if (seen.has(t)) return;
+    seen.add(t);
+    out.push(t);
+  });
+  out.sort((a,b)=>(toMins(a)||0)-(toMins(b)||0));
+  return out;
+}
+function isInOtWindowWithOvernight(mins, startMins, endMins) {
+  if (mins == null || startMins == null || endMins == null) return false;
+  if (mins >= startMins && mins <= endMins) return true;
+  if (mins >= 1440) {
+    const nextDayMins = mins - 1440;
+    return nextDayMins <= OVERNIGHT_CUTOFF_HOUR * 60;
+  }
+  return false;
+}
+function getPunchOptions(empId, dateStr, fieldKey) {
+  const options = [];
+  const seen = new Set();
+  const allowNextDay = fieldKey === 'otIn' || fieldKey === 'otOut';
+  const addOption = (timeValue, isNextDay) => {
+    if (!timeValue) return;
+    const baseTime = padHM(stripNextDaySuffix(timeValue));
+    const value = isNextDay ? `${baseTime}+1` : baseTime;
+    if (seen.has(value)) return;
+    seen.add(value);
+    options.push({
+      value,
+      label: isNextDay ? `${baseTime} (+1)` : baseTime
+    });
+  };
+
+  const matches = (storedRecords || []).filter(r => String(r.empId) === String(empId) && r.date === dateStr);
+  matches.forEach(r => addOption(r.time, false));
+
+  const nextDate = shiftYmdDate(dateStr, 1);
+  if (allowNextDay && nextDate) {
+    // (+1) generation for OT selectors: include only real punches from the
+    // next calendar day, and only up to the configured overnight cutoff hour.
+    (storedRecords || [])
+      .filter(r => String(r.empId) === String(empId) && r.date === nextDate)
+      .forEach(r => {
+        const mins = toMins(padHM(r.time));
+        if (mins !== null && mins <= OVERNIGHT_CUTOFF_HOUR * 60) {
+          addOption(r.time, true);
+        }
+      });
+  }
+
+  options.sort((a, b) => (toMins(a.value) || 0) - (toMins(b.value) || 0));
+  return options;
+}
+function openPunchEditor(rowContext) {
+  const modal = document.getElementById('dtrPunchModal');
+  if (!modal || !rowContext) return;
+  const activeEl = document.activeElement;
+  modal.__lastActiveElement = activeEl && activeEl instanceof HTMLElement ? activeEl : null;
+  const { empId, date, name } = rowContext;
+  const scope = rowContext.scope || 'all';
+  const title = document.getElementById('dtrPunchModalTitle');
+  if (title) {
+    const label = scope === 'overtime' ? 'OT' : scope === 'regular' ? 'Regular' : 'DTR';
+    title.textContent = `Edit ${label} Entrys: ${name || empId} — ${date}`;
+  }
+  modal.dataset.empId = empId;
+  modal.dataset.date = date;
+  modal.dataset.scope = scope;
+  const optionsByField = {
+    amIn: getPunchOptions(empId, date, 'amIn'),
+    amOut: getPunchOptions(empId, date, 'amOut'),
+    pmIn: getPunchOptions(empId, date, 'pmIn'),
+    pmOut: getPunchOptions(empId, date, 'pmOut'),
+    otIn: getPunchOptions(empId, date, 'otIn'),
+    otOut: getPunchOptions(empId, date, 'otOut')
+  };
+  const overrideKey = `${empId}___${date}`;
+  const overrides = dtrOverrides[overrideKey] || {};
+  const selectMap = {
+    amIn: document.getElementById('dtrPunchAmIn'),
+    amOut: document.getElementById('dtrPunchAmOut'),
+    pmIn: document.getElementById('dtrPunchPmIn'),
+    pmOut: document.getElementById('dtrPunchPmOut'),
+    otIn: document.getElementById('dtrPunchOtIn'),
+    otOut: document.getElementById('dtrPunchOtOut')
+  };
+  Object.keys(selectMap).forEach(key => {
+    const select = selectMap[key];
+    if (!select) return;
+    select.innerHTML = '';
+    const autoOpt = document.createElement('option');
+    autoOpt.value = '';
+    autoOpt.textContent = '(Auto)';
+    select.appendChild(autoOpt);
+    const options = optionsByField[key] || [];
+    options.forEach(opt => {
+      const optionEl = document.createElement('option');
+      optionEl.value = opt.value;
+      optionEl.textContent = opt.label;
+      select.appendChild(optionEl);
+    });
+    const stored = normalizeOverrideValue(overrides[key]);
+    if (stored) {
+      // Preserve persisted +1 values in case punches were later removed.
+      if (![...select.options].some(opt => opt.value === stored)) {
+        const storedOption = document.createElement('option');
+        storedOption.value = stored;
+        storedOption.textContent = /\+\d+$/.test(stored)
+          ? `${stripNextDaySuffix(stored)} (+${stored.split('+')[1]})`
+          : stored;
+        select.appendChild(storedOption);
+      }
+      select.value = stored;
+    } else {
+      select.value = '';
+    }
+  });
+  modal.classList.add('is-open');
+  modal.setAttribute('aria-hidden', 'false');
+  const firstFocusable = modal.querySelector('button, select, input, [tabindex]:not([tabindex="-1"])');
+  if (firstFocusable && typeof firstFocusable.focus === 'function') {
+    firstFocusable.focus();
+  }
+}
+// Store per-date split flags for half-day display. When true for an empId+date,
+// the DTR entry is rendered as two separate rows (AM and PM) rather than a
+// single combined row. The split state is persisted in localStorage under
+// LS_SPLITS. Keys are formatted as empId + '___' + date.
+const LS_SPLITS = 'att_splits_v1';
+let splits = {};
+try {
+  splits = JSON.parse(localStorage.getItem(LS_SPLITS) || '{}');
+} catch (e) {
+  splits = {};
+}
+function saveSplits() {
+  try {
+    localStorage.setItem(LS_SPLITS, JSON.stringify(splits));
+  } catch (e) {
+    console.warn('Saving splits failed', e);
+  }
+  syncSplitOverrides();
+}
+// Toggle split and unsplit state for a given employee/date key.  These helper
+// functions are used by the DTR table buttons to avoid inline IIFEs.  They set
+// the split flag in the `splits` object, persist it to localStorage via
+// saveSplits(), and trigger a re-render of the results.
+function splitRecord(key) {
+  // When splitting, mark all three segments (AM, PM, OT) as split.  Use
+  // an object so we can track split state per segment.
+  splits[key] = { AM: true, PM: true, OT: true };
+  saveSplits();
+  renderResults();
+}
+function unsplitRecord(key) {
+  // Group AM/PM/OT segments by their resolved project IDs.  Each group with
+  // more than one segment is recombined (segment-level overrides cleared and
+  // marked as unsplit).  Groups with a single segment remain split.
+  const [empId] = key.split('___');
+  const emp = (typeof storedEmployees !== 'undefined' && storedEmployees) ? storedEmployees[empId] : null;
+  const defaultProj = emp && emp.projectId ? emp.projectId : '';
+  let dayProj = overridesProjects && Object.prototype.hasOwnProperty.call(overridesProjects, key)
+    ? overridesProjects[key]
+    : defaultProj;
+
+  const segments = ['AM', 'PM', 'OT'];
+  const groups = {};
+  segments.forEach(seg => {
+    const segKey = key + '___' + seg;
+    const pid = (overridesProjects && Object.prototype.hasOwnProperty.call(overridesProjects, segKey))
+      ? overridesProjects[segKey]
+      : dayProj;
+    const p = String(pid || '');
+    if (!groups[p]) groups[p] = [];
+    groups[p].push(seg);
+  });
+
+  let splitEntry = splits[key];
+  if (!splitEntry || typeof splitEntry !== 'object') {
+    splitEntry = { AM: true, PM: true, OT: true };
+  }
+
+  Object.keys(groups).forEach(proj => {
+    const segs = groups[proj];
+    if (segs.length > 1) {
+      // Multiple segments share this project → clear per-segment overrides and
+      // mark them unsplit. Also set day-level override if needed.
+      segs.forEach(seg => {
+        const segKey = key + '___' + seg;
+        if (overridesProjects && Object.prototype.hasOwnProperty.call(overridesProjects, segKey)) {
+          delete overridesProjects[segKey];
+        }
+        if (overridesSchedules && Object.prototype.hasOwnProperty.call(overridesSchedules, segKey)) {
+          delete overridesSchedules[segKey];
+        }
+        splitEntry[seg] = false;
+      });
+      const unifiedProj = proj;
+      if (String(unifiedProj || '') !== String(defaultProj || '')) {
+        overridesProjects[key] = unifiedProj;
+      } else {
+        delete overridesProjects[key];
+      }
+    } else {
+      // Single segment → keep its split flag
+      segs.forEach(seg => { splitEntry[seg] = true; });
+    }
+  });
+
+  // Remove split entry if no segments remain split
+  const anySplit = segments.some(seg => splitEntry[seg]);
+  if (anySplit) {
+    splits[key] = splitEntry;
+  } else {
+    delete splits[key];
+  }
+
+  saveSplits();
+  saveOverrides();
+  renderResults();
+}
+function saveOverrides(){
+  localStorage.setItem(LS_OVERRIDES_SCHEDULES, JSON.stringify(overridesSchedules));
+  localStorage.setItem(LS_OVERRIDES_PROJECTS, JSON.stringify(overridesProjects));
+  syncSplitOverrides();
+}
+
+function baseKey(k){
+  const parts = String(k || '').split('___');
+  return parts.length >= 2 ? parts[0] + '___' + parts[1] : k;
+}
+function collectOverridesForKey(src, key){
+  const obj = {};
+  if (src && Object.prototype.hasOwnProperty.call(src, key)) obj.base = src[key];
+  ['AM','PM','OT'].forEach(function(seg){
+    const segKey = key + '___' + seg;
+    if (src && Object.prototype.hasOwnProperty.call(src, segKey)) obj[seg] = src[segKey];
+  });
+  return Object.keys(obj).length ? obj : null;
+}
+async function syncSplitOverrides(){
+  if (!window.supabase || !window.ENABLE_SPLIT_OVERRIDES) return;
+  try {
+    const keySet = new Set();
+    Object.keys(splits || {}).forEach(k => keySet.add(baseKey(k)));
+    Object.keys(overridesProjects || {}).forEach(k => keySet.add(baseKey(k)));
+    Object.keys(overridesSchedules || {}).forEach(k => keySet.add(baseKey(k)));
+    if (keySet.size === 0) return;
+    const rows = [];
+    keySet.forEach(function(k){
+      const parts = k.split('___');
+      rows.push({
+        emp_id: parts[0],
+        date: parts[1],
+        splits: splits[k] || null,
+        overrides_projects: collectOverridesForKey(overridesProjects, k),
+        overrides_schedules: collectOverridesForKey(overridesSchedules, k)
+      });
+    });
+    const { error } = await window.supabase
+      .from(SPLIT_OVERRIDES_TABLE)
+      .upsert(rows, { onConflict: 'emp_id,date' });
+    if (error) console.warn('syncSplitOverrides error', error);
+  } catch (e) {
+    console.warn('syncSplitOverrides failed', e);
+  }
+}
+async function hydrateSplitOverrides(){
+  if (!window.supabase || !window.ENABLE_SPLIT_OVERRIDES) return;
+  try {
+    const { data, error } = await window.supabase
+      .from(SPLIT_OVERRIDES_TABLE)
+      .select('*');
+    if (error) throw error;
+    (data || []).forEach(function(row){
+      const key = row.emp_id + '___' + row.date;
+      if (row.splits) splits[key] = row.splits;
+      if (row.overrides_projects) {
+        const proj = row.overrides_projects;
+        if (proj.base != null) overridesProjects[key] = proj.base;
+        ['AM','PM','OT'].forEach(function(seg){
+          if (proj[seg] != null) overridesProjects[key + '___' + seg] = proj[seg];
+        });
+      }
+      if (row.overrides_schedules) {
+        const sch = row.overrides_schedules;
+        if (sch.base != null) overridesSchedules[key] = sch.base;
+        ['AM','PM','OT'].forEach(function(seg){
+          if (sch[seg] != null) overridesSchedules[key + '___' + seg] = sch[seg];
+        });
+      }
+    });
+    try { localStorage.setItem(LS_SPLITS, JSON.stringify(splits)); } catch(e){}
+    try { localStorage.setItem(LS_OVERRIDES_PROJECTS, JSON.stringify(overridesProjects)); } catch(e){}
+    try { localStorage.setItem(LS_OVERRIDES_SCHEDULES, JSON.stringify(overridesSchedules)); } catch(e){}
+  } catch (e) {
+    console.warn('hydrate split_overrides failed', e);
+  }
+}
+
+
+const DEFAULT_RANGES = {
+  rng_am_in_start:"05:00", rng_am_in_end:"09:00",
+  rng_am_out_start:"11:30", rng_am_out_end:"12:30",
+  rng_pm_in_start:"12:30", rng_pm_in_end:"14:30",
+  rng_pm_out_start:"15:00", rng_pm_out_end:"20:00",
+  rng_ot_in_start:"19:00", rng_ot_in_end:"22:00",
+  rng_ot_out_start:"19:00", rng_ot_out_end:"23:59",
+  rng_sat_in_start:"05:00", rng_sat_in_end:"12:00",
+  rng_sat_out_start:"11:30", rng_sat_out_end:"12:30",
+  rng_sat_ot_start:"11:00", rng_sat_ot_end:"23:59",
+  rng_sat_ot_out_start:"11:00", rng_sat_ot_out_end:"23:59"
+};
+const DEFAULT_SCHEDULE = {
+  name: "Default",
+  sch_am_start:"08:00", sch_am_end:"12:00",
+  sch_pm_start:"13:00", sch_pm_end:"17:00",
+  
+  sch_sat_start:"", sch_sat_end:"",
+  sch_grace:15,
+  ...DEFAULT_RANGES
+
+};
+
+/*
+ * Initialize the local storedRecords variable from the global store.  The
+ * global `window.storedRecords` is set by the boot guard.  Avoid pulling
+ * from localStorage here so that Supabase data is always preferred.  If
+ * the global has not been defined for some reason, fall back to an empty
+ * array.  This ensures the application never silently falls back to a
+ * stale local cache when a remote dataset may be available.
+ */
+let storedRecords = (typeof window !== 'undefined' && Array.isArray(window.storedRecords))
+  ? window.storedRecords
+  : [];
+let storedEmployees = JSON.parse(localStorage.getItem(LS_EMPLOYEES) || '{}');
+let storedSchedules = JSON.parse(localStorage.getItem(LS_SCHEDULES) || 'null');
+let defaultScheduleId = localStorage.getItem(LS_SCHEDULES_DEFAULT) || null;
+let storedProjects = JSON.parse(localStorage.getItem(LS_PROJECTS) || '{}');
+
+function safeParseStorageJSON(key, fallbackValue) {
+  try {
+    const raw = localStorage.getItem(key);
+    if (raw == null) return fallbackValue;
+    const parsed = JSON.parse(raw);
+    return parsed == null ? fallbackValue : parsed;
+  } catch (_) {
+    return fallbackValue;
+  }
+}
+
+function refreshCoreStoresFromStorage() {
+  overridesSchedules = safeParseStorageJSON(LS_OVERRIDES_SCHEDULES, {});
+  overridesProjects = safeParseStorageJSON(LS_OVERRIDES_PROJECTS, {});
+  splits = safeParseStorageJSON(LS_SPLITS, {});
+  dtrOverrides = safeParseStorageJSON(LS_DTR_OVERRIDES, {});
+  storedEmployees = safeParseStorageJSON(LS_EMPLOYEES, {});
+  storedSchedules = safeParseStorageJSON(LS_SCHEDULES, null);
+  storedProjects = safeParseStorageJSON(LS_PROJECTS, {});
+  payrollRates = safeParseStorageJSON(LS_RATES, {});
+  regHours = safeParseStorageJSON(LS_REG_HRS, {});
+  otHours = safeParseStorageJSON(LS_OT_HRS, {});
+
+  try {
+    window.storedEmployees = storedEmployees;
+    window.storedSchedules = storedSchedules;
+    window.storedProjects = storedProjects;
+    window.overridesSchedules = overridesSchedules;
+    window.overridesProjects = overridesProjects;
+    window.splits = splits;
+    window.dtrOverrides = dtrOverrides;
+    window.payrollRates = payrollRates;
+    window.regHours = regHours;
+    window.otHours = otHours;
+  } catch (_) {}
+}
+
+window.refreshCoreStoresFromStorage = refreshCoreStoresFromStorage;
+document.getElementById('downloadEmployeesCSV').addEventListener('click', () => {
+  const header = ['ID','Name','Hourly Rate','Company','Bank Account','Schedule Name','Schedule ID','Project Name','Project ID','Deduct Pag-IBIG','Deduct PhilHealth','Deduct SSS'];
+  const rows = [header];
+  Object.keys(storedEmployees).forEach(id => {
+    const emp = storedEmployees[id] || {};
+    const schedId = emp.scheduleId || '';
+    const schedName = (storedSchedules && storedSchedules[schedId]?.name) || '';
+    const projId = emp.projectId || '';
+    const projName = (storedProjects && storedProjects[projId]?.name) || '';
+    const bank = emp.bankAccount || '';
+    const company = emp.company || COMPANY_OPTIONS[0] || '';
+    const flags = (typeof contribFlags !== 'undefined' && contribFlags[id]) || {};
+    const fPI = (flags.pagibig !== false) ? 'Yes' : 'No';
+    const fPH = (flags.philhealth !== false) ? 'Yes' : 'No';
+    const fSSS = (flags.sss !== false) ? 'Yes' : 'No';
+    rows.push([id, emp.name || '', emp.hourlyRate || '', company, bank, schedName, schedId, projName, projId, fPI, fPH, fSSS]);
+  });
+
+  const csv = rows.map(r => r.map(v => {
+    const s = String(v ?? '');
+    return (s.includes(',') || s.includes('"') || s.includes('\n')) ? '"' + s.replace(/"/g,'""') + '"' : s;
+  }).join(',')).join('\n');
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'employees_backup.csv';
+  a.click();
+});
+
+let currentProjectFilter = localStorage.getItem(LS_FILTER_PROJECT) || 'all';
+
+function ensureSchedules(){
+  if(!storedSchedules || typeof storedSchedules !== 'object'){
+    const id = 'sched_' + Date.now();
+    storedSchedules = {};
+    storedSchedules[id] = Object.assign({}, DEFAULT_SCHEDULE);
+    storedSchedules[id].name = DEFAULT_SCHEDULE.name;
+    defaultScheduleId = id;
+    saveSchedulesToLS();
+  } else {
+    Object.keys(storedSchedules).forEach(id=>{
+      storedSchedules[id] = { ...DEFAULT_RANGES, ...storedSchedules[id] };
+      storedSchedules[id].sch_am_start = storedSchedules[id].sch_am_start || DEFAULT_SCHEDULE.sch_am_start;
+      storedSchedules[id].sch_am_end   = storedSchedules[id].sch_am_end   || DEFAULT_SCHEDULE.sch_am_end;
+      storedSchedules[id].sch_pm_start = storedSchedules[id].sch_pm_start || DEFAULT_SCHEDULE.sch_pm_start;
+      storedSchedules[id].sch_pm_end   = storedSchedules[id].sch_pm_end   || DEFAULT_SCHEDULE.sch_pm_end;
+      if(typeof storedSchedules[id].sch_grace !== 'number') storedSchedules[id].sch_grace = DEFAULT_SCHEDULE.sch_grace;
+      storedSchedules[id].name = storedSchedules[id].name || 'Schedule';
+    });
+    if(!defaultScheduleId || !storedSchedules[defaultScheduleId]){
+      const keys = Object.keys(storedSchedules);
+      if(keys.length) defaultScheduleId = keys[0];
+      saveSchedulesToLS();
+    }
+  }
+}
+function saveSchedulesToLS(){
+  localStorage.setItem(LS_SCHEDULES, JSON.stringify(storedSchedules));
+  localStorage.setItem(LS_SCHEDULES_DEFAULT, defaultScheduleId);
+}
+
+const tabs = {
+  tabMain: document.getElementById('tabMain'),
+  // Dashboard tab/button for high-level summary and payroll history
+  tabDashboard: document.getElementById('tabDashboard'),
+  tabSchedule: document.getElementById('tabSchedule'),
+  tabEmployees: document.getElementById('tabEmployees'),
+  tabProjects: document.getElementById('tabProjects'),
+  panelMain: document.getElementById('panelMain'),
+  // Corresponding Dashboard panel
+  panelDashboard: document.getElementById('panelDashboard'),
+  panelSchedule: document.getElementById('panelSchedule'),
+  panelEmployees: document.getElementById('panelEmployees'),
+  panelProjects: document.getElementById('panelProjects'),
+  tabPayroll: document.getElementById('tabPayroll'),
+  panelPayroll: document.getElementById('panelPayroll'),
+  tabProjectTotals: document.getElementById('tabProjectTotals'),
+  panelProjectTotals: document.getElementById('panelProjectTotals'),
+  panelAudit: document.getElementById('panelAudit'),
+  tabSettings: document.getElementById('tabSettings'),
+  panelSettings: document.getElementById('panelSettings')
+};
+function showTab(name){
+  Object.values(tabs).forEach(el => el && el.classList && el.classList.remove('active'));
+
+  // Manage date range controls: disable on non-dashboard tabs, enable on dashboard unless forced
+  (() => {
+    const wsEl = document.getElementById('weekStart');
+    const weEl = document.getElementById('weekEnd');
+    if (wsEl && weEl) {
+      const isDash = (name === 'dashboard');
+      // Only toggle if the inputs are not forcibly disabled (e.g., due to lock/open)
+      const forced = wsEl.dataset.forced === 'true' || weEl.dataset.forced === 'true';
+      if (!forced) {
+        wsEl.disabled = !isDash;
+        weEl.disabled = !isDash;
+      }
+    }
+  })();
+  if(name==='main'){
+    tabs.tabMain && tabs.tabMain.classList.add('active');
+    tabs.panelMain && tabs.panelMain.classList.add('active');
+    // Phase 2: legacy tab buttons are removed, so we execute the original
+    // "on enter" logic here instead of relying on a click handler.
+    try {
+      if (window.__dtrFilterBackup) {
+        const { name, project, from, to } = window.__dtrFilterBackup;
+        const nameEl = document.getElementById('dtrSearchName');
+        const projectEl = document.getElementById('filterProject');
+        const fromEl = document.getElementById('dtrDateFrom');
+        const toEl = document.getElementById('dtrDateTo');
+        if (nameEl) nameEl.value = name;
+        if (projectEl) {
+          projectEl.value = project;
+          currentProjectFilter = project || 'all';
+          try { localStorage.setItem(LS_FILTER_PROJECT, currentProjectFilter); } catch (e) {}
+        }
+        if (fromEl) fromEl.value = from;
+        if (toEl) toEl.value = to;
+        try {
+          if (from) localStorage.setItem(LS_FROM, from);
+          else localStorage.removeItem(LS_FROM);
+          if (to) localStorage.setItem(LS_TO, to);
+          else localStorage.removeItem(LS_TO);
+        } catch (e) {}
+        window.__dtrFilterBackup = null;
+      }
+    } catch (e) {}
+    if (typeof renderResults === 'function') { try { renderResults(); } catch (e) {} }
+    try { if (typeof checkAndToggleEditState === 'function') checkAndToggleEditState(); } catch (e) {}
+  }
+  // When the dashboard is selected, activate its tab and panel
+  if(name==='dashboard'){
+    tabs.tabDashboard && tabs.tabDashboard.classList.add('active');
+    tabs.panelDashboard && tabs.panelDashboard.classList.add('active');
+    try { if (typeof renderHistory === 'function') renderHistory(); } catch (e) {}
+  }
+  if(name==='schedule'){ tabs.tabSchedule && tabs.tabSchedule.classList.add('active'); tabs.panelSchedule && tabs.panelSchedule.classList.add('active'); try{ if (typeof renderScheduleEditor === 'function') renderScheduleEditor(); }catch(e){} }
+  if(name==='employees'){ tabs.tabEmployees && tabs.tabEmployees.classList.add('active'); tabs.panelEmployees && tabs.panelEmployees.classList.add('active'); try{ if (typeof renderEmployees === 'function') renderEmployees(); }catch(e){} }
+  if(name==='projects'){ tabs.tabProjects && tabs.tabProjects.classList.add('active'); tabs.panelProjects && tabs.panelProjects.classList.add('active'); try{ if (typeof renderProjects === 'function') renderProjects(); }catch(e){} }
+
+  if(name==='payroll'){
+    tabs.tabPayroll && tabs.tabPayroll.classList.add('active');
+    tabs.panelPayroll && tabs.panelPayroll.classList.add('active');
+    // Ensure the default payroll subtab is active
+    try {
+      const defaultBtn = document.querySelector('#panelPayroll .tabs .tab-btn[data-tab="payrollTab"]');
+      if (defaultBtn) defaultBtn.click();
+    } catch (e) {}
+    // Keep legacy period inputs in sync (some lock logic depends on them)
+    try {
+      const weekStartEl = document.getElementById('weekStart');
+      const weekEndEl = document.getElementById('weekEnd');
+      const dtrStartEl = document.getElementById('dtrDateFrom');
+      const dtrEndEl = document.getElementById('dtrDateTo');
+      if (dtrStartEl && weekStartEl && !weekStartEl.value) weekStartEl.value = dtrStartEl.value;
+      if (dtrEndEl && weekEndEl && !weekEndEl.value) weekEndEl.value = dtrEndEl.value;
+    } catch (e) {}
+    // Ensure the DTR grid is available so payroll can derive hours
+    if (typeof renderResults === 'function') { try { renderResults(); } catch (e) {} }
+    // Derive hours directly from the DTR results table
+    try {
+      if (typeof calculatePayrollFromResultsTable === 'function') calculatePayrollFromResultsTable();
+      else if (typeof calculatePayrollFromRecords === 'function') calculatePayrollFromRecords();
+    } catch(e){}
+  }
+
+  if(name==='projectTotals'){
+    tabs.tabProjectTotals && tabs.tabProjectTotals.classList.add('active');
+    tabs.panelProjectTotals && tabs.panelProjectTotals.classList.add('active');
+    // Reports are intended to be computed from the full, unfiltered DTR set.
+    // Backup the user's filters so we can restore them when returning to DTR.
+    try {
+      var nameEl = document.getElementById('dtrSearchName');
+      var projectEl = document.getElementById('filterProject');
+      var fromEl = document.getElementById('dtrDateFrom');
+      var toEl = document.getElementById('dtrDateTo');
+      window.__dtrFilterBackup = {
+        name: nameEl ? nameEl.value : '',
+        project: projectEl ? projectEl.value : 'all',
+        from: fromEl ? fromEl.value : '',
+        to: toEl ? toEl.value : ''
+      };
+      if (nameEl) nameEl.value = '';
+      if (projectEl) projectEl.value = 'all';
+      currentProjectFilter = 'all';
+      try { localStorage.setItem(LS_FILTER_PROJECT, currentProjectFilter); } catch(e){}
+      if (fromEl) fromEl.value = '';
+      if (toEl) toEl.value = '';
+      try {
+        localStorage.removeItem(LS_FROM);
+        localStorage.removeItem(LS_TO);
+      } catch (e) {}
+      if (typeof renderResults === 'function') { try { renderResults(); } catch (e) {} }
+    } catch (e) {}
+  }
+  if(name==='audit'){
+    tabs.panelAudit && tabs.panelAudit.classList.add('active');
+    try{ if (typeof window.renderAuditPanel === 'function') window.renderAuditPanel(); }catch(e){}
+  }
+  if(name==='settings'){ tabs.tabSettings && tabs.tabSettings.classList.add('active'); tabs.panelSettings && tabs.panelSettings.classList.add('active'); }
+}
+window.__dtrFilterBackup = null;
+// When switching to the main (DTR) tab, render results and then toggle the edit
+// state based on whether the selected period is locked. Without this call,
+// the DTR UI may remain interactive even when a locked payroll period is
+// selected. Any errors are caught to avoid breaking tab switching.
+if (tabs.tabMain) tabs.tabMain.addEventListener('click', () => {
+  showTab('main');
+  try {
+    if (window.__dtrFilterBackup) {
+      const { name, project, from, to } = window.__dtrFilterBackup;
+      const nameEl = document.getElementById('dtrSearchName');
+      const projectEl = document.getElementById('filterProject');
+      const fromEl = document.getElementById('dtrDateFrom');
+      const toEl = document.getElementById('dtrDateTo');
+      if (nameEl) nameEl.value = name;
+      if (projectEl) {
+        projectEl.value = project;
+        currentProjectFilter = project || 'all';
+        try { localStorage.setItem(LS_FILTER_PROJECT, currentProjectFilter); } catch (e) {}
+      }
+      if (fromEl) fromEl.value = from;
+      if (toEl) toEl.value = to;
+      try {
+        if (from) localStorage.setItem(LS_FROM, from);
+        else localStorage.removeItem(LS_FROM);
+        if (to) localStorage.setItem(LS_TO, to);
+        else localStorage.removeItem(LS_TO);
+      } catch (e) {}
+      window.__dtrFilterBackup = null;
+    }
+    renderResults();
+  } catch (e) {}
+  try {
+    if (typeof checkAndToggleEditState === 'function') {
+      checkAndToggleEditState();
+    }
+  } catch (e) {}
+});
+if (tabs.tabSchedule) tabs.tabSchedule.addEventListener('click', ()=>showTab('schedule'));
+if (tabs.tabEmployees) tabs.tabEmployees.addEventListener('click', ()=>showTab('employees'));
+if (tabs.tabProjects) tabs.tabProjects.addEventListener('click', ()=>showTab('projects'));
+
+if (tabs.tabPayroll) tabs.tabPayroll.addEventListener('click', ()=>{
+  try {
+    const defaultBtn = document.querySelector('#panelPayroll .tabs .tab-btn[data-tab="payrollTab"]');
+    if (defaultBtn) defaultBtn.click();
+  } catch (e) {}
+
+  showTab('payroll');
+  // Ensure the DTR grid is rendered so payroll hours can be derived even if the user
+  // hasn't opened the DTR tab in this session.
+  try {
+    if (typeof renderResults === 'function') renderResults();
+  } catch (e) {}
+  // When entering the payroll tab, derive hours directly from the DTR results table
+  try {
+    if (typeof calculatePayrollFromResultsTable === 'function') calculatePayrollFromResultsTable();
+    else if (typeof calculatePayrollFromRecords === 'function') calculatePayrollFromRecords();
+  } catch(e){}
+});
+
+// On initial load, render the DTR grid so dependent tabs (like payroll) have hours
+// available without requiring a prior visit to the DTR tab.
+(function ensureDtrRenderedOnBoot(){
+  const renderDtr = () => {
+    try {
+      if (typeof renderResults === 'function') renderResults();
+    } catch (e) {}
+  };
+
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', renderDtr, { once: true });
+  else renderDtr();
+})();
+
+// Switch to the dashboard tab when clicked. Render payroll history if available.
+if (tabs.tabDashboard) {
+  tabs.tabDashboard.addEventListener('click', () => {
+    showTab('dashboard');
+    try {
+      if (typeof renderHistory === 'function') renderHistory();
+    } catch (e) {}
+  });
+}
+
+const scheduleSelect = document.getElementById('scheduleSelect');
+const scheduleNameInput = document.getElementById('scheduleName');
+
+function renderScheduleSelector(){
+  scheduleSelect.innerHTML = '';
+  Object.keys(storedSchedules).forEach(id=>{
+    const opt = document.createElement('option');
+    opt.value = id;
+    opt.textContent = (storedSchedules[id].name || id) + (id === defaultScheduleId ? " (Default)" : "");
+    scheduleSelect.appendChild(opt);
+  });
+  if(defaultScheduleId && storedSchedules[defaultScheduleId]) scheduleSelect.value = defaultScheduleId;
+  else if(scheduleSelect.options.length) scheduleSelect.selectedIndex = 0;
+  renderEmpScheduleDropdowns();
+  renderEmpScheduleDropdownsInTable();
+}
+
+function renderScheduleEditor(){
+  const sel = scheduleSelect.value;
+  if(!sel || !storedSchedules[sel]) return;
+  const s = storedSchedules[sel];
+  document.querySelector('[data-key="sch_am_start"]').value = s.sch_am_start || DEFAULT_SCHEDULE.sch_am_start;
+  document.querySelector('[data-key="sch_am_end"]').value = s.sch_am_end || DEFAULT_SCHEDULE.sch_am_end;
+  document.querySelector('[data-key="sch_pm_start"]').value = s.sch_pm_start || DEFAULT_SCHEDULE.sch_pm_start;
+  document.querySelector('[data-key="sch_pm_end"]').value = s.sch_pm_end || DEFAULT_SCHEDULE.sch_pm_end;
+  
+  const satStartInp = document.querySelector('[data-key="sch_sat_start"]');
+  const satEndInp   = document.querySelector('[data-key="sch_sat_end"]');
+  if (satStartInp) satStartInp.value = (s.sch_sat_start || "");
+  if (satEndInp)   satEndInp.value   = (s.sch_sat_end   || "");
+document.querySelector('[data-key="sch_grace"]').value = (s.sch_grace !== undefined ? s.sch_grace : DEFAULT_SCHEDULE.sch_grace);
+  scheduleNameInput.value = s.name || ("Schedule " + sel);
+  document.querySelectorAll('#rangesTable input[data-key]').forEach(inp=>{
+    const key = inp.dataset.key;
+    inp.value = s[key] || (DEFAULT_RANGES && DEFAULT_RANGES[key]) || "";
+  });
+}
+
+function gatherScheduleFromEditor(){
+  return {
+    name: scheduleNameInput.value.trim() || ("Schedule " + Date.now()),
+    sch_am_start: document.querySelector('[data-key="sch_am_start"]').value || DEFAULT_SCHEDULE.sch_am_start,
+    sch_am_end: document.querySelector('[data-key="sch_am_end"]').value || DEFAULT_SCHEDULE.sch_am_end,
+    sch_pm_start: document.querySelector('[data-key="sch_pm_start"]').value || DEFAULT_SCHEDULE.sch_pm_start,
+    sch_pm_end: document.querySelector('[data-key="sch_pm_end"]').value || DEFAULT_SCHEDULE.sch_pm_end,
+    
+    sch_sat_start: (document.querySelector('[data-key="sch_sat_start"]')?.value || ""),
+    sch_sat_end:   (document.querySelector('[data-key="sch_sat_end"]')?.value   || ""),
+sch_grace: Number(document.querySelector('[data-key="sch_grace"]').value || DEFAULT_SCHEDULE.sch_grace),
+    ...Object.fromEntries([...document.querySelectorAll('#rangesTable input[data-key]')].map(i=>[i.dataset.key, i.value || DEFAULT_RANGES[i.dataset.key] || ""]))
+  };
+}
+
+document.getElementById('addScheduleBtn').addEventListener('click', ()=>{
+  const id = 'sched_' + Date.now();
+  storedSchedules[id] = Object.assign({}, DEFAULT_SCHEDULE); storedSchedules[id].name = 'New schedule';
+  saveSchedulesToLS(); renderScheduleSelector(); scheduleSelect.value = id; renderScheduleEditor();
+});
+document.getElementById('deleteScheduleBtn').addEventListener('click', ()=>{
+  const sel = scheduleSelect.value; if(!sel) return;
+  if(Object.keys(storedSchedules).length === 1){ alert('Cannot delete the only schedule.'); return; }
+  if(!confirm('Delete schedule "' + storedSchedules[sel].name + '"?')) return;
+  delete storedSchedules[sel];
+  if(!storedSchedules[defaultScheduleId]) defaultScheduleId = Object.keys(storedSchedules)[0];
+  Object.keys(storedEmployees).forEach(eid=>{
+    if(storedEmployees[eid].scheduleId === sel) storedEmployees[eid].scheduleId = defaultScheduleId;
+  });
+  saveSchedulesToLS(); saveEmployeesToLS(); renderScheduleSelector(); renderEmployees(); renderResults();
+});
+document.getElementById('setDefaultScheduleBtn').addEventListener('click', ()=>{
+  const sel = scheduleSelect.value; if(!sel) return; defaultScheduleId = sel; saveSchedulesToLS(); renderScheduleSelector();
+});
+document.getElementById('saveScheduleBtn').addEventListener('click', ()=>{
+  const sel = scheduleSelect.value; if(!sel) return;
+  const oldRanges = {};
+  Object.keys(DEFAULT_RANGES).forEach(k=> oldRanges[k] = (storedSchedules[sel] && storedSchedules[sel][k]) || DEFAULT_RANGES[k]);
+  storedSchedules[sel] = { ...gatherScheduleFromEditor(), ...oldRanges, name: document.getElementById('scheduleName').value.trim() || storedSchedules[sel].name || 'Schedule' };
+  document.querySelectorAll('#rangesTable input[data-key]').forEach(i=>{
+    storedSchedules[sel][i.dataset.key] = i.value || DEFAULT_RANGES[i.dataset.key] || "";
+  });
+  saveSchedulesToLS(); renderScheduleSelector(); renderEmpScheduleDropdowns(); renderResults();
+});
+scheduleSelect.addEventListener('change', ()=>{ renderScheduleEditor(); });
+
+function saveRangesFromUI(){
+  const sel = scheduleSelect && scheduleSelect.value;
+  if(!sel || !storedSchedules[sel]) return;
+  document.querySelectorAll('#rangesTable input[data-key]').forEach(i=>{
+    storedSchedules[sel][i.dataset.key] = i.value || "";
+  });
+  saveSchedulesToLS();
+  renderResults();
+}
+function resetRanges(){
+  const sel = scheduleSelect && scheduleSelect.value;
+  if(!sel || !storedSchedules[sel]) return;
+  Object.keys(DEFAULT_RANGES).forEach(k=>{
+    storedSchedules[sel][k] = DEFAULT_RANGES[k];
+  });
+  saveSchedulesToLS();
+  renderScheduleEditor();
+  renderResults();
+}
+document.getElementById('saveRangesBtn').addEventListener('click', saveRangesFromUI);
+document.getElementById('resetRangesBtn').addEventListener('click', resetRanges);
+
+function saveEmployeesToLS(){ localStorage.setItem(LS_EMPLOYEES, JSON.stringify(storedEmployees)); }
+function renderEmpScheduleDropdowns(){
+  const sel = document.getElementById('empScheduleSelect'); if(!sel) return;
+  sel.innerHTML = '';
+  Object.keys(storedSchedules).forEach(id=>{
+    const o=document.createElement('option'); o.value=id;
+    o.textContent=storedSchedules[id].name + (id===defaultScheduleId?' (Default)':'');
+    sel.appendChild(o);
+  });
+  if(defaultScheduleId && storedSchedules[defaultScheduleId]) sel.value = defaultScheduleId;
+}
+function renderEmpScheduleDropdownsInTable(){
+  document.querySelectorAll('.emp-sel-schedule').forEach(sel=>{
+    const id = sel.dataset.id;
+    sel.innerHTML = '';
+    Object.keys(storedSchedules).forEach(sid=>{
+      const label = storedSchedules[sid].name + (sid===defaultScheduleId ? ' (Default)' : '');
+      const o = document.createElement('option'); o.value = sid; o.textContent = label;
+      if(storedEmployees[id] && storedEmployees[id].scheduleId === sid) o.selected = true;
+      sel.appendChild(o);
+    });
+  });
+}
+
+function saveProjectsToLS(options = {}){
+  localStorage.setItem(LS_PROJECTS, JSON.stringify(storedProjects));
+  if(!(options && options.skipRender)){
+    renderProjects();
+  }
+  renderProjectDropdowns();
+  renderProjectFilterOptions();
+  try { if (typeof renderAdditionalIncomeTable === 'function') renderAdditionalIncomeTable(); } catch (_) {}
+  try { if (typeof renderAdjustmentHoursTable === 'function') renderAdjustmentHoursTable(); } catch (_) {}
+  renderResults();
+}
+function renderProjects(){
+  const tbody = document.querySelector('#projectsTable tbody'); tbody.innerHTML = '';
+  const projectCompanySel = document.getElementById('projectCompanySelect');
+  const prevCompany = projectCompanySel ? projectCompanySel.value : '';
+  populateCompanySelect(projectCompanySel, prevCompany);
+  let needsSave = false;
+  Object.keys(storedProjects).forEach(pid=>{
+    const project = storedProjects[pid];
+    // Backward-compatible migration: add active/deactivatedAt if missing
+    if (project && typeof project.active === 'undefined') { project.active = true; project.deactivatedAt = null; needsSave = true; }
+    const isProjActive = !(project && project.active === false);
+    const projBtnLabel = isProjActive ? 'Deactivate' : 'Reactivate';
+    let company = project.company;
+    if (!COMPANY_OPTIONS.includes(company)) {
+      company = COMPANY_OPTIONS[0] || '';
+      project.company = company;
+      needsSave = true;
+    }
+    const companyOptionsHtml = buildCompanyOptionsHtml(company);
+    const tr = document.createElement('tr');
+    tr.classList.toggle('proj-inactive', !isProjActive);
+    tr.innerHTML = `<td><input class="cell proj-name-input" data-id="${pid}" value="${project.name}"></td>
+      <td><select class="proj-company-select" data-id="${pid}">${companyOptionsHtml}</select></td>
+      <td><input type="checkbox" class="proj-active" data-id="${pid}" ${isProjActive ? 'checked' : ''}></td>
+      <td><button class="del-proj" data-id="${pid}">${projBtnLabel}</button></td>`;
+    tbody.appendChild(tr);
+  });
+  if (needsSave) saveProjectsToLS({ skipRender: true });
+
+  document.querySelectorAll('.proj-active').forEach(cb=>{
+    cb.addEventListener('change', e=>{
+      const id = e.target.dataset.id;
+      if(!storedProjects[id]) return;
+      const isActive = !!e.target.checked;
+      storedProjects[id].active = isActive;
+      storedProjects[id].deactivatedAt = isActive ? null : new Date().toISOString();
+      saveProjectsToLS();
+      renderEmployees();
+    });
+  });
+
+  document.querySelectorAll('.del-proj').forEach(btn=>{
+    btn.addEventListener('click', e=>{
+      const id = e.target.dataset.id;
+      const proj = storedProjects[id];
+      if(!proj) return;
+      const isActive = !(proj.active === false);
+      const action = isActive ? 'Deactivate' : 'Reactivate';
+      if(confirm(`${action} project "${proj.name}"?`)){
+        proj.active = !isActive;
+        proj.deactivatedAt = proj.active ? null : new Date().toISOString();
+        saveProjectsToLS();
+        renderEmployees();
+      }
+    });
+  });
+
+  document.querySelectorAll('.proj-name-input').forEach(inp => {
+    inp.addEventListener('change', e => {
+      const id = e.target.dataset.id;
+      storedProjects[id].name = e.target.value;
+      saveProjectsToLS();
+    });
+  });
+
+  document.querySelectorAll('.proj-company-select').forEach(sel => {
+    sel.addEventListener('change', e => {
+      const id = e.target.dataset.id;
+      if (!storedProjects[id]) return;
+      let value = e.target.value;
+      if (!COMPANY_OPTIONS.includes(value)) {
+        value = COMPANY_OPTIONS[0] || '';
+        e.target.value = value;
+      }
+      storedProjects[id].company = value;
+      saveProjectsToLS();
+    });
+  });
+}
+
+
+function renderProjectDropdowns(){
+  const sel = document.getElementById('empProjectSelect');
+  if(!sel) return;
+  sel.innerHTML = '';
+  const noneOpt = document.createElement('option'); noneOpt.value = ''; noneOpt.textContent = '(None)'; sel.appendChild(noneOpt);
+  Object.keys(storedProjects).filter(pid => !(storedProjects[pid] && storedProjects[pid].active === false)).forEach(pid=>{
+    const o=document.createElement('option'); o.value=pid; o.textContent=storedProjects[pid].name; sel.appendChild(o);
+  });
+}
+function renderEmpProjectDropdownsInTable(){
+  document.querySelectorAll('.emp-sel-project').forEach(sel=>{
+    const id = sel.dataset.id;
+    const prev = sel.value;
+    sel.innerHTML = '';
+    const noneOpt = document.createElement('option'); noneOpt.value = ''; noneOpt.textContent = '(None)'; sel.appendChild(noneOpt);
+    const activePids = Object.keys(storedProjects).filter(pid => !(storedProjects[pid] && storedProjects[pid].active === false));
+    activePids.forEach(pid=>{
+      const o = document.createElement('option'); o.value = pid; o.textContent = storedProjects[pid].name;
+      if(storedEmployees[id] && storedEmployees[id].projectId === pid) o.selected = true;
+      sel.appendChild(o);
+    });
+    // If this employee is assigned to an inactive project, keep it visible
+    const curPid = storedEmployees[id] ? storedEmployees[id].projectId : '';
+    if (curPid && storedProjects[curPid] && storedProjects[curPid].active === false) {
+      const o = document.createElement('option');
+      o.value = curPid;
+      o.textContent = storedProjects[curPid].name + ' (inactive)';
+      o.selected = true;
+      sel.appendChild(o);
+    }
+
+    if(prev) sel.value = prev;
+  });
+}
+
+const filterProjectSel = document.getElementById('filterProject');
+function renderProjectFilterOptions(){
+  if(!filterProjectSel) return;
+  const prev = currentProjectFilter || 'all';
+  filterProjectSel.innerHTML = '';
+  const make = (value, label)=>{ const o=document.createElement('option'); o.value=value; o.textContent=label; return o; };
+  filterProjectSel.appendChild(make('all','All Projects'));
+  filterProjectSel.appendChild(make('none','(No project)'));
+  Object.keys(storedProjects).forEach(pid=>{
+    const isActive = !(storedProjects[pid] && storedProjects[pid].active === false);
+    filterProjectSel.appendChild(make(pid, storedProjects[pid].name + (isActive ? '' : ' (inactive)')));
+  });
+  if([...filterProjectSel.options].some(o=>o.value===prev)) filterProjectSel.value = prev;
+  else filterProjectSel.value = 'all';
+  currentProjectFilter = filterProjectSel.value;
+}
+filterProjectSel && filterProjectSel.addEventListener('change', ()=>{
+  currentProjectFilter = filterProjectSel.value || 'all';
+  localStorage.setItem(LS_FILTER_PROJECT, currentProjectFilter);
+  renderResults();
+});
+
+function buildCompanyOptionsHtml(selectedValue){
+  const value = (selectedValue && COMPANY_OPTIONS.includes(selectedValue))
+    ? selectedValue
+    : (COMPANY_OPTIONS[0] || '');
+  return COMPANY_OPTIONS.map(option =>
+    `<option value="${option}" ${option === value ? 'selected' : ''}>${option}</option>`
+  ).join('');
+}
+
+function populateCompanySelect(selectEl, selectedValue){
+  if (!selectEl) return;
+  const value = (selectedValue && COMPANY_OPTIONS.includes(selectedValue))
+    ? selectedValue
+    : (COMPANY_OPTIONS[0] || '');
+  selectEl.innerHTML = buildCompanyOptionsHtml(value);
+  if (value || value === '') {
+    selectEl.value = value;
+  }
+}
+
+function renderEmployees(){
+  renderEmpScheduleDropdowns();
+  renderProjectDropdowns();
+  const empCompanySel = document.getElementById('empCompanySelect');
+  const prevCompany = empCompanySel ? empCompanySel.value : '';
+  populateCompanySelect(empCompanySel, prevCompany);
+  const tbody = document.querySelector('#employeesTable tbody'); tbody.innerHTML = '';
+  const ids = Object.keys(storedEmployees).sort((a,b)=>{
+    const na = /^\d+$/.test(a), nb = /^\d+$/.test(b);
+    if (na && nb) return Number(a) - Number(b);
+    return String(a).localeCompare(String(b));
+  });
+  let needsSave = false;
+  ids.forEach(id => {
+    const emp = storedEmployees[id];
+    // Backward-compatible migration: add active/deactivatedAt if missing
+    if (emp && typeof emp.active === 'undefined') { emp.active = true; emp.deactivatedAt = null; needsSave = true; }
+    let company = emp.company;
+    if (!COMPANY_OPTIONS.includes(company)) {
+      company = COMPANY_OPTIONS[0] || '';
+      if (company !== undefined) {
+        emp.company = company;
+        needsSave = true;
+      }
+    }
+    let scheduleOptionsHtml = '';
+    Object.keys(storedSchedules).forEach(sid=>{
+      const label = storedSchedules[sid].name + (sid===defaultScheduleId ? ' (Default)' : '');
+      scheduleOptionsHtml += `<option value="${sid}" ${emp.scheduleId===sid ? 'selected' : ''}>${label}</option>`;
+    });
+    let projectOptionsHtml = `<option value="">(None)</option>`;
+    const activeProjectIds = Object.keys(storedProjects).filter(pid => !(storedProjects[pid] && storedProjects[pid].active === false));
+    activeProjectIds.forEach(pid=>{
+      projectOptionsHtml += `<option value="${pid}" ${emp.projectId===pid ? 'selected' : ''}>${storedProjects[pid].name}</option>`;
+    });
+    if (emp.projectId && storedProjects[emp.projectId] && storedProjects[emp.projectId].active === false) {
+      projectOptionsHtml += `<option value="${emp.projectId}" selected>${storedProjects[emp.projectId].name} (inactive)</option>`;
+    }
+    const companyOptionsHtml = buildCompanyOptionsHtml(company);
+    const isEmpActive = !(emp && emp.active === false);
+    const empBtnLabel = isEmpActive ? 'Deactivate' : 'Reactivate';
+    const assignedProj = (emp.projectId && storedProjects[emp.projectId]) ? storedProjects[emp.projectId] : null;
+    const isAssignedProjActive = !(assignedProj && assignedProj.active === false);
+    const tr = document.createElement('tr');
+    tr.classList.toggle('emp-inactive', !isEmpActive);
+    tr.classList.toggle('proj-inactive', emp.projectId && !isAssignedProjActive);
+    tr.innerHTML = `<td>${id}</td>
+      <td><input class="cell emp-name-input" data-id="${id}" value="${emp.name}"></td>
+      <td><input class="cell emp-rate-input" type="number" step="0.01" min="0" data-id="${id}" value="${emp.hourlyRate != null ? emp.hourlyRate : ''}"></td>
+      <td><select class="emp-sel-schedule" data-id="${id}">${scheduleOptionsHtml}</select></td>
+      <td><select class="emp-sel-project" data-id="${id}">${projectOptionsHtml}</select></td>
+      <td><select class="emp-company-select" data-id="${id}">${companyOptionsHtml}</select></td>
+      <td><input class="cell emp-bank-input" data-id="${id}" value="${emp.bankAccount != null ? emp.bankAccount : ''}"></td>
+      <td><input type="checkbox" class="emp-pagibig" data-id="${id}" ${ (contribFlags[id] && contribFlags[id].pagibig === false) ? '' : 'checked'}></td>
+      <td><input type="checkbox" class="emp-philhealth" data-id="${id}" ${ (contribFlags[id] && contribFlags[id].philhealth === false) ? '' : 'checked'}></td>
+      <td><input type="checkbox" class="emp-sss" data-id="${id}" ${ (contribFlags[id] && contribFlags[id].sss === false) ? '' : 'checked'}></td>
+      <td><input type=\"checkbox\" class=\"emp-active\" data-id=\"${id}\" ${isEmpActive ? 'checked' : ''}></td>
+      <td><button class=\"del-emp\" data-id=\"${id}\">${empBtnLabel}</button></td>`;
+    tbody.appendChild(tr);
+    // Attach event listeners for contribution checkboxes for this employee
+    const cbPagibig = tr.querySelector('.emp-pagibig');
+    const cbPhilhealth = tr.querySelector('.emp-philhealth');
+    const cbSss = tr.querySelector('.emp-sss');
+    if (cbPagibig) {
+      cbPagibig.addEventListener('change', () => {
+        if (!contribFlags[id]) contribFlags[id] = {};
+        contribFlags[id].pagibig = cbPagibig.checked;
+        localStorage.setItem(LS_CONTRIB_FLAGS, JSON.stringify(contribFlags));
+        calculateAll();
+      });
+    }
+    if (cbPhilhealth) {
+      cbPhilhealth.addEventListener('change', () => {
+        if (!contribFlags[id]) contribFlags[id] = {};
+        contribFlags[id].philhealth = cbPhilhealth.checked;
+        localStorage.setItem(LS_CONTRIB_FLAGS, JSON.stringify(contribFlags));
+        calculateAll();
+      });
+    }
+    if (cbSss) {
+      cbSss.addEventListener('change', () => {
+        if (!contribFlags[id]) contribFlags[id] = {};
+        contribFlags[id].sss = cbSss.checked;
+        localStorage.setItem(LS_CONTRIB_FLAGS, JSON.stringify(contribFlags));
+        calculateAll();
+      });
+    }
+  });
+
+  if (needsSave) saveEmployeesToLS();
+
+  document.querySelectorAll('.emp-name-input').forEach(inp=> inp.addEventListener('change', (e)=>{
+    storedEmployees[e.target.dataset.id].name = e.target.value; saveEmployeesToLS(); renderResults();
+  }));
+  document.querySelectorAll('.emp-rate-input').forEach(inp=> inp.addEventListener('change', (e)=>{
+    const id = e.target.dataset.id;
+    const val = parseFloat(e.target.value) || 0;
+    storedEmployees[id].hourlyRate = val; saveEmployeesToLS();
+    try { payrollRates[id] = val; localStorage.setItem(LS_RATES, JSON.stringify(payrollRates)); } catch(err) {}
+    try { if (typeof renderTable === 'function') renderTable(); } catch (err) { console.warn('renderTable failed', err); }
+    renderResults();
+  }));
+document.querySelectorAll('.emp-sel-schedule').forEach(sel=> sel.addEventListener('change', (e)=>{
+    storedEmployees[e.target.dataset.id].scheduleId = e.target.value; saveEmployeesToLS(); renderResults();
+  }));
+  document.querySelectorAll('.emp-sel-project').forEach(sel=> sel.addEventListener('change', (e)=>{
+    storedEmployees[e.target.dataset.id].projectId = e.target.value || null; saveEmployeesToLS(); renderResults();
+  }));
+  document.querySelectorAll('.emp-company-select').forEach(sel=> sel.addEventListener('change', (e)=>{
+    const id = e.target.dataset.id;
+    if (!storedEmployees[id]) return;
+    let value = e.target.value;
+    if (!COMPANY_OPTIONS.includes(value)) {
+      value = COMPANY_OPTIONS[0] || '';
+      e.target.value = value;
+    }
+    storedEmployees[id].company = value;
+    saveEmployeesToLS();
+    renderResults();
+  }));
+  document.querySelectorAll('.emp-active').forEach(cb=> cb.addEventListener('change', (e)=>{
+    const id = e.target.dataset.id;
+    if (!storedEmployees[id]) return;
+    const isActive = !!e.target.checked;
+    storedEmployees[id].active = isActive;
+    storedEmployees[id].deactivatedAt = isActive ? null : new Date().toISOString();
+    saveEmployeesToLS();
+    renderEmployees();
+    renderResults();
+  }));
+  document.querySelectorAll('.del-emp').forEach(btn=> btn.addEventListener('click', (e)=>{
+    const id=e.target.dataset.id;
+    {
+      const emp = storedEmployees[id];
+      if (!emp) return;
+      const isActive = !(emp.active === false);
+      const action = isActive ? 'Deactivate' : 'Reactivate';
+      const msg = `${action} employee ${id} - ${emp.name}?`;
+      if (confirm(msg)) {
+        emp.active = !isActive;
+        emp.deactivatedAt = emp.active ? null : new Date().toISOString();
+        saveEmployeesToLS();
+        renderEmployees();
+        renderResults();
+      }
+    }
+  }));
+}
+
+document.getElementById('addEmployeeBtn').addEventListener('click', ()=>{
+  const id = document.getElementById('empIdInput').value.trim();
+  const name = document.getElementById('empNameInput').value.trim();
+  const rate = parseFloat(document.getElementById('empRateInput').value) || 0;
+  const scheduleId = document.getElementById('empScheduleSelect').value || defaultScheduleId;
+  const projectId = document.getElementById('empProjectSelect').value || null;
+  const companySelect = document.getElementById('empCompanySelect');
+  let company = companySelect ? companySelect.value : '';
+  if (!COMPANY_OPTIONS.includes(company)) company = COMPANY_OPTIONS[0] || '';
+  const bank = document.getElementById('empBankInput').value.trim();
+  if(!id){ alert('Enter ID'); return; } if(!name){ alert('Enter Name'); return; }
+  storedEmployees[id] = { name: name, hourlyRate: rate, bankAccount: bank, scheduleId: scheduleId, projectId: projectId, company: company, active: true, deactivatedAt: null };
+  // Initialize default contribution deduction flags for new employee if not already set
+  if (!contribFlags[id]) {
+    contribFlags[id] = { pagibig: true, philhealth: true, sss: true };
+    localStorage.setItem(LS_CONTRIB_FLAGS, JSON.stringify(contribFlags));
+  }
+  saveEmployeesToLS();
+  document.getElementById('empIdInput').value=''; document.getElementById('empNameInput').value=''; document.getElementById('empRateInput').value=''; document.getElementById('empBankInput').value='';
+  if (companySelect) companySelect.value = COMPANY_OPTIONS[0] || '';
+  renderEmployees(); renderResults();
+});
+document.getElementById('clearEmployeesBtn').addEventListener('click', ()=>{
+  if(!confirm('Clear all employees?')) return;
+  storedEmployees = {}; saveEmployeesToLS(); renderEmployees(); renderResults();
+});
+
+document.getElementById('empFileInput').addEventListener('change', (evt) => {
+  const file = evt.target.files && evt.target.files[0]; if (!file) return;
+  const reader = new FileReader();
+  reader.onload = function(e) {
+    try {
+      const data = new Uint8Array(e.target.result);
+      const workbook = XLSX.read(data, { type: 'array' });
+      const sheet = workbook.Sheets[workbook.SheetNames[0]];
+      
+const rows = XLSX.utils.sheet_to_json(sheet, { header: 1 });
+let added = 0, updated = 0;
+const headerRow = rows[0] || [];
+const normalizedHeader = headerRow.map(cell => String(cell ?? '').trim().toLowerCase());
+const headerLikely = normalizedHeader.some(val => val === 'id' || val === 'employee id') && normalizedHeader.some(val => val === 'name' || val === 'employee name');
+const dataRows = rows.slice(headerLikely ? 1 : 0);
+const findIndex = (labels) => {
+  for (const label of labels) {
+    const idx = normalizedHeader.indexOf(label);
+    if (idx !== -1) return idx;
+  }
+  return -1;
+};
+const companyHeaderIdx = findIndex(['company']);
+const scheduleHeaderIdx = findIndex(['schedule name','schedule']);
+const projectHeaderIdx = findIndex(['project name','project']);
+const bankHeaderIdx = findIndex(['bank account','bank']);
+const getCell = (row, idx) => (idx >= 0 && idx < row.length) ? row[idx] : '';
+const companyIdxNew = companyHeaderIdx !== -1 ? companyHeaderIdx : 3;
+const scheduleIdxNew = scheduleHeaderIdx !== -1 ? scheduleHeaderIdx : 4;
+const projectIdxNew = projectHeaderIdx !== -1 ? projectHeaderIdx : 5;
+const bankIdxNew = bankHeaderIdx !== -1 ? bankHeaderIdx : 6;
+const scheduleIdxOld = scheduleHeaderIdx !== -1 ? scheduleHeaderIdx : 3;
+const projectIdxOld = projectHeaderIdx !== -1 ? projectHeaderIdx : 4;
+const bankIdxOld = bankHeaderIdx !== -1 ? bankHeaderIdx : 5;
+
+dataRows.forEach(row => {
+  if (!row || row.length < 2) return;
+  const id = String(row[0] ?? '').trim();
+  const name = String(row[1] ?? '').trim();
+  const rate = row.length >= 3 ? parseFloat(row[2]) || 0 : 0;
+  if (!id || !name) return;
+
+  const newCompanyCandidate = String(getCell(row, companyIdxNew) ?? '').trim();
+  const newScheduleCandidate = String(getCell(row, scheduleIdxNew) ?? '').trim();
+  const newProjectCandidate = String(getCell(row, projectIdxNew) ?? '').trim();
+  const newBankCandidate = String(getCell(row, bankIdxNew) ?? '').trim();
+
+  const oldScheduleCandidateRaw = String(getCell(row, scheduleIdxOld) ?? '').trim();
+  const oldProjectCandidateRaw = String(getCell(row, projectIdxOld) ?? '').trim();
+  const oldBankCandidate = String(getCell(row, bankIdxOld) ?? '').trim();
+
+  let useNewFormat = companyHeaderIdx !== -1;
+  if (!useNewFormat) {
+    if (COMPANY_OPTIONS.includes(newCompanyCandidate)) {
+      useNewFormat = true;
+    } else if (newCompanyCandidate && !oldScheduleCandidateRaw && newScheduleCandidate) {
+      useNewFormat = true;
+    } else if (!oldScheduleCandidateRaw && oldProjectCandidateRaw && newScheduleCandidate && oldProjectCandidateRaw === newScheduleCandidate) {
+      useNewFormat = true;
+    } else if (!oldScheduleCandidateRaw && oldBankCandidate && newProjectCandidate && oldBankCandidate === newProjectCandidate) {
+      useNewFormat = true;
+    } else if (!oldScheduleCandidateRaw && !oldProjectCandidateRaw && (newScheduleCandidate || newProjectCandidate)) {
+      useNewFormat = true;
+    } else if (row.length >= 7) {
+      useNewFormat = true;
+    }
+  }
+
+  let company = useNewFormat ? newCompanyCandidate : '';
+  let scheduleName = (useNewFormat ? newScheduleCandidate : oldScheduleCandidateRaw) || '';
+  let projectName = (useNewFormat ? newProjectCandidate : oldProjectCandidateRaw) || '';
+  let bank = useNewFormat ? newBankCandidate : oldBankCandidate;
+
+  if (!scheduleName && !useNewFormat) scheduleName = newScheduleCandidate || '';
+  if (!projectName && !useNewFormat) projectName = newProjectCandidate || '';
+  if (!bank && useNewFormat) bank = oldBankCandidate;
+  if (!bank && !useNewFormat) bank = newBankCandidate;
+
+  scheduleName = scheduleName.toLowerCase();
+  projectName = projectName.toLowerCase();
+  if (!COMPANY_OPTIONS.includes(company)) company = COMPANY_OPTIONS[0] || '';
+
+  if (!storedEmployees[id]) { added++; } else { updated++; }
+  let scheduleId = Object.keys(storedSchedules).find(k => (storedSchedules[k].name || '').toLowerCase() === scheduleName) || defaultScheduleId;
+  let projectId = Object.keys(storedProjects).find(k => (storedProjects[k].name || '').toLowerCase() === projectName) || null;
+
+  storedEmployees[id] = { name: name, hourlyRate: rate, bankAccount: bank, scheduleId: scheduleId, projectId: projectId, company: company };
+});
+saveEmployeesToLS();
+renderEmployees();
+renderResults();
+if (added || updated) alert(`Imported: ${added}, Updated: ${updated}`);
+    } catch (err) { console.error(err); alert('Error reading file.'); }
+    finally { evt.target.value = ''; }
+  };
+  reader.readAsArrayBuffer(file);
+});
+
+function parseLine(line){
+  if(!line || !line.trim()) return null;
+  const parts = line.trim().split(/\t+/);
+  if(parts.length >= 2){
+    const id = parts[0].trim(); const dt = parts[1].trim();
+    const m = dt.match(/^(\d{4}-\d{2}-\d{2})\s+(\d{2}:\d{2})(:\d{2})?$/);
+    if(m) return { empId: id, date: m[1], time: m[2] };
+  }
+  const m2 = line.match(/(\d{4}-\d{2}-\d{2})\s+(\d{2}:\d{2}:\d{2})/);
+  if(m2){
+    const before = line.slice(0, m2.index); const idm = before.match(/(\d+)/);
+    if(!idm) return null; return { empId: idm[1], date: m2[1], time: m2[2].slice(0,5) };
+  }
+  return null;
+}
+
+
+
+document.getElementById('fileInput').addEventListener('change', (ev)=>{
+  const inputEl = ev.target;
+  const files = inputEl.files;
+  if (!files || !files.length) return;
+
+  let processed = 0, totalAdded = 0, errors = 0;
+  const total = files.length;
+  inputEl.disabled = true;
+
+  Array.from(files).forEach(file=>{
+    // Upload the raw .DAT/.TXT file to Supabase for backup/cross-device sync.
+    try {
+      if (typeof uploadDtrFileToCloud === 'function') {
+        uploadDtrFileToCloud(file);
+      }
+    } catch (err) {
+      // Ignore upload errors to avoid blocking file parsing
+    }
+    const r = new FileReader();
+    r.onload = (e)=>{
+      try {
+        const content = String(e.target.result || '');
+        const lines = content.split(/\r?\n/);
+// === MIN PATCH: Only keep records inside the current payroll period (From/To) ===
+let __from = '', __to = '';
+try {
+  const fEl = document.getElementById('weekStart');
+  const tEl = document.getElementById('weekEnd');
+  const wsKey = (typeof LS_WEEKSTART !== 'undefined') ? LS_WEEKSTART : 'ui_payroll_week_start_local';
+  const weKey = (typeof LS_WEEKEND !== 'undefined') ? LS_WEEKEND : 'ui_payroll_week_end_local';
+  __from = (fEl && fEl.value) ? fEl.value : (localStorage.getItem(wsKey) || '');
+  __to   = (tEl && tEl.value) ? tEl.value : (localStorage.getItem(weKey)   || '');
+} catch(_) {}
+function __inRange(d){
+  if (!d) return false;
+  if (__from && d < __from) return false;
+  if (__to   && d > __to)   return false;
+  return true;
+}
+// === /MIN PATCH ===
+
+        let added = 0;
+        for(const ln of lines){
+          const p = (typeof parseLine === 'function') ? parseLine(ln) : null;
+          if (p && p.empId && p.date && p.time && __inRange(p.date)){
+            storedRecords.push({ empId: String(p.empId), date: p.date, time: padHM(p.time) });
+            added++;
+          }
+        }
+        // Persist records locally for offline use
+        try { localStorage.setItem(LS_RECORDS, JSON.stringify(storedRecords)); } catch(e){}
+        // Refresh the DTR grid
+        if (typeof renderResults === 'function') renderResults();
+        // Persist the records to Supabase for cross-device sync
+        try {
+          if (typeof saveDtrToCloud === 'function') saveDtrToCloud(storedRecords);
+        } catch (e) {
+          console.warn('Failed to save DTR to Supabase', e);
+        }
+        // Hide the remote alert since we now have data after upload
+        try {
+          if (typeof hideRemoteDtrAlert === 'function') hideRemoteDtrAlert();
+        } catch (e) {
+          // ignore alert errors
+        }
+        totalAdded += added;
+      } catch(err){
+        console.error('Error reading', file.name, err);
+        errors++;
+      } finally {
+        processed++;
+        if (processed === total){
+          inputEl.disabled = false; inputEl.value = '';
+          if (errors > 0){
+            alert(`Upload finished with errors: imported ${totalAdded} record${totalAdded!==1?'s':''} from ${total} file${total>1?'s':''}. (${errors} file${errors>1?'s':''} failed)`);
+          } else {
+            alert(`Upload successful: imported ${totalAdded} record${totalAdded!==1?'s':''} from ${total} file${total>1?'s':''}.`);
+          }
+        }
+      }
+    };
+    r.onerror = ()=>{
+      errors++; processed++;
+      if (processed === total){
+        inputEl.disabled = false; inputEl.value = '';
+        alert(`Upload finished with errors: imported ${totalAdded} record${totalAdded!==1?'s':''} from ${total} file${total>1?'s':''}. (${errors} file${errors>1?'s':''} failed)`);
+      }
+    };
+    r.readAsText(file);
+  });
+});
+function padHM(hm){
+  if(!hm) return '';
+  const [h,m]=String(hm).split(':').map(x=>String(Number(x)).padStart(2,'0'));
+  return h.padStart(2,'0')+':'+m.padStart(2,'0');
+}
+function toMins(hm){
+  if(!hm) return null;
+  const str = String(hm).trim();
+  const match = str.match(/^(\d{1,2})\s*:\s*(\d{2})(?:\s*\+\s*(\d+))?$/);
+  if(!match) return null;
+  const h = Number(match[1]);
+  const m = Number(match[2]);
+  const dayOffset = match[3] ? Number(match[3]) : 0;
+  if(!isFinite(h) || !isFinite(m) || !isFinite(dayOffset)) return null;
+  return (h * 60) + m + (dayOffset * 24 * 60);
+}
+
+// Apply grace and late-rounding rules to segment start time.
+// Rules:
+// - Within grace minutes from schedule start => count as on-time (segment start).
+// - Beyond grace => round up to the next 30-minute mark.
+//   e.g. 8:16 -> 8:30, 8:31 -> 9:00.
+function normalizeSegmentInMins(inM, segStart, graceMins){
+  if (!Number.isFinite(inM) || !Number.isFinite(segStart)) return inM;
+  const grace = Number(graceMins) || 0;
+  if (inM <= segStart + grace) return segStart;
+  return Math.ceil(inM / 30) * 30;
+}
+
+// Round a segment end backward to the previous 30-minute block.
+// e.g. 5:49 PM -> 5:30 PM.
+function normalizeSegmentOutMins(outM){
+  if (!Number.isFinite(outM)) return outM;
+  return Math.floor(outM / 30) * 30;
+}
+
+function minsToDecimal(mins){ return (mins/60).toFixed(2); }
+
+function queueDtrDropdownRender(){
+  const run = () => {
+    const active = document.activeElement;
+    if (active && active.closest && active.closest('#resultsTable') && active.tagName === 'SELECT') {
+      setTimeout(run, 120);
+      return;
+    }
+    renderResults();
+  };
+  setTimeout(run, 0);
+}
+
+function buildScheduleDropdown(empId, date, currentScheduleId){
+  const sel = document.createElement('select');
+  Object.keys(storedSchedules).forEach(sid => {
+    const o = document.createElement('option');
+    o.value = sid;
+    o.textContent = storedSchedules[sid].name + (sid === defaultScheduleId ? ' (Default)' : '');
+    if(sid === currentScheduleId) o.selected = true;
+    sel.appendChild(o);
+  });
+  sel.addEventListener('click', (ev) => ev.stopPropagation());
+  sel.addEventListener('change', ()=>{
+    overridesSchedules[empId + '___' + date] = sel.value;
+    saveOverrides();
+    queueDtrDropdownRender();
+  });
+  return sel;
+}
+function buildProjectDropdown(empId, date, currentProjectId){
+  const sel = document.createElement('select');
+  const noneOpt = document.createElement('option');
+  noneOpt.value = '';
+  noneOpt.textContent = '(None)';
+  sel.appendChild(noneOpt);
+  Object.keys(storedProjects).filter(pid => !(storedProjects[pid] && storedProjects[pid].active === false)).forEach(pid => {
+    const o = document.createElement('option');
+    o.value = pid;
+    o.textContent = storedProjects[pid].name;
+    if(pid === currentProjectId) o.selected = true;
+    sel.appendChild(o);
+  });
+  if (currentProjectId && storedProjects[currentProjectId] && storedProjects[currentProjectId].active === false) {
+    const o = document.createElement('option');
+    o.value = currentProjectId;
+    o.textContent = storedProjects[currentProjectId].name + ' (inactive)';
+    o.selected = true;
+    sel.appendChild(o);
+  }
+  sel.addEventListener('click', (ev) => ev.stopPropagation());
+  sel.addEventListener('change', ()=>{
+    overridesProjects[empId + '___' + date] = sel.value;
+    saveOverrides();
+    queueDtrDropdownRender();
+  });
+  return sel;
+}
+
+// Build a project dropdown for half-day (AM/PM) rows. Uses a key that
+// appends the half identifier (e.g. '123___2023-08-19___AM') so that
+// overrides can be stored separately for morning and afternoon entries.
+function buildProjectDropdownHalf(empId, date, half, currentProjectId){
+  const sel = document.createElement('select');
+  // Include a none/default option
+  const noneOpt = document.createElement('option');
+  noneOpt.value = '';
+  noneOpt.textContent = '(None)';
+  sel.appendChild(noneOpt);
+  Object.keys(storedProjects).filter(pid => !(storedProjects[pid] && storedProjects[pid].active === false)).forEach(pid => {
+    const o = document.createElement('option');
+    o.value = pid;
+    o.textContent = storedProjects[pid].name;
+    if(pid === currentProjectId) o.selected = true;
+    sel.appendChild(o);
+  });
+  if (currentProjectId && storedProjects[currentProjectId] && storedProjects[currentProjectId].active === false) {
+    const o = document.createElement('option');
+    o.value = currentProjectId;
+    o.textContent = storedProjects[currentProjectId].name + ' (inactive)';
+    o.selected = true;
+    sel.appendChild(o);
+  }
+  sel.addEventListener('click', (ev) => ev.stopPropagation());
+  sel.addEventListener('change', () => {
+    // Persist override keyed by empId + date + half
+    overridesProjects[empId + '___' + date + '___' + half] = sel.value;
+    saveOverrides();
+    // Re-render to apply changes
+    queueDtrDropdownRender();
+  });
+  return sel;
+}
+
+// Build a schedule dropdown for half-day (AM/PM) rows. Similar to
+// buildScheduleDropdown but stores overrides using a half-specific key.
+function buildScheduleDropdownHalf(empId, date, half, currentScheduleId){
+  const sel = document.createElement('select');
+  Object.keys(storedSchedules).forEach(sid => {
+    const o = document.createElement('option');
+    o.value = sid;
+    o.textContent = storedSchedules[sid].name + (sid === defaultScheduleId ? ' (Default)' : '');
+    if(sid === currentScheduleId) o.selected = true;
+    sel.appendChild(o);
+  });
+  sel.addEventListener('click', (ev) => ev.stopPropagation());
+  sel.addEventListener('change', () => {
+    overridesSchedules[empId + '___' + date + '___' + half] = sel.value;
+    saveOverrides();
+    queueDtrDropdownRender();
+  });
+  return sel;
+}
+
+function formatHours(value){
+  const num = parseFloat(value);
+  return (!isFinite(num) || num === 0) ? '-' : num.toFixed(2);
+}
+
+function renderResults(){
+
+// 12-hour clock formatter for display only (keeps underlying logic 24h)
+function __fmt12Clock(hhmm){
+  if(!hhmm || typeof hhmm !== 'string') return hhmm || '';
+  const nextDayMatch = hhmm.match(/\+\s*(\d+)\s*$/);
+  const nextDaySuffix = nextDayMatch ? ` (+${nextDayMatch[1]})` : '';
+  const base = hhmm.replace(/\s*\+\s*\d+\s*$/, '');
+  const m = base.match(/^\s*(\d{1,2})\s*:\s*(\d{2})\s*$/);
+  if(!m) return hhmm;
+  let h = parseInt(m[1],10), mm = m[2];
+  let meridiem = 'AM';
+  if(h === 0){ h = 12; meridiem = 'AM'; }
+  else if(h === 12){ meridiem = 'PM'; }
+  else if(h > 12){ h = h - 12; meridiem = 'PM'; }
+  else { meridiem = 'AM'; }
+  return h + ':' + mm + ' ' + meridiem + nextDaySuffix;
+}
+
+
+  renderScheduleSelector();
+  renderProjectFilterOptions();
+
+  // Respect DTR tab's Date filter when present; fall back to active week.
+  const __df = document.getElementById('dtrDateFrom');
+  const __dt = document.getElementById('dtrDateTo');
+  const startDate = (__df && __df.value) ? __df.value : ((window.__bpSafeDom && __bpSafeDom.val(__bpSafeDom.byId('weekStart'))) || null);
+  const endDate   = (__dt && __dt.value) ? __dt.value : ((window.__bpSafeDom && __bpSafeDom.val(__bpSafeDom.byId('weekEnd'))) || null);
+  currentProjectFilter = document.getElementById('filterProject') ? document.getElementById('filterProject').value : 'all';
+  localStorage.setItem(LS_FILTER_PROJECT, currentProjectFilter);
+
+  
+  const nameQuery = (document.getElementById('dtrSearchName') ? document.getElementById('dtrSearchName').value.trim().toLowerCase() : '');
+const groups = {};
+  const manualKeys = new Set();
+  for(const r of storedRecords){
+    if(startDate && r.date < startDate) continue;
+    if(endDate && r.date > endDate) continue;
+    if (isPunchClaimedByPreviousDayOt(r.empId, r.date, r.time)) continue;
+    const key = r.date + '___' + r.empId;
+    if(!groups[key]) groups[key]=[];
+    groups[key].push(r.time);
+    if (r.manual) manualKeys.add(key);
+  }
+
+  const keys = Object.keys(groups).sort((a,b)=>{
+    const [da,ea]=a.split('___'), [db,eb]=b.split('___');
+    const nameA=(storedEmployees[ea] ? storedEmployees[ea].name : '').toLowerCase();
+    const nameB=(storedEmployees[eb] ? storedEmployees[eb].name : '').toLowerCase();
+    if(nameA && nameB){ if(nameA!==nameB) return nameA.localeCompare(nameB); if(da!==db) return da.localeCompare(db); return String(ea).localeCompare(String(eb)); }
+    if(nameA && !nameB) return -1; if(!nameA && nameB) return 1; if(da!==db) return da.localeCompare(db); return String(ea).localeCompare(String(eb));
+  });
+
+  const tbody = document.querySelector('#resultsTable tbody'); tbody.innerHTML='';
+  // Track rows appended to avoid expensive DOM queries after render
+  let _rowCount = 0;
+  // Initialize totals for DTR summary. We will accumulate regular and OT hours and unique employee IDs
+  let _dtrTotalReg = 0;
+  let _dtrTotalOt  = 0;
+  const _dtrEmpIds = new Set();
+
+  const __nameQuery = (document.getElementById('dtrSearchName') ? document.getElementById('dtrSearchName').value.trim().toLowerCase() : '');
+  for(const key of keys){
+    const [date, empId] = key.split('___');
+    const emp = storedEmployees[empId] || null;
+      if (__nameQuery) { const _nm = (emp && emp.name ? String(emp.name).toLowerCase() : ''); if (_nm.indexOf(__nameQuery) === -1) continue; }
+let empProjId = emp ? (emp.projectId || '') : '';
+    const overrideKeyProj = empId + '___' + date;
+    if(overridesProjects[overrideKeyProj] !== undefined) empProjId = overridesProjects[overrideKeyProj];
+    const passesProject =
+      currentProjectFilter === 'all' ||
+      (currentProjectFilter === 'none' && !empProjId) ||
+      currentProjectFilter === empProjId;
+    let _passes = passesProject;
+if(!_passes && typeof splits !== 'undefined' && splits && splits[empId + '___' + date]){
+  const segs = ['AM','PM','OT'];
+  for (let i=0;i<segs.length;i++){
+    const hk = empId + '___' + date + '___' + segs[i];
+    const pidSeg = (typeof overridesProjects !== 'undefined' && overridesProjects && Object.prototype.hasOwnProperty.call(overridesProjects, hk)) ? overridesProjects[hk] : empProjId;
+    if (currentProjectFilter === 'all' || (currentProjectFilter === 'none' && !pidSeg) || currentProjectFilter === pidSeg){ _passes = true; break; }
+  }
+}
+if(!_passes) continue;
+
+    const times = Array.from(new Set(groups[key])).sort();
+    const otTimes = getOtCandidateTimes(empId, date, times);
+
+    const pickEarliest = (win) => times.find(t => t >= win.start && t <= win.end) || null;
+    const pickLatest = (win) => { const arr = times.filter(t => t >= win.start && t <= win.end); return arr.length ? arr[arr.length-1] : null; };
+    const pickEarliestOt = (win) => { const sM = toMins(win.start), eM = toMins(win.end); return otTimes.find(t => isInOtWindowWithOvernight(toMins(t), sM, eM)) || null; };
+    const pickLatestOt = (win) => { const sM = toMins(win.start), eM = toMins(win.end); const arr = otTimes.filter(t => isInOtWindowWithOvernight(toMins(t), sM, eM)); return arr.length ? arr[arr.length-1] : null; };
+
+    let scheduleIdForEmp = emp && emp.scheduleId ? emp.scheduleId : defaultScheduleId;
+    const overrideKey = empId + '___' + date;
+    if(overridesSchedules[overrideKey]) scheduleIdForEmp = overridesSchedules[overrideKey];
+    const schedule = storedSchedules[scheduleIdForEmp] || Object.assign({}, DEFAULT_SCHEDULE);
+    const rangesForEmp = {
+      amIn: { start: schedule.rng_am_in_start || DEFAULT_RANGES.rng_am_in_start, end: schedule.rng_am_in_end || DEFAULT_RANGES.rng_am_in_end },
+      amOut:{ start: schedule.rng_am_out_start || DEFAULT_RANGES.rng_am_out_start, end: schedule.rng_am_out_end || DEFAULT_RANGES.rng_am_out_end },
+      pmIn: { start: schedule.rng_pm_in_start || DEFAULT_RANGES.rng_pm_in_start, end: schedule.rng_pm_in_end || DEFAULT_RANGES.rng_pm_in_end },
+      pmOut:{ start: schedule.rng_pm_out_start || DEFAULT_RANGES.rng_pm_out_start, end: schedule.rng_pm_out_end || DEFAULT_RANGES.rng_pm_out_end },
+      otIn: { start: schedule.rng_ot_in_start || DEFAULT_RANGES.rng_ot_in_start, end: schedule.rng_ot_in_end || DEFAULT_RANGES.rng_ot_in_end },
+      otOut:{ start: schedule.rng_ot_out_start || DEFAULT_RANGES.rng_ot_out_start, end: schedule.rng_ot_out_end || DEFAULT_RANGES.rng_ot_out_end }
+    };
+
+    // Determine day-of-week before selecting punches so Saturday can use its own ranges.
+    const __dow = (function(d){
+      const dt = new Date(d + 'T00:00');
+      return (isNaN(dt) ? new Date(d) : dt).getDay();
+    })(date);
+    const __isSaturday = (__dow === 6);
+
+    const overridePunches = dtrOverrides && Object.prototype.hasOwnProperty.call(dtrOverrides, overrideKey)
+      ? dtrOverrides[overrideKey]
+      : null;
+    let amInActual = null;
+    let amOutActual = null;
+    let pmInActual = null;
+    let pmOutActual = null;
+    let otInActual = null;
+    let otOutActual = null;
+    if (overridePunches) {
+      amInActual = normalizeOverrideValue(overridePunches.amIn);
+      amOutActual = normalizeOverrideValue(overridePunches.amOut);
+      pmInActual = normalizeOverrideValue(overridePunches.pmIn);
+      pmOutActual = normalizeOverrideValue(overridePunches.pmOut);
+      otInActual = normalizeOverrideValue(overridePunches.otIn);
+      otOutActual = normalizeOverrideValue(overridePunches.otOut);
+    } else if (__isSaturday) {
+      amInActual = pickEarliest({
+        start: schedule.rng_sat_in_start || DEFAULT_RANGES.rng_sat_in_start,
+        end: schedule.rng_sat_in_end || DEFAULT_RANGES.rng_sat_in_end
+      });
+      amOutActual = pickLatest({
+        start: schedule.rng_sat_out_start || DEFAULT_RANGES.rng_sat_out_start,
+        end: schedule.rng_sat_out_end || DEFAULT_RANGES.rng_sat_out_end
+      });
+    } else {
+      amInActual = pickEarliest(rangesForEmp.amIn);
+      amOutActual = pickLatest(rangesForEmp.amOut);
+      pmInActual = pickEarliest(rangesForEmp.pmIn);
+      pmOutActual = pickLatest(rangesForEmp.pmOut);
+    }
+
+    let pmOutRefMins = pmOutActual ? toMins(pmOutActual) : toMins(schedule.sch_pm_end);
+
+    
+    
+    // === Saturday rule (scoped) ===
+    // Use local flags/vars so other days are untouched.
+    let __satStart = null, __satEnd = null;
+    try {
+      if (__isSaturday) { // Saturday
+        const satStart = schedule.sch_sat_start || schedule.sch_am_start || "08:00";
+        const satEnd   = schedule.sch_sat_end   || schedule.sch_pm_end || schedule.sch_am_end || "11:00";
+        __satStart = satStart;
+        __satEnd   = satEnd;
+        // For OT picking, any time after scheduled end counts as OT
+        pmOutRefMins = toMins(satEnd);
+      }
+    } catch(e){ console.warn('Saturday OT local patch error', e); }
+    if (!overridePunches) {
+      const otCandidates = times.filter(t => {
+        const mins = toMins(t);
+        return mins > pmOutRefMins && mins >= toMins(rangesForEmp.otIn.start) && mins <= toMins(rangesForEmp.otIn.end);
+      });
+      // --- Patched OT In/Out picking (DTR) ---
+      const otInCandidates = otTimes.filter(t => {
+        const m = toMins(t);
+        const satOtInStart = toMins(schedule.rng_sat_ot_start || DEFAULT_RANGES.rng_sat_ot_start);
+        const satOtInEnd = toMins(schedule.rng_sat_ot_end || DEFAULT_RANGES.rng_sat_ot_end);
+        return m > pmOutRefMins && isInOtWindowWithOvernight(
+          m,
+          toMins(__isSaturday ? (schedule.rng_sat_ot_start || DEFAULT_RANGES.rng_sat_ot_start) : rangesForEmp.otIn.start),
+          toMins(__isSaturday ? (schedule.rng_sat_ot_end || DEFAULT_RANGES.rng_sat_ot_end) : rangesForEmp.otIn.end)
+        ) && (!__isSaturday || (m >= satOtInStart && m <= satOtInEnd));
+      });
+      otInActual = otInCandidates.length ? otInCandidates[0] : null;
+
+      const otOutCandidates = otTimes
+        .filter(t => {
+          const m = toMins(t);
+          const satOtOutStart = toMins(schedule.rng_sat_ot_out_start || schedule.rng_sat_ot_start || DEFAULT_RANGES.rng_sat_ot_out_start || DEFAULT_RANGES.rng_sat_ot_start);
+          const satOtOutEnd = toMins(schedule.rng_sat_ot_out_end || schedule.rng_sat_ot_end || DEFAULT_RANGES.rng_sat_ot_out_end || DEFAULT_RANGES.rng_sat_ot_end);
+          return m > pmOutRefMins && isInOtWindowWithOvernight(
+            m,
+            toMins(__isSaturday ? (schedule.rng_sat_ot_out_start || schedule.rng_sat_ot_start || DEFAULT_RANGES.rng_sat_ot_out_start || DEFAULT_RANGES.rng_sat_ot_start) : rangesForEmp.otOut.start),
+            toMins(__isSaturday ? (schedule.rng_sat_ot_out_end || schedule.rng_sat_ot_end || DEFAULT_RANGES.rng_sat_ot_out_end || DEFAULT_RANGES.rng_sat_ot_end) : rangesForEmp.otOut.end)
+          ) && (!__isSaturday || (m >= satOtOutStart && m <= satOtOutEnd));
+        })
+        .filter(t => !otInActual || toMins(t) > toMins(otInActual));
+      otOutActual = otOutCandidates.length ? otOutCandidates[otOutCandidates.length - 1] : null;
+      if (otInActual && otOutActual && toMins(otOutActual) <= toMins(otInActual)) {
+        otInActual = null;
+        otOutActual = null;
+      }
+      // --- end patch ---
+    }
+
+let otInCalc = otInActual;
+let otOutCalc = otOutActual;
+
+
+    
+    
+    
+    // Recompute regular time deterministically (no dependency on raw 'times' array)
+    let totalMins = 0; const grace = Number(schedule.sch_grace) || 0;
+
+    const clampSeg = (inStr, outStr, segStartStr, segEndStr) => {
+      // Helper to add minutes
+      const addMin = (m, d) => /* no-op placeholder removed */ m; // placeholder
+    
+      if (!inStr || !outStr || !segStartStr || !segEndStr) return 0;
+      let inM = toMins(inStr);
+      const outM = toMins(outStr);
+      const segStart = toMins(segStartStr), segEndRaw = toMins(segEndStr);
+      let segEnd = segEndRaw;
+      // Auto-correct common input mistake: PM End typed as AM (e.g., 06:00 instead of 18:00)
+      if (segEnd <= segStart && segStart >= 12*60 && segEnd <= 12*60) {
+        segEnd += 12*60; // push to PM
+      }
+      if (segEnd <= segStart) return 0;
+      inM = normalizeSegmentInMins(inM, segStart, grace);
+      const endM = normalizeSegmentOutMins(Math.min(outM, segEnd));
+      return Math.max(0, endM - inM);
+    };
+
+    if (__isSaturday && __satStart && __satEnd) {
+      // Use the earliest actual IN and latest actual OUT between AM/PM within the Saturday window
+      const firstIn  = amInActual || pmInActual || null;
+      const lastOut  = pmOutActual || amOutActual || null;
+      totalMins = clampSeg(firstIn, lastOut, __satStart, __satEnd);
+    } else {
+      // Weekdays: compute AM and PM independently; add them
+      const hasBridge = !!(amInActual && !amOutActual && !pmInActual && pmOutActual);
+      if (hasBridge) {
+        const synthAmOut = schedule.sch_am_end || "12:00";
+        const synthPmIn  = schedule.sch_pm_start || "13:00";
+        totalMins =
+          clampSeg(amInActual, synthAmOut, schedule.sch_am_start, schedule.sch_am_end) +
+          clampSeg(synthPmIn,  pmOutActual, schedule.sch_pm_start, schedule.sch_pm_end);
+      } else {
+        const amMins = clampSeg(amInActual, amOutActual, schedule.sch_am_start, schedule.sch_am_end);
+        const pmMins = clampSeg(pmInActual, pmOutActual, schedule.sch_pm_start, schedule.sch_pm_end);
+        totalMins = amMins + pmMins;
+      }
+    }
+
+    const totalRegularDecimal = minsToDecimal(totalMins);
+let otMins = 0;
+    if(otInCalc && otOutCalc){
+      const otInM = toMins(otInCalc);
+      let otOutM = toMins(otOutCalc);
+      if (otInM !== null && otOutM !== null) {
+        let rangeStart = toMins(__isSaturday ? (__satEnd || rangesForEmp.otIn.start) : rangesForEmp.otIn.start);
+        let rangeEnd = toMins(__isSaturday ? '23:59' : (rangesForEmp.otOut.end || rangesForEmp.otIn.end));
+        if (otOutM >= 1440) rangeEnd = Math.max(rangeEnd, 1440 + OVERNIGHT_CUTOFF_HOUR * 60);
+        // OT duration now always uses toMins(..) values (supports HH:MM+N).
+        const otStartClamp = Math.max(otInM, rangeStart);
+        const otEndClamp = Math.min(otOutM, rangeEnd);
+        otMins = Math.max(0, otEndClamp - otStartClamp);
+      }
+    }
+    
+
+    // Fallback OT computation for non-Saturday days.
+    // When there are no explicit OT punches (or the OT IN occurs before
+    // the end of the regular shift), treat any minutes worked beyond
+    // the scheduled PM end as overtime. Only the final clock-out time
+    // is considered to avoid counting intermediate segments.
+    try {
+      if (!overridePunches && !__isSaturday) {
+        // Determine the reference end time for regular work (PM shift end)
+        const pmRef = pmOutActual ? toMins(pmOutActual) : toMins(schedule.sch_pm_end || (typeof DEFAULT_SCHEDULE !== 'undefined' ? DEFAULT_SCHEDULE.sch_pm_end : '17:00'));
+        // Determine if explicit OT was applied (OT IN after PM end)
+        let hasExplicitOT = false;
+        if (typeof otInCalc !== 'undefined' && typeof otOutCalc !== 'undefined' && otInCalc && otOutCalc) {
+          const otInM = toMins(otInCalc);
+          if (otInM > pmRef) hasExplicitOT = true;
+        }
+        if (!hasExplicitOT) {
+          const lastOutFallback = pmOutActual || amOutActual || null;
+          if (lastOutFallback) {
+            const lastOutM = toMins(lastOutFallback);
+            if (lastOutM > pmRef) {
+              otMins = lastOutM - pmRef;
+            }
+          }
+        }
+      }
+    } catch(err) { console.warn('Non-Saturday OT fallback failed', err); }
+
+    const otDecimal = minsToDecimal(otMins);
+
+    // --- Begin AM/PM/OT Split Logic ---
+    // If this record is flagged for split, render separate rows for the AM,
+    // PM and OT portions instead of one combined row. A split is recorded
+    // in the `splits` object keyed by the employee/date (empId + '___' + date).
+    // When a record is split we compute the regular hours and overtime
+    // separately for each segment using the schedule assigned to that half
+    // (any overrides are honoured). Each segment has its own project and
+    // schedule dropdowns. Grace periods are applied according to the
+    // selected schedule.
+
+    const splitKey = empId + '___' + date;
+    let splitEntry = splits && splits[splitKey];
+    if (splitEntry) {
+      if (splitEntry === true) splitEntry = { AM: true, PM: true, OT: true };
+      const name = emp ? emp.name : '';
+      const merged = { regMins:0, otMins:0, amIn:null, amOut:null, pmIn:null, pmOut:null, otIn:null, otOut:null, count:0 };
+      const clampSegHalf = (inStr, outStr, segStartStr, segEndStr, sched) => {
+        if (!inStr || !outStr || !segStartStr || !segEndStr) return 0;
+        let inM = toMins(inStr);
+        const outM = toMins(outStr);
+        const segStart = toMins(segStartStr);
+        let segEnd = toMins(segEndStr);
+        if (segEnd <= segStart && segStart >= 12 * 60 && segEnd <= 12 * 60) segEnd += 12 * 60;
+        if (segEnd <= segStart) return 0;
+        const g = Number(sched && sched.sch_grace) || 0;
+        inM = normalizeSegmentInMins(inM, segStart, g);
+        const endM = normalizeSegmentOutMins(Math.min(outM, segEnd));
+        return Math.max(0, endM - inM);
+      };
+      const computeOtHalf = (sched) => {
+        let otM = 0, otIn = null, otOut = null;
+        let pmOutRef = pmOutActual ? toMins(pmOutActual) : toMins(sched.sch_pm_end || DEFAULT_SCHEDULE.sch_pm_end);
+        let isSat = false, satStart = null, satEnd = null;
+        try {
+          const dow = (function(d){ const dt = new Date(d + 'T00:00'); return (isNaN(dt) ? new Date(d) : dt).getDay(); })(date);
+          if (dow === 6) { isSat = true; satStart = sched.sch_sat_start || sched.sch_am_start || '08:00'; satEnd = sched.sch_sat_end || sched.sch_pm_end || sched.sch_am_end || '11:00'; pmOutRef = toMins(satEnd); }
+        } catch(e){}
+        const rng = {
+          otIn: { start: sched.rng_ot_in_start || DEFAULT_RANGES.rng_ot_in_start, end: sched.rng_ot_in_end || DEFAULT_RANGES.rng_ot_in_end },
+          otOut:{ start: sched.rng_ot_out_start||DEFAULT_RANGES.rng_ot_out_start, end: sched.rng_ot_out_end||DEFAULT_RANGES.rng_ot_out_end }
+        };
+        const otInCands = otTimes.filter(t=>{ const m=toMins(t); return m>pmOutRef && isInOtWindowWithOvernight(m, toMins(isSat?satEnd:rng.otIn.start), toMins(isSat?'23:59':rng.otIn.end)); });
+        otIn = otInCands.length ? otInCands[0] : null;
+        const otOutCands = otTimes.filter(t=>{ const m=toMins(t); return m>pmOutRef && isInOtWindowWithOvernight(m, toMins(isSat?satEnd:rng.otOut.start), toMins(isSat?'23:59':rng.otOut.end)); }).filter(t=>!otIn||toMins(t)>=toMins(otIn));
+        otOut = otOutCands.length ? otOutCands[otOutCands.length-1] : null;
+        if (isSat && satEnd) { const lastOut=pmOutActual||amOutActual||null; const lastOutM=lastOut?toMins(lastOut):null; const satEndM=toMins(satEnd); if (lastOutM!==null&&lastOutM>satEndM){ if(!otIn) otIn=satEnd; if(!otOut) otOut=lastOut; } }
+        if (otIn && otOut) { const inM=toMins(otIn), outM=toMins(otOut); const startClamp=Math.max(inM, toMins(isSat?(satEnd||rng.otIn.start):rng.otIn.start)); let rangeEnd=toMins(isSat?'23:59':(rng.otOut.end||rng.otIn.end)); if(outM>=1440) rangeEnd=Math.max(rangeEnd, 1440 + OVERNIGHT_CUTOFF_HOUR * 60); const endClamp=Math.min(outM, rangeEnd); otM=Math.max(0,endClamp-startClamp); }
+        return { mins: otM, otIn: otIn, otOut: otOut };
+      };
+      const hasBridge = !!(amInActual && !amOutActual && !pmInActual && pmOutActual);
+      const middayStart = schedule.sch_am_end || '12:00';
+      const middayEnd   = schedule.sch_pm_start || '13:00';
+      ['AM','PM','OT'].forEach(segment => {
+        const halfKey = empId + '___' + date + '___' + segment;
+        const schedIdHalf = (overridesSchedules && overridesSchedules[halfKey]) ? overridesSchedules[halfKey] : scheduleIdForEmp;
+        const schedHalf = storedSchedules[schedIdHalf] || DEFAULT_SCHEDULE;
+        let regMinsSeg=0, otMinsSeg=0, otInSeg=null, otOutSeg=null;
+        if(segment==='AM'){ regMinsSeg = hasBridge ? clampSegHalf(amInActual, middayStart, schedHalf.sch_am_start || DEFAULT_SCHEDULE.sch_am_start, schedHalf.sch_am_end || DEFAULT_SCHEDULE.sch_am_end, schedHalf) : clampSegHalf(amInActual, amOutActual, schedHalf.sch_am_start || DEFAULT_SCHEDULE.sch_am_start, schedHalf.sch_am_end || DEFAULT_SCHEDULE.sch_am_end, schedHalf); }
+        else if(segment==='PM'){ regMinsSeg = hasBridge ? clampSegHalf(middayEnd, pmOutActual, schedHalf.sch_pm_start || DEFAULT_SCHEDULE.sch_pm_start, schedHalf.sch_pm_end || DEFAULT_SCHEDULE.sch_pm_end, schedHalf) : clampSegHalf(pmInActual, pmOutActual, schedHalf.sch_pm_start || DEFAULT_SCHEDULE.sch_pm_start, schedHalf.sch_pm_end || DEFAULT_SCHEDULE.sch_pm_end, schedHalf); }
+        else {
+          if (overridePunches) {
+            otMinsSeg = otMins;
+            otInSeg = otInCalc;
+            otOutSeg = otOutCalc;
+          } else {
+            const otRes = computeOtHalf(schedHalf);
+            otMinsSeg = otRes.mins;
+            otInSeg = otRes.otIn;
+            otOutSeg = otRes.otOut;
+          }
+        }
+        const regDecSeg = minsToDecimal(regMinsSeg);
+        const otDecSeg = segment==='OT'? minsToDecimal(otMinsSeg):'0.00';
+        let projIdSeg = (overridesProjects && Object.prototype.hasOwnProperty.call(overridesProjects, halfKey)) ? overridesProjects[halfKey] : empProjId;
+        const __segPass = (currentProjectFilter === 'all' || (currentProjectFilter === 'none' && !projIdSeg) || currentProjectFilter === projIdSeg);
+        if(!__segPass){ return; }
+        if (splitEntry[segment]) {
+          const trSeg = document.createElement('tr');
+          let htmlSeg='';
+          htmlSeg += '<td>' + __fmt12Clock(empId) + '</td>';
+          htmlSeg += '<td>' + (name || '') + '</td>';
+          htmlSeg += '<td></td><td></td>';
+          htmlSeg += '<td>' + __fmt12Clock(date) + '</td>';
+          if(segment==='AM'){
+            htmlSeg += (amInActual ? '<td>' + __fmt12Clock(amInActual) + '</td>' : '<td class="missing">-</td>');
+            htmlSeg += (hasBridge || !amOutActual) ? '<td class="missing">-</td>' : '<td>' + __fmt12Clock(amOutActual) + '</td>';
+            htmlSeg += '<td class="missing">-</td><td class="missing">-</td>';
+          } else if(segment==='PM'){
+            htmlSeg += '<td class="missing">-</td><td class="missing">-</td>';
+            htmlSeg += (hasBridge || !pmInActual) ? '<td class="missing">-</td>' : '<td>' + __fmt12Clock(pmInActual) + '</td>';
+            htmlSeg += (pmOutActual ? '<td>' + __fmt12Clock(pmOutActual) + '</td>' : '<td class="missing">-</td>');
+          } else {
+            htmlSeg += '<td class="missing">-</td><td class="missing">-</td><td class="missing">-</td><td class="missing">-</td>';
+          }
+          if(segment==='OT'){
+            htmlSeg += (otInSeg ? '<td>'+__fmt12Clock(otInSeg)+'</td>' : '<td class="missing">-</td>');
+            htmlSeg += (otOutSeg ? '<td>'+__fmt12Clock(otOutSeg)+'</td>' : '<td class="missing">-</td>');
+          } else {
+            htmlSeg += '<td class="missing">-</td><td class="missing">-</td>';
+          }
+          htmlSeg += '<td>' + formatHours(regDecSeg) + '</td>';
+          htmlSeg += '<td>' + formatHours(otDecSeg) + '</td>';
+          htmlSeg += '<td>' + formatHours(String((parseFloat(regDecSeg)||0)+(parseFloat(otDecSeg)||0))) + '</td>';
+          htmlSeg += '<td><button type="button" class="btn-unsplit" data-key="' + splitKey + '" onclick="unsplitRecord(this.dataset.key)">Unsplit</button></td>';
+          htmlSeg += '<td class="punches-cell"><button type="button" class="dtr-punch-btn">✏ Entrys</button></td>';
+          // Ensure Actions column always has a Delete button for split rows
+          htmlSeg += '<td class="actions-cell"><button type="button" class="dtr-del-btn">Delete</button></td>';
+          trSeg.innerHTML = htmlSeg;
+          try {
+            if (typeof manualKeys !== 'undefined' && manualKeys.has(splitKey)) {
+              const nmCellSeg = trSeg.cells[1];
+              if (nmCellSeg && !nmCellSeg.querySelector('.manual-indicator')) {
+                const s2 = document.createElement('span');
+                s2.className = 'manual-indicator';
+                s2.title = 'Contains manual DTR';
+                s2.textContent = '*';
+                nmCellSeg.appendChild(s2);
+              }
+            }
+          } catch(e){}
+          const hasOverrideSeg = (overridesSchedules && overridesSchedules[halfKey]) || (overridesProjects && Object.prototype.hasOwnProperty.call(overridesProjects, halfKey));
+          if (hasOverrideSeg) { trSeg.style.backgroundColor = '#fff3cd'; }
+          const pcSeg = trSeg.cells[2]; if (pcSeg) { pcSeg.innerHTML=''; pcSeg.appendChild(buildProjectDropdownHalf(empId, date, segment, projIdSeg)); }
+          const scSeg = trSeg.cells[3]; if (scSeg) { scSeg.innerHTML=''; scSeg.appendChild(buildScheduleDropdownHalf(empId, date, segment, schedIdHalf)); }
+          trSeg.dataset.empId = empId;
+          trSeg.dataset.date = date;
+          trSeg.dataset.half = segment;
+          const timesForHalf = [];
+          if(segment==='AM'){
+            if(amInActual) timesForHalf.push(amInActual);
+            if(!hasBridge && amOutActual) timesForHalf.push(amOutActual);
+            trSeg.dataset.clockIn1 = amInActual || '';
+            trSeg.dataset.clockOut1 = (!hasBridge && amOutActual) ? amOutActual : '';
+          } else if(segment==='PM'){
+            if(!hasBridge && pmInActual) timesForHalf.push(pmInActual);
+            if(pmOutActual) timesForHalf.push(pmOutActual);
+            trSeg.dataset.clockIn2 = (!hasBridge && pmInActual) ? pmInActual : '';
+            trSeg.dataset.clockOut2 = pmOutActual || '';
+          } else {
+            if(otInSeg) timesForHalf.push(otInSeg);
+            if(otOutSeg) timesForHalf.push(otOutSeg);
+            trSeg.dataset.otIn = otInSeg || '';
+            trSeg.dataset.otOut = otOutSeg || '';
+          }
+          trSeg.dataset.times = JSON.stringify(timesForHalf);
+          tbody.appendChild(trSeg);
+          _rowCount++;
+          const _regVal=parseFloat(regDecSeg)||0; const _otVal=parseFloat(otDecSeg)||0;
+          _dtrTotalReg+=_regVal; _dtrTotalOt+=_otVal; _dtrEmpIds.add(empId);
+        } else {
+          merged.count++;
+          if(segment==='AM'){ merged.regMins+=regMinsSeg; merged.amIn=amInActual; merged.amOut=hasBridge?middayStart:amOutActual; }
+          else if(segment==='PM'){ merged.regMins+=regMinsSeg; merged.pmIn=hasBridge?middayEnd:pmInActual; merged.pmOut=pmOutActual; }
+          else { merged.otMins+=otMinsSeg; merged.otIn=otInSeg; merged.otOut=otOutSeg; }
+        }
+      });
+      if (merged.count) {
+        const tr = document.createElement('tr');
+        const projectName = (empProjId && storedProjects[empProjId]) ? storedProjects[empProjId].name : (emp && !emp.projectId ? '' : '');
+        const scheduleName = storedSchedules[scheduleIdForEmp] ? storedSchedules[scheduleIdForEmp].name + (scheduleIdForEmp===defaultScheduleId ? ' (Default)' : '') : '';
+        const cell = (v) => v ? '<td>' + __fmt12Clock(v) + '</td>' : '<td class="missing">-</td>';
+        const regDec = minsToDecimal(merged.regMins);
+        const otDec = minsToDecimal(merged.otMins);
+        tr.innerHTML = '<td>'+empId+'</td><td>'+name+'</td><td>'+projectName+'</td><td>'+scheduleName+'</td><td>'+date+'</td>' +
+          cell(merged.amIn) + cell(merged.amOut) + cell(merged.pmIn) + cell(merged.pmOut) +
+          (merged.otIn ? '<td>'+__fmt12Clock(merged.otIn)+'</td>' : '<td class="missing">-</td>') +
+          (merged.otOut ? '<td>'+__fmt12Clock(merged.otOut)+'</td>' : '<td class="missing">-</td>') +
+          '<td>'+formatHours(regDec)+'</td><td>'+formatHours(otDec)+'</td><td>'+formatHours(minsToDecimal(merged.regMins + merged.otMins))+'</td>' +
+          '<td><button type="button" class="btn-split" data-key="'+splitKey+'" onclick="splitRecord(this.dataset.key)">Split</button></td>' +
+          '<td class="punches-cell"><button type="button" class="dtr-punch-btn">✏ Entrys</button></td>' +
+          '<td class="actions-cell"><button type="button" class="dtr-del-btn">Delete</button></td>';
+        if(overridesSchedules[overrideKey] || overridesProjects[overrideKeyProj] !== undefined){ tr.style.backgroundColor='#fff3cd'; }
+        try{
+          if (typeof manualKeys !== 'undefined' && manualKeys.has(splitKey)) {
+            const nmCell = tr.cells[1];
+            if (nmCell && !nmCell.querySelector('.manual-indicator')) {
+              const s = document.createElement('span');
+              s.className='manual-indicator';
+              s.title='Contains manual DTR';
+              s.textContent='*';
+              nmCell.appendChild(s);
+            }
+          }
+        }catch(e){}
+        const projCell = tr.cells[2]; if(projCell){ projCell.innerHTML=''; projCell.appendChild(buildProjectDropdown(empId, date, empProjId)); }
+        const schedCell = tr.cells[3]; if(schedCell){ schedCell.innerHTML=''; schedCell.appendChild(buildScheduleDropdown(empId, date, scheduleIdForEmp)); }
+        tr.dataset.empId = empId;
+        tr.dataset.date = date;
+        tr.dataset.clockIn1 = merged.amIn || '';
+        tr.dataset.clockOut1 = merged.amOut || '';
+        tr.dataset.clockIn2 = merged.pmIn || '';
+        tr.dataset.clockOut2 = merged.pmOut || '';
+        tr.dataset.otIn = merged.otIn || '';
+        tr.dataset.otOut = merged.otOut || '';
+        tbody.appendChild(tr);
+        const _regVal=parseFloat(regDec)||0; const _otVal=parseFloat(otDec)||0; _dtrTotalReg+=_regVal; _dtrTotalOt+=_otVal; _dtrEmpIds.add(empId);
+      }
+      continue;
+    }
+
+    // --- End AM/PM/OT Split Logic ---
+
+    const name = emp ? emp.name : '';
+    const scheduleName = storedSchedules[scheduleIdForEmp] ? storedSchedules[scheduleIdForEmp].name + (scheduleIdForEmp===defaultScheduleId ? ' (Default)' : '') : '';
+    const projectName = (empProjId && storedProjects[empProjId]) ? storedProjects[empProjId].name : (emp && !emp.projectId ? '' : '');
+
+    const cell = (v) => v ? '<td>' + __fmt12Clock(v) + '</td>' : '<td class="missing">-</td>';
+    const tr = document.createElement('tr');
+    const __tot = ((parseFloat(totalRegularDecimal)||0)+(parseFloat(otDecimal)||0));
+    tr.innerHTML =
+      '<td>'+empId+'</td><td>'+name+'</td><td>'+projectName+'</td><td>'+scheduleName+'</td><td>'+date+'</td>' +
+      cell(amInActual) + cell(amOutActual) + cell(pmInActual) + cell(pmOutActual) +
+      (otInCalc ? '<td>' + __fmt12Clock(otInCalc) + '</td>' : '<td class=\"missing\">-</td>') +
+      (otOutCalc ? '<td>' + __fmt12Clock(otOutCalc) + '</td>' : '<td class=\"missing\">-</td>') +
+      '<td>'+formatHours(totalRegularDecimal)+'</td><td>'+formatHours(otDecimal)+'</td><td>'+formatHours(__tot)+'</td>' +
+      // Use a named handler with a data-key attribute instead of an inline IIFE.
+      '<td><button type="button" class="btn-split" data-key="' + empId + '___' + date + '" onclick="splitRecord(this.dataset.key)">Split</button></td>' +
+      '<td class="punches-cell"><button type="button" class="dtr-punch-btn">✏ Entrys</button></td>' +
+      // Ensure Actions column always has a Delete button for unsplit rows
+      '<td class="actions-cell"><button type="button" class="dtr-del-btn">Delete</button></td>';
+    if(overridesSchedules[overrideKey] || overridesProjects[overrideKeyProj] !== undefined){
+      tr.style.backgroundColor = '#fff3cd';
+    }
+    // Add a star indicator next to the Name if this row contains manual DTR entries
+    try {
+      if (typeof manualKeys !== 'undefined' && manualKeys.has(key)) {
+        const nmCell = tr.cells[1];
+        if (nmCell && !nmCell.querySelector('.manual-indicator')) {
+          const s = document.createElement('span');
+          s.className = 'manual-indicator';
+          s.title = 'Contains manual DTR';
+          s.textContent = '*';
+          nmCell.appendChild(s);
+        }
+      }
+    } catch(e){}
+    const projCell = tr.cells[2];
+    if(projCell){ projCell.innerHTML = ''; projCell.appendChild(buildProjectDropdown(empId, date, empProjId)); }
+    const schedCell = tr.cells[3];
+    if(schedCell){ schedCell.innerHTML = ''; schedCell.appendChild(buildScheduleDropdown(empId, date, scheduleIdForEmp)); }
+    tr.dataset.empId = empId;
+    tr.dataset.date = date;
+    tr.dataset.clockIn1 = amInActual || '';
+    tr.dataset.clockOut1 = amOutActual || '';
+    tr.dataset.clockIn2 = pmInActual || '';
+    tr.dataset.clockOut2 = pmOutActual || '';
+    tr.dataset.otIn = otInCalc || '';
+    tr.dataset.otOut = otOutCalc || '';
+    try { tr.dataset.times = JSON.stringify(times); } catch(_) { tr.dataset.times = '[]'; }
+    tbody.appendChild(tr);
+    _rowCount++;
+    // Accumulate totals for unsplit rows
+    const _regVal = parseFloat(totalRegularDecimal) || 0;
+    const _otVal  = parseFloat(otDecimal) || 0;
+    _dtrTotalReg += _regVal;
+    _dtrTotalOt  += _otVal;
+    _dtrEmpIds.add(empId);
+  }
+
+  // --- DTR Summary ---
+  // After building the table, update the summary using accumulated totals
+  (function(){
+    const summaryEl = document.getElementById('dtrSummary');
+    if (!summaryEl) return;
+    const rowCount = _rowCount;
+    if (!rowCount) {
+      summaryEl.textContent = '';
+      return;
+    }
+    // Compute combined total hours (regular + OT)
+    const _dtrTotalHours = _dtrTotalReg + _dtrTotalOt;
+    summaryEl.textContent = `Grand Total Hours: ${formatHours(_dtrTotalHours)} | Regular Hours: ${formatHours(_dtrTotalReg)} | OT Hours: ${formatHours(_dtrTotalOt)} | Employees: ${_dtrEmpIds.size}`;
+  })();
+
+(function(){
+  const tbl = document.getElementById('resultsTable');
+  if (!tbl) return;
+  // Create/clear tfoot
+  let foot = tbl.querySelector('tfoot#resultsFoot');
+  if (!foot) {
+    foot = document.createElement('tfoot');
+    foot.id = 'resultsFoot';
+    tbl.appendChild(foot);
+  }
+  // Locate important columns by header text
+  const ths = Array.from(tbl.querySelectorAll('thead th'));
+  const norm = s => String((s||'')).trim().toLowerCase();
+  const regIdx = ths.findIndex(th => (function(t){t=String(t||'').trim().toLowerCase();return t==='regular hrs'||t==='total regular hrs';})(th.textContent));
+  const otIdx  = ths.findIndex(th => norm(th.textContent) === 'ot hrs');
+  const totIdx = ths.findIndex(th => norm(th.textContent) === 'total hours');
+  const nameIdx = ths.findIndex(th => norm(th.textContent) === 'name');
+  const cols = ths.length;
+  // Values: prefer internal running totals if present; otherwise sum from table
+  function sumCol(idx){
+    if (idx < 0) return 0;
+    let s = 0;
+    const rows = (tbl.tBodies && tbl.tBodies[0]) ? Array.from(tbl.tBodies[0].rows) : [];
+    rows.forEach(tr => {
+      const td = tr.cells[idx]; if (!td) return;
+      const v = parseFloat(String(td.textContent||'').replace(/[^0-9.\-]/g,''));
+      if (!isNaN(v)) s += v;
+    });
+    return s;
+  }
+  const reg = (typeof _dtrTotalReg === 'number') ? _dtrTotalReg : sumCol(regIdx);
+  const ot  = (typeof _dtrTotalOt  === 'number') ? _dtrTotalOt  : sumCol(otIdx);
+  const tot = reg + ot;
+  const empCount = (typeof _dtrEmpIds === 'object' && _dtrEmpIds) ? _dtrEmpIds.size : (window.__lastEmpCount || 0);
+  // Build row with cells aligned to columns
+  const tr = document.createElement('tr');
+  tr.className = 'totals-row';
+  for (let i=0;i<cols;i++){
+    const td = document.createElement('td');
+    td.style.fontWeight = '700';
+    td.style.background = '#fafafa';
+    if (i===nameIdx) { td.textContent = 'Employees: ' + empCount; td.style.textAlign = 'left'; }
+    else if (i===regIdx) { td.textContent = formatHours(reg); td.style.textAlign = 'right'; }
+    else if (i===otIdx)  { td.textContent = formatHours(ot);  td.style.textAlign = 'right'; }
+    else if (i===totIdx) { td.textContent = formatHours(tot); td.style.textAlign = 'right'; }
+    else if (i===0)      { td.textContent = 'Totals:'; td.style.textAlign = 'left'; }
+    else { td.textContent = ''; }
+    const headTxt = norm(ths[i] && ths[i].textContent);
+      if (headTxt === 'split' || headTxt === 'actions') { td.style.display='none'; td.style.border='0'; }
+      tr.appendChild(td);
+  }
+  foot.innerHTML = '';
+  foot.appendChild(tr);
+  // Hide old textual summary
+  const summaryEl = document.getElementById('dtrSummary');
+  if (summaryEl){ summaryEl.textContent = ''; summaryEl.style.display = 'none'; }
+})();
+}
+
+document.getElementById('addProjectBtn').addEventListener('click', ()=>{
+  const name = document.getElementById('projectNameInput').value.trim();
+  if(!name) return alert('Enter project name');
+  const id = 'proj_' + Date.now();
+  const companySelect = document.getElementById('projectCompanySelect');
+  let company = companySelect ? companySelect.value : '';
+  if (!COMPANY_OPTIONS.includes(company)) company = COMPANY_OPTIONS[0] || '';
+  storedProjects[id] = { name, company, active: true, deactivatedAt: null };
+  document.getElementById('projectNameInput').value='';
+  if (companySelect) companySelect.value = COMPANY_OPTIONS[0] || '';
+  saveProjectsToLS();
+});
+document.getElementById('clearProjectsBtn').addEventListener('click', ()=>{
+  if(!confirm('Clear all projects?')) return;
+  storedProjects = {}; saveProjectsToLS();
+});
+
+async function initApp(){
+  if (window.ENABLE_SPLIT_OVERRIDES) await hydrateSplitOverrides();
+  ensureSchedules();
+  renderScheduleSelector();
+  renderScheduleEditor();
+  renderEmployees();
+  renderProjects();
+  renderProjectFilterOptions();
+  const savedFilter = localStorage.getItem(LS_FILTER_PROJECT);
+  if(document.getElementById('filterProject') && savedFilter && [...document.getElementById('filterProject').options].some(o=>o.value===savedFilter)){
+    document.getElementById('filterProject').value = savedFilter;
+    currentProjectFilter = savedFilter;
+  }
+  renderResults();
+}
+
+async function bootAfterKvHydrate() {
+  if (!window.__kv_hydrated) {
+    await new Promise((resolve) => {
+      const onHydrated = () => {
+        window.removeEventListener('kv-hydrated', onHydrated);
+        resolve();
+      };
+      window.addEventListener('kv-hydrated', onHydrated, { once: true });
+    });
+  }
+  try {
+    if (typeof window.refreshCoreStoresFromStorage === 'function') {
+      window.refreshCoreStoresFromStorage();
+    }
+  } catch (_) {}
+  await initApp();
+}
+bootAfterKvHydrate();
+  
+
+
+function computeHoursForDateRange(startDate, endDate) {
+  const totalsReg = {};
+  const totalsOT = {};
+  const totalsND = {};
+  Object.keys(storedEmployees).forEach(id => {
+    totalsReg[id] = 0;
+    totalsOT[id] = 0;
+    totalsND[id] = 0;
+  });
+
+  const keys = Object.keys(storedSchedules).length ? storedSchedules : {default: DEFAULT_SCHEDULE};
+  const grouped = {};
+
+  for (const r of storedRecords) {
+    if (startDate && r.date < startDate) continue;
+    if (endDate && r.date > endDate) continue;
+    const emp = storedEmployees[r.empId];
+    if (!emp) continue;
+    if (isPunchClaimedByPreviousDayOt(r.empId, r.date, r.time)) continue;
+    const dayKey = r.date + '___' + r.empId;
+    if (!grouped[dayKey]) grouped[dayKey] = [];
+    grouped[dayKey].push(r.time);
+  }
+
+  const toMins = hm => {
+    if(!hm) return null;
+    const match = String(hm).trim().match(/^(\d{1,2})\s*:\s*(\d{2})(?:\s*\+\s*(\d+))?$/);
+    if(!match) return null;
+    const h = Number(match[1]);
+    const m = Number(match[2]);
+    const dayOffset = match[3] ? Number(match[3]) : 0;
+    if(!isFinite(h) || !isFinite(m) || !isFinite(dayOffset)) return null;
+    return h*60+m+(dayOffset*24*60);
+  };
+  const minsToDec = mins => mins / 60;
+  const ndSettings = (typeof getNightDifferentialSettings === 'function')
+    ? getNightDifferentialSettings()
+    : { enabled: false, start: '22:00', end: '06:00', multiplier: 1.10 };
+  const ndEnabled = !!ndSettings.enabled;
+  const ndStartMins = toMins(ndSettings.start);
+  const ndEndMins = toMins(ndSettings.end);
+  const ndPremiumFactorRaw = Number(ndSettings.multiplier) - 1;
+  const ndPremiumFactor = Number.isFinite(ndPremiumFactorRaw) ? Math.max(0, ndPremiumFactorRaw) : 0;
+  const overlapMinsWithNightWindow = (rangeStart, rangeEnd) => {
+    if (!ndEnabled) return 0;
+    if (!Number.isFinite(rangeStart) || !Number.isFinite(rangeEnd) || rangeEnd <= rangeStart) return 0;
+    if (!Number.isFinite(ndStartMins) || !Number.isFinite(ndEndMins)) return 0;
+    let overlap = 0;
+    const startDay = Math.floor(rangeStart / 1440) - 1;
+    const endDay = Math.floor((rangeEnd - 1) / 1440) + 1;
+    for (let day = startDay; day <= endDay; day++) {
+      const winStart = day * 1440 + ndStartMins;
+      const winEnd = (ndEndMins > ndStartMins)
+        ? (day * 1440 + ndEndMins)
+        : ((day + 1) * 1440 + ndEndMins);
+      const segStart = Math.max(rangeStart, winStart);
+      const segEnd = Math.min(rangeEnd, winEnd);
+      if (segEnd > segStart) overlap += (segEnd - segStart);
+    }
+    return overlap;
+  };
+
+  for (const key in grouped) {
+    const [date, empId] = key.split('___');
+    const emp = storedEmployees[empId];
+    if (!emp) continue;
+
+    let scheduleIdForEmp = emp && emp.scheduleId ? emp.scheduleId : defaultScheduleId;
+    const overrideKey = empId + '___' + date;
+    if (overridesSchedules[overrideKey]) scheduleIdForEmp = overridesSchedules[overrideKey];
+    const schedule = keys[scheduleIdForEmp] || Object.assign({}, DEFAULT_SCHEDULE);
+
+    const times = [...new Set(grouped[key])].sort();
+    const otTimes = getOtCandidateTimes(empId, date, times);
+
+    const pickEarliest = (win) => times.find(t => t >= win.start && t <= win.end) || null;
+    const pickLatest = (win) => { const arr = times.filter(t => t >= win.start && t <= win.end); return arr.length ? arr[arr.length-1] : null; };
+    const pickEarliestOt = (win) => { const sM = toMins(win.start), eM = toMins(win.end); return otTimes.find(t => isInOtWindowWithOvernight(toMins(t), sM, eM)) || null; };
+    const pickLatestOt = (win) => { const sM = toMins(win.start), eM = toMins(win.end); const arr = otTimes.filter(t => isInOtWindowWithOvernight(toMins(t), sM, eM)); return arr.length ? arr[arr.length-1] : null; };
+
+    // Determine day-of-week before selecting punches so Saturday can use its own ranges.
+    const __dow = (function(d){
+      const dt = new Date(d + 'T00:00');
+      return (isNaN(dt) ? new Date(d) : dt).getDay();
+    })(date);
+    const __isSaturday = (__dow === 6);
+
+    const overridePunches = dtrOverrides && Object.prototype.hasOwnProperty.call(dtrOverrides, overrideKey)
+      ? dtrOverrides[overrideKey]
+      : null;
+    let amInActual = null;
+    let amOutActual = null;
+    let pmInActual = null;
+    let pmOutActual = null;
+    let otInActual = null;
+    let otOutActual = null;
+    if (overridePunches) {
+      amInActual = normalizeOverrideValue(overridePunches.amIn);
+      amOutActual = normalizeOverrideValue(overridePunches.amOut);
+      pmInActual = normalizeOverrideValue(overridePunches.pmIn);
+      pmOutActual = normalizeOverrideValue(overridePunches.pmOut);
+      otInActual = normalizeOverrideValue(overridePunches.otIn);
+      otOutActual = normalizeOverrideValue(overridePunches.otOut);
+    } else if (__isSaturday) {
+      amInActual = pickEarliest({
+        start: schedule.rng_sat_in_start || DEFAULT_RANGES.rng_sat_in_start,
+        end: schedule.rng_sat_in_end || DEFAULT_RANGES.rng_sat_in_end
+      });
+      amOutActual = pickLatest({
+        start: schedule.rng_sat_out_start || DEFAULT_RANGES.rng_sat_out_start,
+        end: schedule.rng_sat_out_end || DEFAULT_RANGES.rng_sat_out_end
+      });
+    } else {
+      amInActual = pickEarliest({start: schedule.rng_am_in_start, end: schedule.rng_am_in_end});
+      amOutActual = pickLatest({start: schedule.rng_am_out_start, end: schedule.rng_am_out_end});
+      pmInActual = pickEarliest({start: schedule.rng_pm_in_start, end: schedule.rng_pm_in_end});
+      pmOutActual = pickLatest({start: schedule.rng_pm_out_start, end: schedule.rng_pm_out_end});
+    }
+
+    let pmOutRefMins = pmOutActual ? toMins(pmOutActual) : toMins(schedule.sch_pm_end);
+
+    
+    
+    // === Saturday rule (scoped) ===
+    // Use local flags/vars so other days are untouched.
+    let __satStart = null, __satEnd = null;
+    try {
+      if (__isSaturday) { // Saturday
+        const satStart = schedule.sch_sat_start || schedule.sch_am_start || "08:00";
+        const satEnd   = schedule.sch_sat_end   || schedule.sch_pm_end || schedule.sch_am_end || "11:00";
+        __satStart = satStart;
+        __satEnd   = satEnd;
+        // For OT picking, any time after scheduled end counts as OT
+        pmOutRefMins = toMins(satEnd);
+      }
+    } catch(e){ console.warn('Saturday OT local patch error', e); }
+    if (!overridePunches) {
+      if (__isSaturday) {
+        otInActual = pickEarliestOt({
+          start: schedule.rng_sat_ot_start || DEFAULT_RANGES.rng_sat_ot_start,
+          end: schedule.rng_sat_ot_end || DEFAULT_RANGES.rng_sat_ot_end
+        });
+        otOutActual = pickLatestOt({
+          start: schedule.rng_sat_ot_out_start || schedule.rng_sat_ot_start || DEFAULT_RANGES.rng_sat_ot_out_start || DEFAULT_RANGES.rng_sat_ot_start,
+          end: schedule.rng_sat_ot_out_end || schedule.rng_sat_ot_end || DEFAULT_RANGES.rng_sat_ot_out_end || DEFAULT_RANGES.rng_sat_ot_end
+        });
+      } else {
+        otInActual = pickEarliestOt({start: schedule.rng_ot_in_start, end: schedule.rng_ot_in_end});
+        otOutActual = pickLatestOt({start: schedule.rng_ot_out_start, end: schedule.rng_ot_out_end});
+      }
+      if (otInActual && otOutActual && toMins(otOutActual) <= toMins(otInActual)) {
+        otInActual = null;
+        otOutActual = null;
+      }
+    }
+
+    let regMins = 0;
+    const grace = Number(schedule.sch_grace) || 0;
+    const segMins = (inStr, outStr, segStartStr, segEndStr) => {
+      if (!inStr || !outStr || !segStartStr || !segEndStr) return 0;
+      let inM = toMins(inStr);
+      const outM = toMins(outStr);
+      const sS = toMins(segStartStr), sEraw = toMins(segEndStr);
+      let sE = sEraw;
+      if (sE <= sS && sS >= 12*60 && sE <= 12*60) sE += 12*60; // fix 06:00 vs 18:00 typo
+      if (sE <= sS) return 0;
+      inM = normalizeSegmentInMins(inM, sS, grace);
+      const endM = normalizeSegmentOutMins(Math.min(outM, sE));
+      return Math.max(0, endM - inM);
+    };
+    // Compute regular minutes.  Use Saturday-specific start/end ranges when
+    // applicable; otherwise fall back to the normal AM/PM schedule ranges.
+    if (__isSaturday) {
+      // On Saturdays, clamp both AM and PM segments to the Saturday window
+      regMins += segMins(amInActual, amOutActual, __satStart, __satEnd);
+      regMins += segMins(pmInActual, pmOutActual, __satStart, __satEnd);
+    } else {
+      regMins += segMins(amInActual, amOutActual, schedule.sch_am_start, schedule.sch_am_end);
+      regMins += segMins(pmInActual, pmOutActual, schedule.sch_pm_start, schedule.sch_pm_end);
+    }
+    // Bridge case: AM IN + PM OUT only.  If no regular minutes were
+    // computed above, but we have an AM clock-in and a PM clock-out,
+    // synthesize a noon break.  On Saturdays, treat the entire day as
+    // a single continuous window between __satStart and __satEnd.
+    if (regMins === 0 && amInActual && !amOutActual && !pmInActual && pmOutActual) {
+      if (__isSaturday) {
+        // Saturday bridging: compute the full span between the first
+        // clock-in and final clock-out within the Saturday window.
+        regMins = segMins(amInActual, pmOutActual, __satStart, __satEnd);
+      } else {
+        const synthAmOut = schedule.sch_am_end || "12:00";
+        const synthPmIn  = schedule.sch_pm_start || "13:00";
+        regMins =
+          segMins(amInActual, synthAmOut, schedule.sch_am_start, schedule.sch_am_end) +
+          segMins(synthPmIn,  pmOutActual, schedule.sch_pm_start, schedule.sch_pm_end);
+      }
+    }
+    totalsReg[empId] += minsToDec(regMins);
+
+    /*
+     * Compute OT minutes for the current day/employee.  There are three
+     * scenarios handled here:
+     *
+     *   1) Saturday: Any time worked after the scheduled Saturday end
+     *      counts as OT, regardless of whether explicit OT punches were
+     *      recorded.  Each in/out segment contributes separately to the
+     *      OT total.  The resulting OT minutes are added to the employee's
+     *      running total.
+     *
+     *   2) Non-Saturday with explicit OT punches: When OT In and OT Out
+     *      times are recorded and the OT In occurs after the normal
+     *      scheduled end (pmOutRefMins), compute OT as the difference
+     *      between OT Out and OT In.  This respects the configured OT
+     *      ranges and leaves any early departures uncounted.
+     *
+     *   3) Non-Saturday without explicit OT punches: When no valid OT
+     *      punches exist but there is a single end-of-day clock-out, treat
+     *      any minutes worked after the scheduled end as OT.  This
+     *      allows after-hours work to be captured without requiring
+     *      separate OT punches.  If multiple segments exist for the day
+     *      (more than one in/out pair), only the final clock-out is
+     *      considered for the fallback; intermediate segments are
+     *      presumed to be normal work/breaks and do not contribute to OT.
+     */
+    let dayOTMins = 0;
+    if (overridePunches) {
+      if (otInActual && otOutActual) {
+        // OT duration relies on toMins so stored +1 values are interpreted correctly.
+        const otInM = toMins(otInActual);
+        const otOutM = toMins(otOutActual);
+        dayOTMins = (otInM !== null && otOutM !== null)
+          ? Math.max(0, otOutM - otInM)
+          : 0;
+      }
+    } else if (__isSaturday) {
+      // Saturday: only count OT when there is an explicit OT in/out pair.
+      if (otInActual && otOutActual) {
+        const otInM = toMins(otInActual);
+        const otOutM = toMins(otOutActual);
+        dayOTMins = (otInM !== null && otOutM !== null && otOutM > otInM)
+          ? (otOutM - otInM)
+          : 0;
+      }
+    } else {
+      // Non-Saturday: prefer explicit OT punches when they exist
+      if (otInActual && otOutActual && toMins(otInActual) > pmOutRefMins) {
+        // OT duration relies on toMins so stored +1 values are interpreted correctly.
+        const otInM = toMins(otInActual);
+        const otOutM = toMins(otOutActual);
+        dayOTMins = (otInM !== null && otOutM !== null)
+          ? Math.max(0, otOutM - otInM)
+          : 0;
+      } else {
+        // Fallback: no explicit OT punches.  Check the last clock-out and
+        // count any minutes worked after the scheduled end as OT.  Only
+        // the final out of the day is considered to avoid counting
+        // intermediate segments twice.
+        let lastOutM = null;
+        for (let i = 0; i < times.length; i += 2) {
+          const outStr = times[i+1];
+          if (!outStr) continue;
+          const outM = toMins(outStr);
+          if (lastOutM === null || outM > lastOutM) lastOutM = outM;
+        }
+        if (lastOutM != null) {
+          if (lastOutM > pmOutRefMins) {
+            dayOTMins = lastOutM - pmOutRefMins;
+          }
+        }
+      }
+    }
+    totalsOT[empId] += minsToDec(dayOTMins);
+
+    let dayOtStartMins = null;
+    let dayOtEndMins = null;
+    if (otInActual && otOutActual) {
+      const otInM = toMins(otInActual);
+      const otOutM = toMins(otOutActual);
+      if (otInM !== null && otOutM !== null && otOutM > otInM) {
+        dayOtStartMins = otInM;
+        dayOtEndMins = otOutM;
+      }
+    } else if (dayOTMins > 0) {
+      let lastOutM = null;
+      for (let i = 0; i < times.length; i += 2) {
+        const outStr = times[i+1];
+        if (!outStr) continue;
+        const outM = toMins(outStr);
+        if (lastOutM === null || outM > lastOutM) lastOutM = outM;
+      }
+      if (lastOutM != null && lastOutM > pmOutRefMins) {
+        dayOtStartMins = pmOutRefMins;
+        dayOtEndMins = lastOutM;
+      }
+    }
+    const ndMins = overlapMinsWithNightWindow(dayOtStartMins, dayOtEndMins);
+    const hourlyRate = Number(getEmployeeHourlyRate(empId)) || 0;
+    const ndPay = (ndMins > 0 && hourlyRate > 0 && ndPremiumFactor > 0)
+      ? roundToCents(minsToDec(ndMins) * hourlyRate * ndPremiumFactor)
+      : 0;
+    totalsND[empId] = roundToCents((totalsND[empId] || 0) + ndPay);
+  }
+  return { totalsReg, totalsOT, totalsND };
+
+}
+const dtrStartEl = document.getElementById('filterStart');
+const dtrEndEl = document.getElementById('filterEnd');
+
+function calculatePayrollFromRecords(){
+  try { if (typeof renderResults === 'function') renderResults(); } catch(e){ console.warn('renderResults failed', e); }
+
+  /*
+   * Instead of deriving regular and OT hours from the filtered results table
+   * (which can change when the DTR list is filtered), compute these values
+   * directly from the underlying storedRecords for the selected date range.
+   * This ensures that payroll calculations remain fixed regardless of
+   * any filtering performed on the DTR tab.
+   */
+  try {
+    // Determine the date range from the payroll period inputs.  Fall back
+    // to the DTR filter inputs if the payroll period inputs are absent.
+    const start = (typeof weekStartEl !== 'undefined' && weekStartEl && weekStartEl.value) ? weekStartEl.value : (dtrStartEl ? dtrStartEl.value : '');
+    const end   = (typeof weekEndEl   !== 'undefined' && weekEndEl   && weekEndEl.value)   ? weekEndEl.value   : (dtrEndEl   ? dtrEndEl.value   : '');
+    // Use the helper to compute per-employee hours across the full dataset.
+    const { totalsReg, totalsOT, totalsND } = computeHoursForDateRange(start, end);
+    // Initialize regHours and otHours with computed totals
+    regHours = Object.assign({}, totalsReg || {});
+    otHours  = Object.assign({}, totalsOT  || {});
+    nightDiffByEmployee = Object.assign({}, totalsND || {});
+    // Guarantee every employee has a defined entry (default 0)
+    Object.keys(storedEmployees || {}).forEach(id => {
+        if (storedEmployees[id] && storedEmployees[id].active === false) return;
+      if (!regHours.hasOwnProperty(id)) regHours[id] = 0;
+      if (!otHours.hasOwnProperty(id))  otHours[id]  = 0;
+      if (!nightDiffByEmployee.hasOwnProperty(id)) nightDiffByEmployee[id] = 0;
+    });
+    // Persist hours to localStorage
+    try {
+      localStorage.setItem(LS_REG_HRS, JSON.stringify(regHours));
+      localStorage.setItem(LS_OT_HRS, JSON.stringify(otHours));
+    } catch (err) {
+      console.warn('LS save failed', err);
+    }
+  } catch (err) {
+    console.warn('Error computing hours from full records', err);
+  }
+  // Ensure hourly rates are populated for all employees
+  Object.keys(storedEmployees || {}).forEach(id => {
+    if (!payrollRates[id] || payrollRates[id] === 0) {
+      payrollRates[id] = storedEmployees[id]?.hourlyRate || 0;
+    }
+  });
+  // Persist rates
+  try {
+    localStorage.setItem(LS_RATES, JSON.stringify(payrollRates));
+  } catch (err) {}
+  // Rebuild the payroll table with the newly computed hours
+  try {
+    if (typeof renderTable === 'function') renderTable();
+  } catch (err) {
+    console.warn('renderTable failed', err);
+  }
+}
+
+  /**
+   * Compute regular and overtime hours directly from the DTR results table.
+   * This implementation scans the #resultsTable built by renderResults() and
+   * aggregates the regular and OT hours by employee. By relying on the
+   * existing DTR computation (which correctly handles split records and
+   * schedule overrides), the payroll tab stays in sync with whatever
+   * appears in the DTR tab, even when rounding and OT logic differs from
+   * the generic computeHoursForDateRange() helper.  The selected payroll
+   * period (weekStart/weekEnd) is mirrored onto the DTR date filters
+   * before computing.  Project and name filters are temporarily
+   * cleared so that all employees are included, and then restored.
+   */
+  function calculatePayrollFromResultsTable() {
+    try {
+      // Save current filter/search values
+      const searchInput = document.getElementById('dtrSearchName');
+      const filterSelect = document.getElementById('filterProject');
+      const origSearch = searchInput ? searchInput.value : '';
+      const origFilter = filterSelect ? filterSelect.value : '';
+      // Save current DTR date inputs (so we can restore after aggregation)
+      const dtrStartElTmp = document.getElementById('filterStart') || document.getElementById('dtrDateFrom');
+      const dtrEndElTmp   = document.getElementById('filterEnd')   || document.getElementById('dtrDateTo');
+      const origFrom = dtrStartElTmp ? dtrStartElTmp.value : '';
+      const origTo   = dtrEndElTmp   ? dtrEndElTmp.value   : '';
+      // Preserve original LS project filter to fully restore later
+      let __savedLSFilter = null;
+      try { __savedLSFilter = localStorage.getItem(LS_FILTER_PROJECT); } catch(_) {}
+      // Clear name search and select all projects
+      if (searchInput) searchInput.value = '';
+      if (filterSelect) {
+        filterSelect.value = 'all';
+        // Persist the filter state so renderResults respects it
+        if (typeof currentProjectFilter !== 'undefined') currentProjectFilter = 'all';
+        // Do not permanently persist this temporary change; we will restore later.
+        try { localStorage.setItem(LS_FILTER_PROJECT, 'all'); } catch (e) {}
+      }
+      // Sync the DTR date range with the payroll period.  Update the
+      // DTR filter inputs if present (filterStart/filterEnd) and let
+      // renderResults() handle the new range.  Some DTR pages use
+      // dtrDateFrom/dtrDateTo instead.
+      try {
+        const dtrStart = document.getElementById('filterStart') || document.getElementById('dtrDateFrom');
+        const dtrEnd   = document.getElementById('filterEnd')   || document.getElementById('dtrDateTo');
+        if (weekStartEl && dtrStart) dtrStart.value = weekStartEl.value;
+        if (weekEndEl   && dtrEnd)   dtrEnd.value   = weekEndEl.value;
+      } catch (err) {}
+      // Re-render the DTR results table with updated filters
+      if (typeof renderResults === 'function') renderResults();
+      // Aggregate hours from the rendered DTR table
+      const rows = document.querySelectorAll('#resultsTable tbody tr');
+      const regTotals = {};
+      const otTotals = {};
+      rows.forEach(row => {
+        const cells = row.cells;
+        if (!cells || cells.length < 13) return;
+        const empId = cells[0].textContent.trim();
+        // Column 11: total regular hours; column 12: OT hours
+        const regVal = parseFloat(cells[11].textContent) || 0;
+        const otVal  = parseFloat(cells[12].textContent) || 0;
+        regTotals[empId] = (regTotals[empId] || 0) + regVal;
+        otTotals[empId]  = (otTotals[empId]  || 0) + otVal;
+      });
+      // Restore original filters and search
+      if (searchInput) searchInput.value = origSearch;
+      if (filterSelect) {
+        filterSelect.value = origFilter;
+        if (typeof currentProjectFilter !== 'undefined') currentProjectFilter = origFilter;
+        // Restore original LS filter value exactly as it was
+        try {
+          if (__savedLSFilter !== null && __savedLSFilter !== undefined) localStorage.setItem(LS_FILTER_PROJECT, __savedLSFilter);
+          else localStorage.removeItem(LS_FILTER_PROJECT);
+        } catch (e) {}
+      }
+      // Restore DTR date range values to what the user had prior to aggregation
+      try {
+        if (dtrStartElTmp) dtrStartElTmp.value = origFrom;
+        if (dtrEndElTmp)   dtrEndElTmp.value   = origTo;
+      } catch(_) {}
+      // Ensure the visible DTR table reflects the restored date range.
+      try {
+        if (typeof window.applyDtrDateFilter === 'function') applyDtrDateFilter();
+      } catch (_) {}
+      // Re-render the DTR table with the original filter/search and date range
+      if (typeof renderResults === 'function') renderResults();
+      // Some pages patch renderResults to invoke the filter automatically,
+      // but call it explicitly as a safeguard so the restored range is respected.
+      try {
+        if (typeof window.applyDtrDateFilter === 'function') applyDtrDateFilter();
+      } catch (_) {}
+      // Apply aggregated hours to regHours and otHours, rounding to two decimals
+      regHours = {};
+      otHours = {};
+      Object.keys(regTotals).forEach(id => {
+        regHours[id] = +(regTotals[id]).toFixed(2);
+      });
+      Object.keys(otTotals).forEach(id => {
+        otHours[id] = +(otTotals[id]).toFixed(2);
+      });
+
+      // Compute Night Diff using the same payroll period boundaries.
+      // This keeps ND in sync even when this Results-table path is used.
+      let ndTotals = {};
+      try {
+        const ndStart = (weekStartEl && weekStartEl.value) ? weekStartEl.value : '';
+        const ndEnd = (weekEndEl && weekEndEl.value) ? weekEndEl.value : '';
+        const ndComputed = computeHoursForDateRange(ndStart, ndEnd);
+        ndTotals = (ndComputed && ndComputed.totalsND && typeof ndComputed.totalsND === 'object')
+          ? ndComputed.totalsND
+          : {};
+      } catch (ndErr) {
+        console.warn('Night Diff compute via Results table failed', ndErr);
+      }
+      nightDiffByEmployee = Object.assign({}, ndTotals);
+
+      // Ensure every employee has entries for reg, OT, and Night Diff
+      Object.keys(storedEmployees || {}).forEach(id => {
+        if (!regHours.hasOwnProperty(id)) regHours[id] = 0;
+        if (!otHours.hasOwnProperty(id))  otHours[id]  = 0;
+        if (!nightDiffByEmployee.hasOwnProperty(id)) nightDiffByEmployee[id] = 0;
+      });
+      // Persist the hours to localStorage
+      try {
+        localStorage.setItem(LS_REG_HRS, JSON.stringify(regHours));
+        localStorage.setItem(LS_OT_HRS, JSON.stringify(otHours));
+      } catch (err) {}
+      // Rebuild the payroll table using the computed hours
+      if (typeof renderTable === 'function') renderTable();
+    } catch (err) {
+      console.warn('calculatePayrollFromResultsTable failed', err);
+    }
+  }
+
+weekStartEl.addEventListener('change', () => {
+  if (dtrStartEl) dtrStartEl.value = weekStartEl.value;
+  syncPeriodScopedData();
+  try {
+    if (typeof calculatePayrollFromResultsTable === 'function') calculatePayrollFromResultsTable();
+    else if (typeof calculatePayrollFromRecords === 'function') calculatePayrollFromRecords();
+  } catch (e) {}
+  if (typeof renderTable === 'function') renderTable();
+  if (typeof renderOtherDeductionsTable === 'function') renderOtherDeductionsTable();
+  if (typeof renderAdjustmentHoursTable === 'function') renderAdjustmentHoursTable();
+  calculateAll();
+});
+weekEndEl.addEventListener('change', () => {
+  if (dtrEndEl) dtrEndEl.value = weekEndEl.value;
+  syncPeriodScopedData();
+  try {
+    if (typeof calculatePayrollFromResultsTable === 'function') calculatePayrollFromResultsTable();
+    else if (typeof calculatePayrollFromRecords === 'function') calculatePayrollFromRecords();
+  } catch (e) {}
+  if (typeof renderTable === 'function') renderTable();
+  if (typeof renderOtherDeductionsTable === 'function') renderOtherDeductionsTable();
+  if (typeof renderAdjustmentHoursTable === 'function') renderAdjustmentHoursTable();
+  calculateAll();
+});
+if (dtrStartEl) {
+  dtrStartEl.addEventListener('change', () => {
+    weekStartEl.value = dtrStartEl.value;
+    // When editing the DTR date range directly, recompute payroll hours from the DTR table
+    syncPeriodScopedData();
+    try {
+      if (typeof calculatePayrollFromResultsTable === 'function') calculatePayrollFromResultsTable();
+      else if (typeof calculatePayrollFromRecords === 'function') calculatePayrollFromRecords();
+    } catch (e) {}
+  });
+}
+if (dtrEndEl) {
+  dtrEndEl.addEventListener('change', () => {
+    weekEndEl.value = dtrEndEl.value;
+    // When editing the DTR date range directly, recompute payroll hours from the DTR table
+    syncPeriodScopedData();
+    try {
+      if (typeof calculatePayrollFromResultsTable === 'function') calculatePayrollFromResultsTable();
+      else if (typeof calculatePayrollFromRecords === 'function') calculatePayrollFromRecords();
+    } catch (e) {}
+  });
+}
+
+if (tabs.tabPayroll) tabs.tabPayroll.addEventListener('click', () => {
+  if (dtrStartEl && !weekStartEl.value) weekStartEl.value = dtrStartEl.value;
+  if (dtrEndEl && !weekEndEl.value) weekEndEl.value = dtrEndEl.value;
+  // Compute hours based on the current DTR table rather than recomputing from raw records
+  try {
+    if (typeof calculatePayrollFromResultsTable === 'function') calculatePayrollFromResultsTable();
+    else if (typeof calculatePayrollFromRecords === 'function') calculatePayrollFromRecords();
+  } catch (e) {}
+});
+function backupData() {
+  const data = {};
+  for (let i = 0; i < localStorage.length; i++) {
+    const key = localStorage.key(i);
+    data[key] = localStorage.getItem(key);
+  }
+  const blob = new Blob([JSON.stringify(data, null, 2)], {type: 'application/json'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'payroll_backup.json';
+  a.click();
+}
+
+function restoreData(file) {
+  const reader = new FileReader();
+  reader.onload = e => {
+    try {
+      const data = JSON.parse(e.target.result);
+      for (const key in data) {
+        localStorage.setItem(key, data[key]);
+      }
+      alert('Data restored! Reloading...');
+      location.reload();
+    } catch (err) {
+      alert('Invalid backup file.');
+    }
+  };
+  reader.readAsText(file);
+}
+// Legacy backup UI removed - replaced by enhanced Backup & Restore controls.
+  
+
+
+(function(){
+  function closePunchModal(){
+    const modal = document.getElementById('dtrPunchModal');
+    if (!modal) return;
+    const activeEl = document.activeElement;
+    if (activeEl && modal.contains(activeEl) && typeof activeEl.blur === 'function') {
+      activeEl.blur();
+    }
+    modal.classList.remove('is-open');
+    modal.setAttribute('aria-hidden', 'true');
+    const previousEl = modal.__lastActiveElement;
+    if (previousEl && document.contains(previousEl) && typeof previousEl.focus === 'function') {
+      previousEl.focus();
+    }
+    modal.__lastActiveElement = null;
+  }
+  function syncPayrollAfterOverride(){
+    if (typeof renderResults === 'function') { try { renderResults(); } catch (e) {} }
+    try {
+      if (typeof calculatePayrollFromResultsTable === 'function') calculatePayrollFromResultsTable();
+      else if (typeof calculatePayrollFromRecords === 'function') calculatePayrollFromRecords();
+    } catch (e) {}
+    try { if (typeof calculateAll === 'function') calculateAll(); } catch (e) {}
+  }
+  function openManualModal(){
+    const modal = document.getElementById('manualDtrModal');
+    const empSelect = document.getElementById('manualEmpSelect');
+    const manualDate = document.getElementById('manualDate');
+    const manualTime = document.getElementById('manualTime');
+    if(!modal || !empSelect) return;
+    empSelect.innerHTML = '';
+    try {
+      Object.keys(storedEmployees || {}).forEach(id => {
+        const opt = document.createElement('option');
+        opt.value = id;
+        const nm = (storedEmployees[id] && storedEmployees[id].name) ? storedEmployees[id].name : '';
+        opt.textContent = nm ? `${nm} (${id})` : id;
+        empSelect.appendChild(opt);
+      });
+    } catch(e) {}
+    manualDate.value = '';
+    manualTime.value = '';
+    modal.style.display = 'flex';
+  }
+  function closeManualModal(){
+    const modal = document.getElementById('manualDtrModal');
+    if(modal) modal.style.display = 'none';
+  }
+  function wireManualDTR(){
+    const btn = document.getElementById('manualDtrBtn');
+    const cancelBtn = document.getElementById('cancelManualDtr');
+    const saveBtn = document.getElementById('saveManualDtr');
+    if(btn && !btn.__wiredManualOpen){
+      btn.__wiredManualOpen = true;
+      btn.addEventListener('click', openManualModal);
+    }
+    if(cancelBtn && !cancelBtn.__wiredManualCancel){
+      cancelBtn.__wiredManualCancel = true;
+      cancelBtn.addEventListener('click', closeManualModal);
+    }
+    if(saveBtn && !saveBtn.__wiredManualSave) saveBtn.addEventListener('click', function(){
+      if (saveBtn.__savingManual) return;
+      saveBtn.__savingManual = true;
+      const empId = (document.getElementById('manualEmpSelect')||{}).value;
+      const dateVal = (document.getElementById('manualDate')||{}).value;
+      const timeVal = (document.getElementById('manualTime')||{}).value;
+      if(!empId || !dateVal || !timeVal){
+        alert('Please fill all fields.');
+        saveBtn.__savingManual = false;
+        return;
+      }
+      try {
+        const record = { empId: String(empId), date: dateVal, time: timeVal, manual: true };
+        const exists = storedRecords.some(r =>
+          String(r.empId) === record.empId && r.date === record.date && r.time === record.time
+        );
+        if (!exists) storedRecords.push(record);
+        // Persist to localStorage
+        localStorage.setItem(LS_RECORDS, JSON.stringify(storedRecords));
+        // Persist to Supabase for cross-device sync
+        if (typeof saveDtrToCloud === 'function') saveDtrToCloud(storedRecords);
+      } catch(e) { console.error('Saving manual DTR failed', e); }
+      closeManualModal();
+      if(typeof renderResults === 'function') renderResults();
+      setTimeout(function(){ saveBtn.__savingManual = false; }, 150);
+    });
+    if (saveBtn) saveBtn.__wiredManualSave = true;
+  }
+  function wirePunchEditor(){
+    const modal = document.getElementById('dtrPunchModal');
+    if (!modal || modal.__wired) return;
+    modal.__wired = true;
+
+    const cancelBtn = document.getElementById('dtrPunchCancel');
+    const clearBtn = document.getElementById('dtrPunchClear');
+    const saveBtn = document.getElementById('dtrPunchSave');
+
+    if (cancelBtn) cancelBtn.addEventListener('click', closePunchModal);
+    if (clearBtn) clearBtn.addEventListener('click', function(){
+      const empId = modal.dataset.empId;
+      const date = modal.dataset.date;
+      const scope = modal.dataset.scope || 'regular';
+      if (!empId || !date) return closePunchModal();
+      const key = `${empId}___${date}`;
+      if (dtrOverrides && Object.prototype.hasOwnProperty.call(dtrOverrides, key)) {
+        const existing = dtrOverrides[key] || {};
+        const nextValues = {
+          amIn: scope === 'overtime' ? normalizeOverrideValue(existing.amIn) : null,
+          amOut: scope === 'overtime' ? normalizeOverrideValue(existing.amOut) : null,
+          pmIn: scope === 'overtime' ? normalizeOverrideValue(existing.pmIn) : null,
+          pmOut: scope === 'overtime' ? normalizeOverrideValue(existing.pmOut) : null,
+          otIn: scope === 'regular' ? normalizeOverrideValue(existing.otIn) : null,
+          otOut: scope === 'regular' ? normalizeOverrideValue(existing.otOut) : null
+        };
+        const hasAny = Object.values(nextValues).some(val => normalizeOverrideValue(val));
+        if (hasAny) dtrOverrides[key] = nextValues;
+        else delete dtrOverrides[key];
+        saveDtrOverrides();
+      }
+      closePunchModal();
+      syncPayrollAfterOverride();
+    });
+    if (saveBtn) saveBtn.addEventListener('click', function(){
+      const empId = modal.dataset.empId;
+      const date = modal.dataset.date;
+      const scope = modal.dataset.scope || 'regular';
+      if (!empId || !date) return closePunchModal();
+      const key = `${empId}___${date}`;
+      const existing = dtrOverrides[key] || {};
+      const getVal = (id) => {
+        const el = document.getElementById(id);
+        return el ? normalizeOverrideValue(el.value) : null;
+      };
+      const nextValues = {
+        amIn: scope === 'overtime' ? normalizeOverrideValue(existing.amIn) : getVal('dtrPunchAmIn'),
+        amOut: scope === 'overtime' ? normalizeOverrideValue(existing.amOut) : getVal('dtrPunchAmOut'),
+        pmIn: scope === 'overtime' ? normalizeOverrideValue(existing.pmIn) : getVal('dtrPunchPmIn'),
+        pmOut: scope === 'overtime' ? normalizeOverrideValue(existing.pmOut) : getVal('dtrPunchPmOut'),
+        otIn: scope === 'regular' ? normalizeOverrideValue(existing.otIn) : getVal('dtrPunchOtIn'),
+        otOut: scope === 'regular' ? normalizeOverrideValue(existing.otOut) : getVal('dtrPunchOtOut')
+      };
+      const hasAny = Object.values(nextValues).some(Boolean);
+      if (hasAny) {
+        dtrOverrides[key] = nextValues;
+      } else if (dtrOverrides && Object.prototype.hasOwnProperty.call(dtrOverrides, key)) {
+        delete dtrOverrides[key];
+      }
+      saveDtrOverrides();
+      closePunchModal();
+      syncPayrollAfterOverride();
+    });
+
+    modal.addEventListener('click', function(ev){
+      if (ev.target === modal) closePunchModal();
+    });
+    document.addEventListener('keydown', function(ev){
+      if (ev.key === 'Escape' && modal.classList.contains('is-open')) {
+        closePunchModal();
+      }
+    });
+  }
+  function ensurePunchesHeader(){
+    const table = document.getElementById('resultsTable');
+    if(!table) return;
+    const theadRow = table.querySelector('thead tr');
+    if(theadRow && !theadRow.querySelector('.punches-header')){
+      const th = document.createElement('th');
+      th.textContent = 'Punches';
+      th.classList.add('punches-header');
+      const actionsHeader = theadRow.querySelector('.actions-header');
+      if (actionsHeader) {
+        theadRow.insertBefore(th, actionsHeader);
+      } else {
+        theadRow.appendChild(th);
+      }
+    }
+  }
+  function ensureActionsHeader(){
+    const table = document.getElementById('resultsTable');
+    if(!table) return;
+    const theadRow = table.querySelector('thead tr');
+    if(theadRow && !theadRow.querySelector('.actions-header')){
+      const th = document.createElement('th');
+      th.textContent = 'Actions';
+      th.classList.add('actions-header');
+      theadRow.appendChild(th);
+    }
+  }
+  // Robust event delegation so Delete works even if rows insert buttons directly
+  function setupDtrDeleteDelegation(){
+    const table = document.getElementById('resultsTable');
+    if (!table || table.__dtrDelBound) return;
+    table.addEventListener('click', function(ev){
+      const btn = ev.target && ev.target.closest ? ev.target.closest('.dtr-del-btn') : null;
+      if (!btn) return;
+      const tr = btn.closest('tr');
+      if (!tr) return;
+      const empIdCell = tr.cells[0] ? tr.cells[0].textContent.trim() : '';
+      const dateCell  = tr.cells[4] ? tr.cells[4].textContent.trim() : '';
+      if(!empIdCell || !dateCell) return;
+      const isSplitHalf = tr.dataset && tr.dataset.half;
+      const confirmMsg = isSplitHalf
+        ? `Delete this ${tr.dataset.half} DTR for ${empIdCell} on ${dateCell}?`
+        : `Delete all DTR entries for ${empIdCell} on ${dateCell}?`;
+      if(!confirm(confirmMsg)) return;
+      try {
+        if (isSplitHalf) {
+          let timesForHalf = [];
+          try { timesForHalf = JSON.parse(tr.dataset.times || '[]'); } catch(e) { timesForHalf = []; }
+          timesForHalf.forEach(t => {
+            for (let i = 0; i < storedRecords.length; i++) {
+              const rec = storedRecords[i];
+              if (String(rec.empId) === String(empIdCell) && rec.date === dateCell && rec.time === t) {
+                storedRecords.splice(i, 1);
+                break;
+              }
+            }
+          });
+          const splitKey = `${empIdCell}___${dateCell}`;
+          if (splits && splits[splitKey]) {
+            delete splits[splitKey];
+            if (typeof saveSplits === 'function') saveSplits();
+          }
+        } else {
+          for(let i = storedRecords.length - 1; i >= 0; i--){
+            const rec = storedRecords[i];
+            if(String(rec.empId) === String(empIdCell) && rec.date === dateCell){
+              storedRecords.splice(i, 1);
+            }
+          }
+        }
+        localStorage.setItem(LS_RECORDS, JSON.stringify(storedRecords));
+        try { if (typeof saveDtrToCloud === 'function') saveDtrToCloud(storedRecords); } catch (e) {}
+        renderResults();
+      } catch(e){ console.error('DTR delete failed', e); }
+    });
+    table.__dtrDelBound = true;
+  }
+  function setupDtrPunchDelegation(){
+    const table = document.getElementById('resultsTable');
+    if (!table || table.__dtrPunchBound) return;
+    table.__dtrPunchBound = true;
+    table.addEventListener('click', function(ev){
+      const btn = ev.target && ev.target.closest ? ev.target.closest('.dtr-punch-btn') : null;
+      if (!btn) return;
+      const tr = btn.closest('tr');
+      if (!tr) return;
+      const empId = tr.dataset.empId || (tr.cells[0] ? tr.cells[0].textContent.trim() : '');
+      const date = tr.dataset.date || (tr.cells[4] ? tr.cells[4].textContent.trim() : '');
+      if (!empId || !date) return;
+      const emp = storedEmployees && storedEmployees[empId];
+      const name = emp && emp.name ? emp.name : (tr.cells[1] ? tr.cells[1].textContent.trim() : '');
+      openPunchEditor({ empId, date, name, scope: 'all' });
+    });
+  }
+  function addDtrDeleteButtons(){
+    const table = document.getElementById('resultsTable');
+    if(!table) return;
+    ensurePunchesHeader();
+    ensureActionsHeader();
+    const rows = table.querySelectorAll('tbody tr');
+    rows.forEach(tr => {
+      const hasPunch = !!tr.querySelector('.dtr-punch-btn');
+      const hasDelete = !!tr.querySelector('.dtr-del-btn');
+      if (!hasPunch) {
+        const punchTd = document.createElement('td');
+        punchTd.className = 'punches-cell';
+        const editBtn = document.createElement('button');
+        editBtn.textContent = '✏ Entrys';
+        editBtn.className = 'dtr-punch-btn';
+        punchTd.appendChild(editBtn);
+        const actionsCell = tr.querySelector('.actions-cell');
+        if (actionsCell) {
+          tr.insertBefore(punchTd, actionsCell);
+        } else {
+          tr.appendChild(punchTd);
+        }
+      }
+      if (hasDelete) return;
+
+      const actionTd = document.createElement('td');
+      actionTd.className = 'actions-cell';
+      const btn = document.createElement('button');
+      btn.textContent = 'Delete';
+      btn.className = 'dtr-del-btn';
+      btn.addEventListener('click', () => {
+        // Get empId and date from row cells (empId at col 0, date at col 4)
+        const empIdCell = tr.cells[0] ? tr.cells[0].textContent.trim() : '';
+        const dateCell  = tr.cells[4] ? tr.cells[4].textContent.trim() : '';
+        if(!empIdCell || !dateCell) return;
+        // Determine if this row is part of a split (AM/PM). If so, use the attached
+        // metadata to remove only the specific half. Otherwise, remove all times.
+        const isSplitHalf = tr.dataset && tr.dataset.half;
+        const confirmMsg = isSplitHalf
+          ? `Delete this ${tr.dataset.half} DTR for ${empIdCell} on ${dateCell}?`
+          : `Delete all DTR entries for ${empIdCell} on ${dateCell}?`;
+        if(!confirm(confirmMsg)) return;
+        try {
+          if (isSplitHalf) {
+            // Parse times to remove for this half. The dataset.times stores an array
+            // of the exact time strings (e.g., "08:00", "12:00") that belong to
+            // this AM or PM half. Only records with matching empId, date and time
+            // found in this array will be removed.
+            let timesForHalf = [];
+            try {
+              timesForHalf = JSON.parse(tr.dataset.times || '[]');
+            } catch(e) { timesForHalf = []; }
+            // Remove only the specific occurrences of each time listed for this half.
+            // We iterate through the array of times and, for each, remove one matching
+            // record (empId/date/time). This avoids removing duplicates beyond the
+            // count present in timesForHalf (e.g., AM out and OT may share the same
+            // time value, so we only remove the intended PM/OT instances).
+            timesForHalf.forEach(t => {
+              for (let i = 0; i < storedRecords.length; i++) {
+                const rec = storedRecords[i];
+                if (String(rec.empId) === String(empIdCell) && rec.date === dateCell && rec.time === t) {
+                  storedRecords.splice(i, 1);
+                  break; // remove only one matching occurrence per time value
+                }
+              }
+            });
+            // After removing the half, unset the split flag for this emp/date so
+            // the remaining records render as a single row. This mirrors the
+            // behavior of the "Unsplit" button.
+            const splitKey = `${empIdCell}___${dateCell}`;
+            if (splits && splits[splitKey]) {
+              delete splits[splitKey];
+              if (typeof saveSplits === 'function') saveSplits();
+            }
+          } else {
+            // Remove all records for this employee on this date
+            for(let i = storedRecords.length - 1; i >= 0; i--){
+              const rec = storedRecords[i];
+              if(String(rec.empId) === String(empIdCell) && rec.date === dateCell){
+                storedRecords.splice(i, 1);
+              }
+            }
+          }
+          // Persist updated records to localStorage
+          localStorage.setItem(LS_RECORDS, JSON.stringify(storedRecords));
+          // Also persist to Supabase so all devices reflect the deletion
+          try {
+            if (typeof saveDtrToCloud === 'function') saveDtrToCloud(storedRecords);
+          } catch (e) {
+            console.warn('Failed to sync DTR deletion to Supabase', e);
+          }
+          renderResults();
+        } catch(e){ console.error('DTR delete failed', e); }
+      });
+      actionTd.appendChild(btn);
+      tr.appendChild(actionTd);
+    });
+  }
+  function patchRenderResults(){
+    if(typeof renderResults !== 'function') return false;
+    const original = renderResults;
+    window.renderResults = function(){
+      const res = original.apply(this, arguments);
+      try { addDtrDeleteButtons(); } catch(e){}
+      try { setupDtrDeleteDelegation(); } catch(e){}
+      try { setupDtrPunchDelegation(); } catch(e){}
+      try { wirePunchEditor(); } catch(e){}
+      // After rendering results, always check whether the selected payroll period is
+      // locked and toggle editing accordingly. This ensures that dynamic
+      // controls inserted by renderResults() respect the current lock state.
+      try {
+        if (typeof checkAndToggleEditState === 'function') {
+          checkAndToggleEditState();
+        }
+      } catch(e) {}
+      return res;
+    };
+    try { addDtrDeleteButtons(); } catch(e){}
+    return true;
+  }
+  function init(){
+    wireManualDTR();
+    wirePunchEditor();
+    setupDtrDeleteDelegation();
+    setupDtrPunchDelegation();
+    if(!patchRenderResults()){
+      const iv = setInterval(() => {
+        if(patchRenderResults()) clearInterval(iv);
+      }, 200);
+      setTimeout(() => clearInterval(iv), 6000);
+    }
+  }
+  if(document.readyState === 'loading'){
+    document.addEventListener('DOMContentLoaded', init);
+  } else {
+    init();
+  }
+})();
+
+
+
+(function(){
+  function q(id){ return document.getElementById(id); }
+  function toMins(hm){
+    if(!hm) return null;
+    var m = String(hm).trim().match(/^(\d{1,2})\s*:\s*(\d{2})(?:\s*\+\s*(\d+))?$/);
+    if(!m) return null;
+    var h = +m[1]||0, mm = +m[2]||0, d = m[3] ? (+m[3]||0) : 0;
+    return (h*60)+mm+(d*1440);
+  }
+  function minsToDec(mins){ return Math.round((mins/60)*100)/100; }
+  function uniqSort(arr){ var seen={}, out=[]; for(var i=0;i<arr.length;i++){ var v=arr[i]; if(!seen[v]){ seen[v]=1; out.push(v);} } out.sort(); return out; }
+  function max0(x){ return x>0?x:0; }
+
+  // Extend tabs registry
+  if (typeof tabs !== 'undefined' && tabs){
+    tabs.tabProjectTotals   = tabs.tabProjectTotals || document.getElementById('tabProjectTotals');
+    tabs.panelProjectTotals = tabs.panelProjectTotals || document.getElementById('panelProjectTotals');
+    tabs.tabSettings = tabs.tabSettings || document.getElementById('tabSettings');
+    tabs.panelSettings = tabs.panelSettings || document.getElementById('panelSettings');
+  }
+
+  // Wrap showTab to support projectTotals
+  if (typeof showTab === 'function'){
+    var _showTab = showTab;
+    window.showTab = function(name){
+      _showTab(name);
+      if (name === 'projectTotals'){
+        if (tabs.tabProjectTotals) tabs.tabProjectTotals.classList.add('active');
+        if (tabs.panelProjectTotals) tabs.panelProjectTotals.classList.add('active');
+        renderProjectTotals();
+      }
+    };
+  }
+
+  // Click to open our tab
+  if (tabs && tabs.tabProjectTotals){
+    tabs.tabProjectTotals.addEventListener('click', function(){
+      var nameEl = document.getElementById('dtrSearchName');
+      var projectEl = document.getElementById('filterProject');
+      var fromEl = document.getElementById('dtrDateFrom');
+      var toEl = document.getElementById('dtrDateTo');
+      window.__dtrFilterBackup = {
+        name: nameEl ? nameEl.value : '',
+        project: projectEl ? projectEl.value : 'all',
+        from: fromEl ? fromEl.value : '',
+        to: toEl ? toEl.value : ''
+      };
+      if (nameEl) nameEl.value = '';
+      if (projectEl) projectEl.value = 'all';
+      currentProjectFilter = 'all';
+      try { localStorage.setItem(LS_FILTER_PROJECT, currentProjectFilter); } catch(e){}
+      if (fromEl) fromEl.value = '';
+      if (toEl) toEl.value = '';
+      try {
+        localStorage.removeItem(LS_FROM);
+        localStorage.removeItem(LS_TO);
+      } catch (e) {}
+      try { renderResults(); } catch (e) {}
+      showTab('projectTotals');
+    });
+  }
+
+  const settingsBtn = tabs && tabs.tabSettings;
+  if (settingsBtn && !settingsBtn.__wired){
+    settingsBtn.addEventListener('click', function(){
+      showTab('settings');
+    });
+    settingsBtn.__wired = true;
+  }
+
+  // Legacy sidebar removed; keep Settings navigation wired only via header tab + BuildPay Shell.
+
+  // Re-render when date range changes while active
+  ['weekStart','weekEnd'].forEach(function(id){
+    var el = q(id);
+    if (el) el.addEventListener('change', function(){
+      if (tabs && tabs.tabProjectTotals && tabs.tabProjectTotals.classList.contains('active')) renderProjectTotals();
+    });
+  });
+
+  
+  // DTR name search live filter
+  if (document.getElementById('dtrSearchName')) {
+    document.getElementById('dtrSearchName').addEventListener('input', ()=>{
+      renderResults();
+    });
+  }
+// CSV export
+  var dl = q('downloadProjectTotalsCSV');
+  if (dl) dl.addEventListener('click', exportProjectTotalsCSV);
+
+  // Core compute: honors date range + per-day project/schedule overrides + schedule windows, grace, OT windows
+  function computeProjectTotals(startDate, endDate){
+    var empMap = (typeof storedEmployees!=='undefined' && storedEmployees) || {};
+    var schedMap = (typeof storedSchedules!=='undefined' && storedSchedules) || {};
+    var defSchedId = (typeof defaultScheduleId!=='undefined' && defaultScheduleId) || null;
+    var records = (typeof storedRecords!=='undefined' && storedRecords) || [];
+    var projMap = (typeof storedProjects!=='undefined' && storedProjects) || {};
+    var ovSched = (typeof overridesSchedules!=='undefined' && overridesSchedules) || {};
+    var ovProj  = (typeof overridesProjects!=='undefined' && overridesProjects) || {};
+    var DEF     = (typeof DEFAULT_SCHEDULE!=='undefined' && DEFAULT_SCHEDULE) || {};
+
+    var dayGroups = {};
+    for (var i=0;i<records.length;i++){
+      var r = records[i];
+      if (startDate && r.date < startDate) continue;
+      if (endDate && r.date > endDate) continue;
+      if (!empMap[r.empId]) continue;
+      if (isPunchClaimedByPreviousDayOt(r.empId, r.date, r.time)) continue;
+      var key = r.date + '___' + r.empId;
+      if (!dayGroups[key]) dayGroups[key] = [];
+      dayGroups[key].push(r.time);
+    }
+
+    var totals = {}; // projectId => { name, reg, ot, total, employees:{} }
+    var keys = Object.keys(dayGroups);
+    for (var k=0;k<keys.length;k++){
+      var key = keys[k];
+      var parts = key.split('___');
+      var date = parts[0], empId = parts[1];
+      var emp = empMap[empId]; if (!emp) continue;
+
+      var ovKey = empId + '___' + date;
+      var projId = (ovProj.hasOwnProperty(ovKey) ? ovProj[ovKey] : (emp.projectId || '')) || '';
+      var projName = (projId && projMap[projId]) ? (projMap[projId].name || projId) : '(No project)';
+
+      var schedId = emp.scheduleId || defSchedId;
+      if (ovSched[ovKey]) schedId = ovSched[ovKey];
+      var S = (schedId && schedMap[schedId]) ? schedMap[schedId] : DEF;
+
+      var times = uniqSort(dayGroups[key]);
+      var otTimes = getOtCandidateTimes(empId, date, times);
+
+      var win = {
+        amIn:  {start:S.rng_am_in_start||'05:00', end:S.rng_am_in_end||'09:00'},
+        amOut: {start:S.rng_am_out_start||'11:30', end:S.rng_am_out_end||'12:30'},
+        pmIn:  {start:S.rng_pm_in_start||'12:30', end:S.rng_pm_in_end||'14:30'},
+        pmOut: {start:S.rng_pm_out_start||'15:00', end:S.rng_pm_out_end||'20:00'},
+        otIn:  {start:S.rng_ot_in_start||'19:00', end:S.rng_ot_in_end||'22:00'},
+        otOut: {start:S.rng_ot_out_start||'19:00', end:S.rng_ot_out_end||'23:59'}
+      };
+      function pickEarliest(w){ for(var i2=0;i2<times.length;i2++){ var t=times[i2]; if(t>=w.start && t<=w.end) return t; } return null; }
+      function pickLatest(w){ var last=null; for(var j2=0;j2<times.length;j2++){ var t2=times[j2]; if(t2>=w.start && t2<=w.end) last=t2; } return last; }
+
+      var amIn  = pickEarliest(win.amIn);
+      var amOut = pickLatest(win.amOut);
+      var pmIn  = pickEarliest(win.pmIn);
+      var pmOut = pickLatest(win.pmOut);
+
+      var pmOutRefMins = pmOut ? toMins(pmOut) : toMins(S.sch_pm_end || '17:00');
+
+      var otIn = null, otOut = null;
+      for (var x=0;x<otTimes.length;x++){
+        var tt = otTimes[x]; var m = toMins(tt);
+        if (m>pmOutRefMins && isInOtWindowWithOvernight(m, toMins(win.otIn.start), toMins(win.otIn.end))){ otIn = tt; break; }
+      }
+      for (var y=otTimes.length-1;y>=0;y--){
+        var tt2 = otTimes[y]; var m2 = toMins(tt2);
+        if (m2>pmOutRefMins && isInOtWindowWithOvernight(m2, toMins(win.otOut.start), toMins(win.otOut.end))){ otOut = tt2; if(!otIn || toMins(otOut)>=toMins(otIn)) break; }
+      }
+
+      var grace = Number(S.sch_grace)||0;
+      var regMins = 0;
+
+      if (amIn && pmOut && !amOut && !pmIn){
+        var saS = toMins(S.sch_am_start||'08:00'), saE = toMins(S.sch_am_end||'12:00');
+        var spS = toMins(S.sch_pm_start||'13:00'), spE = toMins(S.sch_pm_end||'17:00');
+        var amInM = toMins(amIn), pmOutM = toMins(pmOut);
+        var late = Math.max(0, amInM - saS);
+        var under = Math.max(0, spE - pmOutM);
+        var full = max0(saE-saS) + max0(spE-spS);
+        regMins = (late <= grace) ? max0(full - under) : max0(full - late - under);
+      } else {
+        if (amIn && amOut){
+          var inM = toMins(amIn), sS = toMins(S.sch_am_start||'08:00'), sE = toMins(S.sch_am_end||'12:00');
+          if (inM <= sS + grace) inM = sS;
+          var endM = Math.min(toMins(amOut), sE);
+          if (endM > inM) regMins += (endM - inM);
+        }
+        if (pmIn && pmOut){
+          var inM2 = toMins(pmIn), sS2 = toMins(S.sch_pm_start||'13:00'), sE2 = toMins(S.sch_pm_end||'17:00');
+          if (inM2 <= sS2 + grace) inM2 = sS2;
+          var endM2 = Math.min(toMins(pmOut), sE2);
+          if (endM2 > inM2) regMins += (endM2 - inM2);
+        }
+      }
+
+      var otMins = 0;
+      if (otIn && otOut){
+        var otInMins = toMins(otIn), otOutMins = toMins(otOut);
+        var startClamp = Math.max(otInMins, toMins(win.otIn.start));
+        var rangeEnd = toMins(win.otOut.end);
+        if (otOutMins >= 1440) rangeEnd = Math.max(rangeEnd, 1440 + OVERNIGHT_CUTOFF_HOUR * 60);
+        var endClamp   = Math.min(otOutMins, rangeEnd);
+        otMins = Math.max(0, endClamp - startClamp);
+      }
+
+      var regDec = minsToDec(regMins);
+      var otDec  = minsToDec(otMins);
+
+      if (!totals[projId]) totals[projId] = { name: projName, reg: 0, ot: 0, total: 0, gross: 0, employees: {} };
+      totals[projId].reg   = Math.round((totals[projId].reg + regDec)*100)/100;
+      totals[projId].ot    = Math.round((totals[projId].ot  + otDec )*100)/100;
+      totals[projId].total = Math.round((totals[projId].total + regDec + otDec)*100)/100;
+      var rate = (emp && typeof emp.hourlyRate==='number') ? emp.hourlyRate : (+emp.hourlyRate||0);
+      var otp = getOvertimeMultiplier();
+      var grossInc = (regDec*rate) + (otDec*rate*otp);
+      totals[projId].gross = Math.round((totals[projId].gross + grossInc)*100)/100;
+      if (!totals[projId].employees[empId]) totals[projId].employees[empId] = { id: empId, name: (emp && emp.name) || '', reg: 0, ot: 0, total: 0, gross: 0, perDay: {} };
+totals[projId].employees[empId].reg = Math.round((totals[projId].employees[empId].reg + regDec)*100)/100;
+totals[projId].employees[empId].ot  = Math.round((totals[projId].employees[empId].ot  + otDec )*100)/100;
+totals[projId].employees[empId].total = Math.round((totals[projId].employees[empId].total + regDec + otDec)*100)/100;
+totals[projId].employees[empId].gross = Math.round((totals[projId].employees[empId].gross + grossInc)*100)/100;
+// NEW: record per-day total hours (reg + OT) for this date
+var _dTot = Math.round(((regDec + otDec))*100)/100;
+if (!totals[projId].employees[empId].perDay) totals[projId].employees[empId].perDay = {};
+totals[projId].employees[empId].perDay[date] = Math.round(((totals[projId].employees[empId].perDay[date]||0) + _dTot)*100)/100;
+    }
+
+    var rows = [];
+    var pids = Object.keys(totals).sort(function(a,b){ var A=totals[a].name||''; var B=totals[b].name||''; return A.localeCompare(B); });
+    for (var z=0; z<pids.length; z++){
+      var pid = pids[z];
+      var _emps = Object.values(totals[pid].employees || {}).sort(function(a,b){return (a.name||'').localeCompare(b.name||'') || String(a.id).localeCompare(String(b.id));});
+rows.push({ projectId: pid, project: totals[pid].name, reg: totals[pid].reg, ot: totals[pid].ot, total: totals[pid].total, gross: totals[pid].gross, employees: Object.keys(totals[pid].employees).length , breakdown: _emps });
+    }
+    if (rows.length){
+      var g = {reg:0, ot:0, total:0, gross:0, employees:0};
+      for (var r=0;r<rows.length;r++){ g.reg+=rows[r].reg; g.ot+=rows[r].ot; g.total+=rows[r].total; g.gross+=rows[r].gross; g.employees+=rows[r].employees; }
+      rows.push({ projectId: '__grand__', project: 'Grand Total', reg: Math.round(g.reg*100)/100, ot: Math.round(g.ot*100)/100, total: Math.round(g.total*100)/100, gross: Math.round(g.gross*100)/100, employees: g.employees });
+    }
+    return rows;
+  }
+
+  function renderProjectTotals(){
+    var ws = (q('weekStart') && q('weekStart').value) || '';
+    var we = (q('weekEnd') && q('weekEnd').value) || '';
+    var tbody = document.querySelector('#projectTotalsTable tbody'); if (!tbody) return;
+    var data = computeProjectTotals(ws, we);
+    tbody.innerHTML = '';
+    if (!data.length){
+      var tr = document.createElement('tr'); tr.innerHTML = '<td colspan="5" class="muted">No data for the selected date range.</td>'; tbody.appendChild(tr); return;
+    }
+    for (var i=0;i<data.length;i++){
+      var row = data[i]; var tr = document.createElement('tr');
+      tr.className = 'proj-row';
+      if (row.projectId==='__grand__') tr.style.fontWeight = '700';
+      tr.innerHTML = '<td>'+row.project+'</td>'
+                   + '<td style="text-align:right">'+row.reg.toFixed(2)+'</td>'
+                   + '<td style="text-align:right">'+row.ot.toFixed(2)+'</td>'
+                   + '<td style="text-align:right">'+row.total.toFixed(2)+'</td>'
+                   + '<td style="text-align:right">'+(row.gross!=null?row.gross.toFixed(2):'0.00')+'</td>'
+                   + '<td style="text-align:right">'+row.employees+'</td>';
+      tbody.appendChild(tr);
+      if (row.projectId !== '__grand__' && Array.isArray(row.breakdown) && row.breakdown.length){
+        tr.classList.add('has-breakdown');
+        var dtr = document.createElement('tr');
+        dtr.className = 'proj-emp-breakdown';
+        var inner = '<td colspan="6" style="background:#f9fafb">'
+  + '<div style="padding:8px 6px">'
+  + '<strong>Employees (per-day hours):</strong>';
+
+function dateRangeList(s, e){
+  var out = []; if(!s || !e) return out;
+  var d = new Date(s); var end = new Date(e);
+  while (d <= end){ out.push(new Date(d)); d.setDate(d.getDate()+1); }
+  return out;
+}
+var days = dateRangeList(ws, we);
+
+inner += '<table style="width:100%;margin-top:6px;border-collapse:collapse">'
+      + '<thead><tr>'
+      + '<th style="text-align:left">ID</th>'
+      + '<th style="text-align:left">Name</th>';
+for (var di=0; di<days.length; di++){
+  var dt = days[di];
+  var label = (dt.getMonth()+1)+'/'+dt.getDate();
+  inner += '<th style="text-align:right">'+label+'</th>';
+}
+inner += '<th style="text-align:right">Total Hrs</th>';
+inner += '<th style="text-align:right">Total Amount</th>';
+inner += '</tr></thead><tbody>';
+
+for (var k=0;k<row.breakdown.length;k++){
+  var e = row.breakdown[k];
+  var totalRow = Number(e.total||0);
+  var grossRow = Number(e.gross||0);
+  inner += '<tr>'
+        + '<td>'+(e.id ?? '')+'</td>'
+        + '<td>'+(e.name ?? '')+'</td>';
+  var perDay = (e.perDay||{});
+  for (var di=0; di<days.length; di++){
+    var dkey = days[di].toISOString().slice(0,10);
+    var val = Number(perDay[dkey]||0).toFixed(2);
+    inner += '<td style="text-align:right">'+val+'</td>';
+  }
+  inner += '<td style="text-align:right">'+ totalRow.toFixed(2) +'</td>';
+  inner += '<td style="text-align:right">'+ grossRow.toFixed(2) +'</td>';
+  inner += '</tr>';
+}
+inner += '</tbody></table></div></td>';
+        dtr.innerHTML = inner;
+        dtr.style.display = 'none';
+        tbody.appendChild(dtr);
+        // toggle and show detailed modal when a project row is clicked. The modal
+        // provides a comprehensive breakdown and grand totals for the selected project.
+        tr.style.cursor = 'pointer';
+        tr.addEventListener('click', (function(detailRow, rowObj){
+          return function(){
+            // Show modal with project breakdown if available
+            if (typeof showProjectReport === 'function') showProjectReport(rowObj);
+            // Toggle the inline breakdown row visibility for quick reference
+            if (detailRow) {
+              detailRow.style.display = (detailRow.style.display === 'none' ? 'table-row' : 'none');
+            }
+          };
+        })(dtr, row));
+      }
+
+    }
+  }
+
+  function exportProjectTotalsCSV(){
+    var ws = (q('weekStart') && q('weekStart').value) || '';
+    var we = (q('weekEnd') && q('weekEnd').value) || '';
+    var data = computeProjectTotals(ws, we);
+    var rows = [['Week Start','Week End','Project','Regular Hours','OT Hours','Total Hours','Gross Amount','Employees']];
+    for (var i=0;i<data.length;i++){ var r = data[i]; rows.push([ws,we,r.project,r.reg.toFixed(2),r.ot.toFixed(2),r.total.toFixed(2),(r.gross!=null?r.gross.toFixed(2):'0.00'),r.employees]); }
+var csv = rows.map(function(r){
+      return r.map(function(s){
+        s = String(s==null?'':s);
+        var needs = (s.indexOf('"')>=0) || (s.indexOf(',')>=0) || (s.indexOf('\n')>=0);
+        if (needs) s = '"' + s.split('"').join('""') + '"';
+        return s;
+      }).join(',');
+    }).join('\n');
+    var blob = new Blob([csv], {type:'text/csv'}); var url = URL.createObjectURL(blob);
+    var a = document.createElement('a'); a.href=url; a.download='project_totals.csv'; document.body.appendChild(a); a.click(); a.remove();
+  }
+})();
+
+
+
+// --- Employees: small UX helpers ---
+document.addEventListener('DOMContentLoaded', () => {
+  const panel = document.querySelector('#panelEmployees');
+  if (!panel) return;
+  const form = panel.querySelector('form');
+  if (!form) return;
+
+  // Wrap form in a card if not already
+  if (!form.closest('.form-card')) {
+    const card = document.createElement('div');
+    card.className = 'form-card';
+    form.parentNode.insertBefore(card, form);
+    card.appendChild(form);
+  }
+
+  // Enter-to-submit (except textarea)
+  form.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && e.target.tagName !== 'TEXTAREA') {
+      e.preventDefault();
+      const submit = form.querySelector('button[type="submit"], input[type="submit"]');
+      if (submit) submit.click();
+    }
+  });
+
+  // Auto-mark dangerous buttons
+  form.querySelectorAll('button, input[type="button"]').forEach(el => {
+    const text = (el.textContent || el.value || '').toLowerCase();
+    if (/(clear|reset|delete|remove)/.test(text)) el.classList.add('btn-danger');
+    if (/(save|add|submit|create)/.test(text)) el.classList.add('btn-primary');
+  });
+
+  // Group actions into a row if not already
+  const actions = Array.from(form.querySelectorAll('button, input[type="submit"], input[type="button"]'));
+  if (actions.length) {
+    let bar = form.querySelector('.form-actions');
+    if (!bar) {
+      bar = document.createElement('div');
+      bar.className = 'form-actions';
+      // move trailing buttons into actions
+      actions.forEach(btn => {
+        if (!btn.closest('.form-actions')) bar.appendChild(btn);
+      });
+      form.appendChild(bar);
+    }
+  }
+});
+
+
+
+// Clean print for per-project sheet (modal) with strong grid lines
+function printProjectReportClean(orientation){
+  try{
+    var box = document.getElementById('projectReportContent');
+    if (!box) return;
+    var css = '<style>'+
+      'html,body{margin:0;padding:10px;font-family:Arial,Helvetica,sans-serif}'+
+      '*{-webkit-print-color-adjust:exact;print-color-adjust:exact}'+
+      'h3{margin:0 0 8px 0}'+
+      'table{width:100%;border-collapse:collapse;font-size:12px}'+
+      'table,th,td{border:0.6pt solid #000 !important}'+
+      'th,td{padding:4px 6px;vertical-align:middle}'+
+      'th{background:#f1f5f9;text-align:left}'+
+      '@media print{@page{margin:10mm}}'+
+      '</style>';
+    var html = '<!doctype html><html><head><meta charset="utf-8">'+css+'</head><body>'+ box.innerHTML + '</body></html>';
+    printReport(html, { orientation: orientation, features: 'width=1024,height=768' });
+  }catch(e){ console.warn('Project report clean print failed', e); }
+}
+document.addEventListener('DOMContentLoaded', function(){
+  var btn = document.getElementById('printProjectTotalsBtn');
+  if (btn) btn.addEventListener('click', function(e){
+    e.preventDefault();
+    withPrintOrientation(function(orientation){
+      printProjectReportClean(orientation);
+    });
+  });
+});
+
+
+
+// Enhanced DTR print: clones the results table, removes 'Split' or 'Actions' columns,
+// replaces dropdowns with selected text, and shows date range/project filter.
+(function(){
+  function resolveProjectName(empId, dtrRow){
+    var rawProject = '';
+    if (dtrRow && dtrRow.project != null) {
+      rawProject = String(dtrRow.project).trim();
+    }
+    var projectName = '';
+    if (rawProject) {
+      if (typeof storedProjects !== 'undefined' && storedProjects && storedProjects[rawProject] && storedProjects[rawProject].name) {
+        projectName = storedProjects[rawProject].name;
+      } else {
+        projectName = rawProject;
+      }
+    }
+    if (!projectName) {
+      var emp = (typeof storedEmployees !== 'undefined' && storedEmployees) ? storedEmployees[empId] : null;
+      var empProjectId = emp && emp.projectId ? String(emp.projectId).trim() : '';
+      if (empProjectId) {
+        if (typeof storedProjects !== 'undefined' && storedProjects && storedProjects[empProjectId] && storedProjects[empProjectId].name) {
+          projectName = storedProjects[empProjectId].name;
+        } else {
+          projectName = empProjectId;
+        }
+      }
+    }
+    var normalized = String(projectName || '').trim();
+    var normalizedLower = normalized.toLowerCase();
+    if (!normalized || normalizedLower === 'none' || normalizedLower === '(none)' || normalizedLower === 'null' || normalizedLower === 'undefined' || normalizedLower === '0') {
+      return '-';
+    }
+    return normalized;
+  }
+  function getDtrReportCompanyName(){
+    if (typeof COMPANY_OPTIONS !== 'undefined' && Array.isArray(COMPANY_OPTIONS) && COMPANY_OPTIONS[0]) {
+      return normalizePrintCompanyName(COMPANY_OPTIONS[0]);
+    }
+    return normalizePrintCompanyName('PayrollPro');
+  }
+  function getDtrPeriodText(){
+    var start = (document.getElementById('weekStart') || {}).value || '';
+    var end = (document.getElementById('weekEnd') || {}).value || '';
+    var smallFrom = (document.getElementById('dtrDateRangeFrom')||{}).value || (document.getElementById('dtrDateFrom')||{}).value || '';
+    var smallTo   = (document.getElementById('dtrDateRangeTo')||{}).value   || (document.getElementById('dtrDateTo')||{}).value   || '';
+    var formatWithWeekday = function(value){
+      var raw = String(value || '').trim();
+      if (!raw) return '';
+      var dt = new Date(raw + 'T00:00:00');
+      if (isNaN(dt.getTime())) return raw;
+      return raw + ' (' + dt.toLocaleDateString(undefined, { weekday: 'long' }) + ')';
+    };
+    var s = smallFrom || start;
+    var e = smallTo   || end;
+    var formattedStart = formatWithWeekday(s);
+    var formattedEnd = formatWithWeekday(e);
+    if (formattedStart && formattedEnd) return formattedStart + ' to ' + formattedEnd;
+    return formattedStart || formattedEnd || '';
+  }
+  function getDtrProjectText(){
+    var projectEl = document.getElementById('filterProject');
+    var selected = projectEl && projectEl.options && projectEl.selectedIndex >= 0
+      ? projectEl.options[projectEl.selectedIndex]
+      : null;
+    var label = selected ? (selected.textContent || '').trim() : '';
+    var value = selected ? selected.value : '';
+    var normalize = function(text){ return String(text || '').trim(); };
+    var projectLabelFromValue = function(val){
+      if (!val) return '';
+      if (val === 'all') return 'All Projects';
+      if (val === 'none') return 'No Project';
+      if (typeof storedProjects !== 'undefined' && storedProjects && storedProjects[val]) {
+        return storedProjects[val].name || val;
+      }
+      return val;
+    };
+    var projectLabelFromCell = function(cell){
+      if (!cell) return '';
+      var sel = cell.querySelector ? cell.querySelector('select') : null;
+      if (sel) {
+        var opt = sel.options && sel.selectedIndex >= 0 ? sel.options[sel.selectedIndex] : null;
+        var optLabel = opt ? normalize(opt.textContent) : '';
+        if (optLabel && optLabel !== '(None)') return optLabel;
+        var val = normalize(sel.value);
+        var mapped = projectLabelFromValue(val);
+        return mapped && mapped !== 'No Project' ? mapped : '';
+      }
+      var text = normalize(cell.textContent);
+      if (text && text !== '(None)') return text;
+      return '';
+    };
+    var collectProjectLabelsFromTable = function(){
+      var table = document.getElementById('resultsTable');
+      if (!table || !table.tHead || !table.tHead.rows.length) return [];
+      var headerCells = Array.from(table.tHead.rows[0].cells || []);
+      var idx = headerCells.findIndex(function(cell){
+        return normalize(cell.textContent).toLowerCase() === 'project';
+      });
+      if (idx < 0 || !table.tBodies.length) return [];
+      var labels = [];
+      Array.from(table.tBodies[0].rows || []).forEach(function(row){
+        var cell = row.cells && row.cells[idx];
+        var labelText = projectLabelFromCell(cell);
+        if (labelText) labels.push(labelText);
+      });
+      return Array.from(new Set(labels));
+    };
+    if (value && value !== 'none' && value !== 'all') {
+      return label || projectLabelFromValue(value);
+    }
+    if (value === 'all') return 'All Projects';
+    var labels = collectProjectLabelsFromTable();
+    if (labels.length === 1) return labels[0];
+    if (labels.length > 1) return 'All Projects';
+    if (value === 'none') return 'No Project';
+    return label || '';
+  }
+  function normalizeHeader(text){
+    return String(text || '').replace(/\s+/g, ' ').trim().toLowerCase();
+  }
+  function collectHeaderIndexes(table, labels){
+    var header = table.querySelector('thead tr');
+    if (!header) return [];
+    var cells = Array.from(header.children || []);
+    var normLabels = labels.map(function(label){ return normalizeHeader(label); });
+    var indexes = [];
+    cells.forEach(function(cell, idx){
+      var key = normalizeHeader(cell.textContent);
+      if (normLabels.indexOf(key) !== -1) indexes.push(idx + 1);
+    });
+    return indexes;
+  }
+  function removeColumnsByIndex(table, indexes){
+    var sorted = indexes.slice().sort(function(a, b){ return b - a; });
+    sorted.forEach(function(index){
+      table.querySelectorAll('tr').forEach(function(row){
+        if (row.children && row.children[index - 1]) {
+          row.removeChild(row.children[index - 1]);
+        }
+      });
+    });
+  }
+  function syncFormControlValues(sourceTable, cloneTable){
+    if (!sourceTable || !cloneTable) return;
+    var sourceControls = sourceTable.querySelectorAll('input, select, textarea');
+    var cloneControls = cloneTable.querySelectorAll('input, select, textarea');
+    var len = Math.min(sourceControls.length, cloneControls.length);
+    for (var i = 0; i < len; i += 1) {
+      var src = sourceControls[i];
+      var dst = cloneControls[i];
+      if (!src || !dst) continue;
+      if (src.tagName === 'SELECT') {
+        dst.value = src.value;
+        if (src.selectedIndex >= 0) dst.selectedIndex = src.selectedIndex;
+      } else if (src.type === 'checkbox' || src.type === 'radio') {
+        dst.checked = !!src.checked;
+      } else {
+        dst.value = src.value;
+      }
+    }
+  }
+  function replaceInputsWithText(table){
+    table.querySelectorAll('input, select, button, textarea').forEach(function(el){
+      var cell = el.closest('td,th');
+      if (!cell) return;
+      var val = '';
+      if (el.tagName === 'SELECT') {
+        var selectedIndex = typeof el.selectedIndex === 'number' ? el.selectedIndex : -1;
+        var opt = el.options && selectedIndex >= 0 ? el.options[selectedIndex] : null;
+        if (!opt && el.options && el.options.length) {
+          opt = el.options[0];
+        }
+        val = opt ? opt.textContent : (el.value || '');
+      } else if (el.tagName === 'BUTTON') {
+        val = '';
+      } else if (el.type === 'checkbox') {
+        val = el.checked ? 'Yes' : '';
+      } else {
+        val = el.value || el.textContent || '';
+      }
+      cell.textContent = val;
+    });
+  }
+  function fillProjectNames(table){
+    var headerRow = table.querySelector('thead tr');
+    if (!headerRow) return;
+    var projectIdx = -1;
+    for (var i = 0; i < headerRow.cells.length; i += 1) {
+      if (normalizeHeader(headerRow.cells[i].textContent) === 'project') {
+        projectIdx = i;
+        break;
+      }
+    }
+    if (projectIdx < 0) return;
+    var bodyRows = Array.from((table.tBodies && table.tBodies[0] && table.tBodies[0].rows) || []);
+    bodyRows.forEach(function(row){
+      var empId = row.dataset && row.dataset.empId ? row.dataset.empId : '';
+      if (!empId && row.cells[0]) empId = String(row.cells[0].textContent || '').trim();
+      var date = row.dataset && row.dataset.date ? row.dataset.date : '';
+      var half = row.dataset && row.dataset.half ? row.dataset.half : '';
+      var overrideKey = empId && date ? empId + '___' + date : '';
+      var rowProject = '';
+      if (overrideKey && typeof overridesProjects !== 'undefined' && overridesProjects) {
+        if (half) {
+          var halfKey = overrideKey + '___' + half;
+          if (Object.prototype.hasOwnProperty.call(overridesProjects, halfKey)) {
+            rowProject = overridesProjects[halfKey];
+          }
+        }
+        if (!rowProject && Object.prototype.hasOwnProperty.call(overridesProjects, overrideKey)) {
+          rowProject = overridesProjects[overrideKey];
+        }
+      }
+      var resolved = resolveProjectName(empId, { project: rowProject });
+      if (row.cells[projectIdx]) row.cells[projectIdx].textContent = resolved;
+    });
+  }
+  function replaceZeroWithDash(table){
+    table.querySelectorAll('td').forEach(function(td){
+      var text = (td.textContent || '').trim();
+      if (!text) return;
+      var num = parseFloat(text.replace(/,/g,''));
+      if (!isNaN(num) && num === 0) td.textContent = '-';
+    });
+  }
+  function removeEmptyColumns(table, preserveLabels){
+    var bodyRows = Array.from((table.tBodies && table.tBodies[0] && table.tBodies[0].rows) || []);
+    var headerRow = table.tHead && table.tHead.rows && table.tHead.rows[0];
+    if (!headerRow || !bodyRows.length) return;
+    var preserve = Array.isArray(preserveLabels)
+      ? preserveLabels.map(function(label){ return normalizeHeader(label); })
+      : [];
+    for (var idx = headerRow.cells.length - 1; idx >= 0; idx -= 1) {
+      var headerText = headerRow.cells[idx] ? normalizeHeader(headerRow.cells[idx].textContent) : '';
+      if (preserve.indexOf(headerText) !== -1) continue;
+      var hasContent = bodyRows.some(function(row){
+        var cell = row.cells[idx];
+        if (!cell) return false;
+        var text = (cell.textContent || '').trim();
+        return text && text !== '-';
+      });
+      if (!hasContent) {
+        removeColumnsByIndex(table, [idx + 1]);
+      }
+    }
+  }
+  function markPrintColumnByHeader(table, headerLabel, className){
+    if (!table || !table.tHead || !table.tHead.rows || !table.tHead.rows.length) return;
+    var target = normalizeHeader(headerLabel || '');
+    if (!target) return;
+    var headRow = table.tHead.rows[table.tHead.rows.length - 1];
+    var idx = -1;
+    for (var i = 0; i < headRow.cells.length; i += 1) {
+      if (normalizeHeader(headRow.cells[i].textContent || '') === target) {
+        idx = i;
+        break;
+      }
+    }
+    if (idx < 0) return;
+    Array.from(table.querySelectorAll('tr')).forEach(function(row){
+      var cell = row.cells && row.cells[idx];
+      if (cell) cell.classList.add(className);
+    });
+  }
+  function buildDtrPrintTable(){
+    var tbl = document.getElementById('resultsTable');
+    if (!tbl) return null;
+    var clone = tbl.cloneNode(true);
+    syncFormControlValues(tbl, clone);
+    replaceInputsWithText(clone);
+    fillProjectNames(clone);
+    var removeLabels = ['Punches', 'Actions'];
+    var removeIdx = collectHeaderIndexes(clone, removeLabels);
+    removeColumnsByIndex(clone, removeIdx);
+    replaceZeroWithDash(clone);
+    removeEmptyColumns(clone, ['Project']);
+    markPrintColumnByHeader(clone, 'Project', 'dtr-project-col');
+    return clone;
+  }
+  function printDTR(orientation){
+    try{
+      var clone = buildDtrPrintTable();
+      if (!clone) { alert('No DTR table to print.'); return; }
+      var reportTitle = 'DTR';
+      var companyName = getDtrReportCompanyName();
+      var periodText = getDtrPeriodText();
+      var projectText = getDtrProjectText();
+      var doc = '<!DOCTYPE html><html><head><meta charset="utf-8"><title>' + reportTitle + '</title>' +
+        '<style>@page{size:letter landscape;margin:10mm} body{font-family:Arial,Helvetica,sans-serif;margin:0} .report-header{margin:0 0 8px} .company-name{font-size:14px;font-weight:700} .report-title{font-size:12px;font-weight:600;margin-top:2px} .report-period{font-size:10px;margin-top:2px} table{width:100%;border-collapse:collapse;table-layout:fixed} th,td{border:1pt solid #000;padding:4px;font-size:10px;text-align:center} th{background:#f1f5f9} thead{display:table-header-group} tfoot{display:table-footer-group} td:first-child, th:first-child, td:nth-child(2), th:nth-child(2){text-align:left} #resultsTable th, #resultsTable td { white-space: nowrap; } #resultsTable .dtr-project-col { white-space: normal !important; overflow-wrap: anywhere; word-break: break-word; hyphens: auto; max-width: 240px; vertical-align: top; } #resultsTable th:nth-child(2), #resultsTable td:nth-child(2) { white-space: normal; overflow-wrap: anywhere; word-break: break-word; max-width: 200px; vertical-align: top; }</style>' +
+        '</head><body>' +
+        '<div class="report-header">' +
+        '<div class="company-name">' + companyName + '</div>' +
+        '<div class="report-title">' + reportTitle + '</div>' +
+        (periodText ? '<div class="report-period">Period: ' + periodText + '</div>' : '') +
+        (projectText ? '<div class="report-period">Project: ' + projectText + '</div>' : '') +
+        '</div>' +
+        clone.outerHTML +
+        '</body></html>';
+      printReport(doc, { orientation: orientation, features: 'width=1100,height=700' });
+    }catch(err){
+      alert('Unable to print DTR: ' + err);
+    }
+  }
+  window.printDTR = printDTR;
+  document.addEventListener('click', function(ev){
+    if (ev.target && ev.target.id === 'printDtrBtn') {
+      withPrintOrientation(function(orientation){
+        printDTR(orientation);
+      });
+    }
+  });
+})();
+
+
+
+(function(){
+  function _parse(n){ var x=parseFloat(String(n||'').replace(/[^0-9.\-]/g,'')); return isNaN(x)?0:x; }
+  function _val(el){
+    try {
+      if (!el) return '';
+      if (typeof el.value !== 'undefined') return el.value;
+      return el.textContent || '';
+    } catch(e){ return ''; }
+  }
+  function _fmt(n){
+    var v = Math.round((n||0)*100)/100;
+    try { return v.toLocaleString(undefined,{minimumFractionDigits:2, maximumFractionDigits:2}); }
+    catch(e){ return v.toFixed(2); }
+  }
+
+  // === Payroll ===
+  function updatePayrollGrandTotals(){
+    var tb = document.querySelector('#payrollTable tbody');
+    var foot = document.querySelector('#payrollTotalsFoot');
+    if (!tb || !foot) return;
+      var t = {regHrs:0, rate:0, regPay:0, adjHours:0, adjPay:0, otPay:0, adjAmt:0, grossPay:0, pagibig:0, philhealth:0, sss:0, loanSSS:0, loanPI:0, vale:0, valeWed:0, totalDed:0, netPay:0};
+    var div = Number(divisor) || 1;
+    tb.querySelectorAll('tr').forEach(function(tr){
+      t.regHrs   += _parse(_val(tr.querySelector('.regHrs')));
+      t.rate     += _parse(_val(tr.querySelector('.rate')));
+        t.regPay   += _parse(tr.querySelector('.regPay')?.textContent);
+        t.adjHours += _parse(tr.querySelector('.adjHours')?.textContent);
+        t.adjPay   += _parse(tr.querySelector('.adjPay')?.textContent);
+        t.otPay    += _parse(tr.querySelector('.otPay')?.textContent);
+        t.adjAmt   += _parse(tr.querySelector('.adjAmt')?.textContent);
+        t.grossPay += _parse(tr.querySelector('.grossPay')?.textContent);
+        const dedPagibig = readRowDeductionDataset(tr, 'pagibig', 'effective');
+        const dedPhilhealth = readRowDeductionDataset(tr, 'philhealth', 'effective');
+        const dedSss = readRowDeductionDataset(tr, 'sss', 'effective');
+        const dedLoanSss = readRowDeductionDataset(tr, 'loanSSS', 'effective');
+        const dedLoanPi = readRowDeductionDataset(tr, 'loanPI', 'effective');
+        const dedVale = readRowDeductionDataset(tr, 'vale', 'effective');
+        const dedValeWed = readRowDeductionDataset(tr, 'valeWed', 'effective');
+        const dedTotal = readRowDeductionDataset(tr, 'total', 'effective');
+        t.pagibig  += dedPagibig != null ? _parse(dedPagibig) : _parse(tr.querySelector('.pagibig')?.textContent);
+        t.philhealth += dedPhilhealth != null ? _parse(dedPhilhealth) : _parse(tr.querySelector('.philhealth')?.textContent);
+        t.sss      += dedSss != null ? _parse(dedSss) : _parse(tr.querySelector('.sss')?.textContent);
+        t.loanSSS  += dedLoanSss != null ? _parse(dedLoanSss) : (_parse(_val(tr.querySelector('.loanSSS'))) / div);
+        t.loanPI   += dedLoanPi != null ? _parse(dedLoanPi) : (_parse(_val(tr.querySelector('.loanPI'))) / div);
+        t.vale     += dedVale != null ? _parse(dedVale) : _parse(_val(tr.querySelector('.vale')));
+        t.valeWed  += dedValeWed != null ? _parse(dedValeWed) : _parse(_val(tr.querySelector('.valeWed')));
+        t.totalDed += dedTotal != null ? _parse(dedTotal) : _parse(tr.querySelector('.totalDed')?.textContent);
+        t.netPay   += _parse(tr.querySelector('.netPay')?.textContent);
+    });
+    Object.keys(t).forEach(function(k){
+      var cell = foot.querySelector('[data-col="'+k+'"]');
+      if (cell) cell.textContent = _fmt(t[k]);
+    });
+  }
+  window.updatePayrollGrandTotals = updatePayrollGrandTotals;
+
+  // === Deductions ===
+  function updateDeductionsGrandTotals(){
+    var tb = document.querySelector('#deductionsTable tbody');
+    var foot = document.querySelector('#deductionsTable_foot');
+    if (!tb || !foot) return;
+    var totalsRaw = {pagibig:0, philhealth:0, sss:0, loanSSS:0, loanPI:0, vale:0, adjustments:0, valeWed:0};
+    tb.querySelectorAll('tr').forEach(function(tr){
+      DEDUCTION_COLUMN_KEYS.forEach(function(key){
+        if (key === 'total') return;
+        var cell = tr.querySelector('[data-col="'+key+'"]');
+        if (!cell) return;
+        var rawAttr = cell.getAttribute('data-raw');
+        var rawVal = rawAttr != null ? parseFloat(rawAttr) : NaN;
+        if (!Number.isFinite(rawVal)) {
+          rawVal = _parse(cell.textContent || '');
+        }
+        if (!Number.isFinite(rawVal)) rawVal = 0;
+        totalsRaw[key] += rawVal;
+      });
+    });
+    totalsRaw.total = roundToCents(Object.keys(totalsRaw).reduce(function(sum, key){ return sum + (key === 'total' ? 0 : totalsRaw[key]); }, 0));
+    var effectiveTotals = computeEffectiveDeductionValues(totalsRaw);
+    Object.keys(effectiveTotals).forEach(function(key){
+      var cell = foot.querySelector('[data-col="'+key+'"]');
+      if (!cell) return;
+      var raw = roundToCents(totalsRaw[key] || 0);
+      var effective = roundToCents(effectiveTotals[key] || 0);
+      updateDeductionCellDisplay(cell, raw, effective, isDeductionColumnIncluded(key));
+    });
+    try {
+      var report = buildDeductionsReportData();
+      updateDeductionsContributionBreakdownDisplay(report.contributionTotals);
+    } catch (_) {}
+  }
+  window.updateDeductionsGrandTotals = updateDeductionsGrandTotals;
+
+  // Debounced scheduling for totals to avoid thrash during bulk updates
+  window.__suspendTotals = window.__suspendTotals || false;
+  window.__needsTotalsUpdate = window.__needsTotalsUpdate || false;
+  (function(){
+    var rafId = null;
+    function flush(){
+      rafId = null;
+      if (window.__suspendTotals) { window.__needsTotalsUpdate = true; return; }
+      try { updatePayrollGrandTotals(); } catch(e){}
+      try { updateDeductionsGrandTotals(); } catch(e){}
+    }
+    window.scheduleTotals = function(){
+      if (window.__suspendTotals) { window.__needsTotalsUpdate = true; return; }
+      if (rafId) return;
+      var raf = window.requestAnimationFrame || function(cb){ return setTimeout(cb, 16); };
+      rafId = raf(flush);
+    };
+  })();
+
+  // Run on load
+  function _initTotals(){
+    try{ (window.scheduleTotals||updatePayrollGrandTotals)(); }catch(e){}
+  }
+  if (document.readyState === 'loading'){
+    document.addEventListener('DOMContentLoaded', _initTotals);
+  } else { _initTotals(); }
+
+  // Observe table changes to keep totals fresh (debounced)
+  try {
+    var mo = new MutationObserver(function(){ try{ (window.scheduleTotals||updatePayrollGrandTotals)(); }catch(e){} });
+    var ptb = document.querySelector('#payrollTable tbody');
+    var dtb = document.querySelector('#deductionsTable tbody');
+    if (ptb) mo.observe(ptb, {childList:true, subtree:true, characterData:true});
+    if (dtb) mo.observe(dtb, {childList:true, subtree:true, characterData:true});
+  } catch(e){}
+
+  // Also recalc on payroll inputs (debounced)
+  document.addEventListener('input', function(ev){
+    if ((ev.target && ev.target.closest('#payrollTable'))) {
+      try{ (window.scheduleTotals||updatePayrollGrandTotals)(); }catch(e){}
+    }
+  });
+
+  // Patch into existing functions if present
+  try {
+    var _calcAll = window.calculateAll;
+    if (typeof _calcAll === 'function'){
+      window.calculateAll = function(){
+        var prev = window.__suspendTotals;
+        window.__suspendTotals = true;
+        try { var r = _calcAll.apply(this, arguments); return r; }
+        finally {
+          window.__suspendTotals = prev;
+          var need = window.__needsTotalsUpdate; window.__needsTotalsUpdate = false;
+          try { (window.scheduleTotals||updatePayrollGrandTotals)(); if (need) (window.scheduleTotals||updateDeductionsGrandTotals)(); } catch(e){}
+        }
+      };
+    }
+  } catch(e){}
+  try {
+    var _renderDed = window.renderDeductionsTable;
+    if (typeof _renderDed === 'function'){
+      window.renderDeductionsTable = function(){ var r = _renderDed.apply(this, arguments); try{ (window.scheduleTotals||updateDeductionsGrandTotals)(); }catch(e){}; return r; };
+    }
+  } catch(e){}
+
+})();
+
+
+// Custom Payroll CSV export: Last name, First Name, Middle Name, Employee Account Number, Amount (Net Pay)
+(function(){
+  function splitName(full){
+    full = String(full||'').trim();
+    if (!full) return {last:'', first:'', middle:''};
+    // If "Last, First Middle"
+    if (full.indexOf(',') >= 0){
+      var parts = full.split(',');
+      var last = parts[0].trim();
+      var rhs = (parts.slice(1).join(',')).trim();
+      var toks = rhs.split(/\s+/).filter(Boolean);
+      var first = toks.shift() || '';
+      var middle = toks.join(' ') || '';
+      return {last, first, middle};
+    }
+    // Else assume "First Middle Last"
+    var toks = full.split(/\s+/).filter(Boolean);
+    if (toks.length === 1) return {last: toks[0], first:'', middle:''};
+    if (toks.length === 2) return {first: toks[0], last: toks[1], middle:''};
+    var first = toks[0];
+    var last = toks[toks.length-1];
+    var middle = toks.slice(1, -1).join(' ');
+    return {last, first, middle};
+  }
+  function parseNum(s){
+    var n = parseFloat(String(s||'').replace(/[^0-9.\-]/g,''));
+    return isNaN(n) ? 0 : n;
+  }
+  function csvEscape(val){
+    var s = String(val==null?'':val);
+    var needs = /[",\n]/.test(s);
+    if (needs) s = '"' + s.replace(/"/g,'""') + '"';
+    return s;
+  }
+  function buildPayrollCSV(){
+    var rows = [['Last name','First Name','Middle Name','Employee Account Number','Amount']];
+    var tb = document.querySelector('#payrollTable tbody');
+    if (!tb) return rows.map(r=>r.join(',')).join('\n');
+    var empMap = (typeof storedEmployees !== 'undefined' && storedEmployees) ? storedEmployees : {};
+    tb.querySelectorAll('tr').forEach(function(tr){
+      var id = (tr.cells[0] && tr.cells[0].textContent.trim()) || '';
+      var name = (tr.cells[1] && tr.cells[1].textContent.trim()) || (empMap[id]?.name || '');
+      var bank = (empMap[id]?.bankAccount) || '';
+      var netTxt = (tr.querySelector('.netPay') || {}).textContent;
+      var amount = (Math.round(parseNum(netTxt)*100)/100).toFixed(2);
+      var nm = splitName(name);
+      rows.push([nm.last, nm.first, nm.middle, bank, amount]);
+    });
+    // Serialize
+    return rows.map(function(r){ return r.map(csvEscape).join(','); }).join('\n');
+  }
+  function attachPayrollCsv(){
+    var btn = document.getElementById('downloadPayrollCSV');
+    if (!btn) return;
+    btn.addEventListener('click', function(){
+      try{
+        var csv = buildPayrollCSV();
+        var blob = new Blob([csv], {type:'text/csv'});
+        var url = URL.createObjectURL(blob);
+        var a = document.createElement('a');
+        a.href = url;
+        a.download = 'Payroll_NetPay.csv';
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(function(){ URL.revokeObjectURL(url); }, 1000);
+      }catch(e){
+        console.error('Payroll CSV export failed', e);
+        alert('Failed to build Payroll CSV.');
+      }
+    });
+  }
+  if (document.readyState === 'loading'){
+    document.addEventListener('DOMContentLoaded', attachPayrollCsv);
+  } else {
+    attachPayrollCsv();
+  }
+})();
+
+
+
+// === Override Payroll CSV to: Last name, First Name, Middle Name, Employee Account Number, Amount (Net Pay) ===
+(function(){
+  function splitName(full){
+    full = String(full||'').trim();
+    if (!full) return {last:'', first:'', middle:''};
+    // Handle "Last, First Middle"
+    if (full.indexOf(',') >= 0){
+      var parts = full.split(',');
+      var last = (parts.shift()||'').trim();
+      var rhs = (parts.join(',')||'').trim();
+      var toks = rhs.split(/\s+/).filter(Boolean);
+      var first = toks.shift() || '';
+      var middle = toks.join(' ') || '';
+      return {last, first, middle};
+    }
+    // Default "First Middle Last"
+    var toks = full.split(/\s+/).filter(Boolean);
+    if (toks.length === 1) return {last: toks[0], first:'', middle:''};
+    if (toks.length === 2) return {first: toks[0], last: toks[1], middle:''};
+    var first = toks[0];
+    var last = toks[toks.length-1];
+    var middle = toks.slice(1, -1).join(' ');
+    return {last, first, middle};
+  }
+  function parseNum(s){ var n = parseFloat(String(s||'').replace(/[^0-9.\-]/g,'')); return isNaN(n)?0:n; }
+  function csvEscape(val){ var s=String(val==null?'':val); return /[",\n]/.test(s) ? ('"'+s.replace(/"/g,'""')+'"') : s; }
+
+  function buildPayrollCSV(){
+    var rows = [['Last name','First Name','Middle Name','Employee Account Number','Amount']];
+    var tb = document.querySelector('#payrollTable tbody');
+    if (!tb) return rows.map(r=>r.join(',')).join('\n');
+    var empMap = (typeof storedEmployees !== 'undefined' && storedEmployees) ? storedEmployees : {};
+
+    tb.querySelectorAll('tr').forEach(function(tr){
+      var id = (tr.cells[0] && tr.cells[0].textContent.trim()) || '';
+      var name = (tr.cells[1] && tr.cells[1].textContent.trim()) || (empMap[id]?.name || '');
+      var bank = (empMap[id]?.bankAccount) || ''; // Employee Account Number
+      var netTxt = (tr.querySelector('.netPay') || {}).textContent;
+      var amount = (Math.round(parseNum(netTxt)*100)/100).toFixed(2);
+      var nm = splitName(name);
+      rows.push([nm.last, nm.first, nm.middle, bank, amount]);
+    });
+
+    return rows.map(r => r.map(csvEscape).join(',')).join('\n');
+  }
+
+  function overridePayrollCsv(){
+    var btn = document.getElementById('downloadPayrollCSV');
+    if (!btn) return;
+    // Remove all existing listeners by cloning
+    var clone = btn.cloneNode(true);
+    btn.parentNode.replaceChild(clone, btn);
+    clone.addEventListener('click', function(e){
+      e.preventDefault(); e.stopPropagation();
+      try{
+        var csv = buildPayrollCSV();
+        var blob = new Blob([csv], {type:'text/csv'});
+        var url = URL.createObjectURL(blob);
+        var a = document.createElement('a');
+        a.href = url;
+        a.download = 'Payroll_NetPay.csv';
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(function(){ URL.revokeObjectURL(url); }, 1000);
+      }catch(err){
+        console.error('Payroll CSV export failed', err);
+        alert('Failed to build Payroll CSV.');
+      }
+    });
+  }
+
+  if (document.readyState === 'loading'){
+    document.addEventListener('DOMContentLoaded', overridePayrollCsv);
+  } else {
+    overridePayrollCsv();
+  }
+})();
+
+
+
+document.addEventListener('DOMContentLoaded', function(){
+  var nodes = document.querySelectorAll('#cloudSyncCard');
+  for (var i=1;i<nodes.length;i++){ nodes[i].remove(); }
+});
+
+
+
+// Add click listener for payslip buttons on payroll table
+document.addEventListener('click', function(e) {
+  var target = e.target;
+  if (!target || !target.classList || !target.classList.contains('payslipBtn')) return;
+
+  var row = target.closest('tr');
+  if (!row) return;
+
+  function cellText(sel){
+    var el = row.querySelector(sel);
+    return (el ? (el.textContent || el.value || '') : '').toString().trim();
+  }
+  function inputVal(sel){
+    var el = row.querySelector(sel);
+    var v = el ? (el.value || el.textContent || '') : '';
+    return v.toString().trim();
+  }
+  function perLoanShare(raw){
+    if (typeof window !== 'undefined' && typeof window.computeLoanPerPeriodShare === 'function'){
+      return window.computeLoanPerPeriodShare(raw);
+    }
+    var amt = parseFloat((raw == null ? '' : raw).toString().replace(/,/g,''));
+    if (!isFinite(amt)) amt = 0;
+    var key = (typeof LS_DIVISOR !== 'undefined' ? LS_DIVISOR : 'payroll_deduction_divisor');
+    var div = 0;
+    if (typeof window !== 'undefined' && typeof window.divisor !== 'undefined'){
+      var winDiv = Number(window.divisor);
+      if (!isNaN(winDiv) && winDiv > 0) div = winDiv;
+    }
+    if (!(div > 0)){
+      try {
+        if (typeof localStorage !== 'undefined' && localStorage){
+          var stored = localStorage.getItem(key);
+          if (stored != null){
+            var parsed = parseInt(stored, 10);
+            if (!isNaN(parsed) && parsed > 0) div = parsed;
+          }
+        }
+      } catch(err){}
+    }
+    if (!(div > 0)) div = 1;
+    var per = amt / div;
+    if (!isFinite(per)) per = 0;
+    return per.toFixed(2);
+  }
+
+  function datasetNumber(key){
+    if (!row || !row.dataset) return 0;
+    var raw = row.dataset[key];
+    if (raw == null || raw === '') return 0;
+    var num = parseFloat(raw.toString().replace(/,/g,''));
+    return isNaN(num) ? 0 : num;
+  }
+
+  function parseAmount(val){
+    var num = parseFloat((val == null ? '' : val).toString().replace(/,/g,''));
+    return isNaN(num) ? 0 : num;
+  }
+
+  var rowData = (typeof window.collectPayslipRowData === 'function') ? window.collectPayslipRowData(row) : null;
+
+  var id = (rowData && rowData.id) || ((row.cells[0] && row.cells[0].textContent) ? row.cells[0].textContent.trim() : '');
+  var name = (rowData && rowData.name) || ((row.cells[1] && row.cells[1].textContent) ? row.cells[1].textContent.trim() : '');
+
+  var rate      = rowData ? rowData.rate : inputVal('.rate');
+  var regHrs    = rowData ? rowData.regHours : inputVal('.regHrs');
+  var otHrs     = rowData
+    ? (parseAmount(rowData.otHours) + parseAmount(rowData.adjustmentHours)).toFixed(2)
+    : getOvertimeFinalHours(id).toFixed(2);
+  var regPay    = rowData ? rowData.regPay : cellText('.regPay');
+  var adjHours  = rowData ? rowData.adjHours : cellText('.adjHours');
+  var adjPay    = rowData ? rowData.adjPay : cellText('.adjPay');
+  var otPay     = rowData ? rowData.otPay : cellText('.otPay');
+  var gross     = rowData ? rowData.gross : cellText('.grossPay');
+  var pagibig   = rowData ? rowData.pagibig : cellText('.pagibig');
+  var philhealth= rowData ? rowData.philhealth : cellText('.philhealth');
+  var sss       = rowData ? rowData.sss : cellText('.sss');
+  var sssLoan   = rowData ? rowData.sssLoan : perLoanShare(inputVal('.loanSSS'));
+  var piLoan    = rowData ? rowData.piLoan : perLoanShare(inputVal('.loanPI'));
+  var valeAmt   = rowData ? rowData.vale : inputVal('.vale');
+  var wedValeAmt= rowData ? rowData.valeWed : inputVal('.valeWed');
+  var bantayVal = rowData ? rowData.bantay : inputVal('.bantay');
+  var otherDeductionsTotal = rowData ? Number(rowData.otherDeductionsTotal || 0) : datasetNumber('otherDeductionsTotal');
+  if (!(otherDeductionsTotal > 0)){
+    try {
+      if (typeof getOtherDeductionsTotal === 'function' && id){
+        otherDeductionsTotal = Number(getOtherDeductionsTotal(id)) || 0;
+      }
+    } catch (err) { otherDeductionsTotal = otherDeductionsTotal || 0; }
+  }
+  var otherDeductionsStr = otherDeductionsTotal > 0 ? otherDeductionsTotal.toFixed(2) : '0.00';
+  var totalDed  = rowData ? rowData.totalDeductions : cellText('.totalDed');
+  var net       = rowData ? rowData.net : cellText('.netPay');
+  var bantayRowLegacy = parseAmount(bantayVal) !== 0 ? `<tr><td>Bantay</td><td class="right">${bantayVal}</td></tr>` : '';
+  var adjPayRowLegacy = parseAmount(adjPay) !== 0 ? `<tr><td>Adjustment Pay</td><td class="right">${adjPay}</td></tr>` : '';
+  var additionalIncomeItems = rowData ? rowData.additionalIncomeDetails : (typeof getAdditionalIncomeDetailsForEmployee === 'function' ? getAdditionalIncomeDetailsForEmployee(id) : []);
+  var additionalIncomeTotal = rowData ? Number(rowData.additionalIncomeTotal || 0) : datasetNumber('additionalIncomeTotal');
+  if (!(additionalIncomeTotal > 0)) {
+    additionalIncomeTotal = (additionalIncomeItems || []).reduce(function(sum, item){
+      return sum + parseAmount(item && item.amount);
+    }, 0);
+  }
+  var otherDeductionsItems = rowData ? rowData.otherDeductionsDetails : (typeof getOtherDeductionsDetailsForEmployee === 'function' ? getOtherDeductionsDetailsForEmployee(id) : []);
+  if (!(otherDeductionsTotal > 0)) {
+    otherDeductionsTotal = (otherDeductionsItems || []).reduce(function(sum, item){
+      return sum + parseAmount(item && item.amount);
+    }, 0);
+    otherDeductionsStr = otherDeductionsTotal > 0 ? otherDeductionsTotal.toFixed(2) : '0.00';
+  }
+  var otherDeductionsRows = '';
+  if ((otherDeductionsItems && otherDeductionsItems.length) || otherDeductionsTotal > 0) {
+    otherDeductionsRows += '<tr><th colspan="2">Other Deductions</th></tr>';
+    (otherDeductionsItems || []).forEach(function(item){
+      var label = getOtherDeductionLabel(item);
+      var amount = parseAmount(item && item.amount);
+      if (amount > 0) {
+        otherDeductionsRows += `<tr><td>${label}</td><td class="right">${amount.toFixed(2)}</td></tr>`;
+      }
+    });
+    otherDeductionsRows += `<tr><th>Other Deductions Subtotal</th><th class="right">${otherDeductionsStr}</th></tr>`;
+  }
+
+  var additionalIncomeRows = '';
+  if ((additionalIncomeItems && additionalIncomeItems.length) || additionalIncomeTotal > 0) {
+    additionalIncomeRows += '<tr><th colspan="2">Additional Income</th></tr>';
+    (additionalIncomeItems || []).forEach(function(item){
+      var label = getAdditionalIncomeLabel(item);
+      var amount = parseAmount(item && item.amount);
+      if (amount > 0) {
+        additionalIncomeRows += `<tr><td>${label}</td><td class="right">${amount.toFixed(2)}</td></tr>`;
+      }
+    });
+    additionalIncomeRows += `<tr><th>Additional Income Subtotal</th><th class="right">${additionalIncomeTotal.toFixed(2)}</th></tr>`;
+  }
+
+  var ws = (document.getElementById('weekStart') || {}).value || '';
+  var we = (document.getElementById('weekEnd')   || {}).value || '';
+  var periodText = (typeof window.formatPayslipPeriod === 'function') ? window.formatPayslipPeriod(ws, we) : ((ws && we) ? (ws + ' to ' + we) : (ws || we || ''));
+  var html = '';
+
+  if (rowData && typeof window.buildCompactPayslip === 'function'){
+    var slip = window.buildCompactPayslip(rowData, periodText);
+    if (slip){
+      var stylesSingle = window.PAYSLIP_PRINT_STYLES || '';
+      if (!stylesSingle){
+        stylesSingle = `@page { size: letter portrait; margin: 0.25in; }
+html, body { width: 8.5in; height: 11in; margin: 0; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+body{font-family:Arial,Helvetica,sans-serif;margin:0;padding:0 0.1in;}
+.payslip-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:0.03in;}
+.payslip-grid.single{grid-template-columns:repeat(1,1fr);max-width:3in;margin:0 auto;}
+.payslip{box-sizing:border-box;padding:0.06in;border:1px solid #475569;height:2.6in;overflow:hidden;border-radius:3px;background:#fff;box-shadow:0 0 0 1px rgba(15,23,42,0.2);}
+.page-break{page-break-after:always;break-after:page;}
+.payslip-header{display:flex;flex-direction:column;gap:2px;margin-bottom:4px;}
+.company-name{font-size:10px;font-weight:700;}
+.header-lines{font-size:7.8px;line-height:1.2;}
+.meta-line{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.meta-label{font-weight:700;}
+.meta-muted{color:#475569;}
+.summary-row{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:3px;margin:2px 0 4px;}
+.summary-box{border:1px solid #e2e8f0;border-radius:2px;padding:3px 2px;text-align:center;background:#f8fafc;}
+.summary-label{font-size:7px;font-weight:700;letter-spacing:0.02em;color:#475569;}
+.summary-value{font-size:10px;font-weight:700;line-height:1.1;}
+.summary-net .summary-value{font-size:11px;font-weight:800;color:#0f172a;}
+.details-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:4px;}
+.details-title{font-size:7.5px;font-weight:700;margin:0 0 2px;}
+.detail-row{display:flex;justify-content:space-between;gap:4px;font-size:8px;line-height:1.2;padding:1px 0;}
+.detail-row span:last-child{font-variant-numeric:tabular-nums;}
+.item-line{font-size:7.3px;color:#475569;padding:0;}
+.detail-more{font-style:italic;}
+.payslip-footer{margin-top:3px;font-size:7px;line-height:1.2;color:#475569;}`;
+      }
+      html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Payslip - ${name}</title><style>${stylesSingle}</style></head><body><div class="payslip-grid single">${slip}</div></body></html>`;
+    }
+  }
+
+  if (!html){
+    var legacyPeriod = (ws && we) ? `Period: ${ws} - ${we}` : '';
+    html = `<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>Payslip - ${name}</title>
+<style>
+  body{font-family:Arial,Helvetica,sans-serif;padding:20px;line-height:1.4;}
+  h2{margin:0 0 12px 0;text-align:center;}
+  .meta{margin:0 0 16px 0;text-align:center;color:#475569;}
+  table{border-collapse:collapse;width:100%;font-size:14px;}
+  th,td{border:1px solid #e2e8f0;padding:8px;text-align:left;}
+  th{background:#f1f5f9;}
+  .right{text-align:right;}
+  .section{margin-top:16px;}
+</style>
+</head><body>
+  <h2>Payslip</h2>
+  <div class="meta">${legacyPeriod}</div>
+
+  <table>
+    <tr><th>Employee ID</th><td>${id}</td><th>Name</th><td>${name}</td></tr>
+    <tr><th>Rate</th><td class="right">${rate}</td><th>Reg Hrs</th><td class="right">${regHrs}</td></tr>
+    <tr><th>OT Hrs</th><td class="right">${otHrs}</td><th>Adj Hrs</th><td class="right">${adjHrs}</td></tr>
+    <tr><th>Total Hrs</th><td class="right">${totalHrs}</td><th>Gross Pay</th><td class="right">${gross}</td></tr>
+  </table>
+
+  <div class="section">
+    <table>
+      <tr><th colspan="2">Earnings</th></tr>
+      <tr><td>Regular Pay</td><td class="right">${regPay}</td></tr>
+      ${adjPayRowLegacy}
+      <tr><td>OT Pay</td><td class="right">${otPay}</td></tr>
+      ${bantayRowLegacy}
+    </table>
+  </div>
+
+  ${additionalIncomeRows ? `<div class="section"><table>${additionalIncomeRows}</table></div>` : ''}
+
+  <div class="section">
+    <table>
+      <tr><th colspan="2">Deductions</th></tr>
+      <tr><td>Pag-IBIG</td><td class="right">${pagibig}</td></tr>
+      <tr><td>PhilHealth</td><td class="right">${philhealth}</td></tr>
+      <tr><td>SSS</td><td class="right">${sss}</td></tr>
+      <tr><td>SSS Loan</td><td class="right">${sssLoan}</td></tr>
+      <tr><td>Pag-IBIG Loan</td><td class="right">${piLoan}</td></tr>
+      <tr><td>Cash Advance</td><td class="right">${valeAmt}</td></tr>
+      <tr><td>Wednesday Vale</td><td class="right">${wedValeAmt}</td></tr>
+      <tr><th>Total Deductions</th><th class="right">${totalDed}</th></tr>
+    </table>
+  </div>
+
+  ${otherDeductionsRows ? `<div class="section"><table>${otherDeductionsRows}</table></div>` : ''}
+
+  <div class="section">
+    <table>
+      <tr><th>Net Pay</th><th class="right">${net}</th></tr>
+    </table>
+  </div>
+</body></html>`;
+  }
+
+  withPrintOrientation(function(orientation){
+    printReport(html, { orientation: orientation, features: 'width=800,height=900' });
+  });
+});
+var LS_FROM = (typeof window.LS_FROM !== 'undefined') ? window.LS_FROM : 'dtrDateFrom';
+var LS_TO   = (typeof window.LS_TO   !== 'undefined') ? window.LS_TO   : 'dtrDateTo';
+function getEl(id){ return document.getElementById(id); }
+function loadSaved(){
+    const from = localStorage.getItem(LS_FROM) || '';
+    const to   = localStorage.getItem(LS_TO) || '';
+    const f = getEl('dtrDateFrom'), t = getEl('dtrDateTo');
+    if (f) f.value = from;
+    if (t) t.value = to;
+  }
+
+  function withinRange(dateStr, from, to){
+    if (!dateStr) return false;
+    const s = dateStr.trim();
+    if (!s) return false;
+    if (from && s < from) return false;
+    if (to   && s > to)   return false;
+    return true;
+  }
+
+  function applyDtrDateFilter(){
+    const f = getEl('dtrDateFrom')?.value || '';
+    const t = getEl('dtrDateTo')?.value || '';
+    try { localStorage.setItem(LS_FROM, f); } catch(e){}
+    try { localStorage.setItem(LS_TO, t); } catch(e){}
+
+    const tbody = document.querySelector('#resultsTable tbody');
+    if (!tbody) return;
+    const hasRange = !!(f || t);
+
+    Array.from(tbody.rows).forEach(tr=>{
+      // Adjust the index below if your Date column index is different.
+      // Assuming the "Date" column is 4 (0-based), change as necessary.
+      const dateStr = (tr.cells[4]?.textContent || '').trim();
+      const show = !hasRange || withinRange(dateStr, f, t);
+      tr.style.display = show ? '' : 'none';
+    });
+
+    // After applying the date filter, recompute the DTR summary to reflect only visible rows.
+    const summaryEl = document.getElementById('dtrSummary');
+    if (summaryEl) {
+      // Initialize totals
+      let regSum = 0;
+      let otSum  = 0;
+      const empSet = new Set();
+      const rows = Array.from(tbody.rows);
+      let visibleCount = 0;
+      rows.forEach(row => {
+        // Skip rows hidden by the date filter
+        if (row.style.display === 'none') return;
+        visibleCount++;
+        // Extract values from the Total Regular Hrs and OT Hrs columns (indices 11 and 12)
+        const regVal = parseFloat((row.cells[11]?.textContent || '').trim()) || 0;
+        const otVal  = parseFloat((row.cells[12]?.textContent || '').trim()) || 0;
+        regSum += regVal;
+        otSum  += otVal;
+        // Collect unique employee IDs (column 0)
+        const idCell = (row.cells[0]?.textContent || '').trim();
+        if (idCell) empSet.add(idCell);
+      });
+      // If there are visible rows, update the summary text; otherwise clear it
+      if (visibleCount > 0) {
+        const totalHours = regSum + otSum;
+        summaryEl.textContent = `Grand Total Hours: ${formatHours(totalHours)} | Regular Hours: ${formatHours(regSum)} | OT Hours: ${formatHours(otSum)} | Employees: ${empSet.size}`;
+      } else {
+        summaryEl.textContent = '';
+      }
+    }
+  }
+
+  function hookUI(){
+    const f = getEl('dtrDateFrom');
+    const t = getEl('dtrDateTo');
+    const c = getEl('dtrDateClear');
+    if (f) f.addEventListener('change', applyDtrDateFilter);
+    if (t) t.addEventListener('change', applyDtrDateFilter);
+    if (c) c.addEventListener('click', ()=>{
+      if (f) f.value = '';
+      if (t) t.value = '';
+      try { localStorage.removeItem(LS_FROM); } catch(e){}
+      try { localStorage.removeItem(LS_TO); } catch(e){}
+      applyDtrDateFilter();
+    });
+  }
+
+  function monkeyPatchRender(){
+    const orig = window.renderResults;
+    if (typeof orig === 'function') {
+      window.renderResults = function(){
+        orig.apply(this, arguments);
+        applyDtrDateFilter();
+      };
+    }
+  }
+
+  document.addEventListener('DOMContentLoaded', ()=>{
+    // Inject controls right before #resultsTable if not already in DOM.
+    if (!document.getElementById('dtrDateControls')){
+      const table = document.getElementById('resultsTable');
+      if (table && table.parentNode){
+        const wrapper = document.createElement('div');
+      wrapper.innerHTML = '<div id="dtrDateControls" style="display:flex;gap:.75rem;align-items:center;flex-wrap:wrap;margin:8px 0;"><label style="display:flex;align-items:center;gap:.35rem;"><span>Date:</span><input id="dtrDateFrom" type="date" /></label><span>-</span><label><input id="dtrDateTo" type="date" /></label><button id="dtrDateClear" type="button">Clear</button></div>';
+        table.parentNode.insertBefore(wrapper.firstElementChild, table);
+      }
+    }
+    loadSaved();
+    hookUI();
+    monkeyPatchRender();
+    applyDtrDateFilter();
+  });
+
+
+
+
+// === Thousands Separator Formatting for Amounts (Payroll & Deductions) ===
+(function(){
+  // Format helper: 1,234.56
+  function fmt(n){
+    var num = Number(n);
+    if (!isFinite(num)) return String(n || '');
+    return num.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  }
+
+  function formatAllNumbers(){
+    var sels = '#payrollTable td.num, #payrollTable tfoot td.num, #deductionsTable td.num';
+    document.querySelectorAll(sels).forEach(function(td){
+      var raw = (td.textContent || '').replace(/,/g, '').trim();
+      var num = parseFloat(raw);
+      if (isFinite(num)) {
+        if (num === 0) {
+          td.textContent = '-';
+        } else {
+          td.textContent = fmt(num);
+        }
+      }
+    });
+    // Inputs: hide zeros by showing blank
+    document.querySelectorAll('#payrollTable input.regHrs, #payrollTable input.rate').forEach(function(inp){
+      var v = parseFloat(inp.value);
+      if (!isNaN(v) && v === 0) { inp.value = ''; }
+    });
+  }
+
+  // Patch calculateAll to apply formatting after calculations
+  function patchCalculateAll(){
+    try{
+      var orig = window.calculateAll;
+      if (typeof orig === 'function'){
+        window.calculateAll = function(){
+          var out = orig.apply(this, arguments);
+          try { formatAllNumbers(); } catch(e){}
+          return out;
+        };
+      } else {
+        // If not defined yet, retry after load
+        document.addEventListener('DOMContentLoaded', function(){
+          if (typeof window.calculateAll === 'function'){
+            patchCalculateAll(); 
+            try { formatAllNumbers(); } catch(e){}
+          }
+        });
+      }
+    }catch(e){}
+  }
+
+  // Also patch renderDeductionsTable so that a manual refresh there also formats
+  function patchRenderDeductions(){
+    try{
+      var orig = window.renderDeductionsTable;
+      if (typeof orig === 'function'){
+        window.renderDeductionsTable = function(){
+          var out = orig.apply(this, arguments);
+          try { formatAllNumbers(); } catch(e){}
+          return out;
+        };
+      }
+    }catch(e){}
+  }
+
+  // Initial hooks
+  patchCalculateAll();
+  patchRenderDeductions();
+  document.addEventListener('DOMContentLoaded', function(){
+    try { formatAllNumbers(); } catch(e){}
+  });
+})();
+
+
+
+(function(){
+  function fmt(n){
+    var num = Number(n);
+    if (!isFinite(num)) return String(n || '');
+    return num.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
+  }
+  function patch(fnName){
+    var orig=window[fnName];
+    if(typeof orig==='function'){
+      window[fnName]=function(){
+        var out=orig.apply(this,arguments);
+        try{formatAllNumbers();}catch(e){}
+        return out;
+      }
+    }
+  }
+  patch('calculateAll');
+  patch('renderDeductionsTable');
+  patch('renderReportTable');
+  patch('renderTable');
+  document.addEventListener('DOMContentLoaded', function(){ try{ window.formatAllNumbers && formatAllNumbers(); }catch(e){} });
+})();
+
+
+
+(function(){
+  function fmt(n){
+    var num = Number(n);
+    if (!isFinite(num)) return String(n || '');
+    return num.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
+  }
+  function formatCells(cells){
+    cells.forEach(function(td){
+      var raw = (td.textContent || '').replace(/,/g,'').trim();
+      if (raw === '') return;
+      var num = parseFloat(raw);
+      if (isFinite(num)) td.textContent = fmt(num);
+    });
+  }
+  function formatProjectTotals(){
+    var tbl = document.getElementById('projectTotalsTable');
+    if(!tbl) return;
+    var tds = tbl.querySelectorAll('tbody td, tfoot td');
+    formatCells(Array.from(tds));
+  }
+  function formatProjectModal(){
+    var box = document.getElementById('projectReportContent');
+    if (!box) return;
+    var tds = box.querySelectorAll('td');
+    formatCells(Array.from(tds));
+  }
+  // Patch showProjectReport to format modal numbers
+  (function(){
+    var orig = window.showProjectReport;
+    if (typeof orig === 'function'){
+      window.showProjectReport = function(){
+        var out = orig.apply(this, arguments);
+        try { formatProjectModal(); } catch(e){}
+        return out;
+      };
+    }
+  })();
+  // Observe changes on the project totals table and auto-format
+  document.addEventListener('DOMContentLoaded', function(){
+    formatProjectTotals();
+    var tbl = document.getElementById('projectTotalsTable');
+    if (tbl && window.MutationObserver){
+      var timer = null;
+      var mo = new MutationObserver(function(){
+        clearTimeout(timer);
+        timer = setTimeout(formatProjectTotals, 50);
+      });
+      mo.observe(tbl.tBodies[0] || tbl, { childList: true, subtree: true });
+    }
+  });
+})();
+
+
+
+(function(){
+  const ACTIVE_KEY = 'payroll_active';            // object map: key=start_end, value={startDate,endDate,rows,totals}
+  const CURRENT_KEY = 'current_active_week';      // string: "YYYY-MM-DD__YYYY-MM-DD"
+  const HIST_KEY = 'payroll_hist';                // existing history (may contain locked snapshots)
+
+  function loadJSON(k, d){ try{ return JSON.parse(localStorage.getItem(k)||''); }catch(_){ return d; } }
+  function saveJSON(k, v){ try{ localStorage.setItem(k, JSON.stringify(v)); }catch(_){} }
+
+  function toKey(s,e){ return (s||'') + '__' + (e||''); }
+  function fromKey(k){ const [s,e] = String(k||'').split('__'); return {start:s,end:e}; }
+
+  // Build active store from locked history (one-time, if active is empty)
+  function maybeSeedActiveFromHistory(){
+    let active = loadJSON(ACTIVE_KEY, null);
+    if (active && typeof active === 'object' && Object.keys(active).length) return;
+    const hist = loadJSON(HIST_KEY, []);
+    active = {};
+    (hist||[]).forEach(s=>{
+      if (s && s.startDate && s.endDate /* && s.locked */){
+        const key = toKey(s.startDate, s.endDate);
+        active[key] = { startDate:s.startDate, endDate:s.endDate, rows:s.rows||[], totals:s.totals||{} };
+      }
+    });
+    saveJSON(ACTIVE_KEY, active);
+  }
+
+  function upsertActiveWeek(snap){
+    if(!snap || !snap.startDate || !snap.endDate) return;
+    const key = toKey(snap.startDate, snap.endDate);
+    const active = loadJSON(ACTIVE_KEY, {}) || {};
+    active[key] = { startDate:snap.startDate, endDate:snap.endDate, rows:snap.rows||[], totals:snap.totals||{} };
+    saveJSON(ACTIVE_KEY, active);
+    localStorage.setItem(CURRENT_KEY, key);
+  }
+
+  function listActiveWeeks(){
+    const active = loadJSON(ACTIVE_KEY, {}) || {};
+    return Object.keys(active).sort().map(k=>({ key:k, ...fromKey(k) }));
+  }
+
+  function fillActiveWeekSelects(){
+    const weeks = listActiveWeeks();
+    const current = localStorage.getItem(CURRENT_KEY) || (weeks[weeks.length-1]?.key || '');
+    if (current) localStorage.setItem(CURRENT_KEY, current);
+    document.querySelectorAll('.activeWeekSelect').forEach(sel=>{
+      const prev = sel.value;
+      sel.innerHTML='';
+      weeks.forEach(w=>{
+        const opt = document.createElement('option');
+        opt.value = w.key;
+        opt.textContent = `${w.start} - ${w.end}`;
+        sel.appendChild(opt);
+      });
+      if (weeks.length){
+        sel.value = current && weeks.some(w=>w.key===current) ? current : weeks[weeks.length-1].key;
+      }
+    });
+  }
+
+  function applyActiveWeekToGlobals(){
+    const key = localStorage.getItem(CURRENT_KEY) || '';
+    const {start,end} = fromKey(key);
+    const ws = document.getElementById('weekStart');
+    const we = document.getElementById('weekEnd');
+    if (ws) ws.value = start || ws.value;
+    if (we) we.value = end || we.value;
+  }
+
+  function reRenderAll(){
+    try{ applyActiveWeekToGlobals(); }catch(_){}
+    try{ window.renderResults && renderResults(); }catch(_){}
+    try{ window.calculateAll && calculateAll(); }catch(_){}
+    try{ window.renderReportTable && renderReportTable(); }catch(_){}
+    // If you have totals/project tables:
+    try{ window.formatAllNumbers && formatAllNumbers(); }catch(_){}
+  }
+
+  // Wire the dropdown "Apply" buttons
+  function hookActiveWeekUI(){
+    document.querySelectorAll('.refreshActiveWeek').forEach(btn=>{
+      if (btn._wired) return;
+      btn._wired = true;
+      btn.addEventListener('click', ()=>{
+        const sel = btn.parentElement && btn.parentElement.querySelector('.activeWeekSelect');
+        if (!sel) return;
+        localStorage.setItem(CURRENT_KEY, sel.value || '');
+        applyActiveWeekToGlobals();
+        reRenderAll();
+      });
+    });
+    document.querySelectorAll('.activeWeekSelect').forEach(sel=>{
+      if (sel._wired) return;
+      sel._wired = true;
+      sel.addEventListener('change', ()=>{
+        localStorage.setItem(CURRENT_KEY, sel.value || '');
+      });
+    });
+  }
+
+  // Patch Generate to upsert into ACTIVE store (while keeping existing behavior)
+  function patchGenerateToActive(){
+    const btn = document.getElementById('dashGenerate');
+    if (!btn || btn._activeWired) return;
+    btn._activeWired = true;
+    btn.addEventListener('click', async ()=>{
+      // Wait a moment for existing listeners to compute tables, then capture
+      setTimeout(()=>{
+        try{
+          const ws = document.getElementById('weekStart')?.value;
+          const we = document.getElementById('weekEnd')?.value;
+          if (!ws || !we) return;
+          // Try to collect current payroll rows/totals from existing functions
+          if (typeof window.buildSnapshot === 'function'){
+            (async ()=>{
+              const snap = await window.buildSnapshot(ws, we);
+              if (snap) upsertActiveWeek(snap);
+              fillActiveWeekSelects();
+            })();
+          } else {
+            // Fallback: minimal capture from payroll table if present
+            const rows = [];
+            document.querySelectorAll('#payrollTable tbody tr').forEach(tr=>{
+              rows.push(Array.from(tr.cells).map(td=>td.textContent.trim()));
+            });
+            upsertActiveWeek({ startDate: ws, endDate: we, rows, totals:{} });
+            fillActiveWeekSelects();
+          }
+        }catch(_){}
+      }, 300);
+    }, { capture: true });
+  }
+
+  // On load
+  document.addEventListener('DOMContentLoaded', ()=>{
+    maybeSeedActiveFromHistory();
+    fillActiveWeekSelects();
+    hookActiveWeekUI();
+    patchGenerateToActive();
+
+    // Optional: visually disable weekStart/weekEnd outside dashboard
+    try {
+      const onHashChange = () => {
+        const ws = document.getElementById('weekStart');
+        const we = document.getElementById('weekEnd');
+        // Keep week inputs disabled when dashboard is hidden OR the selected
+        // period is finalized. This avoids re-enabling date adjustment after a
+        // period has been locked/finalized when users switch tabs.
+        const dash = document.getElementById('panelDashboard');
+        const dashActive = dash && (dash.classList.contains('active') || dash.style.display !== 'none');
+        const finalized = (typeof isSelectedPeriodLocked === 'function') ? !!isSelectedPeriodLocked() : false;
+        const disabled = !dashActive || finalized;
+        if (ws) ws.disabled = disabled;
+        if (we) we.disabled = disabled;
+      };
+      onHashChange();
+      window.addEventListener('hashchange', onHashChange);
+    } catch(_){}
+  });
+})();
+
+
+
+(function(){
+  const PAYROLL_HIST_KEY = 'payroll_hist';
+  const LS_ACTIVE_INDEX = 'payroll_active_index';
+  let reloadTimer = null;
+
+  function scheduleFullReload(){
+    if (reloadTimer !== null) return;
+    try {
+      reloadTimer = window.setTimeout(() => {
+        try {
+          (function(){
+      try {
+        if (typeof window.reRenderAll === 'function') { window.reRenderAll(); return; }
+        if (typeof window.renderHistory === 'function') { try { window.renderHistory(); } catch(e){} }
+      } catch(e) {}
+      try { window.location.reload(); } catch(e) {}
+    })()
+        } catch (_) {}
+      }, 120);
+    } catch (_) {
+      try { (function(){
+      try {
+        if (typeof window.reRenderAll === 'function') { window.reRenderAll(); return; }
+        if (typeof window.renderHistory === 'function') { try { window.renderHistory(); } catch(e){} }
+      } catch(e) {}
+      try { window.location.reload(); } catch(e) {}
+    })() } catch (_) {}
+    }
+  }
+
+  function loadHistory() {
+    try {
+      const hist = JSON.parse(localStorage.getItem(PAYROLL_HIST_KEY)) || [];
+      return Array.isArray(hist) ? hist : [];
+    } catch (e) {
+      return [];
+    }
+  }
+
+  function saveActiveIndex(idx) {
+    localStorage.setItem(LS_ACTIVE_INDEX, String(idx));
+  }
+
+  function getActiveIndex() {
+    const v = localStorage.getItem(LS_ACTIVE_INDEX);
+    const n = v == null ? -1 : parseInt(v, 10);
+    return Number.isFinite(n) ? n : -1;
+  }
+
+  function toIsoDate(s){
+  if(!s) return '';
+  if(/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+  const m = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
+  if (m) {
+    const mm = String(parseInt(m[1],10)).padStart(2,'0');
+    const dd = String(parseInt(m[2],10)).padStart(2,'0');
+    return m[3] + '-' + mm + '-' + dd;
+  }
+  const d = new Date(s);
+  if (!isNaN(d)) return d.toISOString().slice(0,10);
+  return '';
+}
+function updateWeekInputs(snap) {
+  const status = (typeof window.getSnapshotStatus === 'function') ? window.getSnapshotStatus(snap) : (snap && snap.status);
+  const isLockedSnapshot = status === 'finalized' || !!(snap && snap.locked);
+  const startISO = toIsoDate(snap && snap.startDate);
+  const endISO   = toIsoDate(snap && snap.endDate);
+
+  // If the user already set a custom DTR date filter (persisted in localStorage),
+  // do not override it when switching payroll periods or when realtime sync
+  // repopulates the dropdowns. Previously, every populateDropdowns() call
+  // would reset the DTR inputs back to the payroll period range, causing the
+  // dates to "jump" while the user was editing them.
+  let hasCustomDtrFilter = false;
+  try {
+    hasCustomDtrFilter = !!(localStorage.getItem(LS_FROM) || localStorage.getItem(LS_TO));
+  } catch (_) {}
+
+  const ws = document.getElementById('weekStart');
+  const we = document.getElementById('weekEnd');
+  if (ws) ws.value = startISO || '';
+  if (we) we.value = endISO   || '';
+
+  // Notify listeners that the week range changed (so Reports can re-render)
+  try {
+    if (ws) ws.dispatchEvent(new Event('change', { bubbles: true }));
+    if (we) we.dispatchEvent(new Event('change', { bubbles: true }));
+  } catch (_) {}
+
+  // DTR date inputs (type=date) must receive ISO; then fire change events
+  if (!hasCustomDtrFilter) {
+    try {
+      const df = document.getElementById('dtrDateFrom');
+      const dt = document.getElementById('dtrDateTo');
+      if (df) { df.value = startISO || ''; df.dispatchEvent(new Event('change', { bubbles: true })); }
+      if (dt) { dt.value = endISO   || ''; dt.dispatchEvent(new Event('change', { bubbles: true })); }
+    } catch (_) {}
+  }
+
+  // Refresh DTR list immediately
+  try { if (typeof renderResults === 'function') { renderResults(); } } catch (e) {}
+
+  // Recalculate payroll if available, deriving hours from the DTR results table
+  if (!isLockedSnapshot) {
+    try {
+      if (typeof calculatePayrollFromResultsTable === 'function') { calculatePayrollFromResultsTable(); }
+      else if (typeof calculatePayrollFromRecords === 'function') { calculatePayrollFromRecords(); }
+    } catch (e) {}
+  } else {
+    try { setSnapshotOverride(snap); } catch (e) {}
+    try { applySnapshotToPayrollTable(snap); } catch (e) {}
+  }
+
+  // After updating the week range, toggle editing state based on whether the
+  // selected period is locked. Without this, switching between periods would
+  // incorrectly leave the UI enabled for locked snapshots or vice versa.
+  try {
+    if (typeof checkAndToggleEditState === 'function') {
+      checkAndToggleEditState();
+    }
+  } catch (e) {}
+}
+
+  function populateDropdowns() {
+    // Prefer the global payrollHistory array if available, else fall back to localStorage
+    const hist = Array.isArray(window.payrollHistory) ? window.payrollHistory : loadHistory();
+    const history = Array.isArray(hist) ? hist : [];
+    // Build list of items with their original indices; sort newest first by start date
+    const items = history.map((s, i) => Object.assign({ i: i }, s)).sort((a, b) => {
+      const startCompare = (b.startDate || '').localeCompare(a.startDate || '');
+      if (startCompare) return startCompare;
+      const aStamp = a.finalizedAt || a.lockedAt || a.createdAt || '';
+      const bStamp = b.finalizedAt || b.lockedAt || b.createdAt || '';
+      const aTime = aStamp ? new Date(aStamp).getTime() : 0;
+      const bTime = bStamp ? new Date(bStamp).getTime() : 0;
+      return bTime - aTime;
+    });
+    const globalSelect = document.getElementById('activePayrollSelect');
+    const panelSelects = Array.from(document.querySelectorAll('.activeWeekSelect'));
+    function fill(selectEl) {
+      if (!selectEl) return;
+      // Rebuild the dropdown options
+      selectEl.innerHTML = '';
+      items.forEach(item => {
+        const opt = document.createElement('option');
+        opt.value = String(item.i);
+        const rangeText = typeof window.formatDateRange === 'function'
+          ? window.formatDateRange(item.startDate, item.endDate)
+          : [item.startDate || '', item.endDate || ''].filter(Boolean).join(' - ');
+        const status = (typeof window.getSnapshotStatus === 'function') ? window.getSnapshotStatus(item) : (item.status || '');
+        const statusSuffix = status === 'voided'
+          ? ' (voided)'
+          : (status === 'finalized' || item.locked || item.finalized)
+            ? ' (finalized)'
+            : '';
+        const label = `${rangeText}${statusSuffix}`.trim();
+        opt.textContent = label;
+        selectEl.appendChild(opt);
+      });
+      // Always set the selected value to the saved active index so all selectors stay in sync
+      const saved = String(getActiveIndex());
+      if ([...selectEl.options].some(o => o.value === saved)) {
+        selectEl.value = saved;
+      } else if (selectEl.options.length) {
+        selectEl.selectedIndex = 0;
+      }
+    }
+    fill(globalSelect);
+    panelSelects.forEach(sel => {
+      if (sel !== globalSelect) fill(sel);
+    });
+    // after filling, apply active
+    const idxVal = parseInt((globalSelect && globalSelect.value) || getActiveIndex(), 10);
+    const snap = Number.isFinite(idxVal) ? history[idxVal] : null;
+    if (snap) {
+      saveActiveIndex(idxVal);
+      updateWeekInputs(snap);
+    }
+  }
+  try { window.populatePayrollDropdowns = populateDropdowns; } catch (e) {}
+
+  function onSelectChange(e) {
+    const idx = parseInt(e.target.value, 10);
+    if (!Number.isFinite(idx)) return;
+    const history = loadHistory();
+    if (!history[idx]) return;
+    saveActiveIndex(idx);
+    updateWeekInputs(history[idx]);
+    // Keep all selects in sync
+    populateDropdowns();
+    scheduleFullReload();
+  }
+
+  async function createNewPeriodSnapshot(start, end){
+    if (!start || !end) return;
+    // Normalize to ISO (YYYY-MM-DD)
+    const toIso = (s)=>{ try{ return s && /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : (new Date(s)).toISOString().slice(0,10); } catch { return s; } };
+    let s = toIso(start), e = toIso(end);
+    if (s && e && s > e) { const t = s; s = e; e = t; }
+    // Prevent duplicates
+    const hist = Array.isArray(window.payrollHistory) ? window.payrollHistory : loadHistory();
+    const exists = hist.some(x => {
+      if (!x || x.startDate !== s || x.endDate !== e) return false;
+      const status = (typeof window.getSnapshotStatus === 'function') ? window.getSnapshotStatus(x) : (x.status || '');
+      return status !== 'voided';
+    });
+    if (exists) { alert('A payroll snapshot for this date range already exists.'); return; }
+    if (typeof buildSnapshot !== 'function') { alert('buildSnapshot function not available.'); return; }
+    const snap = await buildSnapshot(s, e);
+    if (!snap) { alert('Payroll table is missing or empty.'); return; }
+    const json = JSON.stringify(snap);
+    const hashBuffer = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(json));
+    const hashArray = Array.from(new Uint8Array(hashBuffer));
+    const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+    const now = new Date().toISOString();
+    const newSnap = { startDate: s, endDate: e, rows: snap.rows, totals: snap.totals, hash: hashHex, lockedAt: now, locked: false, status: 'draft', createdAt: now };
+    if (Array.isArray(window.payrollHistory)) {
+      window.payrollHistory.push(newSnap);
+      if (typeof saveHistory === 'function') saveHistory();
+    } else {
+      const localHist = loadHistory();
+      localHist.push(newSnap);
+      localStorage.setItem(PAYROLL_HIST_KEY, JSON.stringify(localHist));
+    }
+    // Refresh UI pieces
+    try { if (typeof renderHistory === 'function') renderHistory(); } catch {}
+    try { if (typeof renderActivePayrolls === 'function') renderActivePayrolls(); } catch {}
+    // Set new active index (last)
+    let idx;
+    if (Array.isArray(window.payrollHistory)) idx = window.payrollHistory.length - 1; else idx = (loadHistory().length - 1);
+    saveActiveIndex(idx);
+    populateDropdowns();
+  }
+
+  function validateNewPeriodForm(){
+    const sEl = document.getElementById('newPeriodStart');
+    const eEl = document.getElementById('newPeriodEnd');
+    const err = document.getElementById('newPeriodErr');
+    const saveBtn = document.getElementById('saveNewPeriod');
+    const s = sEl && sEl.value || '';
+    const e = eEl && eEl.value || '';
+    const ok = !!s && !!e && (!s || !e || s <= e);
+    if (err) err.style.display = (s && e && s > e) ? 'block' : 'none';
+    if (saveBtn) saveBtn.disabled = !ok;
+    return ok;
+  }
+
+  function setNewPeriodBusy(busy){
+    const saveBtn = document.getElementById('saveNewPeriod');
+    const cancelBtn = document.getElementById('cancelNewPeriod');
+    const status = document.getElementById('newPeriodStatus');
+    const spin = document.getElementById('newPeriodSpin');
+    if (status) status.style.display = busy ? 'inline-flex' : 'none';
+    if (spin) spin.style.display = busy ? 'inline-block' : 'none';
+    if (saveBtn) saveBtn.disabled = !!busy;
+    if (cancelBtn) cancelBtn.disabled = !!busy;
+  }
+
+  function ensureNewPeriodBindings(){
+    const modal = document.getElementById('newPeriodModal');
+    if (!modal) return;
+    if (!modal.__bound){
+      modal.addEventListener('click', (e)=>{ if (e.target === modal) { modal.style.display = 'none'; } });
+      document.getElementById('cancelNewPeriod')?.addEventListener('click', ()=>{ if (!document.getElementById('cancelNewPeriod').disabled) modal.style.display='none'; });
+      const saveBtn = document.getElementById('saveNewPeriod');
+      if (saveBtn){
+        saveBtn.addEventListener('click', async ()=>{
+          if (!validateNewPeriodForm()) return;
+          setNewPeriodBusy(true);
+          // allow spinner to render
+          await new Promise(r=>setTimeout(r,0));
+          const s = (document.getElementById('newPeriodStart')||{}).value || '';
+          const e = (document.getElementById('newPeriodEnd')||{}).value || '';
+          await createNewPeriodSnapshot(s, e);
+          setNewPeriodBusy(false);
+          modal.style.display = 'none';
+        });
+      }
+      const sEl = document.getElementById('newPeriodStart');
+      const eEl = document.getElementById('newPeriodEnd');
+      const syncMins = ()=>{ try{ if (eEl) eEl.min = sEl && sEl.value ? sEl.value : ''; } catch{} };
+      sEl?.addEventListener('input', ()=>{ syncMins(); validateNewPeriodForm(); });
+      eEl?.addEventListener('input', ()=>{ validateNewPeriodForm(); });
+      syncMins();
+      // Keyboard shortcuts
+      modal.addEventListener('keydown', async (ev)=>{
+        if (ev.key === 'Escape') { ev.preventDefault(); if (!document.getElementById('cancelNewPeriod').disabled) modal.style.display='none'; }
+        if (ev.key === 'Enter') { ev.preventDefault(); if (validateNewPeriodForm()) document.getElementById('saveNewPeriod').click(); }
+      });
+      modal.__bound = true;
+    }
+  }
+
+  function onNewPeriod() {
+    const modal = document.getElementById('newPeriodModal');
+    ensureNewPeriodBindings();
+    if (!modal) return;
+    // Prefill from existing inputs
+    const ws = document.getElementById('weekStart');
+    const we = document.getElementById('weekEnd');
+    const sEl = document.getElementById('newPeriodStart');
+    const eEl = document.getElementById('newPeriodEnd');
+    if (sEl) sEl.value = (ws && ws.value) || '';
+    if (eEl) eEl.value = (we && we.value) || '';
+    // Reset UI state
+    const err = document.getElementById('newPeriodErr');
+    if (err) err.style.display = 'none';
+    setNewPeriodBusy(false);
+    validateNewPeriodForm();
+    modal.style.display = 'flex';
+    try { modal.setAttribute('tabindex','-1'); modal.focus(); } catch{}
+    // Focus start date without forcing the picker to open (avoids jank)
+    setTimeout(()=>{ try{ sEl?.focus(); } catch{} }, 0);
+  }
+
+  function onPanelApply(e) {
+    const wrap = e.target.closest('.active-week-bar');
+    if (!wrap) return;
+    const sel = wrap.querySelector('.activeWeekSelect');
+    if (!sel) return;
+    onSelectChange({ target: sel });
+  }
+
+  document.addEventListener('DOMContentLoaded', () => {
+    const globalSelect = document.getElementById('activePayrollSelect');
+    if (globalSelect) {
+      globalSelect.addEventListener('change', onSelectChange);
+    }
+    const newBtn = document.getElementById('newPayrollPeriod');
+    if (newBtn) {
+      newBtn.addEventListener('click', onNewPeriod);
+    }
+    // Bind modal controls once DOM is ready for instant usage
+    try { ensureNewPeriodBindings(); } catch(_){ }
+    document.addEventListener('click', (e) => {
+      if (e.target && e.target.classList && e.target.classList.contains('refreshActiveWeek')) {
+        onPanelApply(e);
+      }
+    });
+    populateDropdowns();
+  });
+
+  (function() {
+    const tbody = document.querySelector('#historyTable tbody');
+    if (!tbody) return;
+    const observer = new MutationObserver(() => {
+      try {
+        populateDropdowns();
+      } catch (err) {}
+    });
+    observer.observe(tbody, { childList: true, subtree: false });
+  })();
+})();
+
+
+
+(function(){
+  // On page load, immediately check whether the currently selected payroll period
+  // is locked and toggle the UI accordingly. Without this, the DTR panel may
+  // remain interactive on initial load even if the chosen period has been
+  // previously locked. The check is wrapped in a try-catch to avoid
+  // exceptions during startup.
+  document.addEventListener('DOMContentLoaded', () => {
+    try {
+      if (typeof checkAndToggleEditState === 'function') {
+        checkAndToggleEditState();
+      }
+    } catch (e) {}
+  });
+})();
+
+
+
+/*
+ * Save the entire DTR dataset to Supabase.  This helper uses the
+ * globally scoped `supabase` client (injected by the KV sync adapter)
+ * to upsert the records into the `dtr_records` table.  The primary
+ * key is fixed to 'records' so that only a single row is maintained.
+ */
+async function saveDtrToCloudLegacyBlob(records) {
+  // Safer multi-device DTR persistence:
+  // - Avoids wiping cloud when one device has an empty/stale copy
+  // - Uses merge + tombstones to resolve concurrent edits
+  // - Queues saves until initial hydration completes
+  try {
+    const supa = window.supabase || (typeof supabase !== 'undefined' ? supabase : null);
+    if (!supa) return;
+
+    // Queue saves until hydration is done to avoid "blank overwrite" on startup.
+    if (!window.__dtrHydrationDone) {
+      window.__queuedDtrRecords = Array.isArray(records) ? records : [];
+      window.__pendingDtrSave = true;
+      return;
+    }
+
+    const LS_TOMBS = 'payroll_dtr_tombstones';
+    const LS_LAST  = 'payroll_dtr_last_saved_keys';
+    const LS_DEV   = 'payroll_dtr_device_id';
+
+    const getDeviceId = () => {
+      let id = '';
+      try { id = localStorage.getItem(LS_DEV) || ''; } catch(e) {}
+      if (!id) {
+        id = 'dev_' + Math.random().toString(16).slice(2) + '_' + Date.now().toString(16);
+        try { localStorage.setItem(LS_DEV, id); } catch(e) {}
+      }
+      return id;
+    };
+
+    const recKey = (rec) => {
+      if (!rec) return '';
+      const emp = rec.empId != null ? String(rec.empId).trim() : '';
+      const date = rec.date ? String(rec.date) : '';
+      const time = rec.time ? String(rec.time) : '';
+      const src = rec.source ? String(rec.source) : (rec.manual ? 'manual' : '');
+      return emp + '|' + date + '|' + time + '|' + src;
+    };
+
+    const loadJson = (k, fb) => {
+      try { return JSON.parse(localStorage.getItem(k) || '') || fb; } catch(e) { return fb; }
+    };
+    const saveJson = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch(e) {} };
+
+    const localRecs = Array.isArray(records) ? records : [];
+    let localTombs = loadJson(LS_TOMBS, {});
+    const prevKeysArr = loadJson(LS_LAST, []);
+    const prevKeys = new Set(Array.isArray(prevKeysArr) ? prevKeysArr : []);
+
+    // Detect local deletions (keys that existed before but are missing now)
+    const curKeys = new Set();
+    for (const r of localRecs) {
+      const k = recKey(r);
+      if (k) curKeys.add(k);
+    }
+    if (prevKeys.size) {
+      for (const k of prevKeys) {
+        if (!curKeys.has(k) && !localTombs[k]) {
+          localTombs[k] = new Date().toISOString();
+        }
+      }
+    }
+
+    // Fetch remote
+    const remoteRes = await loadDtrFromCloudLegacyBlob();
+    if (remoteRes && remoteRes.status === 'error') {
+      // Cloud unreachable; keep local only.
+      console.warn('DTR cloud unreachable, skipping save:', remoteRes.error || '');
+      saveJson(LS_TOMBS, localTombs);
+      saveJson(LS_LAST, Array.from(curKeys));
+      return;
+    }
+
+    const remoteRecs = remoteRes && Array.isArray(remoteRes.records) ? remoteRes.records : [];
+    const remoteTombs = remoteRes && remoteRes.tombstones && typeof remoteRes.tombstones === 'object' ? remoteRes.tombstones : {};
+
+    // Safety: never overwrite a non-empty remote dataset with an empty local dataset
+    if (localRecs.length === 0 && remoteRecs.length > 0) {
+      console.warn('Prevented DTR wipe: local empty, remote has data.');
+      // Re-hydrate local from remote instead
+      try {
+        storedRecords = remoteRecs;
+        window.storedRecords = remoteRecs;
+        localStorage.setItem(LS_RECORDS, JSON.stringify(remoteRecs));
+      } catch(e) {}
+      return;
+    }
+
+    // Merge tombstones (latest wins) and records (union minus tombstones)
+    const mergedTombs = Object.assign({}, remoteTombs, localTombs);
+    for (const k of Object.keys(remoteTombs || {})) {
+      if (localTombs[k] && remoteTombs[k]) {
+        mergedTombs[k] = String(localTombs[k]) > String(remoteTombs[k]) ? localTombs[k] : remoteTombs[k];
+      }
+    }
+
+    const byKey = new Map();
+    const add = (r) => {
+      const k = recKey(r);
+      if (!k) return;
+      if (mergedTombs[k]) return;
+      if (!byKey.has(k)) byKey.set(k, r);
+      else {
+        const prev = byKey.get(k) || {};
+        // Prefer richer fields from either record
+        byKey.set(k, Object.assign({}, prev, r));
+      }
+    };
+    remoteRecs.forEach(add);
+    localRecs.forEach(add);
+
+    const mergedRecs = Array.from(byKey.values());
+    // Stable-ish ordering for nicer UI
+    mergedRecs.sort((a,b)=>{
+      const ea = (a && a.empId != null) ? String(a.empId) : '';
+      const eb = (b && b.empId != null) ? String(b.empId) : '';
+      if (ea !== eb) return ea < eb ? -1 : 1;
+      const da = a && a.date ? String(a.date) : '';
+      const db = b && b.date ? String(b.date) : '';
+      if (da !== db) return da < db ? -1 : 1;
+      const ta = a && a.time ? String(a.time) : '';
+      const tb = b && b.time ? String(b.time) : '';
+      if (ta !== tb) return ta < tb ? -1 : 1;
+      return 0;
+    });
+
+    const payload = {
+      records: mergedRecs,
+      tombstones: mergedTombs,
+      meta: { updatedAt: new Date().toISOString(), updatedBy: getDeviceId() }
+    };
+
+    const { error } = await supa
+      .from('dtr_records')
+      .upsert({ id: 'records', data: payload }, { onConflict: 'id' });
+
+    if (error) {
+      console.error('Supabase DTR save error:', error.message);
+      // Still update local tombstones/keys so we don't double-delete next time.
+      saveJson(LS_TOMBS, mergedTombs);
+      saveJson(LS_LAST, Array.from(new Set(mergedRecs.map(recKey).filter(Boolean))));
+      return;
+    }
+
+    // Persist merged copy locally (single source of truth)
+    try {
+      storedRecords = mergedRecs;
+      window.storedRecords = mergedRecs;
+      localStorage.setItem(LS_RECORDS, JSON.stringify(mergedRecs));
+    } catch(e) {}
+
+    saveJson(LS_TOMBS, mergedTombs);
+    saveJson(LS_LAST, Array.from(new Set(mergedRecs.map(recKey).filter(Boolean))));
+
+  } catch (e) {
+    console.error('Supabase DTR save failed', e);
+  }
+}
+
+/*
+ * Upload a raw DTR file to Supabase Storage.  This helper uploads the
+ * original .DAT/.TXT file into the 'dtr_uploads' folder of the 'app'
+ * storage bucket.  If the bucket does not exist or the upload fails,
+ * the error is logged and the application continues silently.  Each
+ * upload uses a timestamp and random suffix to avoid collisions.
+ */
+async function uploadDtrFileToCloud(file) {
+  try {
+    const supa = window.supabase || (typeof supabase !== 'undefined' ? supabase : null);
+    if (!supa || !file) return;
+    const bucket = supa.storage.from('app');
+    // Compose a unique path using a timestamp and random number to avoid collisions
+    const path = `dtr_uploads/${Date.now()}_${Math.floor(Math.random() * 1000)}_${file.name}`;
+    const { error } = await bucket.upload(path, file, { upsert: false });
+    if (error) {
+      console.warn('Supabase DTR file upload error:', error.message);
+    }
+  } catch (err) {
+    console.warn('Supabase DTR file upload failed', err);
+  }
+}
+
+/*
+ * Retrieve the DTR dataset from Supabase.  Returns an array of
+ * attendance records if available, otherwise null.  The returned
+ * object is expected to have the shape { data: [...] }, so we
+ * unwrap the nested data field when present.
+ */
+async function loadDtrFromCloudLegacyBlob() {
+  // Returns { status, records, tombstones, meta?, error? }
+  try {
+    const supa = window.supabase || (typeof supabase !== 'undefined' ? supabase : null);
+    if (!supa) return { status: 'no_client', records: null, tombstones: null };
+    const { data, error } = await supa
+      .from('dtr_records')
+      .select('data')
+      .eq('id', 'records')
+      .maybeSingle();
+
+    if (error) {
+      console.warn('Supabase DTR fetch error:', error.message);
+      return { status: 'error', error: error.message, records: null, tombstones: null };
+    }
+    if (!data) return { status: 'not_found', records: null, tombstones: null };
+
+    const payload = data.data;
+
+    // Backward compatible:
+    // - old shape: [ ...records ]
+    // - new shape: { records: [...], tombstones: {...}, meta: {...} }
+    if (Array.isArray(payload)) {
+      return { status: 'ok', records: payload, tombstones: {} };
+    }
+    if (payload && typeof payload === 'object') {
+      const recs = Array.isArray(payload.records)
+        ? payload.records
+        : (Array.isArray(payload.data) ? payload.data : []);
+      const tombs = (payload.tombstones && typeof payload.tombstones === 'object') ? payload.tombstones : {};
+      return { status: 'ok', records: recs, tombstones: tombs, meta: payload.meta || {} };
+    }
+    return { status: 'ok', records: [], tombstones: {} };
+  } catch (e) {
+    console.error('Supabase DTR fetch failed', e);
+    return { status: 'error', error: String(e), records: null, tombstones: null };
+  }
+}
+
+// === Best-practice DTR storage (row-per-punch) ===
+// This replaces the legacy single-row blob in `dtr_records` with a normalized table.
+// Create this table in Supabase:
+//
+//   create table if not exists public.dtr_punches (
+//     id text primary key,
+//     emp_id text not null,
+//     date date not null,
+//     time text not null,
+//     source text null,
+//     data jsonb not null,
+//     updated_by text null,
+//     updated_at timestamptz not null default now()
+//   );
+//
+// Enable Realtime for this table in Supabase (Database > Replication).
+// If you use RLS, add permissive policies (no-login setup):
+//   alter table public.dtr_punches enable row level security;
+//   create policy "allow all dtr_punches" on public.dtr_punches for all using (true) with check (true);
+
+function __dtrRecId(rec){
+  if (!rec) return '';
+  const emp = rec.empId != null ? String(rec.empId).trim() : '';
+  const date = rec.date ? String(rec.date) : '';
+  const time = rec.time ? String(rec.time) : '';
+  const src = rec.source ? String(rec.source) : (rec.manual ? 'manual' : '');
+  return emp + '|' + date + '|' + time + '|' + src;
+}
+function __dtrGetDeviceId(){
+  const LS_DEV = 'payroll_dtr_device_id';
+  let id = '';
+  try { id = localStorage.getItem(LS_DEV) || ''; } catch(e) {}
+  if (!id) {
+    id = 'dev_' + Math.random().toString(16).slice(2) + '_' + Date.now().toString(16);
+    try { localStorage.setItem(LS_DEV, id); } catch(e) {}
+  }
+  return id;
+}
+function __dtrLoadJson(k, fb){
+  try { return JSON.parse(localStorage.getItem(k) || '') || fb; } catch(e) { return fb; }
+}
+function __dtrSaveJson(k, v){
+  try { localStorage.setItem(k, JSON.stringify(v)); } catch(e) {}
+}
+
+async function __dtrFetchAllPunchRows(supa, table){
+  const out = [];
+  const pageSize = 1000;
+  let from = 0;
+  while (true){
+    const { data, error } = await supa
+      .from(table)
+      .select('id,data')
+      .range(from, from + pageSize - 1);
+    if (error) throw error;
+    const chunk = data || [];
+    out.push(...chunk);
+    if (chunk.length < pageSize) break;
+    from += pageSize;
+  }
+  return out;
+}
+
+async function migrateLegacyDtrToPunches(records){
+  try {
+    const supa = window.supabase || (typeof supabase !== 'undefined' ? supabase : null);
+    if (!supa) return false;
+    const table = 'dtr_punches';
+    const deviceId = __dtrGetDeviceId();
+    const localRecs = Array.isArray(records) ? records : [];
+    const rowsRaw = localRecs.map(r => {
+      const id = __dtrRecId(r);
+      if (!id) return null;
+      return {
+        id,
+        emp_id: (r.empId != null ? String(r.empId) : '').trim(),
+        date: r.date,
+        time: r.time,
+        source: r.source || (r.manual ? 'manual' : null),
+        data: r,
+        updated_by: deviceId
+      };
+    }).filter(Boolean);
+
+    // Deduplicate by id to avoid "ON CONFLICT DO UPDATE cannot affect row a second time"
+    // (happens when payload contains duplicate ids).
+    const __rowMap = new Map();
+    for (const row of rowsRaw) __rowMap.set(row.id, row); // last one wins
+    const rows = Array.from(__rowMap.values());
+
+    // Batch upserts to avoid payload limits
+    const batchSize = 500;
+    for (let i=0;i<rows.length;i+=batchSize){
+      const batch = rows.slice(i, i+batchSize);
+      const { error } = await supa.from(table).upsert(batch, { onConflict: 'id' });
+      if (error) throw error;
+    }
+    return true;
+  } catch (e) {
+    console.warn('Legacy->Punches migration failed:', e && e.message ? e.message : e);
+    return false;
+  }
+}
+
+async function loadDtrFromCloud() {
+  // Returns { status, records, tombstones, meta?, error? }
+  const supa = window.supabase || (typeof supabase !== 'undefined' ? supabase : null);
+  if (!supa) return { status: 'no_client', records: null, tombstones: null, meta: { storage: 'none' } };
+
+  const punchesTable = 'dtr_punches';
+  try {
+    const rows = await __dtrFetchAllPunchRows(supa, punchesTable);
+    const recs = rows.map(r => r && r.data).filter(Boolean);
+    const punchIds = new Set(rows.map(r => r && r.id).filter(Boolean));
+
+    // If punches already has data but a prior legacy->punches migration was partial (or failed),
+    // backfill any missing legacy records once per session.
+    if (recs.length && !window.__dtr_punches_backfill_done) {
+      window.__dtr_punches_backfill_done = true;
+      try {
+        const legacy = await loadDtrFromCloudLegacyBlob();
+        const legacyRecs = legacy && Array.isArray(legacy.records) ? legacy.records : [];
+        if (legacyRecs.length) {
+          const missing = [];
+          for (const r of legacyRecs) {
+            const id = __dtrRecId(r);
+            if (id && !punchIds.has(id)) missing.push(r);
+          }
+          if (missing.length) {
+            await migrateLegacyDtrToPunches(missing);
+            const rows2 = await __dtrFetchAllPunchRows(supa, punchesTable);
+            const recs2 = rows2.map(r => r && r.data).filter(Boolean);
+            // Replace arrays in-place so downstream logic sees the refreshed data.
+            rows.splice(0, rows.length, ...rows2);
+            recs.splice(0, recs.length, ...recs2);
+          }
+        }
+      } catch(e) {
+        console.warn('Punches legacy backfill skipped:', e && e.message ? e.message : e);
+      }
+    }
+
+    // If punches table exists but empty, try legacy blob (for migration)
+    if (!recs.length) {
+      try {
+        const legacy = await loadDtrFromCloudLegacyBlob();
+        if (legacy && legacy.status === 'ok' && Array.isArray(legacy.records) && legacy.records.length) {
+          return { status: 'ok', records: legacy.records, tombstones: {}, meta: { storage: 'legacy', needsMigration: true, punchesTableExists: true } };
+        }
+      } catch(_) {}
+    }
+    return { status: 'ok', records: recs, tombstones: {}, meta: { storage: 'punches', rowCount: rows.length } };
+  } catch (e) {
+    const msg = (e && (e.message || e.details)) ? String(e.message || e.details) : String(e);
+    const isMissing = /does not exist|relation .*dtr_punches|42P01/i.test(msg);
+    if (isMissing) {
+      // Fallback to legacy for backwards compatibility
+      try {
+        const legacy = await loadDtrFromCloudLegacyBlob();
+        return Object.assign({}, legacy, { meta: { storage: 'legacy', reason: 'punches_missing' } });
+      } catch (e2) {
+        return { status: 'error', error: String(e2), records: null, tombstones: null, meta: { storage: 'legacy', reason: 'punches_missing' } };
+      }
+    }
+    console.warn('Supabase DTR punches fetch error:', msg);
+    return { status: 'error', error: msg, records: null, tombstones: null, meta: { storage: 'punches' } };
+  }
+}
+
+async function saveDtrToCloud(records) {
+  // Row-per-punch persistence (safe for multi-device editing).
+  // - Upserts only the affected punch rows, not the entire dataset as a single blob.
+  // - Deletes removed punches by primary key.
+  try {
+    const supa = window.supabase || (typeof supabase !== 'undefined' ? supabase : null);
+    if (!supa) return;
+
+    // Queue saves until hydration is done to avoid startup overwrite.
+    if (!window.__dtrHydrationDone) {
+      window.__queuedDtrRecords = Array.isArray(records) ? records : [];
+      window.__pendingDtrSave = true;
+      return;
+    }
+
+    const punchesTable = 'dtr_punches';
+    const deviceId = __dtrGetDeviceId();
+    const LS_LAST  = 'payroll_dtr_last_saved_keys';
+
+    const localRecs = Array.isArray(records) ? records : [];
+    const curKeys = new Set();
+    const rows = [];
+    for (const r of localRecs){
+      const id = __dtrRecId(r);
+      if (!id) continue;
+      curKeys.add(id);
+      rows.push({
+        id,
+        emp_id: (r.empId != null ? String(r.empId) : '').trim(),
+        date: r.date,
+        time: r.time,
+        source: r.source || (r.manual ? 'manual' : null),
+        data: r,
+        updated_by: deviceId
+      });
+    }
+
+    const prevKeysArr = __dtrLoadJson(LS_LAST, []);
+    const prevKeys = new Set(Array.isArray(prevKeysArr) ? prevKeysArr : []);
+    const delKeys = [];
+    if (prevKeys.size){
+      for (const k of prevKeys){
+        if (!curKeys.has(k)) delKeys.push(k);
+      }
+    }
+
+    // Deduplicate by id to avoid "ON CONFLICT DO UPDATE cannot affect row a second time"
+    // (happens when payload contains duplicate ids).
+    const __rowMap2 = new Map();
+    for (const row of rows) __rowMap2.set(row.id, row); // last one wins
+    const rowsDedup = Array.from(__rowMap2.values());
+
+    // Upsert in batches
+    const batchSize = 500;
+    for (let i=0;i<rowsDedup.length;i+=batchSize){
+      const batch = rowsDedup.slice(i, i+batchSize);
+      const { error } = await supa.from(punchesTable).upsert(batch, { onConflict: 'id' });
+      if (error) throw error;
+    }
+
+    // Delete removed keys (also in batches)
+    for (let i=0;i<delKeys.length;i+=batchSize){
+      const batch = delKeys.slice(i, i+batchSize);
+      const { error } = await supa.from(punchesTable).delete().in('id', batch);
+      if (error) throw error;
+    }
+
+    // Update local last-saved keys to include current dataset (incl. remote changes if merged into storedRecords)
+    __dtrSaveJson(LS_LAST, Array.from(curKeys));
+
+  } catch (e) {
+    const msg = (e && (e.message || e.details)) ? String(e.message || e.details) : String(e);
+    const isMissing = /does not exist|relation .*dtr_punches|42P01/i.test(msg);
+    if (isMissing) {
+      console.warn('DTR punches table missing; falling back to legacy DTR storage until you create `dtr_punches`.');
+      try { await saveDtrToCloudLegacyBlob(records); } catch(_) {}
+      return;
+    }
+    console.warn('saveDtrToCloud punches failed:', msg);
+  }
+}
+
+function setupDtrPunchesRealtime(){
+  try {
+    const supa = window.supabase || (typeof supabase !== 'undefined' ? supabase : null);
+    if (!supa || !supa.channel) return;
+    if (window.__dtrPunchesSubscribed) return;
+    window.__dtrPunchesSubscribed = true;
+
+    const punchesTable = 'dtr_punches';
+    const LS_LAST  = 'payroll_dtr_last_saved_keys';
+
+    let renderTimer = null;
+    const queueRender = () => {
+      if (renderTimer) clearTimeout(renderTimer);
+      renderTimer = setTimeout(() => {
+        try { if (typeof renderResults === 'function') renderResults(); } catch(e) {}
+      }, 120);
+    };
+
+    const applyState = (recs) => {
+      try {
+        storedRecords = recs;
+        window.storedRecords = recs;
+        localStorage.setItem(LS_RECORDS, JSON.stringify(recs));
+        __dtrSaveJson(LS_LAST, Array.from(new Set(recs.map(__dtrRecId).filter(Boolean))));
+      } catch(e) {}
+      queueRender();
+    };
+
+    const ch = supa.channel('dtr_punches_sync');
+    window.__dtrPunchesChannel = ch;
+
+    ch.on('postgres_changes', { event: '*', schema: 'public', table: punchesTable }, (payload) => {
+      try {
+        if (!window.__dtrHydrationDone) return;
+        const eventType = payload && payload.eventType;
+        const newRow = payload && payload.new;
+        const oldRow = payload && payload.old;
+        const id = (newRow && newRow.id) || (oldRow && oldRow.id) || '';
+        if (!id) return;
+
+        const cur = Array.isArray(window.storedRecords) ? window.storedRecords : (Array.isArray(storedRecords) ? storedRecords : []);
+        const idx = cur.findIndex(r => __dtrRecId(r) === id);
+
+        if (eventType === 'DELETE') {
+          if (idx >= 0) {
+            const next = cur.slice(0, idx).concat(cur.slice(idx+1));
+            applyState(next);
+          }
+          return;
+        }
+
+        const rec = newRow && newRow.data ? newRow.data : null;
+        if (!rec) return;
+
+        if (idx >= 0) {
+          const next = cur.slice();
+          next[idx] = Object.assign({}, cur[idx] || {}, rec);
+          applyState(next);
+        } else {
+          const next = cur.concat([rec]);
+          applyState(next);
+        }
+      } catch(e) {
+        console.warn('DTR realtime apply failed', e);
+      }
+    });
+
+    ch.subscribe((status) => {
+      // status: SUBSCRIBED, TIMED_OUT, CHANNEL_ERROR, CLOSED
+      if (status === 'SUBSCRIBED') {
+        try { if (typeof hideRemoteDtrAlert === 'function') hideRemoteDtrAlert(); } catch(e) {}
+      }
+    });
+  } catch(e) {
+    console.warn('setupDtrPunchesRealtime failed', e);
+  }
+}
+
+
+
+// Helpers to control the remote DTR alert banner.  These functions
+// locate the #remoteDtrAlert element and toggle its visibility.  The
+// banner notifies users when there is no remote DTR data available
+// and encourages them to upload a .DAT/.TXT file to populate the
+// cloud.  If the element is not present these helpers silently do
+// nothing.
+function showRemoteDtrAlert(msg){
+  const el = document.getElementById('remoteDtrAlert');
+  if (!el) return;
+  // Prefix the message with a warning symbol for emphasis
+  el.textContent = `⚠ ${msg}`;
+  el.style.display = '';
+}
+function hideRemoteDtrAlert(){
+  const el = document.getElementById('remoteDtrAlert');
+  if (!el) return;
+  el.style.display = 'none';
+}
+
+// On initial load, attempt to hydrate storedRecords from Supabase.  If
+// remote data exists it will overwrite the current storedRecords array
+// and localStorage.  This ensures that the latest DTR data is available
+// across devices while preserving offline capability.  The call is
+// performed after DOMContentLoaded to ensure that other scripts have
+// defined storedRecords and renderResults() before we modify them.
+// On initial load, attempt to hydrate storedRecords from Supabase.
+// Best-practice: DTR is stored row-per-punch in `dtr_punches` so multiple devices can edit safely.
+document.addEventListener('DOMContentLoaded', async function () {
+  window.__dtrHydrationDone = false;
+
+  const LS_LAST  = 'payroll_dtr_last_saved_keys';
+
+  const getCurrentLocalRecords = () => {
+    const fromWindow = (typeof window !== 'undefined' && Array.isArray(window.storedRecords))
+      ? window.storedRecords
+      : null;
+    if (fromWindow) return fromWindow;
+    return (typeof storedRecords !== 'undefined' && Array.isArray(storedRecords)) ? storedRecords : [];
+  };
+
+  try {
+    const res = await loadDtrFromCloud();
+
+    if (res && res.status === 'ok' && Array.isArray(res.records) && res.records.length) {
+      const remoteRecs = res.records;
+
+      // If we loaded from legacy blob and punches table exists, migrate once (then we'll operate on punches going forward)
+      if (res.meta && res.meta.needsMigration) {
+        const migrated = await migrateLegacyDtrToPunches(remoteRecs);
+        if (migrated) {
+          // Re-load from punches to ensure canonical shape
+          const again = await loadDtrFromCloud();
+          if (again && again.status === 'ok' && Array.isArray(again.records)) {
+            remoteRecs.splice(0, remoteRecs.length, ...again.records);
+          }
+        }
+      }
+
+      // Merge: remote is source of truth, but keep any local-only punches (offline adds) that are not in remote.
+      // IMPORTANT: pull local records *after* the async cloud fetch resolves. If a user creates
+      // a manual DTR while hydration is in flight, we must merge that latest local state so the
+      // new punch is not overwritten by a stale pre-fetch snapshot.
+      const localRecs = getCurrentLocalRecords();
+      const remoteKeys = new Set(remoteRecs.map(__dtrRecId).filter(Boolean));
+      const merged = remoteRecs.slice();
+      for (const r of (localRecs || [])) {
+        const k = __dtrRecId(r);
+        if (k && !remoteKeys.has(k)) merged.push(r);
+      }
+
+      // Stable ordering for nicer UI
+      merged.sort((a,b)=>{
+        const ea = (a && a.empId != null) ? String(a.empId) : '';
+        const eb = (b && b.empId != null) ? String(b.empId) : '';
+        if (ea !== eb) return ea < eb ? -1 : 1;
+        const da = a && a.date ? String(a.date) : '';
+        const db = b && b.date ? String(b.date) : '';
+        if (da !== db) return da < db ? -1 : 1;
+        const ta = a && a.time ? String(a.time) : '';
+        const tb = b && b.time ? String(b.time) : '';
+        if (ta !== tb) return ta < tb ? -1 : 1;
+        return 0;
+      });
+
+      try {
+        storedRecords = merged;
+        window.storedRecords = merged;
+        localStorage.setItem(LS_RECORDS, JSON.stringify(merged));
+        __dtrSaveJson(LS_LAST, Array.from(new Set(merged.map(__dtrRecId).filter(Boolean))));
+      } catch(e) {}
+
+      if (typeof renderResults === 'function') { try { renderResults(); } catch (e) {} }
+      if (typeof hideRemoteDtrAlert === 'function') hideRemoteDtrAlert();
+
+      // Seed remote with any local-only punches (safe: only inserts new ids)
+      if (localRecs && localRecs.length) {
+        // If there are local-only records, save will upsert missing ids; it will not wipe remote.
+        window.__dtrHydrationDone = true;
+        try { await saveDtrToCloud(merged); } catch(e) {}
+        window.__dtrHydrationDone = false;
+      }
+
+    } else if (res && (res.status === 'not_found' || (res.status === 'ok' && (!res.records || !res.records.length)))) {
+      // Remote is empty/missing
+      const localRecs = getCurrentLocalRecords();
+      if (localRecs && localRecs.length) {
+        // Seed remote from local
+        window.__dtrHydrationDone = true; // allow save
+        try { await saveDtrToCloud(localRecs); } catch(e) {}
+        if (typeof hideRemoteDtrAlert === 'function') hideRemoteDtrAlert();
+      } else {
+        if (typeof showRemoteDtrAlert === 'function') {
+          const reason = res && res.meta && res.meta.reason === 'punches_missing'
+            ? 'DTR table `dtr_punches` is not set up yet. Create it in Supabase to enable safe multi-device sync.'
+            : 'No remote DTR data found. Import a .DAT/.TXT file to populate cloud data.';
+          showRemoteDtrAlert(reason);
+        }
+      }
+    } else {
+      // Cloud unreachable or no client - keep local data
+      if (typeof showRemoteDtrAlert === 'function') {
+        showRemoteDtrAlert('Cloud DTR unavailable right now. Using local copy on this device.');
+      }
+    }
+  } catch (e) {
+    console.error('Error hydrating DTR from Supabase', e);
+    if (typeof showRemoteDtrAlert === 'function') {
+      showRemoteDtrAlert('Cloud DTR unavailable right now. Using local copy on this device.');
+    }
+  } finally {
+    window.__dtrHydrationDone = true;
+
+    // Flush any queued save that happened before hydration finished
+    if (window.__pendingDtrSave && Array.isArray(window.__queuedDtrRecords)) {
+      const q = window.__queuedDtrRecords;
+      window.__pendingDtrSave = false;
+      window.__queuedDtrRecords = null;
+      try { await saveDtrToCloud(q); } catch(e) {}
+    }
+
+    // Start realtime subscription (if the punches table exists)
+    try { setupDtrPunchesRealtime(); } catch(e) {}
+  }
+});
+
+
+
+(function(){
+  document.addEventListener('DOMContentLoaded', function(){
+    const supabase = window.supabase;
+    const KV_TABLE = window.SUPABASE_TABLE || 'kv_store';
+    const DTR_TABLE = 'dtr_punches';
+    const LEGACY_DTR_TABLE = 'dtr_records';
+    const BUCKET = 'backups';
+    // locate header to attach controls (fallback to body if missing)
+    const header = document.querySelector('#panelPayroll header') || document.body;
+    const wrap = document.createElement('div');
+    wrap.style.display = 'flex';
+    wrap.style.flexWrap = 'wrap';
+    wrap.style.gap = '6px';
+    wrap.style.alignItems = 'center';
+    wrap.style.marginTop = '10px';
+    // status element
+    const statusSpan = document.createElement('span');
+    statusSpan.id = 'backupStatus';
+    statusSpan.style.fontSize = '12px';
+    statusSpan.style.color = '#374151';
+    // Buttons
+    const backupBtn = document.createElement('button');
+    backupBtn.id = 'backupNowBtn';
+    backupBtn.type = 'button';
+    backupBtn.textContent = '🔒 Backup Now';
+    backupBtn.style.cursor = 'pointer';
+    const testBtn = document.createElement('button');
+    testBtn.id = 'testRestoreBtn';
+    testBtn.type = 'button';
+    testBtn.textContent = '🧪 Test Restore (Dry Run)';
+    testBtn.style.cursor = 'pointer';
+    const restoreBtn = document.createElement('button');
+    restoreBtn.id = 'restoreBundleBtn';
+    restoreBtn.type = 'button';
+    restoreBtn.textContent = 'Restore Bundle';
+    restoreBtn.style.cursor = 'pointer';
+    const listCloudBtn = document.createElement('button');
+    listCloudBtn.id = 'listCloudBackups';
+    listCloudBtn.type = 'button';
+    listCloudBtn.textContent = 'List Backups';
+    listCloudBtn.style.cursor = 'pointer';
+    listCloudBtn.title = 'Fetch available backups from Supabase storage';
+    const cloudSelect = document.createElement('select');
+    cloudSelect.id = 'cloudBackupSelect';
+    cloudSelect.style.display = 'none';
+    const restoreCloudBtn = document.createElement('button');
+    restoreCloudBtn.id = 'restoreCloudBtn';
+    restoreCloudBtn.type = 'button';
+    restoreCloudBtn.textContent = 'Restore Selected';
+    restoreCloudBtn.style.cursor = 'pointer';
+    restoreCloudBtn.style.display = 'none';
+    restoreCloudBtn.title = 'Download the selected backup from Supabase and restore';
+    const healthBtn = document.createElement('button');
+    healthBtn.id = 'healthCheckBtn';
+    healthBtn.type = 'button';
+    healthBtn.textContent = '🩺 Health Check';
+    healthBtn.style.cursor = 'pointer';
+    const restoreInput = document.createElement('input');
+    restoreInput.id = 'restoreFileInput';
+    restoreInput.type = 'file';
+    restoreInput.accept = '.json';
+    restoreInput.style.display = 'none';
+    const logDiv = document.createElement('div');
+    logDiv.id = 'backupLog';
+    logDiv.style.width = '100%';
+    logDiv.style.maxWidth = '920px';
+    logDiv.style.background = '#ffffff';
+    logDiv.style.border = '1px solid #e5e7eb';
+    logDiv.style.borderRadius = '8px';
+    logDiv.style.padding = '10px';
+    logDiv.style.fontSize = '12px';
+    logDiv.style.color = '#111111';
+    logDiv.style.lineHeight = '1.35';
+    logDiv.style.display = 'none';
+    // Append children
+    wrap.appendChild(statusSpan);
+    wrap.appendChild(backupBtn);
+    wrap.appendChild(testBtn);
+    wrap.appendChild(restoreBtn);
+    wrap.appendChild(listCloudBtn);
+    wrap.appendChild(cloudSelect);
+    wrap.appendChild(restoreCloudBtn);
+    wrap.appendChild(healthBtn);
+    wrap.appendChild(logDiv);
+    wrap.appendChild(restoreInput);
+    header.appendChild(wrap);
+    // Local references
+    const statusEl = statusSpan;
+    const logEl = logDiv;
+    const btnBackup = backupBtn;
+    const btnDry = testBtn;
+    const btnRestore = restoreBtn;
+    const btnList = listCloudBtn;
+    const selectCloud = cloudSelect;
+    const btnRestoreCloud = restoreCloudBtn;
+    const btnHealth = healthBtn;
+    const inputRestore = restoreInput;
+    // Utility functions
+    function setStatus(msg, isError){
+      if (!statusEl) return;
+      statusEl.textContent = msg || '';
+      statusEl.style.color = isError ? '#b91c1c' : '#374151';
+    }
+    function logMsg(msg){
+      if (!logEl) return;
+      if (logEl.style.display === 'none') logEl.style.display = 'block';
+      const div = document.createElement('div');
+      const now = new Date();
+      div.textContent = now.toLocaleTimeString() + ' - ' + msg;
+      logEl.appendChild(div);
+      logEl.scrollTop = logEl.scrollHeight;
+    }
+    function clearLog(){
+      if (logEl){ logEl.innerHTML = ''; logEl.style.display = 'none'; }
+    }
+    function lockUI(lock){
+      [btnBackup, btnDry, btnRestore, btnHealth, inputRestore, btnList, btnRestoreCloud, selectCloud].forEach(function(el){ if (el){ el.disabled = lock; el.style.opacity = lock ? '0.7' : '1'; }});
+    }
+    async function listBackups(){
+      if(!supabase || !supabase.storage){ setStatus('Supabase storage unavailable', true); return; }
+      try {
+        setStatus('Fetching backups...');
+        const { data, error } = await supabase.storage.from(BUCKET).list('');
+        if (error){ setStatus('List failed: ' + error.message, true); return; }
+        selectCloud.innerHTML = '';
+        (data || []).filter(o=>o.name && o.name.endsWith('.json')).sort((a,b)=> b.name.localeCompare(a.name)).forEach(function(obj){
+          const opt = document.createElement('option');
+          opt.value = obj.name;
+          opt.textContent = obj.name;
+          selectCloud.appendChild(opt);
+        });
+        if (selectCloud.options.length){
+          selectCloud.style.display = '';
+          btnRestoreCloud.style.display = '';
+          setStatus('Select a backup to restore');
+        } else {
+          selectCloud.style.display = 'none';
+          btnRestoreCloud.style.display = 'none';
+          setStatus('No backups found');
+        }
+      } catch(e){ setStatus('List failed: ' + e.message, true); }
+    }
+    async function restoreFromCloud(){
+      const name = selectCloud && selectCloud.value;
+      if(!name){ alert('Select a backup first'); return; }
+      if(!supabase || !supabase.storage){ setStatus('Supabase storage unavailable', true); return; }
+      try {
+        setStatus('Downloading ' + name + '...');
+        const { data, error } = await supabase.storage.from(BUCKET).download(name);
+        if (error) throw error;
+        const file = new File([data], name, { type: 'application/json' });
+        await restoreFile(file, { dryRun: false });
+      } catch(e){
+        setStatus('Cloud restore failed: ' + e.message, true);
+        logMsg('Cloud restore failed: ' + e.message);
+      }
+    }
+    function nowStamp(){
+      const d = new Date();
+      const iso = d.toISOString().replace(/[:]/g,'').replace(/\.\d{3}Z$/,'Z');
+      return iso;
+    }
+    async function sha256Hex(str){
+      const enc = new TextEncoder().encode(str);
+      const buf = await crypto.subtle.digest('SHA-256', enc);
+      return Array.from(new Uint8Array(buf)).map(b=>b.toString(16).padStart(2,'0')).join('');
+    }
+    async function buildMetadata(local, db){
+      const meta = { localKeys: Object.keys(local).length, tables: {} };
+      try { meta.localHash = await sha256Hex(JSON.stringify(local)); } catch(e){ meta.localHash = 'n/a'; }
+      const entries = Object.entries(db || {});
+      for (const [name, rows] of entries){
+        const safeRows = Array.isArray(rows) ? rows : [];
+        const entry = { count: safeRows.length };
+        try { entry.hash = await sha256Hex(JSON.stringify(safeRows)); } catch(e){ entry.hash = 'n/a'; }
+        meta.tables[name] = entry;
+      }
+      return meta;
+    }
+    async function validateBundleIntegrity(bundle){
+      const local = isObject(bundle.local) ? bundle.local : {};
+      const db = isObject(bundle.db) ? bundle.db : {};
+      const meta = isObject(bundle.meta) ? bundle.meta : {};
+      if (meta.localHash && meta.localHash !== 'n/a' && meta.localHash !== await sha256Hex(JSON.stringify(local))){
+        throw new Error('Local payload hash mismatch');
+      }
+      for (const [name, rows] of Object.entries(db)){
+        const expected = meta.tables && meta.tables[name] ? meta.tables[name] : null;
+        const safeRows = Array.isArray(rows) ? rows : [];
+        if (expected){
+          if (typeof expected.count === 'number' && expected.count !== safeRows.length){
+            throw new Error(name + ' row count mismatch');
+          }
+          if (expected.hash && expected.hash !== 'n/a' && expected.hash !== await sha256Hex(JSON.stringify(safeRows))){
+            throw new Error(name + ' hash mismatch');
+          }
+        }
+      }
+      return true;
+    }
+    async function backupNow(){
+      try {
+        lockUI(true); clearLog(); setStatus('Running backup...');
+        logMsg('Starting backup');
+        const local = {};
+        const lsKeys = Object.keys(localStorage);
+        lsKeys.forEach(function(k){
+          try { local[k] = localStorage.getItem(k); } catch(e){}
+        });
+        logMsg('LocalStorage keys: ' + lsKeys.length);
+        const TABLES = window.DB_TABLES || [KV_TABLE, DTR_TABLE, LEGACY_DTR_TABLE];
+        const db = {};
+        let totalRows = 0;
+        for (const t of TABLES){
+          try {
+            const { data, error } = await supabase.from(t).select('*');
+            if (error){
+              logMsg(t + ' fetch warning: ' + error.message);
+              db[t] = [];
+            } else {
+              db[t] = data || [];
+              totalRows += db[t].length;
+              logMsg(t + ' rows: ' + db[t].length);
+            }
+          } catch(e){
+            logMsg(t + ' fetch failed: ' + e.message);
+            db[t] = [];
+          }
+        }
+        const meta = await buildMetadata(local, db);
+        const bundle = {
+          schema: 'payrollhub.backup.v1',
+          createdAt: new Date().toISOString(),
+          local: local,
+          db: db,
+          meta: meta
+        };
+        const withoutHash = JSON.stringify(bundle);
+        const hash = await sha256Hex(withoutHash);
+        bundle.hash = hash;
+        const final = JSON.stringify(bundle, null, 2);
+        const blob = new Blob([final], { type: 'application/json' });
+        const filename = 'backup-' + nowStamp() + '.json';
+        try {
+          if (supabase && supabase.storage){
+            const { error: upErr } = await supabase.storage.from(BUCKET).upload(filename, blob, { upsert: true, contentType: 'application/json' });
+            if (upErr) logMsg('Storage upload skipped: ' + upErr.message);
+            else logMsg('Uploaded to storage bucket: ' + BUCKET + '/' + filename);
+          }
+        } catch(e){ logMsg('Storage error: ' + e.message); }
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url; a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+        setStatus('Backup complete ✓  (Local: ' + lsKeys.length + ', Tables: ' + TABLES.length + ', Rows: ' + totalRows + ')');
+        logMsg('Backup complete - SHA256: ' + hash);
+      } catch(e){
+        console.error(e);
+        setStatus('Backup failed: ' + e.message, true);
+        logMsg('ERROR: ' + e.message);
+        alert('Backup failed: ' + e.message);
+      } finally {
+        lockUI(false);
+      }
+    }
+    function isObject(o){ return o && typeof o === 'object' && !Array.isArray(o); }
+    async function verifyBackup(bundle){
+      const local = isObject(bundle.local) ? bundle.local : {};
+      const db = isObject(bundle.db) ? bundle.db : {};
+      const lsKeys = Object.keys(local);
+      const tableNames = Object.keys(db);
+      let tablesOk = 0;
+      let localOk = 0;
+      const tableIssues = [];
+      const localIssues = [];
+      if (supabase){
+        for (const t of tableNames){
+          const expected = Array.isArray(db[t]) ? db[t].length : 0;
+          try {
+            const { count, error } = await supabase.from(t).select('*', { count: 'exact', head: true });
+            if (!error && count === expected) tablesOk++;
+            else tableIssues.push(t + ': expected ' + expected + ', got ' + (error ? ('error ' + error.message) : count));
+          } catch(e){ tableIssues.push(t + ': verify failed - ' + e.message); }
+        }
+      }
+      lsKeys.forEach(function(k){
+        try {
+          const expected = typeof local[k] === 'string' ? local[k] : JSON.stringify(local[k]);
+          const actual = localStorage.getItem(k);
+          if (String(actual) === String(expected)) localOk++;
+          else localIssues.push(k);
+        } catch(e){ localIssues.push(k + ' (' + e.message + ')'); }
+      });
+      if (tableIssues.length) tableIssues.forEach(function(m){ logMsg('Table mismatch: ' + m); });
+      if (localIssues.length) localIssues.forEach(function(m){ logMsg('LocalStorage mismatch: ' + m); });
+      logMsg('Verification result - tables: ' + tablesOk + '/' + tableNames.length + ', local: ' + localOk + '/' + lsKeys.length);
+      return { tables: { ok: tablesOk, total: tableNames.length }, local: { ok: localOk, total: lsKeys.length } };
+    }
+    window.verifyBackup = verifyBackup;
+    async function restoreFile(file, opts){
+      lockUI(true); clearLog();
+      try {
+        setStatus((opts && opts.dryRun ? 'Dry run: ' : '') + 'Reading file...');
+        logMsg('Reading file: ' + file.name);
+        const text = await file.text();
+        let bundle;
+        try { bundle = JSON.parse(text); } catch(e){ setStatus('Invalid JSON', true); throw e; }
+        if (!isObject(bundle) || bundle.schema !== 'payrollhub.backup.v1'){ setStatus('Schema mismatch', true); throw new Error('Schema mismatch'); }
+        const clone = Object.assign({}, bundle);
+        const declared = clone.hash; delete clone.hash;
+        const recompute = await sha256Hex(JSON.stringify(clone));
+        if (declared && declared !== recompute){ setStatus('Hash mismatch', true); throw new Error('Hash mismatch'); }
+        await validateBundleIntegrity(bundle);
+        const local = isObject(bundle.local) ? bundle.local : {};
+        const db = isObject(bundle.db) ? bundle.db : {};
+        const lsKeys = Object.keys(local);
+        const tableNames = Object.keys(db);
+        logMsg('Bundle valid - Local keys: ' + lsKeys.length + ', Tables: ' + tableNames.length);
+        if (opts && opts.dryRun){ setStatus('Dry run passed ✓'); logMsg('No writes performed'); alert('Dry run OK - no data written.'); return; }
+        if (!confirm('Restoring this backup will overwrite local data and Supabase tables (' + tableNames.length + ' tables, ' + lsKeys.length + ' local keys). Continue?')){
+          setStatus('Restore cancelled');
+          logMsg('User cancelled restore');
+          return;
+        }
+        // Upsert tables
+        if (supabase){
+          for (const t of tableNames){
+            const rows = Array.isArray(db[t]) ? db[t] : [];
+            if (!rows.length) continue;
+            try {
+              const { error } = await supabase.from(t).upsert(rows);
+              if (error) logMsg(t + ' upsert warning: ' + error.message);
+              else logMsg(t + ' upserted: ' + rows.length);
+            } catch(e){ logMsg(t + ' upsert failed: ' + e.message); }
+          }
+        }
+        // Hydrate localStorage
+        try {
+          lsKeys.forEach(function(k){
+            const v = local[k];
+            const str = typeof v === 'string' ? v : JSON.stringify(v);
+            localStorage.setItem(k, str);
+          });
+          logMsg('LocalStorage hydrated: ' + lsKeys.length + ' keys');
+        } catch(e){ logMsg('LocalStorage hydrate warning: ' + e.message); }
+        try {
+          if (typeof calculateAll === 'function') calculateAll();
+          if (typeof renderDeductionsTable === 'function') renderDeductionsTable();
+          if (typeof renderTable === 'function') renderTable();
+        } catch(e){}
+        const verify = await verifyBackup(bundle);
+        const localSummary = verify.local.ok + '/' + verify.local.total;
+        const tableSummary = verify.tables.ok + '/' + verify.tables.total;
+        const allOk = verify.local.ok === verify.local.total && verify.tables.ok === verify.tables.total;
+        const msg = (allOk ? 'Restore complete ✓ ' : 'Restore completed with discrepancies') +
+          ' (Local: ' + localSummary + ', Tables: ' + tableSummary + ')';
+        setStatus(msg, !allOk);
+        logMsg(msg);
+        alert(allOk ? 'Restore complete.' : 'Restore completed with discrepancies. See log.');
+      } catch(e){
+        console.error(e);
+        setStatus('Restore failed: ' + e.message, true);
+        logMsg('ERROR: ' + e.message);
+        alert('Restore failed: ' + e.message);
+      } finally {
+        lockUI(false);
+      }
+    }
+    async function healthCheck(){
+      lockUI(true); clearLog();
+      setStatus('Running health check…');
+      logMsg('Checking KV table, DTR table, and Storage bucket');
+      const results = { kv:false, dtr:false, storage:false };
+      try {
+        const r = await supabase.from(KV_TABLE).select('key').limit(1);
+        if (!r.error){ results.kv = true; logMsg('KV table OK'); } else { logMsg('KV issue: ' + r.error.message); }
+      } catch(e){ logMsg('KV exception: ' + e.message); }
+      try {
+        const r2 = await supabase.from(DTR_TABLE).select('count', { count: 'exact', head: true });
+        if (!r2.error){ results.dtr = true; logMsg('DTR table OK'); } else { logMsg('DTR issue: ' + r2.error.message); }
+      } catch(e){ logMsg('DTR exception: ' + e.message); }
+      try {
+        if (supabase && supabase.storage){
+          const r3 = await supabase.storage.from(BUCKET).list('', { limit: 1 });
+          if (!r3.error){ results.storage = true; logMsg('Storage bucket OK'); } else { logMsg('Storage bucket issue: ' + r3.error.message); }
+        } else { logMsg('Supabase storage client not available'); }
+    } catch(e){ logMsg('Storage exception: ' + e.message); }
+    const summary = 'KV: ' + (results.kv?'OK':'Issue') + ' | DTR: ' + (results.dtr?'OK':'Issue') + ' | Storage: ' + (results.storage?'OK':'Issue');
+    setStatus('Health check done - ' + summary, !(results.kv && results.dtr));
+    lockUI(false);
+    }
+    // Attach event listeners
+    backupBtn.addEventListener('click', backupNow);
+    testBtn.addEventListener('click', function(){
+      const tmpInput = document.createElement('input');
+      tmpInput.type = 'file';
+      tmpInput.accept = '.json';
+      tmpInput.onchange = function(e){
+        const f = e.target.files && e.target.files[0];
+        if (f) restoreFile(f, { dryRun: true });
+      };
+      tmpInput.click();
+    });
+    restoreBtn.addEventListener('click', function(){
+      inputRestore.click();
+    });
+    inputRestore.addEventListener('change', function(e){
+      const f = e.target.files && e.target.files[0];
+      if (f) restoreFile(f, { dryRun: false });
+      e.target.value = '';
+    });
+    healthBtn.addEventListener('click', healthCheck);
+    listCloudBtn.addEventListener('click', listBackups);
+    restoreCloudBtn.addEventListener('click', restoreFromCloud);
+  });
+})();
+
+
+
+// ===== DTR Editor Column (Total Regular & OT editable) =====
+(function(){
+  const LS_OVR_HOURS = 'att_overrides_hours_v1';
+  let overridesHours = {};
+  try { overridesHours = JSON.parse(localStorage.getItem(LS_OVR_HOURS) || '{}') || {}; } catch(e){ overridesHours = {}; }
+  function saveOverridesHours(){ try { localStorage.setItem(LS_OVR_HOURS, JSON.stringify(overridesHours)); } catch(e){} }
+  // Persist overrides to Supabase (kv_store) and fetch initial remote data
+  function saveOverridesHoursRemote(){
+    try {
+      const supabaseClient = window.supabase;
+      const table = window.SUPABASE_TABLE;
+      if(!supabaseClient || !table) return;
+      // Upsert the entire overridesHours object as the value for LS_OVR_HOURS
+      supabaseClient
+        .from(table)
+        .upsert({ key: LS_OVR_HOURS, value: overridesHours }, { onConflict: 'key' })
+        .then(({ error }) => {
+          if (error) console.warn('Supabase upsert overridesHours error:', error);
+        });
+    } catch(e){ console.warn('Supabase upsert overridesHours failed', e); }
+  }
+  // Load remote overridesHours from Supabase on startup, merge/replace local state and apply to table
+  (async function loadRemoteOverrides(){
+    try {
+      const supabaseClient = window.supabase;
+      const table = window.SUPABASE_TABLE;
+      if(!supabaseClient || !table) return;
+      const { data, error } = await supabaseClient
+        .from(table)
+        .select('value')
+        .eq('key', LS_OVR_HOURS)
+        .maybeSingle();
+      if(!error && data && data.value){
+        // replace overridesHours with remote value
+        if (typeof data.value === 'object') {
+          overridesHours = data.value;
+          // persist to local storage for offline use
+          saveOverridesHours();
+          // apply remote values to table after they've loaded
+          applyOverridesToTable();
+          recomputeDtrSummaryFromTable();
+        }
+      }
+    } catch(e){ console.warn('Load remote overrides failed', e); }
+  })();
+  // Subscribe to realtime updates for overridesHours in Supabase so edits on other devices reflect here
+  try {
+    const supabaseClient = window.supabase;
+    const table = window.SUPABASE_TABLE;
+    if (supabaseClient && table && supabaseClient.channel) {
+      supabaseClient
+        .channel('dtr_overrides_hours')
+        .on(
+          'postgres_changes',
+          { event: '*', schema: 'public', table: table, filter: `key=eq.${LS_OVR_HOURS}` },
+          (payload) => {
+            try {
+              const newVal = payload.new && payload.new.value;
+              if (newVal && typeof newVal === 'object') {
+                overridesHours = newVal;
+                saveOverridesHours();
+                applyOverridesToTable();
+                recomputeDtrSummaryFromTable();
+              }
+            } catch(e) { console.warn('Realtime payload handling error', e); }
+          }
+        )
+        .subscribe();
+    }
+  } catch(e){ console.warn('Realtime subscription error:', e); }
+
+  function ensureEditorHeader(){
+    const table = document.getElementById('resultsTable');
+    if(!table) return;
+    const theadRow = table.querySelector('thead tr');
+    if(!theadRow) return;
+    if(!theadRow.querySelector('.editor-header')){
+      const th = document.createElement('th');
+      th.textContent = 'Editor';
+      th.className = 'editor-header';
+      theadRow.appendChild(th);
+    }
+  }
+
+  function getColIndexes(table){
+    const heads = Array.from(table.querySelectorAll('thead th')).map(th => String((th.textContent || '')).trim());
+    const norm = txt => String(txt || '').replace(/\s+/g, ' ').trim().toLowerCase();
+    const map = {
+      regIdx: heads.findIndex(t => /(^(Total\s+)?Regular\s+Hrs$)/i.test(t)),
+      otIdx:  heads.findIndex(t => /^OT\s*Hrs$/i.test(t)),
+      clockIn1Idx: -1,
+      clockOut1Idx: -1,
+      clockIn2Idx: -1,
+      clockOut2Idx: -1,
+      otInIdx: -1,
+      otOutIdx: -1
+    };
+    heads.forEach((txt, idx) => {
+      const n = norm(txt);
+      if (n === 'clock in 1' || n === 'am in') map.clockIn1Idx = idx;
+      else if (n === 'clock out 1' || n === 'am out') map.clockOut1Idx = idx;
+      else if (n === 'clock in 2' || n === 'pm in') map.clockIn2Idx = idx;
+      else if (n === 'clock out 2' || n === 'pm out') map.clockOut2Idx = idx;
+      else if (n === 'ot in') map.otInIdx = idx;
+      else if (n === 'ot out') map.otOutIdx = idx;
+    });
+    return map;
+  }
+
+  // Generate keys for an editor row.
+  // - base key: stable across devices (empId + date)
+  // - half key: includes segment when table is split (AM/PM/OT)
+  function baseKeyForRow(tr){
+    const empId = tr.cells[0] ? tr.cells[0].textContent.trim() : '';
+    const date  = tr.cells[4] ? tr.cells[4].textContent.trim() : '';
+    return empId + '___' + date;
+  }
+  function keyForRow(tr){
+    const base = baseKeyForRow(tr);
+    if (tr.dataset && tr.dataset.half) return base + '___' + tr.dataset.half; // AM/PM/OT
+    return base;
+  }
+
+  function applyOverridesToTable(){
+    const table = document.getElementById('resultsTable');
+    if(!table) return;
+    const {regIdx, otIdx} = getColIndexes(table);
+    if(regIdx < 0 || otIdx < 0) return;
+    table.querySelectorAll('tbody tr').forEach(tr=>{
+      const kHalf = keyForRow(tr);
+      const kBase = baseKeyForRow(tr);
+      const ov = overridesHours[kHalf] || overridesHours[kBase];
+      if(ov){
+        const regVal = (parseFloat(ov.reg)||0).toFixed(2);
+        const otVal  = (parseFloat(ov.ot )||0).toFixed(2);
+        const regStar = (Object.prototype.hasOwnProperty.call(ov,'regEdited') ? !!ov.regEdited : true);
+        const otStar  = (Object.prototype.hasOwnProperty.call(ov,'otEdited')  ? !!ov.otEdited  : true);
+        tr.cells[regIdx].textContent = regVal + (regStar ? ' *' : '');
+        tr.cells[otIdx ].textContent = otVal  + (otStar  ? ' *' : '');
+      }
+    });
+  }
+
+  function recomputeDtrSummaryFromTable(){
+    const table = document.getElementById('resultsTable');
+    if(!table) return;
+    const {regIdx, otIdx} = getColIndexes(table);
+    if(regIdx < 0 || otIdx < 0) return;
+    let sumReg = 0, sumOt = 0, empSet = new Set();
+    table.querySelectorAll('tbody tr').forEach(tr=>{
+      const empId = tr.cells[0] ? tr.cells[0].textContent.trim() : '';
+      if(empId) empSet.add(empId);
+      const reg = parseFloat(tr.cells[regIdx] && tr.cells[regIdx].textContent) || 0;
+      const ot  = parseFloat(tr.cells[otIdx]  && tr.cells[otIdx].textContent)  || 0;
+      sumReg += reg; sumOt += ot;
+    });
+    const summaryEl = document.getElementById('dtrSummary');
+    if(summaryEl){
+      const total = sumReg + sumOt;
+      summaryEl.textContent = 'Grand Total Hours: ' + formatHours(total) + ' | Regular: ' + formatHours(sumReg) + ' | OT Hours: ' + formatHours(sumOt) + ' | Employees: ' + empSet.size;
+    }
+  }
+
+  function getTimeFieldsForRow(tr){
+    if (!tr || !tr.dataset) {
+      return ['clockIn1','clockOut1','clockIn2','clockOut2','otIn','otOut'];
+    }
+    const half = tr.dataset.half;
+    if (half === 'AM') return ['clockIn1','clockOut1'];
+    if (half === 'PM') return ['clockIn2','clockOut2'];
+    if (half === 'OT') return ['otIn','otOut'];
+    return ['clockIn1','clockOut1','clockIn2','clockOut2','otIn','otOut'];
+  }
+
+  function revertTimeCellsToDisplay(tr, fields, idxMap){
+    if (!tr) return;
+    fields.forEach(field => {
+      const idxProp = field + 'Idx';
+      const idx = idxMap[idxProp];
+      if (typeof idx !== 'number' || idx < 0) return;
+      const cell = tr.cells[idx];
+      if (!cell) return;
+      const val = (tr.dataset && tr.dataset[field]) ? tr.dataset[field] : '';
+      cell.innerHTML = '';
+      if (val){
+        cell.textContent = __fmt12Clock(val);
+        cell.classList.remove('missing');
+      } else {
+        cell.textContent = '-';
+        cell.classList.add('missing');
+      }
+    });
+  }
+
+  function removeRecordsForTimes(empId, date, times){
+    if (!Array.isArray(times) || !times.length) return;
+    times.forEach(t => {
+      for (let i = storedRecords.length - 1; i >= 0; i--){
+        const rec = storedRecords[i];
+        if (String(rec.empId) === String(empId) && rec.date === date && rec.time === t){
+          storedRecords.splice(i, 1);
+          break;
+        }
+      }
+    });
+  }
+
+  function persistStoredRecords(){
+    try { localStorage.setItem(LS_RECORDS, JSON.stringify(storedRecords)); } catch(e){}
+    try {
+      if (typeof saveDtrToCloud === 'function') saveDtrToCloud(storedRecords);
+    } catch(e){
+      console.warn('Failed to save DTR to Supabase', e);
+    }
+  }
+
+  function applyTimeUpdates(tr, fields, idxMap){
+    if (!tr) return { changed: false };
+    const values = {};
+    const prevValues = {};
+    let changed = false;
+    fields.forEach(field => {
+      const prev = (tr.dataset && tr.dataset[field]) || '';
+      prevValues[field] = prev;
+      const idxProp = field + 'Idx';
+      const idx = idxMap[idxProp];
+      if (typeof idx !== 'number' || idx < 0) {
+        values[field] = prev;
+        return;
+      }
+      const cell = tr.cells[idx];
+      if (!cell){
+        values[field] = prev;
+        return;
+      }
+      const input = cell.querySelector('input.edit-time');
+      const val = input && input.value ? input.value : '';
+      values[field] = val;
+      if (val !== prev) changed = true;
+    });
+    if (!changed){
+      revertTimeCellsToDisplay(tr, fields, idxMap);
+      return { changed: false };
+    }
+    const empId = (tr.dataset && tr.dataset.empId) || (tr.cells[0] ? tr.cells[0].textContent.trim() : '');
+    const date = (tr.dataset && tr.dataset.date) || (tr.cells[4] ? tr.cells[4].textContent.trim() : '');
+    if (!empId || !date){
+      revertTimeCellsToDisplay(tr, fields, idxMap);
+      return { changed: false };
+    }
+    const toRemove = new Set();
+    const toAdd = new Set();
+    fields.forEach(field => {
+      const before = prevValues[field] || '';
+      const after = values[field] || '';
+      if (before && before !== after){
+        toRemove.add(before);
+      }
+      if (!after && before){
+        toRemove.add(before);
+      }
+      if (after && before !== after){
+        toAdd.add(after);
+      }
+    });
+    if (toRemove.size){
+      removeRecordsForTimes(empId, date, Array.from(toRemove));
+    }
+    if (toAdd.size){
+      Array.from(toAdd).forEach(time => {
+        storedRecords.push({ empId: String(empId), date, time, manual: true });
+      });
+    }
+    fields.forEach(field => {
+      const nextVal = values[field] || '';
+      tr.dataset[field] = nextVal;
+    });
+    const allTimes = fields
+      .map(field => tr.dataset && tr.dataset[field] ? tr.dataset[field] : '')
+      .filter(Boolean)
+      .sort();
+    try {
+      tr.dataset.times = JSON.stringify(allTimes);
+    } catch(_) {
+      tr.dataset.times = '[]';
+    }
+    persistStoredRecords();
+    return { changed: true };
+  }
+
+  function addDtrEditorButtons(){
+    const table = document.getElementById('resultsTable');
+    if(!table) return;
+    ensureEditorHeader();
+    const idxMap = getColIndexes(table);
+    const regIdx = idxMap.regIdx;
+    const otIdx = idxMap.otIdx;
+    table.querySelectorAll('tbody tr').forEach(tr => {
+      if(tr.querySelector('.dtr-edit-btn')) return;
+      const td = document.createElement('td');
+      td.className = 'editor-cell';
+      const btn = document.createElement('button');
+      btn.textContent = 'Edit';
+      btn.className = 'dtr-edit-btn';
+      btn.addEventListener('click', () => {
+        const regCell = (regIdx >= 0) ? tr.cells[regIdx] : null;
+        const otCell  = (otIdx >= 0) ? tr.cells[otIdx] : null;
+        const timeFields = getTimeFieldsForRow(tr);
+        if(btn.textContent === 'Edit'){
+          const regVal = regCell ? (parseFloat(regCell.textContent) || 0) : 0;
+          const otVal  = otCell  ? (parseFloat(otCell.textContent)  || 0) : 0;
+          if (regCell) regCell.innerHTML = '<input type="number" step="0.01" class="edit-reg" name="dtr_edit_reg" value="'+regVal+'">';
+          if (otCell)  otCell .innerHTML = '<input type="number" step="0.01" class="edit-ot"  name="dtr_edit_ot" value="'+otVal+'">';
+          try {
+            if (regCell) tr.dataset.origReg = String(regVal.toFixed(2));
+            if (otCell)  tr.dataset.origOt  = String(otVal.toFixed(2));
+            const kHalf0 = keyForRow(tr);
+            const kBase0 = baseKeyForRow(tr);
+            const ov0 = (overridesHours && (overridesHours[kHalf0] || overridesHours[kBase0])) || null;
+            const hadAny = !!ov0;
+            const hadReg = hadAny ? (Object.prototype.hasOwnProperty.call(ov0,'regEdited') ? !!ov0.regEdited : true) : false;
+            const hadOt  = hadAny ? (Object.prototype.hasOwnProperty.call(ov0,'otEdited')  ? !!ov0.otEdited  : true) : false;
+            tr.dataset.hadRegEdited = hadReg ? '1' : '0';
+            tr.dataset.hadOtEdited  = hadOt  ? '1' : '0';
+          } catch(_){}
+          timeFields.forEach(field => {
+            const idxProp = field + 'Idx';
+            const idx = idxMap[idxProp];
+            if (typeof idx !== 'number' || idx < 0) return;
+            const cell = tr.cells[idx];
+            if (!cell) return;
+            const val = (tr.dataset && tr.dataset[field]) ? tr.dataset[field] : '';
+            const input = document.createElement('input');
+            input.type = 'time';
+            input.className = 'edit-time';
+            input.dataset.field = field;
+            if (val) input.value = val;
+            cell.classList.remove('missing');
+            cell.innerHTML = '';
+            cell.appendChild(input);
+          });
+          btn.textContent = 'Save';
+        } else {
+          const regInput = tr.querySelector('input.edit-reg');
+          const otInput  = tr.querySelector('input.edit-ot');
+          const regVal = regInput ? (parseFloat(regInput.value) || 0) : 0;
+          const otVal  = otInput  ? (parseFloat(otInput.value)  || 0) : 0;
+          const kHalf = keyForRow(tr);
+          const kBase = baseKeyForRow(tr);
+          const origR = parseFloat(tr.dataset.origReg || 'NaN');
+          const origO = parseFloat(tr.dataset.origOt  || 'NaN');
+          const hadPrevReg = (tr.dataset.hadRegEdited === '1');
+          const hadPrevOt  = (tr.dataset.hadOtEdited  === '1');
+          const changedReg = (regInput && isFinite(origR)) ? Math.abs(regVal - origR) > 1e-9 : false;
+          const changedOt  = (otInput  && isFinite(origO)) ? Math.abs(otVal  - origO) > 1e-9 : false;
+          const regEdited  = changedReg || hadPrevReg;
+          const otEdited   = changedOt  || hadPrevOt;
+          const timeResult = applyTimeUpdates(tr, timeFields, idxMap);
+          let overridesTouched = false;
+          if (timeResult.changed && !changedReg && !changedOt){
+            try { if (overridesHours && Object.prototype.hasOwnProperty.call(overridesHours, kHalf)) { delete overridesHours[kHalf]; overridesTouched = true; } } catch(_){ }
+            try { if (overridesHours && Object.prototype.hasOwnProperty.call(overridesHours, kBase)) { delete overridesHours[kBase]; overridesTouched = true; } } catch(_){ }
+          } else if (regEdited || otEdited){
+            const payload = { reg: regVal, ot: otVal, regEdited: !!regEdited, otEdited: !!otEdited };
+            overridesHours[kHalf] = payload;
+            overridesHours[kBase] = payload;
+            overridesTouched = true;
+          } else {
+            try { if (overridesHours && Object.prototype.hasOwnProperty.call(overridesHours, kHalf)) { delete overridesHours[kHalf]; overridesTouched = true; } } catch(_){ }
+            try { if (overridesHours && Object.prototype.hasOwnProperty.call(overridesHours, kBase)) { delete overridesHours[kBase]; overridesTouched = true; } } catch(_){ }
+          }
+          if (overridesTouched){
+            saveOverridesHours();
+            if (typeof saveOverridesHoursRemote === 'function') saveOverridesHoursRemote();
+          }
+          if (timeResult.changed){
+            btn.textContent = 'Edit';
+            try { renderResults(); } catch(e){}
+            return;
+          }
+          const ovNow = overridesHours && (overridesHours[kHalf] || overridesHours[kBase]);
+          const starReg = ovNow ? (Object.prototype.hasOwnProperty.call(ovNow,'regEdited') ? !!ovNow.regEdited : true) : false;
+          const starOt  = ovNow ? (Object.prototype.hasOwnProperty.call(ovNow,'otEdited')  ? !!ovNow.otEdited  : true) : false;
+          if (regCell) regCell.textContent = regVal.toFixed(2) + (starReg ? ' *' : '');
+          if (otCell)  otCell.textContent  = otVal.toFixed(2) + (starOt ? ' *' : '');
+          btn.textContent = 'Edit';
+          recomputeDtrSummaryFromTable();
+        }
+      });
+      td.appendChild(btn);
+      tr.appendChild(td);
+    });
+  }
+
+  function afterRender(){
+    applyOverridesToTable();
+    addDtrEditorButtons();
+    recomputeDtrSummaryFromTable();
+  }
+
+  function patchOnce(){
+    if (window.__DTR_EDITOR_PATCHED) return;
+    window.__DTR_EDITOR_PATCHED = true;
+    const orig = window.renderResults;
+    if (typeof orig === 'function'){
+      window.renderResults = function(){
+        const out = orig.apply(this, arguments);
+        try { afterRender(); } catch(e){}
+        return out;
+      };
+    }
+    document.addEventListener('DOMContentLoaded', afterRender);
+  }
+
+  patchOnce();
+})();
+
+
+
+// === Reports: match last date (RWH & OTH) width to the common RWH width of other dates ===
+(function(){
+  function getTable(){
+    const host = document.getElementById('r_table');
+    return host ? (host.tagName.toLowerCase()==='table' ? host : host.querySelector('table')) : null;
+  }
+  function bottomHeader(t){ return t && t.tHead ? t.tHead.rows[t.tHead.rows.length-1] : null; }
+  function lastPairIdx(t){
+    const row = bottomHeader(t); if (!row) return null;
+    const ths = Array.from(row.cells);
+    let rwh = -1, oth = -1;
+    for (let i = ths.length-1; i >= 0; i--){
+      const txt = (ths[i].textContent||'').trim().toUpperCase();
+      if (oth === -1 && txt === 'OTH'){ oth = i; continue; }
+      if (oth !== -1 && txt === 'RWH'){ rwh = i; break; }
+    }
+    return (rwh !== -1 && oth !== -1) ? {rwh, oth, ths} : null;
+  }
+  function modeWidth(numbers){
+    const map = new Map();
+    numbers.forEach(v=>{ map.set(Math.round(v), (map.get(Math.round(v))||0)+1); });
+    let best=0, bestCount=-1;
+    map.forEach((c, w)=>{ if (c>bestCount){ best=w; bestCount=c; } });
+    return best||90;
+  }
+  function computeRefWidth(t, idx){
+    const row = bottomHeader(t); const ths = Array.from(row.cells);
+    const widths = [];
+    for (let i=0;i<ths.length;i++){
+      const txt = (ths[i].textContent||'').trim().toUpperCase();
+      if (txt === 'RWH' && i !== idx.rwh){
+        widths.push(ths[i].getBoundingClientRect().width);
+      }
+    }
+    if (!widths.length){
+      for (let i=0;i<ths.length;i++){
+        const txt = (ths[i].textContent||'').trim().toUpperCase();
+        if (txt === 'OTH' && i !== idx.oth){
+          widths.push(ths[i].getBoundingClientRect().width);
+        }
+      }
+    }
+    return modeWidth(widths);
+  }
+  function classCols(t, idx, cls){
+    // add class to header and all body cells at the given column index
+    const row = bottomHeader(t);
+    if (row && row.cells[idx]) row.cells[idx].classList.add(cls);
+    if (t.tBodies && t.tBodies.length){
+      for (const tr of Array.from(t.tBodies[0].rows)){
+        if (tr.cells[idx]) tr.cells[idx].classList.add(cls);
+      }
+    }
+  }
+  function apply(){
+    const t = getTable(); if (!t) return false;
+    const pair = lastPairIdx(t); if (!pair) return false;
+    const w = computeRefWidth(t, pair);
+
+    // ensure a style root with CSS var
+    let style = document.getElementById('__match_last_pair_style');
+    if (!style){
+      style = document.createElement('style');
+      style.id = '__match_last_pair_style';
+      style.textContent = `
+        :root { --LAST_PAIR_W: ${w}px; }
+        #r_table { table-layout: fixed; }
+        #r_table .__lastR, #r_table .__lastO {
+          width: var(--LAST_PAIR_W) !important;
+          min-width: var(--LAST_PAIR_W) !important;
+          max-width: var(--LAST_PAIR_W) !important;
+          box-sizing: border-box;
+          white-space: nowrap;
+          text-align: center;
+          padding-left: 8px; padding-right: 8px;
+        }
+        #r_table .__lastR > *, #r_table .__lastO > * {
+          display:block; max-width:100%; overflow:hidden;
+        }
+      `;
+      document.head.appendChild(style);
+    } else {
+      style.textContent = style.textContent.replace(/--LAST_PAIR_W:\s*\d+px/, `--LAST_PAIR_W: ${w}px`);
+    }
+
+    // mark both columns with classes
+    classCols(t, pair.rwh, '__lastR');
+    classCols(t, pair.oth, '__lastO');
+
+    // also set parent header colspan cell width to 2*ref
+    if (t.tHead && t.tHead.rows.length >= 2){
+      const top = t.tHead.rows[t.tHead.rows.length-2];
+      let cur = 0;
+      for (const th of Array.from(top.cells)){
+        const span = Number(th.getAttribute('colspan')||1);
+        if (cur <= pair.rwh && pair.oth < cur + span){
+          th.style.width = (w*2) + 'px';
+          th.style.minWidth = (w*2) + 'px';
+          th.style.maxWidth = (w*2) + 'px';
+          th.style.boxSizing = 'border-box';
+          break;
+        }
+        cur += span;
+      }
+    }
+    return true;
+  }
+  function init(){
+    let tries = 0;
+    const timer = setInterval(()=>{ tries++; if (apply()) clearInterval(timer); if (tries>80) clearInterval(timer); }, 200);
+    try{ new MutationObserver(apply).observe(document.body, {childList:true, subtree:true}); }catch(e){}
+  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
+  else init();
+})();
+// === END ===
+
+
+
+(function(){
+  function applyReportSizing(){ /* disabled: CSS handles widths to avoid twitch */ }
+
+  // Apply after build and on any changes
+  function initSizingObserver(){ /* no-op; observers removed to prevent jitter */ }
+
+  if (document.readyState === 'loading'){
+    document.addEventListener('DOMContentLoaded', initSizingObserver);
+  } else {
+    initSizingObserver();
+  }
+})();
+
+
+
+(function(){
+  function forcePersonnel150(){ /* disabled: using CSS constraints for first column */ }
+  function init(){
+    var tbl = document.getElementById('r_table');
+    if(!tbl) return;
+    // no observers; width handled by CSS
+  }
+  if (document.readyState === 'loading'){
+    document.addEventListener('DOMContentLoaded', init, { once:true });
+  } else { init(); }
+})();
+
+
+
+(function(){
+  function applyTotalsWidth100(){ /* disabled: CSS handles totals columns */ }
+  function init(){
+    var tbl = document.getElementById('r_table');
+    if(!tbl) return;
+    // no observers; widths handled by CSS
+  }
+  if (document.readyState === 'loading'){
+    document.addEventListener('DOMContentLoaded', init, { once:true });
+  } else { init(); }
+})();
+
+
+
+// Clean Reports Print: opens a minimal window with just the reports table.
+// Note: Browser header/footer (date, title, URL) are controlled by the print dialog.
+// To remove them entirely, uncheck "Headers and footers" in the print settings.
+(function(){
+  function printReportsClean(tableId, hintId, orientation){
+    try{
+      var tbl = document.getElementById(tableId || 'r_table');
+      if (!tbl) return;
+      var hint = document.getElementById(hintId || 'r_range_hint');
+      var css = `
+        <style>
+          html,body{margin:0;padding:10px;font-family:Arial,Helvetica,sans-serif}
+          *{-webkit-print-color-adjust:exact;print-color-adjust:exact}
+          h3{margin:0 0 8px 0}
+          .proj-title{font-weight:700;font-size:14px;margin:10px 0 6px 0}
+          table{width:100%;border-collapse:collapse;font-size:12px;table-layout:fixed}
+          table, th, td{border:0.6pt solid #000 !important}
+          th,td{padding:4px 6px;vertical-align:middle}
+          th{background:#f1f5f9;text-align:left}
+          thead{display:table-header-group}
+          .left{text-align:left}
+          .num{text-align:right}
+          .proj-block{page-break-after:always}
+          /* First column fixed width with ellipsis, no wrap */
+          table th:first-child, table td:first-child{
+            width:170px !important; min-width:170px !important; max-width:170px !important;
+            white-space:nowrap !important; overflow:hidden; text-overflow:ellipsis;
+            word-break: keep-all; overflow-wrap: normal; hyphens: none;
+          }
+          table th:first-child *, table td:first-child *{ white-space:nowrap !important; }
+          /* Make RATE compact to leave more room for names */
+          table th:nth-child(2), table td:nth-child(2){
+            width:70px; min-width:70px; max-width:80px; white-space:nowrap;
+          }
+          /* First header row date cells */
+          thead tr:first-child th:nth-child(n+3):not(:nth-last-child(-n+2)){
+            width: 80px; min-width: 80px; max-width: 80px; white-space: nowrap;
+          }
+          /* Uniform date column widths, exclude the last 2 total columns */
+          thead tr:nth-child(2) th:not(:nth-last-child(-n+2)){
+            width: 40px; min-width: 40px; max-width: 40px; white-space: nowrap;
+          }
+          tbody td:nth-child(n+3):not(:nth-last-child(-n+2)){
+            width: 40px; min-width: 40px; max-width: 40px; white-space: nowrap;
+          }
+          /* Totals column widths */
+          thead tr:first-child th:nth-last-child(2),
+          thead tr:nth-child(2) th:nth-last-child(2),
+          tbody td:nth-last-child(2){ width: 120px; min-width: 120px; max-width: 140px; white-space: nowrap; }
+          thead tr:first-child th:nth-last-child(1),
+          thead tr:nth-child(2) th:nth-last-child(1),
+          tbody td:nth-last-child(1){ width: 110px; min-width: 110px; max-width: 120px; white-space: nowrap; }
+          @media print{ @page { margin: 10mm; } }
+        </style>`;
+
+      // Build per-project sections with clear headers (strip inline widths)
+      var headHTML = '';
+      if (tbl.tHead) {
+        try{
+          var headClone = tbl.tHead.cloneNode(true);
+          headClone.querySelectorAll('th,td').forEach(function(el){ el.removeAttribute('style'); });
+          // Force first column (PERSONNEL) to fixed 170px and no-wrap in print
+          try {
+            headClone.querySelectorAll('tr th:first-child').forEach(function(th){
+              th.style.width = '170px';
+              th.style.minWidth = '170px';
+              th.style.maxWidth = '170px';
+              th.style.whiteSpace = 'nowrap';
+              th.style.overflow = 'hidden';
+              th.style.textOverflow = 'ellipsis';
+              th.style.wordBreak = 'keep-all';
+              th.style.overflowWrap = 'normal';
+              th.style.hyphens = 'none';
+            });
+          } catch(_e) {}
+          headHTML = headClone.innerHTML;
+        }catch(e){ headHTML = tbl.tHead.innerHTML; }
+      }
+      var bodies = tbl.querySelectorAll('tbody.proj-page');
+      var blocks = '';
+      bodies.forEach(function(tb){
+        try{
+          var projName = (tb.querySelector('.proj-break td')?.textContent || 'Project').trim();
+          var clone = tb.cloneNode(true);
+          // Remove inline styles from cells to avoid overriding print CSS
+          try{ clone.querySelectorAll('th,td').forEach(function(el){ el.removeAttribute('style'); }); }catch(_){ }
+          // Enforce first column width and no-wrap inline to survive print engine quirks
+          try{
+            clone.querySelectorAll('tr > td:first-child').forEach(function(td){
+              if (td && !td.hasAttribute('colspan')){
+                td.style.width = '170px';
+                td.style.minWidth = '170px';
+                td.style.maxWidth = '170px';
+                td.style.whiteSpace = 'nowrap';
+                td.style.overflow = 'hidden';
+                td.style.textOverflow = 'ellipsis';
+                td.style.wordBreak = 'keep-all';
+                td.style.overflowWrap = 'normal';
+                td.style.hyphens = 'none';
+              }
+            });
+          }catch(_e){}
+          var first = clone.querySelector('.proj-break');
+          if (first) first.parentNode.removeChild(first);
+          blocks += '<div class="proj-block">' +
+                    '<div class="proj-title">Project: ' + projName + (hint ? ' — ' + (hint.textContent||'') : '') + '</div>' +
+                    '<table><thead>' + headHTML + '</thead><tbody>' + clone.innerHTML + '</tbody></table>' +
+                   '</div>';
+        }catch(e){}
+      });
+      if (!blocks) { blocks = '<div>No project data to print.</div>'; }
+      var html = '<!doctype html><html><head><meta charset="utf-8">' + css + '</head><body>' + blocks + '</body></html>';
+      printReport(html, { orientation: orientation, features: 'width=1024,height=768' });
+    }catch(e){ console.warn('Clean print failed', e); }
+  }
+
+  function attach(){
+    var btn = document.getElementById('r_print');
+    if (btn && !btn.__cleanPrint){
+      btn.addEventListener('click', function(ev){
+        ev.preventDefault();
+        withPrintOrientation(function(orientation){
+          printReportsClean('r_table', 'r_range_hint', orientation);
+        });
+      });
+      btn.__cleanPrint = true;
+    }
+    var otBtn = document.getElementById('r_ot_print');
+    if (otBtn && !otBtn.__cleanPrint){
+      otBtn.addEventListener('click', function(ev){
+        ev.preventDefault();
+        withPrintOrientation(function(orientation){
+          printReportsClean('r_ot_table', 'r_ot_range_hint', orientation);
+        });
+      });
+      otBtn.__cleanPrint = true;
+    }
+  }
+  if (document.readyState === 'loading'){ document.addEventListener('DOMContentLoaded', attach, {once:true}); }
+  else { attach(); }
+})();
+
+
+
+(function(){
+  function applyGrandAndGross(){ /* disabled: handled via CSS to avoid twitch */ }
+  function init(){
+    var tbl = document.getElementById('r_table');
+    if(!tbl) return;
+    // widths handled by CSS; no observers to prevent layout jitter
+  }
+  if (document.readyState === 'loading'){
+    document.addEventListener('DOMContentLoaded', init, { once:true });
+  } else { init(); }
+})();
+
+
+
+  (function(){
+    function removeBackupUI(){
+      try {
+        var btn = document.getElementById('backupNowBtn');
+        if (btn && btn.parentElement) { btn.parentElement.remove(); }
+        var log = document.getElementById('backupLog'); if (log) log.remove();
+      } catch(e){}
+    }
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', removeBackupUI, { once:true });
+    } else {
+      removeBackupUI();
+    }
+  })();
+  
+
+
+// Auto-update "Total Hours" (Reg + OT) using lightweight event hooks
+(function(){
+  function findColIdxByHeader(tbl, text){
+    if (!tbl) return -1;
+    const ths = tbl.querySelectorAll('thead th');
+    for (let i=0;i<ths.length;i++){
+      const t = (ths[i].textContent||'').trim().toLowerCase();
+      if (t === String(text||'').toLowerCase()) return i;
+    }
+    return -1;
+  }
+  function num(x){
+    const n = parseFloat(String(x==null?'':x).replace(/[^0-9.\-]/g,''));
+    return isNaN(n) ? 0 : n;
+  }
+  function computeTotalHoursForTable(){
+    const tbl = document.getElementById('resultsTable');
+    if (!tbl) return;
+    const regIdx = findColIdxByHeader(tbl, 'Regular Hrs') || findColIdxByHeader(tbl, 'Total Regular Hrs');
+    const otIdx  = findColIdxByHeader(tbl, 'OT Hrs');
+    const totIdx = findColIdxByHeader(tbl, 'Total Hours');
+    if (regIdx < 0 || otIdx < 0 || totIdx < 0) return;
+    const rows = tbl.tBodies && tbl.tBodies[0] ? Array.from(tbl.tBodies[0].rows) : [];
+    for (const tr of rows){
+      const regCell = tr.cells[regIdx];
+      const otCell  = tr.cells[otIdx];
+      const totCell = tr.cells[totIdx];
+      if (!regCell || !otCell || !totCell) continue;
+      const reg = num(regCell.textContent);
+      const ot  = num(otCell.textContent);
+      const total = reg + ot;
+      const next = total === 0 ? '-' : total.toFixed(2);
+      if (totCell.textContent !== next) {
+        totCell.textContent = next;
+      }
+    }
+  }
+  function hookTable(){
+    const tbl = document.getElementById('resultsTable');
+    if (!tbl) return;
+    const run = () => { try{ computeTotalHoursForTable(); }catch(e){} };
+    // Also watch DOM changes (rows re-rendered after edits) and recompute
+    const tbody = tbl.tBodies && tbl.tBodies[0];
+    if (tbody) {
+      let t = null;
+      const obs = new MutationObserver(() => {
+        if (t) clearTimeout(t);
+        t = setTimeout(run, 0); // micro-debounce
+      });
+      obs.observe(tbody, { childList: true, subtree: true, characterData: true });
+      // save ref
+      window.__dtrTotalsObserver = obs;
+    }
+
+    // Recompute on typical edit signals
+    ['input','change','keyup'].forEach(evt => tbl.addEventListener(evt, run, true));
+    // Also expose a manual trigger for existing code paths
+    window.computeTotalHoursForTable = computeTotalHoursForTable;
+    // First run
+    run();
+  }
+  if (document.readyState === 'loading'){
+    document.addEventListener('DOMContentLoaded', hookTable);
+  } else {
+    hookTable();
+  }
+})();
+
+
+
+// ---- Unified visible-rows totals & footer sync (applied) ----
+(function(){
+  function norm(s){ return String(s||'').trim().toLowerCase(); }
+  function num(txt){
+    var v = parseFloat(String(txt==null?'':txt).replace(/[^0-9.\-]/g,''));
+    return isNaN(v) ? 0 : v;
+  }
+  function findColIndex(ths, labelOrFn){
+    for (var i=0;i<ths.length;i++){
+      var t = norm(ths[i].textContent);
+      if (typeof labelOrFn === 'function'){ if (labelOrFn(t)) return i; }
+      else if (t === norm(labelOrFn)) return i;
+    }
+    return -1;
+  }
+  function computeVisibleTotals(){
+    var tbl = document.getElementById('resultsTable');
+    if (!tbl || !tbl.tBodies || !tbl.tBodies[0]) return null;
+    var ths = tbl.querySelectorAll('thead th');
+    var idIdx  = findColIndex(ths, 'id');
+    var regIdx = findColIndex(ths, function(t){ return t==='regular hrs' || t==='total regular hrs'; });
+    var otIdx  = findColIndex(ths, 'ot hrs');
+    var totIdx = findColIndex(ths, 'total hours');
+    var rows = Array.from(tbl.tBodies[0].rows||[]);
+    var reg=0, ot=0, tot=0;
+    var seen = new Set();
+    for (var r=0; r<rows.length; r++){
+      var tr = rows[r];
+      var style = window.getComputedStyle(tr);
+      if (tr.offsetParent===null || style.display==='none' || style.visibility==='hidden') continue;
+      if (regIdx>=0) reg += num(tr.cells[regIdx] && tr.cells[regIdx].textContent);
+      if (otIdx>=0)  ot  += num(tr.cells[otIdx] && tr.cells[otIdx].textContent);
+      if (totIdx>=0) tot += num(tr.cells[totIdx] && tr.cells[totIdx].textContent);
+      if (idIdx>=0){
+        var idtxt = String(tr.cells[idIdx] && tr.cells[idIdx].textContent || '').trim();
+        if (idtxt) seen.add(idtxt);
+      }
+    }
+    if (totIdx<0) tot = reg + ot;
+    return { reg: reg, ot: ot, tot: tot, emp: seen.size, regIdx, otIdx, totIdx, idIdx, ths: ths };
+  }
+  function rebuildDtrFooter(){
+    var tbl = document.getElementById('resultsTable');
+    if (!tbl) return;
+    var res = computeVisibleTotals();
+    if (!res) return;
+    var foot = tbl.querySelector('tfoot#resultsFoot');
+    if (!foot){
+      foot = document.createElement('tfoot');
+      foot.id = 'resultsFoot';
+      tbl.appendChild(foot);
+    }
+    var cols = res.ths.length;
+    var tr = document.createElement('tr');
+    tr.className = 'totals-row';
+    for (var i=0;i<cols;i++){
+      var td = document.createElement('td');
+      td.style.fontWeight = '700';
+      td.style.background = '#fafafa';
+      var t = norm(res.ths[i].textContent);
+      if (i===0) { td.textContent = 'Totals:'; td.style.textAlign='left'; }
+      else if (t==='name') { td.textContent = 'Employees: ' + res.emp; }
+      else if (i===res.regIdx) { td.textContent = formatHours(res.reg); td.style.textAlign='right'; }
+      else if (i===res.otIdx)  { td.textContent = formatHours(res.ot);  td.style.textAlign='right'; }
+      else if (i===res.totIdx) { td.textContent = formatHours(res.tot || (res.reg+res.ot)); td.style.textAlign='right'; }
+      else if (t==='split' || t==='actions') { td.style.display='none'; td.style.border='0'; }
+      else { td.textContent = ''; }
+      tr.appendChild(td);
+    }
+    foot.innerHTML = '';
+    foot.appendChild(tr);
+    var summaryEl = document.getElementById('dtrSummary');
+    if (summaryEl){
+      var grand = res.tot || (res.reg + res.ot);
+      summaryEl.textContent = 'Grand Total Hours: ' + formatHours(grand) +
+        ' | Regular Hours: ' + formatHours(res.reg) +
+        ' | OT Hours: ' + formatHours(res.ot) +
+        ' | Employees: ' + res.emp;
+      summaryEl.style.display = '';
+    }
+  }
+  window.computeVisibleTotals = computeVisibleTotals;
+  window.rebuildDtrFooter = rebuildDtrFooter;
+  function hook(){
+    rebuildDtrFooter();
+    var tbl = document.getElementById('resultsTable');
+    if (!tbl || !tbl.tBodies || !tbl.tBodies[0]) return;
+    var tbody = tbl.tBodies[0];
+    var scheduled = false;
+    var run = function(){
+      if (scheduled) return;
+      scheduled = true;
+      (window.requestAnimationFrame || setTimeout)(function(){
+        scheduled = false;
+        try{ rebuildDtrFooter(); }catch(e){}
+      }, 0);
+    };
+    ['input','change','keyup'].forEach(function(evt){ tbody.addEventListener(evt, run, true); });
+    var obs = new MutationObserver(function(){ run(); });
+    obs.observe(tbody, { childList:true, subtree:true, characterData:true });
+    window.__dtrFooterObserver = obs;
+  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', hook);
+  else hook();
+  if (typeof window.renderResults === 'function'){
+    var _origRR = window.renderResults;
+    window.renderResults = function(){ var r = _origRR.apply(this, arguments); try{ rebuildDtrFooter(); }catch(e){} return r; };
+  }
+  if (typeof window.calculateAll === 'function'){
+    var _origCA = window.calculateAll;
+    window.calculateAll = function(){ var r = _origCA.apply(this, arguments); try{ rebuildDtrFooter(); }catch(e){} return r; };
+  }
+})();
+
+
+
+(function(){
+  try { document.body.classList.add('bp-theme'); } catch(e) {}
+
+  // Mobile: off-canvas sidebar toggling
+  const shellEl = document.getElementById('bpShell');
+  const menuBtn = document.getElementById('bpMenuBtn');
+  const overlay = document.getElementById('bpOverlay');
+  const isPhone = () => (window.matchMedia && window.matchMedia('(max-width: 720px)').matches);
+
+  function openMenu(){
+    if (!shellEl) return;
+    shellEl.classList.add('sidebar-open');
+    if (menuBtn) menuBtn.setAttribute('aria-expanded','true');
+    if (overlay) overlay.setAttribute('aria-hidden','false');
+  }
+  function closeMenu(){
+    if (!shellEl) return;
+    shellEl.classList.remove('sidebar-open');
+    if (menuBtn) menuBtn.setAttribute('aria-expanded','false');
+    if (overlay) overlay.setAttribute('aria-hidden','true');
+  }
+  function toggleMenu(){
+    if (!shellEl) return;
+    if (shellEl.classList.contains('sidebar-open')) closeMenu();
+    else openMenu();
+  }
+  try {
+    if (menuBtn) menuBtn.addEventListener('click', toggleMenu);
+    if (overlay) overlay.addEventListener('click', closeMenu);
+    document.addEventListener('keydown', (e)=>{ if (e.key === 'Escape') closeMenu(); });
+    window.addEventListener('resize', ()=>{ if (!isPhone()) closeMenu(); });
+  } catch(e) {}
+
+  // Phase 2: The BuildPay Shell is now the only navigation.
+  // The Shell calls `showTab()` directly, so the legacy header tab buttons are no longer needed.
+  const NAV_GROUPS = [
+    { label: 'Main', items: [
+      { page: 'dashboard',  tabName: 'dashboard',     title: 'Dashboard',          icon: '⊞' },
+      { page: 'employees',  tabName: 'employees',     title: 'Employees',          icon: '👷' },
+      { page: 'dtr',        tabName: 'main',          title: 'Time & Attendance',  icon: '⏱️' },
+      { page: 'payroll',    tabName: 'payroll',       title: 'Payroll Run',        icon: '💵' },
+      { page: 'projects',   tabName: 'projects',      title: 'Projects',           icon: '🏗️' }
+    ]},
+    { label: 'Finance', items: [
+      { page: 'totals',     tabName: 'projectTotals', title: 'Reports',            icon: '📊' },
+      { page: 'audit',     tabName: 'audit',       title: 'Audit',              icon: '🧾' }
+    ]},
+    { label: 'Management', items: [
+      { page: 'schedules',  tabName: 'schedule',      title: 'Schedules',          icon: '🗓️' },
+      { page: 'settings',   tabName: 'settings',      title: 'Settings',           icon: '⚙️' }
+    ]}
+  ];
+
+  const map = {};          // page -> { tabName, title, icon }
+  const nameToPage = {};   // tabName -> page
+  NAV_GROUPS.forEach(g => (g.items||[]).forEach(it => {
+    map[it.page] = { tabName: it.tabName, title: it.title, icon: it.icon };
+    nameToPage[it.tabName] = it.page;
+  }));
+
+  (function buildBpNav(){
+    const bpNav = document.querySelector('.bp-nav');
+    if (!bpNav) return;
+    bpNav.innerHTML = '';
+    NAV_GROUPS.forEach(group => {
+      if (group.label) {
+        const lbl = document.createElement('div');
+        lbl.className = 'bp-nav-label';
+        lbl.textContent = group.label;
+        bpNav.appendChild(lbl);
+      }
+      (group.items||[]).forEach(it => {
+        const btn = document.createElement('button');
+        btn.className = 'bp-nav-item';
+        btn.type = 'button';
+        btn.dataset.page = it.page;
+
+        const iconSpan = document.createElement('span');
+        iconSpan.className = 'bp-nav-ico';
+        iconSpan.textContent = it.icon || '';
+        btn.appendChild(iconSpan);
+
+        const labelSpan = document.createElement('span');
+        labelSpan.className = 'label';
+        labelSpan.textContent = it.title;
+        btn.appendChild(labelSpan);
+
+        bpNav.appendChild(btn);
+      });
+    });
+  })();
+
+  function setBpActive(page){
+    document.querySelectorAll('.bp-nav-item').forEach(b => {
+      b.classList.toggle('active', (b.dataset.page === page));
+    });
+    const t = map[page] && map[page].title ? map[page].title : 'Dashboard';
+    const topTitle = document.getElementById('bpTopTitle');
+    if (topTitle) topTitle.textContent = t;
+  }
+
+  function go(page){
+    const cfg = map[page];
+    if (!cfg) return;
+    try {
+      if (typeof window.showTab === 'function') window.showTab(cfg.tabName);
+    } catch(e) {}
+    setBpActive(page);
+    try {
+      const cont = document.querySelector('.bp-content');
+      if (cont) cont.scrollTop = 0;
+    } catch(e){}
+  }
+
+  // Nav clicks -> call showTab() directly
+  document.querySelectorAll('.bp-nav-item').forEach(btn => {
+    btn.addEventListener('click', () => {
+      go(btn.dataset.page);
+      // On phones, close the drawer after navigation.
+      if (isPhone()) closeMenu();
+    });
+  });
+
+  // Hook showTab so any code-driven tab switches update the Shell active state.
+  function hookShowTab(){
+    if (typeof window.showTab !== 'function') return false;
+    if (window.showTab && window.showTab.__bpShellWrapped) return true;
+    const orig = window.showTab;
+    const wrapped = function(name){
+      const r = orig.apply(this, arguments);
+      try {
+        const pg = nameToPage[name];
+        if (pg) setBpActive(pg);
+      } catch(e) {}
+      return r;
+    };
+    wrapped.__bpShellWrapped = true;
+    window.showTab = wrapped;
+    return true;
+  }
+  let hookTries = 0;
+  const hookTimer = setInterval(() => {
+    hookTries++;
+    if (hookShowTab() || hookTries > 60) clearInterval(hookTimer);
+  }, 200);
+
+  // Pay period controls: mirror original picker & buttons
+  const origSel = document.getElementById('activePayrollSelect');
+  const bpSel   = document.getElementById('bpActivePayrollSelect');
+  const origNew = document.getElementById('newPayrollPeriod');
+  const origFin = document.getElementById('lockSnapshotBtn');
+  const origVoid= document.getElementById('voidPayRunBtn');
+
+  function cloneOptions(){
+    if (!origSel || !bpSel) return;
+    const sig = Array.from(origSel.options).map(o=>o.value+'|'+o.textContent).join('@@');
+    if (bpSel.__sig !== sig){
+      bpSel.innerHTML = '';
+      Array.from(origSel.options).forEach(o=>{
+        const opt = document.createElement('option');
+        opt.value = o.value;
+        opt.textContent = o.textContent;
+        bpSel.appendChild(opt);
+      });
+      bpSel.__sig = sig;
+    }
+    bpSel.value = origSel.value;
+  }
+  function syncButtons(){
+    const bpVoid = document.getElementById('bpVoidPayRun');
+    if (bpVoid && origVoid) bpVoid.disabled = !!origVoid.disabled;
+  }
+  function ensurePickersWired(){
+    if (!origSel || !bpSel) return;
+    cloneOptions();
+    syncButtons();
+    // one-time wiring
+    if (!bpSel.__wired){
+      bpSel.addEventListener('change', () => {
+        try{
+          origSel.value = bpSel.value;
+          origSel.dispatchEvent(new Event('change', { bubbles:true }));
+        }catch(e){}
+      });
+      origSel.addEventListener('change', () => {
+        try{ cloneOptions(); syncButtons(); }catch(e){}
+      });
+      bpSel.__wired = true;
+    }
+  }
+
+  // Buttons
+  const bpNew  = document.getElementById('bpNewPayrollPeriod');
+  const bpFin  = document.getElementById('bpFinalizeSnapshot');
+  const bpVoid = document.getElementById('bpVoidPayRun');
+  if (bpNew)  bpNew.addEventListener('click', ()=> { try{ origNew && origNew.click(); }catch(e){} });
+  if (bpFin)  bpFin.addEventListener('click', ()=> { try{ origFin && origFin.click(); }catch(e){} });
+  if (bpVoid) bpVoid.addEventListener('click', ()=> { try{ origVoid && origVoid.click(); }catch(e){} });
+
+  // Wait for original picker to populate (it loads after boot)
+  let tries = 0;
+  const timer = setInterval(() => {
+    tries++;
+    ensurePickersWired();
+    // Stop once options exist or after ~10s
+    if ((origSel && origSel.options && origSel.options.length) || tries > 50) clearInterval(timer);
+  }, 200);
+
+  // Default: determine initial active page based on active panels, otherwise go to dashboard.
+  try {
+    const activePanel = document.querySelector('.tab-panel.active');
+    const id = activePanel ? activePanel.id : '';
+    const initial = (id === 'panelMain') ? 'dtr'
+      : (id === 'panelSchedule') ? 'schedules'
+      : (id === 'panelEmployees') ? 'employees'
+      : (id === 'panelProjects') ? 'projects'
+      : (id === 'panelPayroll') ? 'payroll'
+      : (id === 'panelProjectTotals') ? 'totals'
+      : (id === 'panelSettings') ? 'settings'
+      : 'dashboard';
+    setBpActive(initial);
+    if (!activePanel && typeof window.showTab === 'function') {
+      try { window.showTab('dashboard'); } catch(e) {}
+    }
+  } catch(e){}
+})();
+
+
+
+// === CalculateAll Scheduler: coalesce multiple calls per frame ===
+(function(){
+  try {
+    if (window.calculateAll && !window.calculateAll.__scheduledWrapped) {
+      const orig = window.calculateAll;
+      let scheduled = false;
+      function run(){
+        scheduled = false;
+        try { orig(); } catch(e) { console.warn('calculateAll error', e); }
+      }
+      const wrap = function(){
+        if (scheduled) return;
+        scheduled = true;
+        (window.requestAnimationFrame || setTimeout)(run, 0);
+      };
+      wrap.__scheduledWrapped = true;
+      window.calculateAll = wrap;
+    }
+  } catch(e) { /* no-op */ }
+})();
+
+// === Deductions render: skip work when hidden; defer to original builder when visible ===
+(function(){
+  function isDeductionsVisible(){
+    const el = document.getElementById('deductionsTab');
+    return !!(el && el.classList && el.classList.contains('active'));
+  }
+  try {
+    const orig = window.renderDeductionsTable;
+    if (typeof orig === 'function' && !orig.__perfWrapped) {
+      const optimized = function(){
+        if (!isDeductionsVisible()) { window.__deductionsDirty = true; return; }
+        window.__deductionsDirty = false;
+        let result;
+        try {
+          result = orig.apply(this, arguments);
+        } catch (e) {
+          console.warn('renderDeductionsTable fallback', e);
+          try { result = orig.apply(this, arguments); } catch (_) { return; }
+        }
+        try { (window.scheduleTotals||window.updateDeductionsGrandTotals||function(){})(); } catch(e){}
+        return result;
+      };
+      optimized.__perfWrapped = true;
+      window.renderDeductionsTable = optimized;
+    }
+  } catch(e) { /* no-op */ }
+  // Render pending deductions when its tab becomes active
+  document.addEventListener('click', function(ev){
+    const btn = ev.target && ev.target.closest && ev.target.closest('#panelPayroll .tabs .tab-btn');
+    if (btn && btn.dataset && btn.dataset.tab === 'deductionsTab'){
+      if (!window.__deductionsDirty || typeof window.renderDeductionsTable !== 'function') return;
+      const schedule = window.requestAnimationFrame ? window.requestAnimationFrame.bind(window) : function(cb){ return setTimeout(cb, 0); };
+      schedule(function(){
+        if (window.__deductionsDirty && typeof window.renderDeductionsTable === 'function' && isDeductionsVisible()){
+          try { window.renderDeductionsTable(); } catch(e){}
+        }
+      });
+    }
+  });
+})();
+
+
+
+// === RenderResults Scheduler: coalesce rapid calls into one per frame ===
+(function(){
+  try {
+    if (window.renderResults && !window.renderResults.__scheduledWrapped) {
+      const orig = window.renderResults;
+      let scheduled = false;
+      function run(){
+        scheduled = false;
+        try { orig(); } catch(e) { console.warn('renderResults error', e); }
+      }
+      const wrap = function(){
+        if (scheduled) return;
+        scheduled = true;
+        (window.requestAnimationFrame || setTimeout)(run, 0);
+      };
+      wrap.__scheduledWrapped = true;
+      window.renderResults = wrap;
+    }
+  } catch(e) { /* no-op */ }
+})();
+
+
+
+// Minimal lock handler: reuse freeze helpers instead of serializing snapshots.
+(function(){
+  function getPeriod(){
+    const ws = document.getElementById('weekStart');
+    const we = document.getElementById('weekEnd');
+    return {
+      start: ws && ws.value ? ws.value : '',
+      end: we && we.value ? we.value : ''
+    };
+  }
+  function isLocked(){
+    try { if (typeof isSelectedPeriodLocked === 'function') return !!isSelectedPeriodLocked(); }
+    catch (err) {}
+    return false;
+  }
+  async function lockPeriod(){
+    try {
+      if (typeof window.lockCurrentPeriod === 'function') {
+        await Promise.resolve(window.lockCurrentPeriod());
+      }
+    } catch (err) {
+      console.warn('lockPeriod failed', err);
+    }
+  }
+  const ALLOW_WHEN_LOCKED = new Set([
+    'renderResults',          // Needed to display the DTR grid while locked
+    'rebuildReports',         // Allows read-only report refreshes
+    'renderProjectTotals',    // Keeps project totals visible
+    'renderMasterReport',     // Ensures master report tab still renders
+    'renderTable',            // Employees tab
+    'renderDeductionsTable'   // Deductions tab
+  ]);
+
+  function guard(name){
+    try {
+      const fn = window[name];
+      if (typeof fn !== 'function' || fn.__guarded) return;
+      const wrapped = function(){
+        if (isLocked() && !ALLOW_WHEN_LOCKED.has(name)) return;
+        return fn.apply(this, arguments);
+      };
+      wrapped.__guarded = true;
+      window[name] = wrapped;
+    } catch (err) {}
+  }
+  ['renderResults','calculatePayrollFromResultsTable','calculatePayrollFromRecords','rebuildReports','renderProjectTotals','renderMasterReport','calculateAll','renderTable','renderDeductionsTable'].forEach(guard);
+  document.addEventListener('DOMContentLoaded', function(){
+    document.addEventListener('click', function(ev){
+      const t = ev.target;
+      if (!t) return;
+    }, true);
+
+    try {
+      if (isLocked()) {
+        if (typeof window.checkAndToggleEditState === 'function') window.checkAndToggleEditState();
+      } else if (typeof window.applyPayrollLockUI === 'function') {
+        window.applyPayrollLockUI(false);
+      }
+    } catch (err) {}
+
+    try {
+      var tp = document.getElementById('tabPayroll');
+      function onOpenPayroll(){
+        try {
+          if (isLocked() && typeof window.checkAndToggleEditState === 'function') {
+            window.checkAndToggleEditState();
+          }
+        } catch (e) {}
+      }
+      if (tp && !tp.__lockBind){ tp.addEventListener('click', onOpenPayroll); tp.__lockBind = true; }
+    } catch (e) {}
+
+    var __lockStableAt = 0;
+    function markPeriodChanged(){ try { __lockStableAt = Date.now() + 250; } catch(e){} }
+    function isStable(){ try { return Date.now() >= __lockStableAt; } catch(e){ return true; } }
+    try {
+      var _isLocked = isLocked;
+      isLocked = function(){ if (!isStable()) return false; return _isLocked(); };
+    } catch (e) {}
+    function scheduleUiReeval(){
+      setTimeout(function(){
+        try {
+          if (typeof window.checkAndToggleEditState === 'function') window.checkAndToggleEditState();
+        } catch (e) {}
+      }, 260);
+    }
+    try { var ws = document.getElementById('weekStart'); if (ws && !ws.__lockBind){ ws.addEventListener('change', function(){ markPeriodChanged(); scheduleUiReeval(); }); ws.__lockBind = true; } } catch(e){}
+    try { var we = document.getElementById('weekEnd'); if (we && !we.__lockBind){ we.addEventListener('change', function(){ markPeriodChanged(); scheduleUiReeval(); }); we.__lockBind = true; } } catch(e){}
+    try { var sel = document.getElementById('activePayrollSelect'); if (sel && !sel.__lockBind){ sel.addEventListener('change', function(){ markPeriodChanged(); scheduleUiReeval(); }); sel.__lockBind = true; } } catch(e){}
+  });
+  try { window.lockPeriod = lockPeriod; } catch (err) {}
+})();
+// Toggle Payroll table inputs read-only state based on lock
+function setPayrollLockedUI(locked){
+  try {
+    // 1) Toggle form controls (inputs only) inside Payroll panel; leave tab buttons enabled
+    var panel = document.getElementById('panelPayroll');
+    if (panel){
+      var inputs = panel.querySelectorAll('input, select, textarea');
+      inputs.forEach(function(el){ el.disabled = !!locked; });
+      // Explicitly disable file-import fields when locked
+      if (locked){
+        panel.querySelectorAll('#importSss').forEach(function(el){ el.disabled = true; });
+      }
+    }
+    // 2) Also toggle just the payroll grid controls for safety
+    document.querySelectorAll('#payrollTable input, #payrollTable select, #payrollTable textarea').forEach(function(el){ el.disabled = !!locked; });
+    // 3) Re-assert on DOM mutations while locked (payroll table only)
+    var tbl = document.getElementById('payrollTable');
+    if (tbl){
+      if (locked && !tbl.__lockObs){
+        var mo = new MutationObserver(function(){ try { document.querySelectorAll('#payrollTable input, #payrollTable select, #payrollTable textarea').forEach(function(el){ el.disabled = true; }); } catch(e){} });
+        mo.observe(tbl, { childList: true, subtree: true });
+        tbl.__lockObs = mo;
+      } else if (!locked && tbl.__lockObs){ try { tbl.__lockObs.disconnect(); } catch(e){}; tbl.__lockObs = null; }
+    }
+  } catch(e){}
+}
+
+
+
+// Normalize Deductions note: rename Column 8 label from Vale to Account in the help text.
+document.addEventListener('DOMContentLoaded', function(){
+  try{
+    var note = document.querySelector('#deductionsTab .section.note');
+    if (note && note.innerHTML && /Column\s*8:<\/strong>\s*Vale/i.test(note.innerHTML)){
+      note.innerHTML = note.innerHTML.replace(/(Column\s*8:<\/strong>)\s*Vale/i, '$1 Account');
+    }
+  }catch(e){}
+});
+
+/* === Other Deductions Pivot Report (Print + Excel) === */
+(function(){
+  function od_formatMoney(n){
+    var x = Number(n || 0);
+    if (!isFinite(x)) x = 0;
+    return x.toFixed(2);
+  }
+
+  function od_isTypeInList(t, list){
+    if (!t) return false;
+    return list.indexOf(t) !== -1;
+  }
+
+  function od_buildPivot(){
+    try { if (typeof syncPeriodScopedData === 'function') syncPeriodScopedData(); } catch(e){}
+    try { if (typeof ensureOtherDeductionsDetailsMap === 'function') ensureOtherDeductionsDetailsMap(); } catch(e){}
+    var types = [];
+    try { if (typeof getDeductionTypeOptions === 'function') types = getDeductionTypeOptions() || []; } catch(e){ types = []; }
+
+    var CUSTOM_COL = 'Custom';
+    var totals = {};
+    types.forEach(function(t){ totals[t] = 0; });
+    totals[CUSTOM_COL] = 0;
+
+    var rows = [];
+    (typeof getEmployeeList()!=='undefined' && Array.isArray(getEmployeeList()) ? getEmployeeList() : []).forEach(function(emp){
+      var empId = emp && emp.id ? emp.id : '';
+      var empName = emp && emp.name ? emp.name : '';
+      var sums = {};
+      types.forEach(function(t){ sums[t] = 0; });
+      sums[CUSTOM_COL] = 0;
+
+      var items = (typeof otherDeductionsDetails!=='undefined' && otherDeductionsDetails && otherDeductionsDetails[empId]) ? otherDeductionsDetails[empId] : [];
+      if (!Array.isArray(items)) items = [];
+
+      items.forEach(function(it){
+        if (!it) return;
+        var amt = 0;
+        try { amt = parseFloat((it.amount || 0).toString().replace(/,/g,'')) || 0; } catch(e){ amt = 0; }
+        if (amt === 0) return;
+
+        var t = (it.type || '').toString().trim();
+        var lbl = (it.label || '').toString().trim();
+        var resolved = null;
+
+        // Prefer stored type if it matches options
+        if (od_isTypeInList(t, types)) resolved = t;
+        else if (od_isTypeInList(lbl, types)) resolved = lbl;
+
+        if (!resolved) resolved = CUSTOM_COL;
+
+        if (resolved === CUSTOM_COL) sums[CUSTOM_COL] += amt;
+        else sums[resolved] += amt;
+      });
+
+      var rowTotal = 0;
+      types.forEach(function(t){ rowTotal += sums[t]; });
+      rowTotal += sums[CUSTOM_COL];
+
+      // Keep all employees in export; printing will optionally hide zero columns
+      rows.push({
+        id: empId,
+        name: empName,
+        sums: sums,
+        total: rowTotal
+      });
+
+      types.forEach(function(t){ totals[t] += sums[t]; });
+      totals[CUSTOM_COL] += sums[CUSTOM_COL];
+    });
+
+    // Compute grand total
+    var grandTotal = 0;
+    types.forEach(function(t){ grandTotal += totals[t]; });
+    grandTotal += totals[CUSTOM_COL];
+
+    return {
+      periodKey: (typeof periodKey === 'function' ? periodKey() : ''),
+      start: (window.weekStartEl && weekStartEl.value) ? weekStartEl.value : '',
+      end: (window.weekEndEl && weekEndEl.value) ? weekEndEl.value : '',
+      types: types,
+      customCol: CUSTOM_COL,
+      totals: totals,
+      grandTotal: grandTotal,
+      rows: rows
+    };
+  }
+
+  function od_getPrintableTypes(pivot){
+    var types = [];
+    (pivot.types || []).forEach(function(t){
+      if ((pivot.totals && pivot.totals[t]) ? Number(pivot.totals[t]) !== 0 : false) types.push(t);
+    });
+    var includeCustom = pivot.totals && Number(pivot.totals[pivot.customCol]) !== 0;
+    return { types: types, includeCustom: includeCustom };
+  }
+
+  function od_openPrint(pivot, orientation){
+    var printable = od_getPrintableTypes(pivot);
+    var types = printable.types;
+    var includeCustom = printable.includeCustom;
+
+    // If nothing to print (no values at all), alert
+    var anyValue = false;
+    for (var i=0;i<types.length;i++){ if (Number(pivot.totals[types[i]]||0) !== 0) { anyValue=true; break; } }
+    if (!anyValue && includeCustom && Number(pivot.totals[pivot.customCol]||0)!==0) anyValue = true;
+    if (!anyValue){
+      alert('No Other Deductions values to print for this period.');
+      return;
+    }
+
+    var colCount = 2 + types.length + (includeCustom ? 1 : 0) + 1; // ID+Name + types + custom + Total
+    var fontSize = (colCount > 10) ? 8 : 9;
+    var headerSize = 12;
+
+    var title = 'Other Deductions Pivot Report';
+    var periodText = (pivot.start && pivot.end) ? (pivot.start + ' to ' + pivot.end) : pivot.periodKey;
+    var generated = new Date().toLocaleString();
+
+    var html = '';
+    html += '<!doctype html><html><head><meta charset="utf-8">';
+    html += '<title>'+title+'</title>';
+    html += '<style>';
+    html += '@page{size:Letter portrait;margin:0.5in;}';
+    html += 'body{font-family:Arial, sans-serif;color:#000;}';
+    html += '.hdr{margin-bottom:10px;}';
+    html += '.hdr h1{font-size:'+headerSize+'px;margin:0 0 4px 0;}';
+    html += '.hdr .meta{font-size:10px;margin:0;}';
+    html += 'table{width:100%;border-collapse:collapse;table-layout:fixed;}';
+    html += 'th,td{border:1px solid #000;padding:2px 4px;font-size:'+fontSize+'px;line-height:1.15;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}';
+    html += 'th{text-align:center;background:#f2f2f2;}';
+    html += 'td{text-align:right;}';
+    html += 'td.col-name, td.col-id{text-align:left;}';
+    html += 'tfoot td{font-weight:bold;}';
+    html += '</style></head><body>';
+    html += '<div class="hdr">';
+    html += '<h1>'+title+'</h1>';
+    html += '<p class="meta"><strong>Period:</strong> '+(periodText||'')+'</p>';
+    html += '<p class="meta"><strong>Generated:</strong> '+generated+'</p>';
+    html += '</div>';
+
+    html += '<table><thead><tr>';
+    html += '<th style="width:80px;">ID</th>';
+    html += '<th style="width:160px;">Name</th>';
+    types.forEach(function(t){ html += '<th>'+t+'</th>'; });
+    if (includeCustom) html += '<th>'+pivot.customCol+'</th>';
+    html += '<th>Total</th>';
+    html += '</tr></thead><tbody>';
+
+    pivot.rows.forEach(function(r){
+      html += '<tr>';
+      html += '<td class="col-id">'+(r.id||'')+'</td>';
+      html += '<td class="col-name">'+(r.name||'')+'</td>';
+      types.forEach(function(t){ html += '<td>'+od_formatMoney((r.sums && r.sums[t]) || 0)+'</td>'; });
+      if (includeCustom) html += '<td>'+od_formatMoney((r.sums && r.sums[pivot.customCol]) || 0)+'</td>';
+      html += '<td>'+od_formatMoney(r.total||0)+'</td>';
+      html += '</tr>';
+    });
+
+    html += '</tbody><tfoot><tr>';
+    html += '<td colspan="2" class="col-name">TOTAL</td>';
+    types.forEach(function(t){ html += '<td>'+od_formatMoney((pivot.totals && pivot.totals[t]) || 0)+'</td>'; });
+    if (includeCustom) html += '<td>'+od_formatMoney((pivot.totals && pivot.totals[pivot.customCol]) || 0)+'</td>';
+    html += '<td>'+od_formatMoney(pivot.grandTotal||0)+'</td>';
+    html += '</tr></tfoot></table>';
+    html += '</body></html>';
+    printReport(html, { orientation: orientation });
+  }
+
+  function od_exportExcel(pivot){
+    if (typeof XLSX === 'undefined' || !XLSX || !XLSX.utils){
+      alert('Excel library not available');
+      return;
+    }
+    var types = pivot.types || [];
+    var headers = ['Employee ID','Employee Name'].concat(types).concat([pivot.customCol,'Total']);
+    var aoa = [headers];
+
+    pivot.rows.forEach(function(r){
+      var row = [r.id || '', r.name || ''];
+      types.forEach(function(t){ row.push(Number((r.sums && r.sums[t]) || 0)); });
+      row.push(Number((r.sums && r.sums[pivot.customCol]) || 0));
+      row.push(Number(r.total || 0));
+      aoa.push(row);
+    });
+
+    // totals row
+    var totalRow = ['TOTAL',''];
+    types.forEach(function(t){ totalRow.push(Number((pivot.totals && pivot.totals[t]) || 0)); });
+    totalRow.push(Number((pivot.totals && pivot.totals[pivot.customCol]) || 0));
+    totalRow.push(Number(pivot.grandTotal || 0));
+    aoa.push(totalRow);
+    var ws = XLSX.utils.aoa_to_sheet(aoa);
+
+    // basic number formatting for amount columns
+    var range = XLSX.utils.decode_range(ws['!ref'] || 'A1:A1');
+    for (var R=1; R<=range.e.r; R++){
+      for (var C=2; C<=range.e.c; C++){
+        var cellAddr = XLSX.utils.encode_cell({r:R,c:C});
+        var cell = ws[cellAddr];
+        if (cell && typeof cell.v === 'number'){
+          cell.t = 'n';
+          cell.z = '0.00';
+        }
+      }
+    }
+
+    ws['!freeze'] = { xSplit: 2, ySplit: 1 };
+    var wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Other Deductions Pivot');
+
+    var safeStart = (pivot.start || '').replace(/[^0-9\-]/g,'');
+    var safeEnd = (pivot.end || '').replace(/[^0-9\-]/g,'');
+    var fname = 'Other_Deductions_Pivot';
+    if (safeStart && safeEnd) fname += '_' + safeStart + '_to_' + safeEnd;
+    fname += '.xlsx';
+
+    XLSX.writeFile(wb, fname);
+  }
+
+  document.addEventListener('DOMContentLoaded', function(){
+    var printBtn = document.getElementById('printOtherDeductionsPivotBtn');
+    if (printBtn){
+      printBtn.addEventListener('click', function(){
+        var pivot = od_buildPivot();
+        withPrintOrientation(function(orientation){
+          od_openPrint(pivot, orientation);
+        });
+      });
+    }
+    var excelBtn = document.getElementById('exportOtherDeductionsPivotExcelBtn');
+    if (excelBtn){
+      excelBtn.addEventListener('click', function(){
+        var pivot = od_buildPivot();
+        od_exportExcel(pivot);
+      });
+    }
+  });
+})();
+
+
+
+
+// Full-featured live-reload helper for development.
+//
+// Capabilities
+// ------------
+// * Prefers WebSocket push updates (configurable endpoint) for near-instant reloads.
+// * Falls back to EventSource/SSE when WebSockets are unavailable.
+// * Falls back again to polling HEAD requests so changes are still detected in simple setups.
+// * Supports CSS hot-swapping without a full-page reload when the server notifies us which
+//   files changed (payload: { type: 'refresh-css', files: ['app.css'] }).
+// * Can be configured globally via window.__LIVE_RELOAD_CONFIG__ before this script loads.
+//
+// Minimal server contract
+// -----------------------
+//   WebSocket/SSE messages should be JSON encoded with a "type" field. Supported types:
+//     { type: 'reload', reason?: 'optional message' }              -> location.reload()
+//     { type: 'refresh-css', files?: ['relative/or/absolute.css'] } -> swap <link rel=stylesheet>
+//
+//   If you don't have a live-reload server, the polling fallback still works when the HTML file
+//   is served via HTTP(S) and responds to HEAD requests with Last-Modified or ETag headers.
+(function(){
+  try {
+    if (!/^https?:/i.test(window.location.protocol)) return; // Only when served over HTTP/S
+
+    var host = (window.location && window.location.hostname) || '';
+    var isLoopback = host === 'localhost' || host === '127.0.0.1' || host === '::1' || host === '[::1]';
+    var isPrivateIp = /^10\./.test(host) || /^192\.168\./.test(host) || /^172\.(1[6-9]|2\d|3[0-1])\./.test(host);
+    var isDevLike = isLoopback || isPrivateIp || /\.local(?:domain)?$/i.test(host) || /\.test$/i.test(host);
+    if (!isDevLike) return; // Avoid connecting to live-reload endpoints on public hosts (e.g. GitHub Pages)
+
+    var cfg = window.__LIVE_RELOAD_CONFIG__ || {};
+    var logEnabled = !cfg.quiet;
+
+    function log(){
+      if (!logEnabled || !window.console) return;
+      try {
+        var args = Array.prototype.slice.call(arguments);
+        args.unshift('[live-reload]');
+        console.log.apply(console, args);
+      } catch (e) {}
+    }
+
+    function reloadPage(reason){
+      try {
+        if (reason) log('Reloading:', reason);
+        (function(){
+      try {
+        if (typeof window.reRenderAll === 'function') { window.reRenderAll(); return; }
+        if (typeof window.renderHistory === 'function') { try { window.renderHistory(); } catch(e){} }
+      } catch(e) {}
+      try { window.location.reload(); } catch(e) {}
+    })()
+      } catch (e) {
+        log('Reload failed', e);
+      }
+    }
+
+    function refreshCss(files){
+      try {
+        var candidates = Array.prototype.slice.call(document.querySelectorAll('link[rel~="stylesheet"]'));
+        if (!candidates.length) { reloadPage('stylesheet update'); return; }
+
+        var normalized = null;
+        if (Array.isArray(files) && files.length){
+          normalized = files.map(function(file){
+            try {
+              var a = document.createElement('a');
+              a.href = file;
+              return a.href;
+            } catch (err) {
+              return file;
+            }
+          });
+        }
+
+        candidates.forEach(function(link){
+          try {
+            var hrefBase = link.href.split('?')[0];
+            if (normalized && normalized.length) {
+              var match = normalized.some(function(target){
+                return target === link.href || target === hrefBase;
+              });
+              if (!match) return;
+            }
+
+            var clone = link.cloneNode(true);
+            var cacheBust = 'lr=' + Date.now();
+            clone.href = hrefBase + (hrefBase.indexOf('?') >= 0 ? '&' : '?') + cacheBust;
+            clone.onload = function(){
+              try { link.remove(); } catch (err) {}
+            };
+            clone.onerror = function(){
+              try {
+                clone.remove();
+                reloadPage('stylesheet reload failed');
+              } catch (err) {}
+            };
+            link.parentNode.insertBefore(clone, link.nextSibling);
+          } catch (err) {}
+        });
+      } catch (e) {
+        reloadPage('stylesheet refresh error');
+      }
+    }
+
+    var pollUrl = cfg.pollUrl || window.location.href.split('#')[0];
+    var pollIntervalMs = typeof cfg.pollIntervalMs === 'number' ? cfg.pollIntervalMs : 2000;
+    var lastPollSignature = null;
+    var pollTimer = null;
+
+    function stopPolling(){
+      if (pollTimer){
+        try { window.clearTimeout(pollTimer); } catch (e) {}
+        pollTimer = null;
+      }
+    }
+
+    function schedulePoll(){
+      stopPolling();
+      try {
+        pollTimer = window.setTimeout(checkForUpdate, pollIntervalMs);
+      } catch (e) {}
+    }
+
+    function checkForUpdate(){
+      try {
+        if (!window.fetch) { schedulePoll(); return; }
+        fetch(pollUrl, { method: 'HEAD', cache: 'no-store' })
+          .then(function(resp){
+            if (!resp || !resp.ok) { schedulePoll(); return; }
+            var signature = resp.headers.get('last-modified') || resp.headers.get('etag');
+            if (!signature) { schedulePoll(); return; }
+            if (!lastPollSignature) {
+              lastPollSignature = signature;
+              schedulePoll();
+              return;
+            }
+            if (signature !== lastPollSignature) {
+              reloadPage('file change detected via polling');
+            } else {
+              schedulePoll();
+            }
+          })
+          .catch(function(){ schedulePoll(); });
+      } catch (e) {
+        schedulePoll();
+      }
+    }
+
+    function startPollingFallback(){
+      log('Polling for changes every', pollIntervalMs + 'ms');
+      schedulePoll();
+    }
+
+    var retryTimer = null;
+    function scheduleRetry(nextFn){
+      try {
+        if (retryTimer) window.clearTimeout(retryTimer);
+        retryTimer = window.setTimeout(nextFn, cfg.retryDelayMs || 3000);
+      } catch (e) {
+        try { nextFn(); } catch (err) {}
+      }
+    }
+
+    function handleMessage(data){
+      try {
+        if (!data) return;
+        var payload = typeof data === 'string' ? JSON.parse(data) : data;
+        if (!payload || !payload.type) return;
+        if (payload.type === 'reload') {
+          reloadPage(payload.reason || 'server request');
+        } else if (payload.type === 'refresh-css') {
+          refreshCss(payload.files);
+        }
+      } catch (err) {
+        log('Failed to process message', err);
+      }
+    }
+
+    function startEventSource(){
+      if (!window.EventSource) {
+        startPollingFallback();
+        return;
+      }
+
+      var esUrl = cfg.eventSourceUrl;
+      if (!esUrl){
+        var path = cfg.eventSourcePath || '/__live_reload/events';
+        esUrl = window.location.origin + path;
+      }
+
+      log('Connecting to EventSource', esUrl);
+      try {
+        var es = new EventSource(esUrl);
+        es.onmessage = function(evt){ handleMessage(evt && evt.data); };
+        es.onerror = function(){
+          log('EventSource error, falling back to polling');
+          try { es.close(); } catch (e) {}
+          startPollingFallback();
+        };
+      } catch (err) {
+        log('EventSource setup failed, falling back to polling');
+        startPollingFallback();
+      }
+    }
+
+    function startWebSocket(){
+      if (!window.WebSocket) {
+        startEventSource();
+        return;
+      }
+
+      var wsUrl = cfg.websocketUrl;
+      if (!wsUrl){
+        var wsProto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        var wsPath = cfg.websocketPath || '/__live_reload';
+        wsUrl = wsProto + '//' + window.location.host + wsPath;
+      }
+
+      log('Connecting to WebSocket', wsUrl);
+      try {
+        var ws = new WebSocket(wsUrl);
+        ws.onopen = function(){ log('WebSocket connected'); };
+        ws.onmessage = function(evt){ handleMessage(evt && evt.data); };
+        ws.onerror = function(){ log('WebSocket error'); };
+        ws.onclose = function(){
+          log('WebSocket closed, retrying via EventSource');
+          scheduleRetry(startEventSource);
+        };
+      } catch (err) {
+        log('WebSocket setup failed, trying EventSource');
+        startEventSource();
+      }
+    }
+
+    startWebSocket();
+
+    // Safety net: if neither WS nor SSE succeed within ~1s, ensure polling is running.
+    try {
+      window.setTimeout(function(){
+        if (!lastPollSignature && !pollTimer) {
+          startPollingFallback();
+        }
+      }, 1000);
+    } catch (e) {}
+  } catch (e) {}
+})();
+
+
+
+// === Audit tab (finalized periods): load + verify hash + view stored snapshot segments ===
+(function(){
+  function $(id){ return document.getElementById(id); }
+
+  function setStatus(msg, isErr){
+    const el = $('auditStatus');
+    if (!el) return;
+    el.textContent = msg || '';
+    el.style.color = isErr ? '#b91c1c' : '#64748b';
+  }
+
+  function setInfo(html){
+    const el = $('auditInfo');
+    if (!el) return;
+    el.innerHTML = html || '';
+  }
+
+  function resetAuditTabs(){
+    const tabs = $('auditTabs');
+    if (tabs) {
+      tabs.innerHTML = '';
+      tabs.style.display = 'none';
+    }
+  }
+
+  function setActiveSnapshotTab(periodKey){
+    const tabs = $('auditSnapshotTabs');
+    if (!tabs) return;
+    tabs.querySelectorAll('.tab-btn').forEach(btn=>{
+      const active = btn.dataset.period === periodKey;
+      btn.classList.toggle('active', active);
+      btn.setAttribute('aria-selected', active ? 'true' : 'false');
+    });
+  }
+
+  function renderSnapshotSubtabs(idx){
+    const tabs = $('auditSnapshotTabs');
+    if (!tabs) return;
+    tabs.innerHTML = '';
+    const rows = Array.isArray(idx) ? idx : [];
+
+    if (!rows.length) {
+      tabs.style.display = 'none';
+      return;
+    }
+
+    rows.forEach((item, i)=>{
+      const s = item.startDate || '';
+      const e = item.endDate || '';
+      if (!s || !e) return;
+      const periodKey = s + '|' + e;
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'tab-btn' + (i === 0 ? ' active' : '');
+      btn.dataset.period = periodKey;
+      btn.textContent = s + ' to ' + e;
+      btn.setAttribute('aria-selected', i === 0 ? 'true' : 'false');
+      btn.addEventListener('click', async ()=>{
+        const sel = $('auditPeriodSelect');
+        if (sel) sel.value = periodKey;
+        setActiveSnapshotTab(periodKey);
+        await showSelectedManifest();
+        await auditLoadSnapshot();
+      });
+      tabs.appendChild(btn);
+    });
+
+    tabs.style.display = 'flex';
+  }
+
+  function setActiveAuditSubtab(name){
+    const cont = $('auditContainer');
+    const tabs = $('auditTabs');
+    if (!cont || !tabs) return;
+
+    tabs.querySelectorAll('.tab-btn').forEach(btn=>{
+      const active = btn.dataset.seg === name;
+      btn.classList.toggle('active', active);
+      btn.setAttribute('aria-selected', active ? 'true' : 'false');
+    });
+
+    cont.querySelectorAll('[data-audit-segment]').forEach(card=>{
+      card.style.display = (card.dataset.auditSegment === name) ? '' : 'none';
+    });
+  }
+
+  function renderAuditSubtabs(segNames){
+    const tabs = $('auditTabs');
+    if (!tabs) return;
+    tabs.innerHTML = '';
+
+    if (!Array.isArray(segNames) || !segNames.length) {
+      tabs.style.display = 'none';
+      return;
+    }
+
+    segNames.forEach((name, idx)=>{
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'tab-btn' + (idx === 0 ? ' active' : '');
+      btn.dataset.seg = name;
+      btn.setAttribute('aria-selected', idx === 0 ? 'true' : 'false');
+      btn.textContent = name;
+      btn.addEventListener('click', ()=>setActiveAuditSubtab(name));
+      tabs.appendChild(btn);
+    });
+
+    tabs.style.display = 'flex';
+  }
+
+  function fmtStamp(iso){
+    if (!iso) return '';
+    try { return new Date(iso).toLocaleString(); } catch(e){ return String(iso); }
+  }
+
+  async function loadAuditIndex(){
+    const sel = $('auditPeriodSelect');
+    if (!sel) return [];
+    sel.innerHTML = '';
+
+    let idx = [];
+    try {
+      if (typeof window.readSnapshotIndex === 'function') idx = await window.readSnapshotIndex();
+    } catch (e) {}
+    if (!Array.isArray(idx)) idx = [];
+
+    idx = idx.filter(it => it && (it.finalizedAt || it.lockedAt) && !it.voidedAt);
+
+    idx.sort((a,b)=>{
+      const as = (a.finalizedAt || a.lockedAt || a.createdAt || '');
+      const bs = (b.finalizedAt || b.lockedAt || b.createdAt || '');
+      return String(bs).localeCompare(String(as));
+    });
+
+    if (!idx.length){
+      const opt = document.createElement('option');
+      opt.value = '';
+      opt.textContent = 'No finalized snapshots found';
+      sel.appendChild(opt);
+      setStatus('No snapshots.');
+      setInfo('');
+      const pre = $('auditManifestJson'); if (pre) pre.textContent = '';
+      const cont = $('auditContainer'); if (cont) cont.innerHTML = '';
+      resetAuditTabs();
+      renderSnapshotSubtabs([]);
+      return [];
+    }
+
+    idx.forEach(item=>{
+      const s = item.startDate || '';
+      const e = item.endDate || '';
+      const opt = document.createElement('option');
+      opt.value = s + '|' + e;
+      const hash = item.auditHash || item.hash || '';
+      opt.textContent = (s && e ? (s + ' to ' + e) : (s || e || 'Period')) + (hash ? (' • ' + String(hash).slice(0,10) + '…') : '');
+      sel.appendChild(opt);
+    });
+
+    setStatus('Loaded ' + idx.length + ' snapshot(s).');
+    renderSnapshotSubtabs(idx);
+    return idx;
+  }
+
+  async function showSelectedManifest(){
+    const sel = $('auditPeriodSelect');
+    if (!sel) return;
+    const val = sel.value || '';
+    const parts = val.split('|');
+    const startDate = parts[0] || '';
+    const endDate = parts[1] || '';
+    if (!startDate || !endDate) return;
+    const periodKey = startDate + '|' + endDate;
+    setActiveSnapshotTab(periodKey);
+
+    const pre  = $('auditManifestJson');
+    const cont = $('auditContainer');
+    if (cont) cont.innerHTML = '';
+    resetAuditTabs();
+
+    let manifest = null;
+    try { if (typeof window.readSnapshotSegment === 'function') manifest = await window.readSnapshotSegment('manifest', startDate, endDate); } catch(e){}
+
+    if (!manifest) {
+      let idx = [];
+      try { idx = await window.readSnapshotIndex(); } catch(e){}
+      const entry = (Array.isArray(idx) ? idx : []).find(x => x && x.startDate === startDate && x.endDate === endDate) || {};
+      manifest = {
+        version: entry.version || 0,
+        startDate, endDate,
+        finalizedAt: entry.finalizedAt || entry.lockedAt || '',
+        rootHash: entry.auditHash || entry.hash || '',
+        note: 'Manifest not found for this period. (Older snapshot?)',
+        auditHash: entry.auditHash || '',
+        manifestHash: entry.manifestHash || '',
+        segmentCount: entry.segmentCount || 0
+      };
+    }
+
+    const hash = manifest.rootHash || manifest.auditHash || '';
+    const when = manifest.finalizedAt ? fmtStamp(manifest.finalizedAt) : '';
+    setInfo(
+      '<div><b>Period:</b> ' + startDate + ' to ' + endDate + '</div>' +
+      (when ? ('<div><b>Finalized:</b> ' + when + '</div>') : '') +
+      (hash ? ('<div><b>Root Hash:</b> <code style="font-size:12px;">' + hash + '</code></div>') : '') +
+      (manifest.segmentCount ? ('<div><b>Segments:</b> ' + manifest.segmentCount + '</div>') : '') +
+      (manifest.note ? ('<div style="margin-top:6px;color:#64748b;">' + String(manifest.note) + '</div>') : '')
+    );
+
+    if (pre) pre.textContent = JSON.stringify(manifest, null, 2);
+  }
+
+  async function auditVerify(){
+    const sel = $('auditPeriodSelect');
+    if (!sel) return;
+    const val = sel.value || '';
+    const parts = val.split('|');
+    const startDate = parts[0] || '';
+    const endDate = parts[1] || '';
+    if (!startDate || !endDate) return;
+
+    if (typeof window.verifyAuditManifestForPeriod !== 'function') {
+      setStatus('verifyAuditManifestForPeriod not available', true);
+      return;
+    }
+    setStatus('Verifying…');
+    try {
+      const res = await window.verifyAuditManifestForPeriod(startDate, endDate);
+      if (res && res.ok) setStatus('✅ Hash OK (matches manifest)');
+      else setStatus('❌ Hash FAILED: ' + ((res && res.reason) ? res.reason : 'Mismatch'), true);
+      await showSelectedManifest();
+    } catch (e) {
+      setStatus('Verify error: ' + (e && e.message ? e.message : String(e)), true);
+    }
+  }
+
+  function renderSegmentCard(name, value){
+    const card = document.createElement('div');
+    card.className = 'audit-segment-card';
+    card.dataset.auditSegment = name;
+    card.style.border = '1px solid #e2e8f0';
+    card.style.borderRadius = '12px';
+    card.style.padding = '10px';
+    card.style.background = '#fff';
+
+    const title = document.createElement('div');
+    title.className = 'audit-segment-title';
+    title.style.fontWeight = '700';
+    title.style.marginBottom = '6px';
+    title.textContent = name;
+    card.appendChild(title);
+
+    if (value && typeof value === 'object' && Array.isArray(value.headers) && Array.isArray(value.rows)) {
+      const html = (typeof window.buildTableHtml === 'function')
+        ? window.buildTableHtml(value.headers, value.rows, value.footerRow || [])
+        : '';
+      const wrap = document.createElement('div');
+      wrap.className = 'audit-segment-wrap';
+      wrap.style.overflow = 'auto';
+      wrap.innerHTML = html || '<div class="audit-table-unavailable" style="color:#64748b;font-size:12px;">(Table renderer unavailable)</div>';
+      card.appendChild(wrap);
+      return card;
+    }
+
+    if (value && typeof value === 'object' && typeof value.html === 'string') {
+      const det = document.createElement('details');
+      det.open = false;
+      const sum = document.createElement('summary');
+      sum.textContent = 'View HTML';
+      sum.style.cursor = 'pointer';
+      det.appendChild(sum);
+      const wrap = document.createElement('div');
+      wrap.className = 'audit-segment-wrap';
+      wrap.style.overflow = 'auto';
+      wrap.innerHTML = value.html;
+      det.appendChild(wrap);
+      card.appendChild(det);
+      return card;
+    }
+
+    const pre = document.createElement('pre');
+    pre.className = 'audit-raw-pre';
+    pre.style.whiteSpace = 'pre-wrap';
+    pre.style.margin = '0';
+    pre.style.fontSize = '12px';
+    pre.textContent = (typeof value === 'string') ? value : JSON.stringify(value, null, 2);
+    card.appendChild(pre);
+    return card;
+  }
+
+  async function auditLoadSnapshot(){
+    const sel = $('auditPeriodSelect');
+    const cont = $('auditContainer');
+    if (!sel || !cont) return;
+    const val = sel.value || '';
+    const parts = val.split('|');
+    const startDate = parts[0] || '';
+    const endDate = parts[1] || '';
+    if (!startDate || !endDate) return;
+
+    if (typeof window.readSnapshotSegment !== 'function') {
+      setStatus('readSnapshotSegment not available', true);
+      return;
+    }
+
+    setStatus('Loading snapshot…');
+    cont.innerHTML = '';
+
+    let manifest = null;
+    try { manifest = await window.readSnapshotSegment('manifest', startDate, endDate); } catch(e){}
+    const segNames = manifest && manifest.segmentHashes ? Object.keys(manifest.segmentHashes) : ['dtr','payroll','overtime','deductions','additionalIncome','otherDeductions','adjustments','reports','master'];
+    const rendered = [];
+
+    for (const name of segNames) {
+      try {
+        const seg = await window.readSnapshotSegment(name, startDate, endDate);
+        if (seg == null) continue;
+        cont.appendChild(renderSegmentCard(name, seg));
+        rendered.push(name);
+      } catch (e) {
+        cont.appendChild(renderSegmentCard(name, { error: (e && e.message) ? e.message : String(e) }));
+        rendered.push(name);
+      }
+    }
+
+    renderAuditSubtabs(rendered);
+    if (rendered.length) setActiveAuditSubtab(rendered[0]);
+    setStatus(rendered.length ? ('Loaded ' + rendered.length + ' segment(s).') : 'No stored segments found.');
+  }
+
+  window.renderAuditPanel = async function(){
+    const idx = await loadAuditIndex();
+    await showSelectedManifest();
+    if (idx && idx.length) await auditLoadSnapshot();
+
+    const sel = $('auditPeriodSelect');
+    if (sel && !sel.__auditWired) {
+      sel.addEventListener('change', showSelectedManifest);
+      sel.__auditWired = true;
+    }
+    const b1 = $('auditRefreshBtn');
+    const b2 = $('auditVerifyBtn');
+    const b3 = $('auditLoadBtn');
+    if (b1 && !b1.__auditWired) {
+      b1.addEventListener('click', async()=>{
+        const rows = await loadAuditIndex();
+        await showSelectedManifest();
+        if (rows && rows.length) await auditLoadSnapshot();
+      });
+      b1.__auditWired = true;
+    }
+    if (b2 && !b2.__auditWired) { b2.addEventListener('click', auditVerify); b2.__auditWired = true; }
+    if (b3 && !b3.__auditWired) { b3.addEventListener('click', auditLoadSnapshot); b3.__auditWired = true; }
+  };
+})();
