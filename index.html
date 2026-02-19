@@ -2296,12 +2296,16 @@ window.addEventListener('load', dashReports);
   #panelPayroll input.cell { width:100%;padding:4px;border:1px solid var(--border);border-radius:4px;text-align:right }
 /* === PATCH: make computed hours/rate look like plain text & non-interactive === */
 #panelPayroll input.regHrs,
-#panelPayroll input.rate {
+#panelPayroll input.rate,
+.bp-shell #panelPayroll input.regHrs,
+.bp-shell #panelPayroll input.rate {
   pointer-events: none;      /* no clicks */
-  border: none;              /* look like text */
-  background: transparent;
-  color: inherit;
-  padding: 0;
+  border: none !important;   /* look like text */
+  background: transparent !important;
+  color: inherit !important;
+  padding: 0 !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
   outline: none;
   -webkit-appearance: none;
   -moz-appearance: textfield;
@@ -2309,8 +2313,15 @@ window.addEventListener('load', dashReports);
   text-align: right;
 }
 #panelPayroll input.regHrs[disabled],
-#panelPayroll input.rate[disabled] {
-  color: inherit;            /* avoid greyed-out disabled look */
+#panelPayroll input.rate[disabled],
+.bp-shell #panelPayroll input.regHrs[disabled],
+.bp-shell #panelPayroll input.rate[disabled] {
+  color: inherit !important; /* avoid greyed-out disabled look */
+  border: none !important;
+  background: transparent !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+  opacity: 1;
 }
 /* hide number spinners where applicable */
 #panelPayroll input.regHrs::-webkit-outer-spin-button,
