@@ -10830,6 +10830,8 @@ document.addEventListener('DOMContentLoaded', () => {
   const voidReasonError = document.getElementById('voidReasonError');
   const voidCancelBtn = document.getElementById('cancelVoidPayRun');
   const voidConfirmBtn = document.getElementById('confirmVoidPayRun');
+  let isGeneratingSnapshot = false;
+  let isFinalizingSnapshot = false;
 
   const PAYROLL_LOCKS_KEY = 'payroll_lock_state';
 
@@ -12095,51 +12097,65 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Handler for Generate button: build and save a snapshot without locking
   dashGenerateBtn && dashGenerateBtn.addEventListener('click', async () => {
-    const start = dashStart && dashStart.value;
-    const end = dashEnd && dashEnd.value;
-    if (!start || !end) {
-      alert('Please select both start and end dates.');
-      return;
-    }
+    if (isGeneratingSnapshot) return;
+    isGeneratingSnapshot = true;
+    if (dashGenerateBtn) dashGenerateBtn.disabled = true;
+    try {
+      const start = dashStart && dashStart.value;
+      const end = dashEnd && dashEnd.value;
+      if (!start || !end) {
+        alert('Please select both start and end dates.');
+        return;
+      }
     // Prevent duplicate snapshots for the same date range. If any snapshot (locked or active)
     // already exists with this start/end, alert the user and skip creation. This avoids
     // double-entry payroll for the same period.
-    const exists = Array.isArray(payrollHistory) && payrollHistory.some(snap =>
-      snap && snap.startDate === start && snap.endDate === end && getSnapshotStatus(snap) !== 'voided');
-    if (exists) {
-      alert('A payroll snapshot for this date range already exists. Please choose a different range or delete the existing entry.');
-      return;
-    }
-    // Ensure all payroll values are recalculated before taking a snapshot for generation
-    try {
-      if (typeof calculateAll === 'function') {
-        calculateAll();
+      const exists = Array.isArray(payrollHistory) && payrollHistory.some(snap =>
+        snap && snap.startDate === start && snap.endDate === end && getSnapshotStatus(snap) !== 'voided');
+      if (exists) {
+        alert('A payroll snapshot for this date range already exists. Please choose a different range or delete the existing entry.');
+        return;
       }
-    } catch (e) {
-      // Suppress errors from calculateAll; snapshot will reflect current cell values
+    // Ensure all payroll values are recalculated before taking a snapshot for generation
+      try {
+        if (typeof calculateAll === 'function') {
+          calculateAll();
+        }
+      } catch (e) {
+        // Suppress errors from calculateAll; snapshot will reflect current cell values
+      }
+      const snap = await buildSnapshot(start, end);
+      if (!snap) {
+        alert('Payroll table is missing or empty.');
+        return;
+      }
+      const json = JSON.stringify(snap);
+      const hashBuffer = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(json));
+      const hashArray = Array.from(new Uint8Array(hashBuffer));
+      const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+      const now = new Date().toISOString();
+      payrollHistory.push({ startDate: start, endDate: end, rows: snap.rows, totals: snap.totals, hash: hashHex, lockedAt: now, locked: false, status: 'draft', createdAt: now });
+      saveHistory();
+      // Update both history and active payroll tables after creating a new snapshot
+      renderHistory();
+      if (typeof renderActivePayrolls === 'function') renderActivePayrolls();
+    } finally {
+      isGeneratingSnapshot = false;
+      if (dashGenerateBtn && !isSelectedPeriodLocked()) dashGenerateBtn.disabled = false;
     }
-    const snap = await buildSnapshot(start, end);
-    if (!snap) {
-      alert('Payroll table is missing or empty.');
-      return;
-    }
-    const json = JSON.stringify(snap);
-    const hashBuffer = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(json));
-    const hashArray = Array.from(new Uint8Array(hashBuffer));
-    const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
-    const now = new Date().toISOString();
-    payrollHistory.push({ startDate: start, endDate: end, rows: snap.rows, totals: snap.totals, hash: hashHex, lockedAt: now, locked: false, status: 'draft', createdAt: now });
-    saveHistory();
-    // Update both history and active payroll tables after creating a new snapshot
-    renderHistory();
-    if (typeof renderActivePayrolls === 'function') renderActivePayrolls();
   });
 
   dashLockButton && dashLockButton.addEventListener('click', async () => {
+    if (isFinalizingSnapshot) return;
+    isFinalizingSnapshot = true;
+    if (dashLockButton) dashLockButton.disabled = true;
     try {
       await Promise.resolve(lockCurrentPeriod());
     } catch (err) {
       console.warn('Finalize & Snapshot failed', err);
+    } finally {
+      isFinalizingSnapshot = false;
+      if (dashLockButton && !isSelectedPeriodLocked()) dashLockButton.disabled = false;
     }
   });
 
