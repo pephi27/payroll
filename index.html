@@ -15635,7 +15635,6 @@ rows += `<tr class="allowance">
         <button id="auditLoadBtn" type="button" class="primary">Load Snapshot</button>
         <span id="auditStatus" style="margin-left:auto;font-size:12px;color:#64748b;"></span>
       </div>
-      <div id="auditSnapshotTabs" class="tabs" style="display:none;margin-bottom:10px;"></div>
       <div id="auditInfo" style="font-size:12px;color:#64748b;margin-bottom:10px;"></div>
       <div id="auditTabs" class="tabs" style="display:none;margin-bottom:10px;"></div>
       <div id="auditContainer" style="display:flex;flex-direction:column;gap:10px;"></div>
@@ -24530,51 +24529,6 @@ document.addEventListener('DOMContentLoaded', function(){
     }
   }
 
-  function setActiveSnapshotTab(periodKey){
-    const tabs = $('auditSnapshotTabs');
-    if (!tabs) return;
-    tabs.querySelectorAll('.tab-btn').forEach(btn=>{
-      const active = btn.dataset.period === periodKey;
-      btn.classList.toggle('active', active);
-      btn.setAttribute('aria-selected', active ? 'true' : 'false');
-    });
-  }
-
-  function renderSnapshotSubtabs(idx){
-    const tabs = $('auditSnapshotTabs');
-    if (!tabs) return;
-    tabs.innerHTML = '';
-    const rows = Array.isArray(idx) ? idx : [];
-
-    if (!rows.length) {
-      tabs.style.display = 'none';
-      return;
-    }
-
-    rows.forEach((item, i)=>{
-      const s = item.startDate || '';
-      const e = item.endDate || '';
-      if (!s || !e) return;
-      const periodKey = s + '|' + e;
-      const btn = document.createElement('button');
-      btn.type = 'button';
-      btn.className = 'tab-btn' + (i === 0 ? ' active' : '');
-      btn.dataset.period = periodKey;
-      btn.textContent = s + ' to ' + e;
-      btn.setAttribute('aria-selected', i === 0 ? 'true' : 'false');
-      btn.addEventListener('click', async ()=>{
-        const sel = $('auditPeriodSelect');
-        if (sel) sel.value = periodKey;
-        setActiveSnapshotTab(periodKey);
-        await showSelectedManifest();
-        await auditLoadSnapshot();
-      });
-      tabs.appendChild(btn);
-    });
-
-    tabs.style.display = 'flex';
-  }
-
   function setActiveAuditSubtab(name){
     const cont = $('auditContainer');
     const tabs = $('auditTabs');
@@ -24649,7 +24603,6 @@ document.addEventListener('DOMContentLoaded', function(){
       const pre = $('auditManifestJson'); if (pre) pre.textContent = '';
       const cont = $('auditContainer'); if (cont) cont.innerHTML = '';
       resetAuditTabs();
-      renderSnapshotSubtabs([]);
       return [];
     }
 
@@ -24664,7 +24617,6 @@ document.addEventListener('DOMContentLoaded', function(){
     });
 
     setStatus('Loaded ' + idx.length + ' snapshot(s).');
-    renderSnapshotSubtabs(idx);
     return idx;
   }
 
@@ -24676,8 +24628,6 @@ document.addEventListener('DOMContentLoaded', function(){
     const startDate = parts[0] || '';
     const endDate = parts[1] || '';
     if (!startDate || !endDate) return;
-    const periodKey = startDate + '|' + endDate;
-    setActiveSnapshotTab(periodKey);
 
     const pre  = $('auditManifestJson');
     const cont = $('auditContainer');
@@ -24835,9 +24785,8 @@ document.addEventListener('DOMContentLoaded', function(){
   }
 
   window.renderAuditPanel = async function(){
-    const idx = await loadAuditIndex();
+    await loadAuditIndex();
     await showSelectedManifest();
-    if (idx && idx.length) await auditLoadSnapshot();
 
     const sel = $('auditPeriodSelect');
     if (sel && !sel.__auditWired) {
@@ -24847,14 +24796,7 @@ document.addEventListener('DOMContentLoaded', function(){
     const b1 = $('auditRefreshBtn');
     const b2 = $('auditVerifyBtn');
     const b3 = $('auditLoadBtn');
-    if (b1 && !b1.__auditWired) {
-      b1.addEventListener('click', async()=>{
-        const rows = await loadAuditIndex();
-        await showSelectedManifest();
-        if (rows && rows.length) await auditLoadSnapshot();
-      });
-      b1.__auditWired = true;
-    }
+    if (b1 && !b1.__auditWired) { b1.addEventListener('click', async()=>{ await loadAuditIndex(); await showSelectedManifest(); }); b1.__auditWired = true; }
     if (b2 && !b2.__auditWired) { b2.addEventListener('click', auditVerify); b2.__auditWired = true; }
     if (b3 && !b3.__auditWired) { b3.addEventListener('click', auditLoadSnapshot); b3.__auditWired = true; }
   };
