@@ -384,6 +384,25 @@
         border-color: rgba(248,113,113,0.45) !important;
         color: #fecaca !important;
       }
+
+      /* Audit panel: make generated snapshot cards/tables follow dark mode */
+      .bp-shell #panelAudit #auditInfo,
+      .bp-shell #panelAudit #auditStatus,
+      .bp-shell #panelAudit label,
+      .bp-shell #panelAudit summary,
+      .bp-shell #panelAudit .audit-segment-title,
+      .bp-shell #panelAudit .audit-raw-pre,
+      .bp-shell #panelAudit .audit-table-unavailable{
+        color: var(--bp-text) !important;
+      }
+      .bp-shell #panelAudit .audit-segment-card{
+        background: rgba(24,28,35,0.92) !important;
+        border: 1px solid var(--bp-border) !important;
+        color: var(--bp-text) !important;
+      }
+      .bp-shell #panelAudit .audit-segment-wrap code{
+        color: #bfdbfe !important;
+      }
       .bp-shell #panelProjects #projectNameInput,
       .bp-shell #panelProjects #projectCompanySelect,
       .bp-shell #panelProjects .proj-name-input,
@@ -24570,6 +24589,7 @@ document.addEventListener('DOMContentLoaded', function(){
 
   function renderSegmentCard(name, value){
     const card = document.createElement('div');
+    card.className = 'audit-segment-card';
     card.dataset.auditSegment = name;
     card.style.border = '1px solid #e2e8f0';
     card.style.borderRadius = '12px';
@@ -24577,6 +24597,7 @@ document.addEventListener('DOMContentLoaded', function(){
     card.style.background = '#fff';
 
     const title = document.createElement('div');
+    title.className = 'audit-segment-title';
     title.style.fontWeight = '700';
     title.style.marginBottom = '6px';
     title.textContent = name;
@@ -24587,8 +24608,9 @@ document.addEventListener('DOMContentLoaded', function(){
         ? window.buildTableHtml(value.headers, value.rows, value.footerRow || [])
         : '';
       const wrap = document.createElement('div');
+      wrap.className = 'audit-segment-wrap';
       wrap.style.overflow = 'auto';
-      wrap.innerHTML = html || '<div style="color:#64748b;font-size:12px;">(Table renderer unavailable)</div>';
+      wrap.innerHTML = html || '<div class="audit-table-unavailable" style="color:#64748b;font-size:12px;">(Table renderer unavailable)</div>';
       card.appendChild(wrap);
       return card;
     }
@@ -24601,6 +24623,7 @@ document.addEventListener('DOMContentLoaded', function(){
       sum.style.cursor = 'pointer';
       det.appendChild(sum);
       const wrap = document.createElement('div');
+      wrap.className = 'audit-segment-wrap';
       wrap.style.overflow = 'auto';
       wrap.innerHTML = value.html;
       det.appendChild(wrap);
@@ -24609,6 +24632,7 @@ document.addEventListener('DOMContentLoaded', function(){
     }
 
     const pre = document.createElement('pre');
+    pre.className = 'audit-raw-pre';
     pre.style.whiteSpace = 'pre-wrap';
     pre.style.margin = '0';
     pre.style.fontSize = '12px';
