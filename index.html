@@ -1034,12 +1034,12 @@ function __kvSetupRealtimeChannel(force = false) {
           const nextValue = serialized == null ? 'null' : String(serialized);
           const current = localStorage.getItem(key);
           if (nextValue !== current) {
-            try { __origSetItem.call(localStorage, key, nextValue); } catch {}
+            try { __origSetItem(key, nextValue); } catch {}
             queueHydrateRerender();
           }
         } else if (eventType === 'DELETE') {
           if (localStorage.getItem(key) !== null) {
-            try { __origRemoveItem.call(localStorage, key); } catch {}
+            try { __origRemoveItem(key); } catch {}
             queueHydrateRerender();
           }
         }
@@ -1116,8 +1116,8 @@ window.addEventListener('beforeunload', () => {
 
 if (!window.__kvSubscribed) __kvSetupRealtimeChannel();
 
-const __origSetItem = Storage.prototype.setItem
-const __origRemoveItem = Storage.prototype.removeItem
+const __origSetItem = window.localStorage.setItem.bind(window.localStorage)
+const __origRemoveItem = window.localStorage.removeItem.bind(window.localStorage)
 
 async function cloudUpsert(key, value) {
   try {
@@ -1210,26 +1210,84 @@ let __kvBypassNextSetItem = false;
 const __CLOUD_ONLY_KEYS = new Set(['payroll_loan_tracker','payroll_loan_sss','payroll_loan_pagibig','payroll_vale','payroll_vale_wed','payroll_other_deductions_details','payroll_other_deductions_total','payroll_additional_income_details','payroll_additional_income_total']);
 function __kvShouldMirror(k){ return KNOWN_KEYS.includes(k) && !__CLOUD_ONLY_KEYS.has(k); }
 
-// Write-through on any localStorage change (only after hydrate succeeds)
-Storage.prototype.setItem = function(k, v) {
-  try { __origSetItem.call(this, k, v) } catch {}
-  // Only mirror real localStorage changes (ignore sessionStorage)
-  if (this !== window.localStorage) return;
-  if (!__kvSyncEnabled) return;
-  // If this write came from writeKV's cache update, don't mirror it back to cloud (avoid double writes)
-  if (__kvBypassNextSetItem || window.__kvBypassNextSetItem) {
-    try { __kvBypassNextSetItem = false; window.__kvBypassNextSetItem = false; } catch {}
-    return;
+const store = (() => {
+  const pendingTimers = new Map();
+  const queueKey = '__payroll_sync_queue_v1';
+  const stateKey = '__payroll_sync_state_v1';
+
+  function getJSON(key, fallback = null) {
+    try {
+      const raw = window.localStorage.getItem(key);
+      return raw == null ? fallback : JSON.parse(raw);
+    } catch (_) {
+      return fallback;
+    }
   }
-  // Mirror normal keys + also mirror cloud-only keys if something still writes them via localStorage directly
-  if (__kvShouldMirror(k) || __CLOUD_ONLY_KEYS.has(k)) scheduleCloudUpsert(k, v);
-}
-Storage.prototype.removeItem = function(k) {
-  try { __origRemoveItem.call(this, k) } catch {}
-  if (this !== window.localStorage) return;
-  if (!__kvSyncEnabled) return;
-  if (__kvShouldMirror(k) || __CLOUD_ONLY_KEYS.has(k)) cloudDelete(k);
-}
+
+  function setJSON(key, value) {
+    const text = JSON.stringify(value);
+    try { __origSetItem(key, text); } catch (_) { return false; }
+    if (__kvSyncEnabled && (__kvShouldMirror(key) || __CLOUD_ONLY_KEYS.has(key))) {
+      scheduleCloudUpsert(key, text);
+    }
+    return true;
+  }
+
+  function update(key, fn, fallback = null) {
+    const current = getJSON(key, fallback);
+    const next = fn(current);
+    setJSON(key, next);
+    return next;
+  }
+
+  function debouncedSave(key, value, wait = 500) {
+    if (pendingTimers.has(key)) window.clearTimeout(pendingTimers.get(key));
+    pendingTimers.set(key, window.setTimeout(() => {
+      pendingTimers.delete(key);
+      setJSON(key, value);
+    }, Math.max(300, Math.min(800, Number(wait) || 500))));
+  }
+
+  function enqueueSync(change) {
+    const queue = getJSON(queueKey, []);
+    queue.push({ ...change, ts: change && change.ts ? change.ts : new Date().toISOString() });
+    setJSON(queueKey, queue);
+    const syncState = getJSON(stateKey, {});
+    syncState.pendingCount = queue.length;
+    setJSON(stateKey, syncState);
+  }
+
+  async function flushSync() {
+    const queue = getJSON(queueKey, []);
+    if (!Array.isArray(queue) || !queue.length) return { ok: true, conflict: false };
+    for (let i = 0; i < queue.length; i += 1) {
+      const change = queue[i];
+      const nextVersion = Number(change.expected_version) + 1;
+      const { data, error } = await supabase
+        .from('payroll_period_segments')
+        .update({ data: change.new_data, version: nextVersion, updated_at: new Date().toISOString() })
+        .eq('period_id', change.period_id)
+        .eq('segment_key', change.segment_key)
+        .eq('version', Number(change.expected_version))
+        .select('version');
+      if (error) return { ok: false, conflict: false, error };
+      if (!data || !data.length) { const st = getJSON(stateKey, {}); st.conflict = true; setJSON(stateKey, st); return { ok: false, conflict: true }; }
+      queue.shift();
+      setJSON(queueKey, queue);
+    }
+    const syncState = getJSON(stateKey, {});
+    syncState.pendingCount = 0;
+    syncState.conflict = false;
+    syncState.lastPushAt = new Date().toISOString();
+    setJSON(stateKey, syncState);
+    return { ok: true, conflict: false };
+  }
+
+  return { getJSON, setJSON, update, debouncedSave, enqueueSync, flushSync };
+})();
+
+window.store = store;
+window.addEventListener('beforeunload', () => { __kvFlushUpsertQueue(true).catch(() => {}); });
 
 async function __kvHydrateOnce(){
   try {
@@ -1285,7 +1343,7 @@ async function __kvHydrateOnce(){
 
       if (cloudStr != null && cloudStr !== cur) {
         // Important: write using the original setItem to avoid triggering mirroring back to cloud.
-        try { __origSetItem.call(localStorage, k, cloudStr); } catch {}
+        try { __origSetItem(k, cloudStr); } catch {}
         changed = true;
       }
     }
@@ -3076,7 +3134,11 @@ window.addEventListener('load', dashReports);
           <button id="newPayrollPeriod" type="button" class="date-input">New period</button>
           <button id="lockSnapshotBtn" type="button" class="date-input">Finalize &amp; Snapshot</button>
           <button id="voidPayRunBtn" type="button" class="date-input" disabled>Void Pay Run</button>
+          <span id="syncStatusBadge" style="font-size:12px;color:#0f172a;font-weight:600;">Synced</span>
           <span id="dashLockStatus" style="display:none;font-size:12px;color:#111827;font-weight:600;"></span>
+        </div>
+        <div id="syncConflictBanner" style="display:none;margin-top:8px;padding:8px 10px;border:1px solid #fecaca;background:#fef2f2;color:#991b1b;border-radius:8px;font-size:12px;">
+          Conflict detected. <button type="button" id="reloadFromCloudBtn" class="date-input" style="padding:4px 8px;">Reload from cloud</button>
         </div>
         <!-- New Period Modal (pre-rendered for instant open) -->
         <style>
@@ -10813,6 +10875,59 @@ document.addEventListener('DOMContentLoaded', () => {
   // append to it directly. Without this, new snapshots added via custom UI would only update
   // localStorage and would not appear in the current session until a full page reload.
   window.payrollHistory = payrollHistory;
+
+  const PERIOD_META_KEY = 'payroll_period_meta_v1';
+  const PERIOD_SEGMENTS_KEY = 'payroll_period_segments_local_v1';
+  const PERIOD_SNAPSHOTS_KEY = 'payroll_period_snapshots_v1';
+  const PERIOD_STATUSES = { DRAFT:'DRAFT', FINALIZED:'FINALIZED', VOIDED:'VOIDED' };
+  const appState = {
+    activePeriodId: '',
+    localSegments: {},
+    periodMeta: {},
+    syncQueue: [],
+    syncStatus: { lastPullAt:'', lastPushAt:'', pendingCount:0, conflict:false }
+  };
+  try { window.appState = appState; } catch(_) {}
+
+  function periodIdFromRange(start, end){ return (start && end) ? `${start}|${end}` : ''; }
+  function getPeriodMeta(periodId){
+    const all = (window.store && window.store.getJSON(PERIOD_META_KEY, {})) || {};
+    return all[periodId] || { status: PERIOD_STATUSES.DRAFT, head_version: 1, label: periodId, updated_at: new Date().toISOString() };
+  }
+  function setPeriodMeta(periodId, patch){
+    if (!periodId) return;
+    const all = (window.store && window.store.getJSON(PERIOD_META_KEY, {})) || {};
+    const prev = all[periodId] || { status: PERIOD_STATUSES.DRAFT, head_version: 1, label: periodId };
+    const next = { ...prev, ...patch, head_version: (Number(prev.head_version)||1) + 1, updated_at: new Date().toISOString() };
+    all[periodId] = next;
+    if (window.store) window.store.setJSON(PERIOD_META_KEY, all);
+    appState.periodMeta[periodId] = next;
+    return next;
+  }
+  function getSnapshotsStore(){ return (window.store && window.store.getJSON(PERIOD_SNAPSHOTS_KEY, [])) || []; }
+  function setSnapshotsStore(rows){ if (window.store) window.store.setJSON(PERIOD_SNAPSHOTS_KEY, rows); }
+  function snapshotsForPeriod(periodId){ return getSnapshotsStore().filter(r => r && r.period_id === periodId); }
+  function nextRevision(periodId){
+    const rows = snapshotsForPeriod(periodId);
+    return rows.reduce((m,r)=>Math.max(m, Number(r.revision)||0), 0) + 1;
+  }
+  function canonicalize(obj){
+    const norm = (v) => {
+      if (Array.isArray(v)) return v.map(norm);
+      if (v && typeof v === 'object') {
+        return Object.keys(v).sort().reduce((acc,k)=>{ acc[k]=norm(v[k]); return acc; },{});
+      }
+      return v;
+    };
+    return JSON.stringify(norm(obj));
+  }
+  async function sha256Hex(str){
+    const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(String(str||'')));
+    return Array.from(new Uint8Array(buf)).map(b=>b.toString(16).padStart(2,'0')).join('');
+  }
+  async function computeSnapshotHash(snapshotObj){ return sha256Hex(canonicalize(snapshotObj)); }
+  try { window.computeSnapshotHash = computeSnapshotHash; } catch(_) {}
+
   // Grab references to dashboard elements
   // Use the global weekStart/weekEnd inputs instead of the removed dashStartDate/dashEndDate fields.
   const dashStart = document.getElementById('weekStart');
@@ -11387,9 +11502,21 @@ document.addEventListener('DOMContentLoaded', () => {
     return { snap, index: payrollHistory.indexOf(snap) };
   }
 
-  function voidSnapshot(snap, reason) {
+  async function voidSnapshot(snap, reason) {
     if (!snap) return;
     const now = new Date().toISOString();
+    const periodId = periodIdFromRange(snap.startDate, snap.endDate);
+    const meta = getPeriodMeta(periodId);
+    if (meta.status !== PERIOD_STATUSES.FINALIZED) {
+      alert('Only FINALIZED period can be voided.');
+      return;
+    }
+    const flush = window.store ? await window.store.flushSync() : { ok: true, conflict: false };
+    if (!flush.ok) {
+      alert(flush.conflict ? 'Conflict detected; reload period before voiding.' : 'Sync failed; check connection.');
+      return;
+    }
+
     snap.status = 'voided';
     snap.voidedAt = now;
     snap.voidedBy = snap.voidedBy || 'admin';
@@ -11397,6 +11524,29 @@ document.addEventListener('DOMContentLoaded', () => {
     snap.locked = true;
     snap.finalized = true;
     clearPeriodLockEntry(snap.startDate, snap.endDate);
+
+    const snapData = { startDate: snap.startDate, endDate: snap.endDate, rows: snap.rows || [], totals: snap.totals || {}, reason };
+    const revision = nextRevision(periodId);
+    const snapshotRow = {
+      snapshot_id: (crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`),
+      period_id: periodId,
+      revision,
+      created_at: now,
+      created_by: 'admin',
+      status: PERIOD_STATUSES.VOIDED,
+      snapshot_data: snapData,
+      snapshot_hash: await computeSnapshotHash(snapData),
+      note: reason
+    };
+    const allSnapshots = getSnapshotsStore();
+    allSnapshots.push(snapshotRow);
+    setSnapshotsStore(allSnapshots);
+    setPeriodMeta(periodId, { status: PERIOD_STATUSES.VOIDED, label: `${snap.startDate} to ${snap.endDate}` });
+    try {
+      await supabase.from('payroll_period_snapshots').insert(snapshotRow);
+      await supabase.from('payroll_periods').upsert({ id: periodId, label: `${snap.startDate} to ${snap.endDate}`, status: PERIOD_STATUSES.VOIDED, updated_at: now });
+    } catch (e) { console.warn('void snapshot sync failed', e); }
+
     saveHistory();
     if (typeof renderHistory === 'function') renderHistory();
     if (typeof renderActivePayrolls === 'function') renderActivePayrolls();
@@ -11411,32 +11561,23 @@ document.addEventListener('DOMContentLoaded', () => {
       alert('Please select both start and end dates.');
       return;
     }
-    const existingLock = getLockEntry(start, end);
-    if (existingLock?.locked) {
-      const latestFinalized = findHistorySnapshot(start, end);
-      if (latestFinalized && !isSnapshotVoided(latestFinalized)) {
-        applyLockUI();
-        return;
-      }
-      const latestIncludingVoided = findLatestSnapshotForPeriod(start, end, { includeVoided: true });
-      if (latestIncludingVoided && isSnapshotVoided(latestIncludingVoided)) {
-        clearPeriodLockEntry(start, end);
-      } else {
-        applyLockUI();
-        return;
-      }
+    const periodId = periodIdFromRange(start, end);
+    const currentMeta = getPeriodMeta(periodId);
+    if (currentMeta.status !== PERIOD_STATUSES.DRAFT) {
+      alert('Only DRAFT can be finalized');
+      return;
     }
+
+    const flush = window.store ? await window.store.flushSync() : { ok: true, conflict: false };
+    if (!flush.ok) {
+      alert(flush.conflict ? 'Conflict detected; reload period before finalizing.' : 'Sync failed; check connection.');
+      return;
+    }
+
     await finalizeCashAdvancesForPeriod(start, end);
-    try {
-      if (typeof calculateAll === 'function') {
-        await Promise.resolve(calculateAll());
-      }
-    } catch (err) {}
-    try {
-      if (typeof updatePayrollGrandTotals === 'function') {
-        updatePayrollGrandTotals();
-      }
-    } catch (err) {}
+    try { if (typeof calculateAll === 'function') await Promise.resolve(calculateAll()); } catch (err) {}
+    try { if (typeof updatePayrollGrandTotals === 'function') updatePayrollGrandTotals(); } catch (err) {}
+
     const snapshot = await buildSnapshot(start, end);
     if (!snapshot || !Array.isArray(snapshot.rows) || !snapshot.rows.length) {
       alert('Payroll table is missing or empty.');
@@ -11444,44 +11585,53 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     const lockedAt = new Date().toISOString();
-
-    // Audit-grade hash: includes DTR + payroll + all payroll subtabs + reports segments.
     let hashHex = '';
     let auditMeta = {};
     try {
       const audit = await buildAndPersistAuditManifestForPeriod(start, end, lockedAt);
       if (audit && audit.rootHash) hashHex = audit.rootHash;
       auditMeta = audit && typeof audit === 'object' ? {
-        auditHash: audit.rootHash || '',
-        manifestHash: audit.manifestHash || '',
-        segmentCount: audit.segmentCount || 0,
-        version: audit.version || 1
+        auditHash: audit.rootHash || '', manifestHash: audit.manifestHash || '', segmentCount: audit.segmentCount || 0, version: audit.version || 1
       } : {};
-    } catch (err) {
-      // Fallback: payroll-only hash + segment persistence (best-effort)
-      try {
-        const payload = JSON.stringify({
-          startDate: start,
-          endDate: end,
-          rows: snapshot.rows,
-          totals: snapshot.totals,
-          divisor: snapshot.divisor,
-          settings: snapshot.settings || {}
-        });
-        const hashBuffer = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(payload));
-        const hashArray = Array.from(new Uint8Array(hashBuffer));
-        hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
-      } catch (_) {
-        hashHex = '';
-      }
-      try { await persistSnapshotSegmentsForPeriod(start, end); } catch (_) {}
-    }
+    } catch (err) {}
+
+    const revision = nextRevision(periodId);
+    const snapshotPayload = {
+      period_id: periodId,
+      period_label: `${start} to ${end}`,
+      revision_candidate: revision,
+      created_at: lockedAt,
+      segments: {
+        payroll: { rows: snapshot.rows, totals: snapshot.totals, divisor: snapshot.divisor, settings: snapshot.settings || {} }
+      },
+      period_meta: { status: PERIOD_STATUSES.FINALIZED, head_version: (Number(currentMeta.head_version)||1) + 1 }
+    };
+    const computedHash = await computeSnapshotHash(snapshotPayload);
+    if (!hashHex) hashHex = computedHash;
+
+    const snapshotRow = {
+      snapshot_id: (crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`),
+      period_id: periodId,
+      revision,
+      created_at: lockedAt,
+      created_by: 'admin',
+      status: PERIOD_STATUSES.FINALIZED,
+      snapshot_data: snapshotPayload,
+      snapshot_hash: hashHex,
+      note: ''
+    };
+
+    const allSnapshots = getSnapshotsStore();
+    allSnapshots.push(snapshotRow);
+    setSnapshotsStore(allSnapshots);
+    setPeriodMeta(periodId, { status: PERIOD_STATUSES.FINALIZED, label: `${start} to ${end}` });
 
     try {
-      await upsertSnapshotIndexEntry(start, end, { finalizedAt: lockedAt, hash: hashHex, ...(auditMeta || {}) });
-    } catch (err) {
-      console.warn('Snapshot index update failed', err);
-    }
+      await supabase.from('payroll_period_snapshots').insert(snapshotRow);
+      await supabase.from('payroll_periods').upsert({ id: periodId, label: `${start} to ${end}`, status: PERIOD_STATUSES.FINALIZED, updated_at: lockedAt });
+    } catch (e) { console.warn('finalize cloud sync failed', e); }
+
+    try { await upsertSnapshotIndexEntry(start, end, { finalizedAt: lockedAt, hash: hashHex, revision, status: PERIOD_STATUSES.FINALIZED, ...(auditMeta || {}) }); } catch (err) { console.warn('Snapshot index update failed', err); }
 
     let existing = findLatestSnapshotForPeriod(start, end, { onlyUnlocked: true, includeVoided: false });
     if (!existing) {
@@ -11503,6 +11653,8 @@ document.addEventListener('DOMContentLoaded', () => {
     existing.finalizedBy = existing.finalizedBy || 'admin';
     existing.finalizeNote = existing.finalizeNote || '';
     existing.status = 'finalized';
+    existing.revision = revision;
+
     saveHistory();
     if (typeof renderHistory === 'function') renderHistory();
     if (typeof renderActivePayrolls === 'function') renderActivePayrolls();
@@ -11518,17 +11670,62 @@ document.addEventListener('DOMContentLoaded', () => {
       totals: snapshot.totals,
       hash: hashHex,
       targetIndex: payrollHistory.indexOf(existing),
-      snapshot: {
-        rows: snapshot.rows,
-        totals: snapshot.totals,
-        divisor: snapshot.divisor,
-        settings: snapshot.settings || {},
-        hash: hashHex
-      }
+      snapshot: { rows: snapshot.rows, totals: snapshot.totals, divisor: snapshot.divisor, settings: snapshot.settings || {}, hash: hashHex }
     });
     applySnapshotToPayrollTable(existing);
     applyLockUI();
   }
+
+
+  function updateSyncStatusUI(){
+    const badge = document.getElementById('syncStatusBadge');
+    const banner = document.getElementById('syncConflictBanner');
+    if (!badge) return;
+    const q = (window.store && window.store.getJSON('__payroll_sync_queue_v1', [])) || [];
+    const state = (window.store && window.store.getJSON('__payroll_sync_state_v1', {})) || {};
+    if (state.conflict) {
+      badge.textContent = 'Conflict';
+      badge.style.color = '#b91c1c';
+      if (banner) banner.style.display = '';
+    } else if (q.length > 0) {
+      badge.textContent = `Pending ${q.length}`;
+      badge.style.color = '#92400e';
+      if (banner) banner.style.display = 'none';
+    } else {
+      badge.textContent = 'Synced';
+      badge.style.color = '#166534';
+      if (banner) banner.style.display = 'none';
+    }
+  }
+
+  async function pollPeriodSync(){
+    const { start, end } = getCurrentPeriodRange();
+    const periodId = periodIdFromRange(start, end);
+    if (!periodId || !window.supabase) return;
+    try {
+      const localMeta = getPeriodMeta(periodId);
+      const { data: periodRow } = await supabase.from('payroll_periods').select('id,status,head_version,updated_at').eq('id', periodId).maybeSingle();
+      if (periodRow && periodRow.status && periodRow.status !== localMeta.status) {
+        setPeriodMeta(periodId, { status: periodRow.status, label: `${start} to ${end}` });
+        if (periodRow.status !== PERIOD_STATUSES.DRAFT) disablePayrollInputs();
+      }
+    } catch (e) {}
+    updateSyncStatusUI();
+  }
+
+  document.getElementById('reloadFromCloudBtn')?.addEventListener('click', async () => {
+    const ok = confirm('Discard pending local changes for conflicted period and reload from cloud?');
+    if (!ok) return;
+    if (window.store) {
+      window.store.setJSON('__payroll_sync_queue_v1', []);
+      window.store.setJSON('__payroll_sync_state_v1', { conflict: false, pendingCount: 0, lastPullAt: new Date().toISOString() });
+    }
+    await pollPeriodSync();
+    location.reload();
+  });
+
+  window.setInterval(pollPeriodSync, 20000);
+  pollPeriodSync();
 
   if (dashStart) {
     dashStart.addEventListener('change', () => { checkAndToggleEditState(); });
@@ -12170,7 +12367,7 @@ document.addEventListener('DOMContentLoaded', () => {
     });
     voidCancelBtn && voidCancelBtn.addEventListener('click', () => closeVoidModal());
     voidReasonInput && voidReasonInput.addEventListener('input', updateVoidConfirmState);
-    voidConfirmBtn && voidConfirmBtn.addEventListener('click', () => {
+    voidConfirmBtn && voidConfirmBtn.addEventListener('click', async () => {
       const reason = (voidReasonInput && voidReasonInput.value ? voidReasonInput.value.trim() : '');
       if (!reason) {
         updateVoidConfirmState();
@@ -12186,7 +12383,7 @@ document.addEventListener('DOMContentLoaded', () => {
         closeVoidModal();
         return;
       }
-      voidSnapshot(resolved.snap, reason);
+      await voidSnapshot(resolved.snap, reason);
       closeVoidModal();
     });
     voidModal.addEventListener('keydown', (ev) => {
@@ -24494,15 +24691,29 @@ document.addEventListener('DOMContentLoaded', function(){
 
     let idx = [];
     try {
-      if (typeof window.readSnapshotIndex === 'function') idx = await window.readSnapshotIndex();
+      const revRows = (window.store && window.store.getJSON('payroll_period_snapshots_v1', [])) || [];
+      idx = revRows.map(r => ({
+        startDate: (r.period_id || '').split('|')[0] || '',
+        endDate: (r.period_id || '').split('|')[1] || '',
+        revision: r.revision || 1,
+        status: r.status || 'FINALIZED',
+        finalizedAt: r.created_at || '',
+        hash: r.snapshot_hash || '',
+        period_id: r.period_id || '',
+        snapshot_data: r.snapshot_data || null
+      }));
     } catch (e) {}
+
+    if (!Array.isArray(idx) || !idx.length) {
+      try { if (typeof window.readSnapshotIndex === 'function') idx = await window.readSnapshotIndex(); } catch (e) {}
+    }
     if (!Array.isArray(idx)) idx = [];
 
-    idx = idx.filter(it => it && (it.finalizedAt || it.lockedAt) && !it.voidedAt);
+    idx = idx.filter(it => it && (it.finalizedAt || it.lockedAt || it.created_at));
 
     idx.sort((a,b)=>{
-      const as = (a.finalizedAt || a.lockedAt || a.createdAt || '');
-      const bs = (b.finalizedAt || b.lockedAt || b.createdAt || '');
+      const as = (a.finalizedAt || a.lockedAt || a.createdAt || a.created_at || '');
+      const bs = (b.finalizedAt || b.lockedAt || b.createdAt || b.created_at || '');
       return String(bs).localeCompare(String(as));
     });
 
@@ -24523,9 +24734,11 @@ document.addEventListener('DOMContentLoaded', function(){
       const s = item.startDate || '';
       const e = item.endDate || '';
       const opt = document.createElement('option');
-      opt.value = s + '|' + e;
+      const rev = item.revision || 1;
+      opt.value = [s,e,rev].join('|');
       const hash = item.auditHash || item.hash || '';
-      opt.textContent = (s && e ? (s + ' to ' + e) : (s || e || 'Period')) + (hash ? (' • ' + String(hash).slice(0,10) + '…') : '');
+      const status = item.status || 'FINALIZED';
+      opt.textContent = (s && e ? (s + ' to ' + e) : (s || e || 'Period')) + ` • Rev ${rev} • ${status}` + (hash ? (' • ' + String(hash).slice(0,10) + '…') : '');
       sel.appendChild(opt);
     });
 
@@ -24540,6 +24753,7 @@ document.addEventListener('DOMContentLoaded', function(){
     const parts = val.split('|');
     const startDate = parts[0] || '';
     const endDate = parts[1] || '';
+    const revision = Number(parts[2] || '1');
     if (!startDate || !endDate) return;
 
     const pre  = $('auditManifestJson');
@@ -24553,7 +24767,7 @@ document.addEventListener('DOMContentLoaded', function(){
     if (!manifest) {
       let idx = [];
       try { idx = await window.readSnapshotIndex(); } catch(e){}
-      const entry = (Array.isArray(idx) ? idx : []).find(x => x && x.startDate === startDate && x.endDate === endDate) || {};
+      const entry = (Array.isArray(idx) ? idx : []).find(x => x && x.startDate === startDate && x.endDate === endDate && (!revision || Number(x.revision||1)===revision)) || {};
       manifest = {
         version: entry.version || 0,
         startDate, endDate,
@@ -24586,17 +24800,25 @@ document.addEventListener('DOMContentLoaded', function(){
     const parts = val.split('|');
     const startDate = parts[0] || '';
     const endDate = parts[1] || '';
+    const revision = Number(parts[2] || '1');
     if (!startDate || !endDate) return;
 
-    if (typeof window.verifyAuditManifestForPeriod !== 'function') {
-      setStatus('verifyAuditManifestForPeriod not available', true);
-      return;
-    }
     setStatus('Verifying…');
     try {
-      const res = await window.verifyAuditManifestForPeriod(startDate, endDate);
-      if (res && res.ok) setStatus('✅ Hash OK (matches manifest)');
-      else setStatus('❌ Hash FAILED: ' + ((res && res.reason) ? res.reason : 'Mismatch'), true);
+      const rows = (window.store && window.store.getJSON('payroll_period_snapshots_v1', [])) || [];
+      const periodId = `${startDate}|${endDate}`;
+      const row = rows.find(r => r && r.period_id === periodId && Number(r.revision||1) === revision);
+      if (row && row.snapshot_data) {
+        const computed = await (window.computeSnapshotHash ? window.computeSnapshotHash(row.snapshot_data) : Promise.resolve(''));
+        if (computed && computed === row.snapshot_hash) setStatus('✅ Verified');
+        else setStatus('❌ Mismatch', true);
+      } else if (typeof window.verifyAuditManifestForPeriod === 'function') {
+        const res = await window.verifyAuditManifestForPeriod(startDate, endDate);
+        if (res && res.ok) setStatus('✅ Hash OK (matches manifest)');
+        else setStatus('❌ Hash FAILED: ' + ((res && res.reason) ? res.reason : 'Mismatch'), true);
+      } else {
+        setStatus('No verifiable snapshot found', true);
+      }
       await showSelectedManifest();
     } catch (e) {
       setStatus('Verify error: ' + (e && e.message ? e.message : String(e)), true);
@@ -24665,6 +24887,7 @@ document.addEventListener('DOMContentLoaded', function(){
     const parts = val.split('|');
     const startDate = parts[0] || '';
     const endDate = parts[1] || '';
+    const revision = Number(parts[2] || '1');
     if (!startDate || !endDate) return;
 
     if (typeof window.readSnapshotSegment !== 'function') {
