@@ -334,6 +334,94 @@
         color: #fecaca !important;
       }
 
+      /* Settings panel: remove legacy white surfaces in dark mode */
+      .bp-shell #panelSettings .settings-section,
+      .bp-shell #panelSettings .income-type-item,
+      .bp-shell #panelSettings .deduction-type-item{
+        background: rgba(24,28,35,0.92) !important;
+        border-color: var(--bp-border) !important;
+        color: var(--bp-text) !important;
+      }
+      .bp-shell #panelSettings .settings-section h4,
+      .bp-shell #panelSettings .settings-row label,
+      .bp-shell #panelSettings .hint{
+        color: var(--bp-text) !important;
+      }
+      .bp-shell #panelSettings input[type="text"],
+      .bp-shell #panelSettings input[type="number"],
+      .bp-shell #panelSettings input[type="time"],
+      .bp-shell #panelSettings select,
+      .bp-shell #panelSettings textarea{
+        background: var(--bp-surface2) !important;
+        border: 1px solid var(--bp-border2) !important;
+        color: var(--bp-text) !important;
+      }
+      .bp-shell #panelSettings input[type="checkbox"]{
+        accent-color: var(--bp-orange) !important;
+      }
+      .bp-shell #panelSettings .income-type-remove,
+      .bp-shell #panelSettings .deduction-type-remove{
+        background: rgba(127,29,29,0.25) !important;
+        border-color: rgba(248,113,113,0.45) !important;
+        color: #fecaca !important;
+      }
+      .bp-shell #panelProjects #projectNameInput,
+      .bp-shell #panelProjects #projectCompanySelect,
+      .bp-shell #panelProjects .proj-name-input,
+      .bp-shell #panelProjects .proj-company-select{
+        background: var(--bp-surface2) !important;
+        border: 1px solid var(--bp-border2) !important;
+        color: var(--bp-text) !important;
+      }
+
+      /* Employees panel: ensure form/table controls follow dark theme */
+      .bp-shell #panelEmployees .form-card{
+        background: rgba(17,19,24,0.92) !important;
+        border: 1px solid var(--bp-border) !important;
+        box-shadow: 0 10px 30px rgba(0,0,0,0.18) !important;
+      }
+      .bp-shell #panelEmployees label,
+      .bp-shell #panelEmployees small.hint{
+        color: var(--bp-text) !important;
+      }
+      .bp-shell #panelEmployees input:not([type]),
+      .bp-shell #panelEmployees input[type="text"],
+      .bp-shell #panelEmployees input[type="number"],
+      .bp-shell #panelEmployees select,
+      .bp-shell #panelEmployees textarea,
+      .bp-shell #panelEmployees .emp-name-input,
+      .bp-shell #panelEmployees .emp-rate-input,
+      .bp-shell #panelEmployees .emp-bank-input,
+      .bp-shell #panelEmployees .emp-sel-schedule,
+      .bp-shell #panelEmployees .emp-sel-project,
+      .bp-shell #panelEmployees .emp-company-select{
+        background: var(--bp-surface2) !important;
+        border: 1px solid var(--bp-border2) !important;
+        color: var(--bp-text) !important;
+      }
+      .bp-shell #panelEmployees input[type="checkbox"]{
+        accent-color: var(--bp-orange) !important;
+        background: var(--bp-surface2) !important;
+        border: 1px solid var(--bp-border2) !important;
+      }
+      .bp-shell #panelEmployees button,
+      .bp-shell #panelEmployees input[type="submit"],
+      .bp-shell #panelEmployees input[type="button"]{
+        background: rgba(24,28,35,0.92) !important;
+        border: 1px solid var(--bp-border2) !important;
+        color: var(--bp-text) !important;
+      }
+      .bp-shell #panelEmployees .btn-primary{
+        background: linear-gradient(135deg,var(--bp-orange),#c2580f) !important;
+        border-color: rgba(249,115,22,0.35) !important;
+        color: #0b0d10 !important;
+      }
+      .bp-shell #panelEmployees .btn-danger{
+        background: rgba(127,29,29,0.25) !important;
+        border-color: rgba(248,113,113,0.45) !important;
+        color: #fecaca !important;
+      }
+
 
       /* Inputs */
       .bp-shell input[type=file],
