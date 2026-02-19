@@ -337,10 +337,22 @@
       /* Settings panel: remove legacy white surfaces in dark mode */
       .bp-shell #panelSettings .settings-section,
       .bp-shell #panelSettings .income-type-item,
-      .bp-shell #panelSettings .deduction-type-item{
+      .bp-shell #panelSettings .deduction-type-item,
+      .bp-shell #panelSettings .table-card{
         background: rgba(24,28,35,0.92) !important;
         border-color: var(--bp-border) !important;
         color: var(--bp-text) !important;
+      }
+      .bp-shell #panelSettings .table-card__title,
+      .bp-shell #panelSettings .table-card__subtitle,
+      .bp-shell #panelSettings .contrib-note,
+      .bp-shell #panelSettings .contrib-note strong{
+        color: var(--bp-text) !important;
+      }
+      .bp-shell #panelSettings .table-card__tag{
+        background: rgba(59,130,246,0.22) !important;
+        color: #bfdbfe !important;
+        border: 1px solid rgba(59,130,246,0.36) !important;
       }
       .bp-shell #panelSettings .settings-section h4,
       .bp-shell #panelSettings .settings-row label,
@@ -352,6 +364,13 @@
       .bp-shell #panelSettings input[type="time"],
       .bp-shell #panelSettings select,
       .bp-shell #panelSettings textarea{
+        background: var(--bp-surface2) !important;
+        border: 1px solid var(--bp-border2) !important;
+        color: var(--bp-text) !important;
+      }
+      .bp-shell #panelSettings #sssTable input,
+      .bp-shell #panelSettings #pagibigTable input,
+      .bp-shell #panelSettings #philhealthTable input{
         background: var(--bp-surface2) !important;
         border: 1px solid var(--bp-border2) !important;
         color: var(--bp-text) !important;
