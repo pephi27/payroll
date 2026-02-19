@@ -13390,7 +13390,7 @@ let storedRecords = (typeof window !== 'undefined' && Array.isArray(window.store
 let storedEmployees = JSON.parse(localStorage.getItem(LS_EMPLOYEES) || '{}');
 let storedSchedules = JSON.parse(localStorage.getItem(LS_SCHEDULES) || 'null');
 let defaultScheduleId = localStorage.getItem(LS_SCHEDULES_DEFAULT) || null;
-var storedProjects = JSON.parse(localStorage.getItem(LS_PROJECTS) || '{}');
+let storedProjects = JSON.parse(localStorage.getItem(LS_PROJECTS) || '{}');
 
 function safeParseStorageJSON(key, fallbackValue) {
   try {
