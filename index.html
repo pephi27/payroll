@@ -2395,6 +2395,20 @@ window.addEventListener('load', dashReports);
   /* If a project has a breakdown row, break after that row; otherwise break after the project header row */
   #panelProjectTotals tr.proj-emp-breakdown { page-break-after: always; }
   #panelProjectTotals tr.proj-row.no-breakdown { page-break-after: always; }
+
+  /* Reports print: one sheet per project, repeat header; hide grand total rows */
+  #panelProjectTotals .card { box-shadow: none; border: 0; padding: 0; }
+  #panelProjectTotals #r_table thead,
+  #panelProjectTotals #r_ot_table thead { display: table-header-group; }
+  #panelProjectTotals #r_table tfoot,
+  #panelProjectTotals #r_ot_table tfoot { display: none !important; }
+  #panelProjectTotals #r_table tbody.proj-page,
+  #panelProjectTotals #r_ot_table tbody.proj-page { display: table-row-group; break-inside: avoid; page-break-inside: avoid; }
+  #panelProjectTotals #r_table tbody.proj-page,
+  #panelProjectTotals #r_ot_table tbody.proj-page { break-before: page; page-break-before: always; }
+  #panelProjectTotals #r_table tbody.proj-page:first-of-type,
+  #panelProjectTotals #r_ot_table tbody.proj-page:first-of-type { break-before: auto; page-break-before: auto; }
+  #panelProjectTotals #masterReportContainer .mr-table thead { display: table-header-group; }
 }
 
 </style>
@@ -12809,19 +12823,6 @@ return { rootHash, manifestHash, segmentCount: Object.keys(segments).length, ver
     #panelProjectTotals .mr-table th.left, #panelProjectTotals .mr-table td.left{ text-align:left }
     #panelProjectTotals .mr-table tfoot td{ font-weight:700; background:#fff7ed }
     #panelProjectTotals .mr-table tr.mr-company th{ text-align:center; background:#eef4fb; font-size:13px }
-    /* Print: one sheet per project, repeat header; hide grand total (redundant) */
-    @media print{
-      header,.header,.controls{display:none!important}
-      .card{box-shadow:none;border:0;padding:0}
-      #r_table thead, #r_ot_table thead{display:table-header-group}
-      #r_table tfoot, #r_ot_table tfoot{display:none!important}
-      #r_table tbody.proj-page, #r_ot_table tbody.proj-page{display:table-row-group;break-inside:avoid;page-break-inside:avoid}
-      #r_table tbody.proj-page, #r_ot_table tbody.proj-page{break-before:page;page-break-before:always}
-      #r_table tbody.proj-page:first-of-type,
-      #r_ot_table tbody.proj-page:first-of-type{break-before:auto;page-break-before:auto}
-      /* Master report print tweaks */
-      #masterReportContainer .mr-table thead{display:table-header-group}
-    }
   </style>
 
   <div class="card">
