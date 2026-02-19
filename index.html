@@ -15495,6 +15495,7 @@ rows += `<tr class="allowance">
         <span id="auditStatus" style="margin-left:auto;font-size:12px;color:#64748b;"></span>
       </div>
       <div id="auditInfo" style="font-size:12px;color:#64748b;margin-bottom:10px;"></div>
+      <div id="auditTabs" class="tabs" style="display:none;margin-bottom:10px;"></div>
       <div id="auditContainer" style="display:flex;flex-direction:column;gap:10px;"></div>
       <details style="margin-top:10px;">
         <summary style="cursor:pointer;">Raw manifest JSON</summary>
@@ -24379,6 +24380,54 @@ document.addEventListener('DOMContentLoaded', function(){
     el.innerHTML = html || '';
   }
 
+  function resetAuditTabs(){
+    const tabs = $('auditTabs');
+    if (tabs) {
+      tabs.innerHTML = '';
+      tabs.style.display = 'none';
+    }
+  }
+
+  function setActiveAuditSubtab(name){
+    const cont = $('auditContainer');
+    const tabs = $('auditTabs');
+    if (!cont || !tabs) return;
+
+    tabs.querySelectorAll('.tab-btn').forEach(btn=>{
+      const active = btn.dataset.seg === name;
+      btn.classList.toggle('active', active);
+      btn.setAttribute('aria-selected', active ? 'true' : 'false');
+    });
+
+    cont.querySelectorAll('[data-audit-segment]').forEach(card=>{
+      card.style.display = (card.dataset.auditSegment === name) ? '' : 'none';
+    });
+  }
+
+  function renderAuditSubtabs(segNames){
+    const tabs = $('auditTabs');
+    if (!tabs) return;
+    tabs.innerHTML = '';
+
+    if (!Array.isArray(segNames) || !segNames.length) {
+      tabs.style.display = 'none';
+      return;
+    }
+
+    segNames.forEach((name, idx)=>{
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'tab-btn' + (idx === 0 ? ' active' : '');
+      btn.dataset.seg = name;
+      btn.setAttribute('aria-selected', idx === 0 ? 'true' : 'false');
+      btn.textContent = name;
+      btn.addEventListener('click', ()=>setActiveAuditSubtab(name));
+      tabs.appendChild(btn);
+    });
+
+    tabs.style.display = 'flex';
+  }
+
   function fmtStamp(iso){
     if (!iso) return '';
     try { return new Date(iso).toLocaleString(); } catch(e){ return String(iso); }
@@ -24412,6 +24461,7 @@ document.addEventListener('DOMContentLoaded', function(){
       setInfo('');
       const pre = $('auditManifestJson'); if (pre) pre.textContent = '';
       const cont = $('auditContainer'); if (cont) cont.innerHTML = '';
+      resetAuditTabs();
       return [];
     }
 
@@ -24441,6 +24491,7 @@ document.addEventListener('DOMContentLoaded', function(){
     const pre  = $('auditManifestJson');
     const cont = $('auditContainer');
     if (cont) cont.innerHTML = '';
+    resetAuditTabs();
 
     let manifest = null;
     try { if (typeof window.readSnapshotSegment === 'function') manifest = await window.readSnapshotSegment('manifest', startDate, endDate); } catch(e){}
@@ -24500,6 +24551,7 @@ document.addEventListener('DOMContentLoaded', function(){
 
   function renderSegmentCard(name, value){
     const card = document.createElement('div');
+    card.dataset.auditSegment = name;
     card.style.border = '1px solid #e2e8f0';
     card.style.borderRadius = '12px';
     card.style.padding = '10px';
@@ -24567,33 +24619,39 @@ document.addEventListener('DOMContentLoaded', function(){
     let manifest = null;
     try { manifest = await window.readSnapshotSegment('manifest', startDate, endDate); } catch(e){}
     const segNames = manifest && manifest.segmentHashes ? Object.keys(manifest.segmentHashes) : ['dtr','payroll','overtime','deductions','additionalIncome','otherDeductions','adjustments','reports','master'];
+    const rendered = [];
 
     for (const name of segNames) {
       try {
         const seg = await window.readSnapshotSegment(name, startDate, endDate);
         if (seg == null) continue;
         cont.appendChild(renderSegmentCard(name, seg));
+        rendered.push(name);
       } catch (e) {
         cont.appendChild(renderSegmentCard(name, { error: (e && e.message) ? e.message : String(e) }));
+        rendered.push(name);
       }
     }
 
-    setStatus('Loaded.');
+    renderAuditSubtabs(rendered);
+    if (rendered.length) setActiveAuditSubtab(rendered[0]);
+    setStatus(rendered.length ? ('Loaded ' + rendered.length + ' segment(s).') : 'No stored segments found.');
   }
 
   window.renderAuditPanel = async function(){
     await loadAuditIndex();
     await showSelectedManifest();
+    await auditLoadSnapshot();
 
     const sel = $('auditPeriodSelect');
     if (sel && !sel.__auditWired) {
-      sel.addEventListener('change', showSelectedManifest);
+      sel.addEventListener('change', async()=>{ await showSelectedManifest(); await auditLoadSnapshot(); });
       sel.__auditWired = true;
     }
     const b1 = $('auditRefreshBtn');
     const b2 = $('auditVerifyBtn');
     const b3 = $('auditLoadBtn');
-    if (b1 && !b1.__auditWired) { b1.addEventListener('click', async()=>{ await loadAuditIndex(); await showSelectedManifest(); }); b1.__auditWired = true; }
+    if (b1 && !b1.__auditWired) { b1.addEventListener('click', async()=>{ await loadAuditIndex(); await showSelectedManifest(); await auditLoadSnapshot(); }); b1.__auditWired = true; }
     if (b2 && !b2.__auditWired) { b2.addEventListener('click', auditVerify); b2.__auditWired = true; }
     if (b3 && !b3.__auditWired) { b3.addEventListener('click', auditLoadSnapshot); b3.__auditWired = true; }
   };
