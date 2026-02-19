@@ -2302,6 +2302,8 @@ window.addEventListener('load', dashReports);
   background: transparent;
   color: inherit;
   padding: 0;
+  border-radius: 0;
+  box-shadow: none;
   outline: none;
   -webkit-appearance: none;
   -moz-appearance: textfield;
@@ -2311,6 +2313,11 @@ window.addEventListener('load', dashReports);
 #panelPayroll input.regHrs[disabled],
 #panelPayroll input.rate[disabled] {
   color: inherit;            /* avoid greyed-out disabled look */
+  border: none;
+  background: transparent;
+  border-radius: 0;
+  box-shadow: none;
+  opacity: 1;
 }
 /* hide number spinners where applicable */
 #panelPayroll input.regHrs::-webkit-outer-spin-button,
