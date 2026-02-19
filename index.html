@@ -24641,17 +24641,16 @@ document.addEventListener('DOMContentLoaded', function(){
   window.renderAuditPanel = async function(){
     await loadAuditIndex();
     await showSelectedManifest();
-    await auditLoadSnapshot();
 
     const sel = $('auditPeriodSelect');
     if (sel && !sel.__auditWired) {
-      sel.addEventListener('change', async()=>{ await showSelectedManifest(); await auditLoadSnapshot(); });
+      sel.addEventListener('change', showSelectedManifest);
       sel.__auditWired = true;
     }
     const b1 = $('auditRefreshBtn');
     const b2 = $('auditVerifyBtn');
     const b3 = $('auditLoadBtn');
-    if (b1 && !b1.__auditWired) { b1.addEventListener('click', async()=>{ await loadAuditIndex(); await showSelectedManifest(); await auditLoadSnapshot(); }); b1.__auditWired = true; }
+    if (b1 && !b1.__auditWired) { b1.addEventListener('click', async()=>{ await loadAuditIndex(); await showSelectedManifest(); }); b1.__auditWired = true; }
     if (b2 && !b2.__auditWired) { b2.addEventListener('click', auditVerify); b2.__auditWired = true; }
     if (b3 && !b3.__auditWired) { b3.addEventListener('click', auditLoadSnapshot); b3.__auditWired = true; }
   };
