@@ -2264,19 +2264,6 @@ window.addEventListener('load', dashReports);
 /* === END PATCH === */
 
 
-  
-/* ===== Print Styles for Project Totals ===== */
-@media print {
-  body * { visibility: hidden !important; }
-  #panelProjectTotals, #panelProjectTotals * { visibility: visible !important; }
-  #panelProjectTotals { position: absolute; left: 0; top: 0; width: 100%; }
-  header, .tabs, .controls, #panelProjectTotals .controls, #panelProjectTotals button { display: none !important; }
-  #projectTotalsTable { width: 100%; border-collapse: collapse; font-size: 12px; }
-  #projectTotalsTable th, #projectTotalsTable td { border: 1px solid #444; padding: 6px; text-align: right; }
-  #projectTotalsTable th:first-child, #projectTotalsTable td:first-child { text-align: left; }
-  .proj-emp-breakdown { page-break-inside: avoid; }
-  .page-break { page-break-after: always; }
-}
 </style>
 
   <style id="payrollScopedStyles">
@@ -2398,20 +2385,13 @@ window.addEventListener('load', dashReports);
   #projectTotalsTable th:first-child, #projectTotalsTable td:first-child { text-align: left; }
   .proj-emp-breakdown { page-break-inside: avoid; }
   .page-break { page-break-after: always; }
-}
-
-</style>
-
-<style>
-
-/* --- Per-project per page when printing --- */
-@media print {
   /* If a project has a breakdown row, break after that row; otherwise break after the project header row */
   #panelProjectTotals tr.proj-emp-breakdown { page-break-after: always; }
   #panelProjectTotals tr.proj-row.no-breakdown { page-break-after: always; }
 }
 
 </style>
+
 
 <style>
 #payrollTab #payrollTable tfoot td,
