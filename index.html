@@ -1518,17 +1518,44 @@ function safeStringify(v){
 
 /* Loan Tracker */
 .loan-tracker h3 { margin: 14px 0 6px; }
-.loan-tracker .table-wrap { overflow-x: auto; border: 1px solid #ddd; border-radius: 10px; padding: 6px; background: #fff; }
+.loan-tracker .table-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--bp-border);
+  border-radius: 10px;
+  padding: 6px;
+  background: var(--bp-surface);
+}
 #loanTrackerTable { width: 100%; border-collapse: collapse; min-width: 1200px; }
-#loanTrackerTable th, #loanTrackerTable td { border: 1px solid #e3e3e3; padding: 6px 8px; font-size: 12px; }
-#loanTrackerTable th { background: #fafafa; }
-#loanTrackerTable td { vertical-align: middle; }
+#loanTrackerTable th, #loanTrackerTable td {
+  border: 1px solid var(--bp-border);
+  padding: 6px 8px;
+  font-size: 12px;
+  color: var(--bp-text);
+}
+#loanTrackerTable th {
+  background: var(--bp-surface2);
+  color: #f8fafc;
+}
+#loanTrackerTable td {
+  vertical-align: middle;
+  background: rgba(17, 19, 24, 0.75);
+}
+#loanTrackerTable tbody tr:nth-child(even) td {
+  background: rgba(24, 28, 35, 0.88);
+}
 #loanTrackerTable td.balance-cell { font-weight: 600; }
 #loanTrackerTable input[type="number"] { width: 110px; }
 #loanTrackerTable input[type="checkbox"] { transform: scale(1.15); }
 #loanTrackerControls { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 8px; }
 #loanTrackerControls .loan-tracker-filter { min-width: 220px; }
 #loanTrackerControls .loan-tracker-toggle { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; }
+#loanTrackerControls select,
+#loanTrackerControls input,
+#loanTrackerTable input {
+  background: var(--bp-surface2);
+  border: 1px solid var(--bp-border2);
+  color: var(--bp-text);
+}
 #loanTrackerControls .money-locked-control,
 #loanTrackerTable .money-locked-control,
 #deductionsTable .money-locked-control { opacity: 0.55; cursor: not-allowed; }
