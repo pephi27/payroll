@@ -19113,20 +19113,30 @@ function calculatePayrollFromRecords(){
       } catch (err) {}
       // Re-render the DTR results table with updated filters
       if (typeof renderResults === 'function') renderResults();
-      // Aggregate hours from the rendered DTR table
+      // Aggregate hours from the rendered DTR table.
+      // If no rows are available yet (transient render/filter state),
+      // fall back to direct record computation so OT pay does not reset to zero.
       const rows = document.querySelectorAll('#resultsTable tbody tr');
       const regTotals = {};
       const otTotals = {};
-      rows.forEach(row => {
-        const cells = row.cells;
-        if (!cells || cells.length < 13) return;
-        const empId = cells[0].textContent.trim();
-        // Column 11: total regular hours; column 12: OT hours
-        const regVal = parseFloat(cells[11].textContent) || 0;
-        const otVal  = parseFloat(cells[12].textContent) || 0;
-        regTotals[empId] = (regTotals[empId] || 0) + regVal;
-        otTotals[empId]  = (otTotals[empId]  || 0) + otVal;
-      });
+      if (rows.length > 0) {
+        rows.forEach(row => {
+          const cells = row.cells;
+          if (!cells || cells.length < 13) return;
+          const empId = cells[0].textContent.trim();
+          // Column 11: total regular hours; column 12: OT hours
+          const regVal = parseFloat(cells[11].textContent) || 0;
+          const otVal  = parseFloat(cells[12].textContent) || 0;
+          regTotals[empId] = (regTotals[empId] || 0) + regVal;
+          otTotals[empId]  = (otTotals[empId]  || 0) + otVal;
+        });
+      } else {
+        const directStart = (weekStartEl && weekStartEl.value) ? weekStartEl.value : '';
+        const directEnd = (weekEndEl && weekEndEl.value) ? weekEndEl.value : '';
+        const directTotals = computeHoursForDateRange(directStart, directEnd);
+        Object.assign(regTotals, (directTotals && directTotals.totalsReg) || {});
+        Object.assign(otTotals, (directTotals && directTotals.totalsOT) || {});
+      }
       // Restore original filters and search
       if (searchInput) searchInput.value = origSearch;
       if (filterSelect) {
