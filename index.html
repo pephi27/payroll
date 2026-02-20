@@ -927,13 +927,6 @@ function queueHydrateRerender() {
   const schedule = () => {
     try { if (__kvRerenderTimer) window.clearTimeout(__kvRerenderTimer); } catch {}
     __kvRerenderTimer = window.setTimeout(() => {
-      try {
-        const active = document.activeElement;
-        if (active && active.closest && active.closest('#resultsTable') && active.tagName === 'SELECT') {
-          schedule();
-          return;
-        }
-      } catch (_) {}
       __kvRerenderTimer = null;
       rerender();
     }, 120);
@@ -16508,37 +16501,25 @@ async function hydrateSplitOverrides(){
     if (error) throw error;
     (data || []).forEach(function(row){
       const key = row.emp_id + '___' + row.date;
-      if (row.splits && !splits[key]) splits[key] = row.splits;
+      if (row.splits) splits[key] = row.splits;
       if (row.overrides_projects) {
         const proj = row.overrides_projects;
-        if (proj.base != null && overridesProjects[key] == null) overridesProjects[key] = proj.base;
+        if (proj.base != null) overridesProjects[key] = proj.base;
         ['AM','PM','OT'].forEach(function(seg){
-          const segKey = key + '___' + seg;
-          if (proj[seg] != null && overridesProjects[segKey] == null) overridesProjects[segKey] = proj[seg];
+          if (proj[seg] != null) overridesProjects[key + '___' + seg] = proj[seg];
         });
       }
       if (row.overrides_schedules) {
         const sch = row.overrides_schedules;
-        if (sch.base != null && overridesSchedules[key] == null) overridesSchedules[key] = sch.base;
+        if (sch.base != null) overridesSchedules[key] = sch.base;
         ['AM','PM','OT'].forEach(function(seg){
-          const segKey = key + '___' + seg;
-          if (sch[seg] != null && overridesSchedules[segKey] == null) overridesSchedules[segKey] = sch[seg];
+          if (sch[seg] != null) overridesSchedules[key + '___' + seg] = sch[seg];
         });
       }
     });
-    // Persist merge locally without mirroring this boot-time compatibility hydrate back to cloud.
-    // This prevents a stale split_overrides row from reverting newer KV-based project/schedule edits.
-    try {
-      if (typeof __origSetItem === 'function') {
-        __origSetItem(LS_SPLITS, JSON.stringify(splits));
-        __origSetItem(LS_OVERRIDES_PROJECTS, JSON.stringify(overridesProjects));
-        __origSetItem(LS_OVERRIDES_SCHEDULES, JSON.stringify(overridesSchedules));
-      } else {
-        localStorage.setItem(LS_SPLITS, JSON.stringify(splits));
-        localStorage.setItem(LS_OVERRIDES_PROJECTS, JSON.stringify(overridesProjects));
-        localStorage.setItem(LS_OVERRIDES_SCHEDULES, JSON.stringify(overridesSchedules));
-      }
-    } catch(e){}
+    try { localStorage.setItem(LS_SPLITS, JSON.stringify(splits)); } catch(e){}
+    try { localStorage.setItem(LS_OVERRIDES_PROJECTS, JSON.stringify(overridesProjects)); } catch(e){}
+    try { localStorage.setItem(LS_OVERRIDES_SCHEDULES, JSON.stringify(overridesSchedules)); } catch(e){}
   } catch (e) {
     console.warn('hydrate split_overrides failed', e);
   }
