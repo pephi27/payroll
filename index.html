@@ -17461,25 +17461,6 @@ function renderEmployees(){
         needsSave = true;
       }
     }
-    // Keep contribution flags mirrored on the employee object so they persist
-    // even if the standalone contrib flag cache is reset/reloaded.
-    const empStoredFlags = (emp && typeof emp.contribFlags === 'object' && emp.contribFlags) ? emp.contribFlags : {};
-    if (!contribFlags[id]) {
-      contribFlags[id] = {
-        pagibig: empStoredFlags.pagibig !== false,
-        philhealth: empStoredFlags.philhealth !== false,
-        sss: empStoredFlags.sss !== false
-      };
-      needsSave = true;
-    }
-    if (!emp.contribFlags || typeof emp.contribFlags !== 'object') {
-      emp.contribFlags = {
-        pagibig: contribFlags[id].pagibig !== false,
-        philhealth: contribFlags[id].philhealth !== false,
-        sss: contribFlags[id].sss !== false
-      };
-      needsSave = true;
-    }
     let scheduleOptionsHtml = '';
     Object.keys(storedSchedules).forEach(sid=>{
       const label = storedSchedules[sid].name + (sid===defaultScheduleId ? ' (Default)' : '');
@@ -17522,11 +17503,6 @@ function renderEmployees(){
       cbPagibig.addEventListener('change', () => {
         if (!contribFlags[id]) contribFlags[id] = {};
         contribFlags[id].pagibig = cbPagibig.checked;
-        if (storedEmployees[id]) {
-          if (!storedEmployees[id].contribFlags || typeof storedEmployees[id].contribFlags !== 'object') storedEmployees[id].contribFlags = {};
-          storedEmployees[id].contribFlags.pagibig = cbPagibig.checked;
-          saveEmployeesToLS();
-        }
         localStorage.setItem(LS_CONTRIB_FLAGS, JSON.stringify(contribFlags));
         calculateAll();
       });
@@ -17535,11 +17511,6 @@ function renderEmployees(){
       cbPhilhealth.addEventListener('change', () => {
         if (!contribFlags[id]) contribFlags[id] = {};
         contribFlags[id].philhealth = cbPhilhealth.checked;
-        if (storedEmployees[id]) {
-          if (!storedEmployees[id].contribFlags || typeof storedEmployees[id].contribFlags !== 'object') storedEmployees[id].contribFlags = {};
-          storedEmployees[id].contribFlags.philhealth = cbPhilhealth.checked;
-          saveEmployeesToLS();
-        }
         localStorage.setItem(LS_CONTRIB_FLAGS, JSON.stringify(contribFlags));
         calculateAll();
       });
@@ -17548,11 +17519,6 @@ function renderEmployees(){
       cbSss.addEventListener('change', () => {
         if (!contribFlags[id]) contribFlags[id] = {};
         contribFlags[id].sss = cbSss.checked;
-        if (storedEmployees[id]) {
-          if (!storedEmployees[id].contribFlags || typeof storedEmployees[id].contribFlags !== 'object') storedEmployees[id].contribFlags = {};
-          storedEmployees[id].contribFlags.sss = cbSss.checked;
-          saveEmployeesToLS();
-        }
         localStorage.setItem(LS_CONTRIB_FLAGS, JSON.stringify(contribFlags));
         calculateAll();
       });
@@ -17636,11 +17602,6 @@ document.getElementById('addEmployeeBtn').addEventListener('click', ()=>{
     contribFlags[id] = { pagibig: true, philhealth: true, sss: true };
     localStorage.setItem(LS_CONTRIB_FLAGS, JSON.stringify(contribFlags));
   }
-  storedEmployees[id].contribFlags = {
-    pagibig: contribFlags[id].pagibig !== false,
-    philhealth: contribFlags[id].philhealth !== false,
-    sss: contribFlags[id].sss !== false
-  };
   saveEmployeesToLS();
   document.getElementById('empIdInput').value=''; document.getElementById('empNameInput').value=''; document.getElementById('empRateInput').value=''; document.getElementById('empBankInput').value='';
   if (companySelect) companySelect.value = COMPANY_OPTIONS[0] || '';
