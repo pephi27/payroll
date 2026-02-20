@@ -16664,6 +16664,8 @@ function saveSchedulesToLS(){
   localStorage.setItem(LS_SCHEDULES_DEFAULT, defaultScheduleId);
 }
 
+const LS_ACTIVE_MAIN_TAB = 'bp_active_main_tab';
+
 const tabs = {
   tabMain: document.getElementById('tabMain'),
   // Dashboard tab/button for high-level summary and payroll history
@@ -16804,6 +16806,12 @@ function showTab(name){
     try{ if (typeof window.renderAuditPanel === 'function') window.renderAuditPanel(); }catch(e){}
   }
   if(name==='settings'){ tabs.tabSettings && tabs.tabSettings.classList.add('active'); tabs.panelSettings && tabs.panelSettings.classList.add('active'); }
+
+  try {
+    if (name && typeof localStorage !== 'undefined') {
+      localStorage.setItem(LS_ACTIVE_MAIN_TAB, name);
+    }
+  } catch (e) {}
 }
 window.__dtrFilterBackup = null;
 // When switching to the main (DTR) tab, render results and then toggle the edit
@@ -23906,22 +23914,40 @@ document.addEventListener('DOMContentLoaded', async function () {
     if ((origSel && origSel.options && origSel.options.length) || tries > 50) clearInterval(timer);
   }, 200);
 
-  // Default: determine initial active page based on active panels, otherwise go to dashboard.
+  // Default: restore the last selected top-level tab when possible.
   try {
-    const activePanel = document.querySelector('.tab-panel.active');
-    const id = activePanel ? activePanel.id : '';
-    const initial = (id === 'panelMain') ? 'dtr'
-      : (id === 'panelSchedule') ? 'schedules'
-      : (id === 'panelEmployees') ? 'employees'
-      : (id === 'panelProjects') ? 'projects'
-      : (id === 'panelPayroll') ? 'payroll'
-      : (id === 'panelProjectTotals') ? 'totals'
-      : (id === 'panelSettings') ? 'settings'
-      : 'dashboard';
-    setBpActive(initial);
-    if (!activePanel && typeof window.showTab === 'function') {
-      try { window.showTab('dashboard'); } catch(e) {}
+    const VALID_TABS = new Set(['dashboard','main','schedule','employees','projects','payroll','projectTotals','audit','settings']);
+    const savedTab = (() => {
+      try {
+        const value = localStorage.getItem('bp_active_main_tab');
+        return VALID_TABS.has(value) ? value : '';
+      } catch (e) {
+        return '';
+      }
+    })();
+
+    const panelByTab = {
+      main: 'panelMain',
+      dashboard: 'panelDashboard',
+      schedule: 'panelSchedule',
+      employees: 'panelEmployees',
+      projects: 'panelProjects',
+      payroll: 'panelPayroll',
+      projectTotals: 'panelProjectTotals',
+      audit: 'panelAudit',
+      settings: 'panelSettings'
+    };
+
+    const activePanel = document.querySelector('section.panel.active');
+    const detectedTab = activePanel ? Object.keys(panelByTab).find((tabName) => panelByTab[tabName] === activePanel.id) : '';
+    const initialTab = savedTab || detectedTab || 'dashboard';
+
+    if (typeof window.showTab === 'function') {
+      try { window.showTab(initialTab); } catch(e) {}
     }
+
+    const page = nameToPage[initialTab] || 'dashboard';
+    setBpActive(page);
   } catch(e){}
 })();
 </script>
