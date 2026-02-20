@@ -13352,31 +13352,21 @@ return { rootHash, manifestHash, segmentCount: Object.keys(segments).length, ver
     }
 
     function getPayrollTotalOvertimePay(){
-      // Compute OT gross from canonical overtime sources instead of reading
-      // transient DOM totals. This avoids report/OT-tab flicker while table
-      // footers are still re-rendering.
-      try {
-        if (typeof getEmployeeList === 'function' && typeof getOvertimePayForEmployee === 'function') {
-          let sum = 0;
-          getEmployeeList().forEach(emp => {
-            if (!emp || !emp.id) return;
-            const baseRate = (typeof getEmployeeHourlyRate === 'function') ? getEmployeeHourlyRate(emp.id) : 0;
-            const baseOtPay = Number(getOvertimePayForEmployee(emp.id, baseRate)) || 0;
-            const nightDiff = (typeof getNightDifferentialPayForEmployee === 'function')
-              ? (Number(getNightDifferentialPayForEmployee(emp.id)) || 0)
-              : 0;
-            sum = roundToCents(sum + baseOtPay + nightDiff);
-          });
-          return roundToCents(sum);
-        }
-      } catch (_) {}
+      const readCellAmount = (cell) => {
+        if (!cell) return 0;
+        const raw = String(cell.textContent || '').replace(/,/g, '').trim();
+        if (!raw || raw === '-') return 0;
+        const num = Number(raw);
+        return Number.isFinite(num) ? num : 0;
+      };
 
-      // Fallback for early boot / partial state.
+      const footerCell = document.querySelector('#payrollTotalsFoot [data-col="otPay"]');
+      const footerValue = readCellAmount(footerCell);
+      if (footerValue > 0) return roundToCents(footerValue);
+
       let sum = 0;
       document.querySelectorAll('#payrollTable tbody tr').forEach(tr => {
-        const raw = String(tr.querySelector('.otPay')?.textContent || '').replace(/,/g, '').trim();
-        const num = (!raw || raw === '-') ? 0 : Number(raw);
-        if (Number.isFinite(num)) sum += num;
+        sum += readCellAmount(tr.querySelector('.otPay'));
       });
       return roundToCents(sum);
     }
