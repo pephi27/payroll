@@ -11724,7 +11724,27 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!periodId || !window.supabase) return;
     try {
       const localMeta = getPeriodMeta(periodId);
-      const { data: periodRow } = await supabase.from('payroll_periods').select('id,status,head_version,updated_at').eq('id', periodId).maybeSingle();
+      let periodRow = null;
+      let periodQuery = await supabase
+        .from('payroll_periods')
+        .select('id,status,head_version,updated_at')
+        .eq('id', periodId)
+        .maybeSingle();
+      if (periodQuery.error && String(periodQuery.error.message || '').toLowerCase().includes('column')) {
+        periodQuery = await supabase
+          .from('payroll_periods')
+          .select('id,status,updated_at')
+          .eq('id', periodId)
+          .maybeSingle();
+      }
+      if (periodQuery.error && String(periodQuery.error.message || '').toLowerCase().includes('status')) {
+        periodQuery = await supabase
+          .from('payroll_periods')
+          .select('id,updated_at')
+          .eq('id', periodId)
+          .maybeSingle();
+      }
+      periodRow = periodQuery.data;
       if (periodRow && periodRow.status && periodRow.status !== localMeta.status) {
         setPeriodMeta(periodId, { status: periodRow.status, label: `${start} to ${end}` });
         if (periodRow.status !== PERIOD_STATUSES.DRAFT) disablePayrollInputs();
