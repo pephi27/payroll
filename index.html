@@ -10910,6 +10910,28 @@ document.addEventListener('DOMContentLoaded', () => {
   try { window.appState = appState; } catch(_) {}
 
   function periodIdFromRange(start, end){ return (start && end) ? `${start}|${end}` : ''; }
+  function isUuidLike(value){
+    return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(value||'').trim());
+  }
+  async function upsertPayrollPeriodCloud(start, end, status, updatedAt){
+    if (!window.supabase || !start || !end) return;
+    const periodId = periodIdFromRange(start, end);
+    const payload = {
+      label: `${start} to ${end}`,
+      status,
+      updated_at: updatedAt,
+      period_start: start,
+      period_end: end
+    };
+    if (isUuidLike(periodId)) payload.id = periodId;
+    let resp = await supabase.from('payroll_periods').upsert(payload, { onConflict: 'period_start,period_end' });
+    if (resp && resp.error && String(resp.error.message||'').toLowerCase().includes('period_start')) {
+      const minimal = { label: payload.label, status: payload.status, updated_at: payload.updated_at };
+      if (payload.id) minimal.id = payload.id;
+      resp = await supabase.from('payroll_periods').upsert(minimal);
+    }
+    if (resp && resp.error) throw resp.error;
+  }
   function getPeriodMeta(periodId){
     const all = (window.store && window.store.getJSON(PERIOD_META_KEY, {})) || {};
     return all[periodId] || { status: PERIOD_STATUSES.DRAFT, head_version: 1, label: periodId, updated_at: new Date().toISOString() };
@@ -11564,7 +11586,7 @@ document.addEventListener('DOMContentLoaded', () => {
     setPeriodMeta(periodId, { status: PERIOD_STATUSES.VOIDED, label: `${snap.startDate} to ${snap.endDate}` });
     try {
       await supabase.from('payroll_period_snapshots').insert(snapshotRow);
-      await supabase.from('payroll_periods').upsert({ id: periodId, label: `${snap.startDate} to ${snap.endDate}`, status: PERIOD_STATUSES.VOIDED, updated_at: now });
+      await upsertPayrollPeriodCloud(snap.startDate, snap.endDate, PERIOD_STATUSES.VOIDED, now);
     } catch (e) { console.warn('void snapshot sync failed', e); }
 
     saveHistory();
@@ -11648,7 +11670,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     try {
       await supabase.from('payroll_period_snapshots').insert(snapshotRow);
-      await supabase.from('payroll_periods').upsert({ id: periodId, label: `${start} to ${end}`, status: PERIOD_STATUSES.FINALIZED, updated_at: lockedAt });
+      await upsertPayrollPeriodCloud(start, end, PERIOD_STATUSES.FINALIZED, lockedAt);
     } catch (e) { console.warn('finalize cloud sync failed', e); }
 
     try { await upsertSnapshotIndexEntry(start, end, { finalizedAt: lockedAt, hash: hashHex, revision, status: PERIOD_STATUSES.FINALIZED, ...(auditMeta || {}) }); } catch (err) { console.warn('Snapshot index update failed', err); }
@@ -11724,7 +11746,48 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!periodId || !window.supabase) return;
     try {
       const localMeta = getPeriodMeta(periodId);
-      const { data: periodRow } = await supabase.from('payroll_periods').select('id,status,head_version,updated_at').eq('id', periodId).maybeSingle();
+      const schemaProbe = (window.__payrollPeriodsSchemaProbe = window.__payrollPeriodsSchemaProbe || {
+        preferredIndex: 0,
+        disabledUntil: 0,
+        warned: false,
+        mode: 'id'
+      });
+      if (schemaProbe.disabledUntil > Date.now()) {
+        updateSyncStatusUI();
+        return;
+      }
+      const byIdSelects = ['id,status,head_version,updated_at', 'id,status,updated_at', 'id,updated_at'];
+      const byRangeSelects = ['period_start,period_end,status,head_version,updated_at', 'period_start,period_end,status,updated_at', 'period_start,period_end,updated_at'];
+      const queryMode = isUuidLike(periodId) ? 'id' : 'range';
+      if (schemaProbe.mode !== queryMode) {
+        schemaProbe.mode = queryMode;
+        schemaProbe.preferredIndex = 0;
+      }
+      const selects = (queryMode === 'id') ? byIdSelects : byRangeSelects;
+      let periodRow = null;
+      let lastError = null;
+      for (let i = schemaProbe.preferredIndex; i < selects.length; i += 1) {
+        let query = supabase.from('payroll_periods').select(selects[i]);
+        query = (queryMode === 'id') ? query.eq('id', periodId) : query.eq('period_start', start).eq('period_end', end);
+        const periodQuery = await query.maybeSingle();
+        if (!periodQuery.error) {
+          schemaProbe.preferredIndex = i;
+          periodRow = periodQuery.data;
+          lastError = null;
+          break;
+        }
+        lastError = periodQuery.error;
+      }
+      if (lastError) {
+        if (!schemaProbe.warned) {
+          console.warn('payroll_periods pollPeriodSync query failed; pausing sync polling for 2 minutes', lastError);
+          schemaProbe.warned = true;
+        }
+        schemaProbe.disabledUntil = Date.now() + (2 * 60 * 1000);
+        updateSyncStatusUI();
+        return;
+      }
+      schemaProbe.warned = false;
       if (periodRow && periodRow.status && periodRow.status !== localMeta.status) {
         setPeriodMeta(periodId, { status: periodRow.status, label: `${start} to ${end}` });
         if (periodRow.status !== PERIOD_STATUSES.DRAFT) disablePayrollInputs();
