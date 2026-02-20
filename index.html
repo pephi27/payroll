@@ -1052,6 +1052,22 @@ function __kvSetupRealtimeChannel(force = false) {
             queueHydrateRerender();
           }
         } else if (eventType === 'DELETE') {
+          // Guard against remote deletes wiping computed payroll hour maps.
+          if (key === 'payroll_reg_hours' || key === 'payroll_ot_hours') {
+            try {
+              const currentRaw = localStorage.getItem(key);
+              const currentObj = currentRaw ? JSON.parse(currentRaw) : null;
+              if (__kvHasMeaningfulHoursMap(currentObj)) {
+                // Keep local computed values and heal cloud row asynchronously.
+                try {
+                  if (window.__kvSyncEnabled && window.__kvSyncEnabled() && typeof window.writeKV === 'function') {
+                    window.writeKV(key, currentObj);
+                  }
+                } catch (_) {}
+                return;
+              }
+            } catch (_) {}
+          }
           if (localStorage.getItem(key) !== null) {
             try { __origRemoveItem(key); } catch {}
             queueHydrateRerender();
