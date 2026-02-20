@@ -11724,7 +11724,9 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!periodId || !window.supabase) return;
     try {
       const localMeta = getPeriodMeta(periodId);
-      const { data: periodRow } = await supabase.from('payroll_periods').select('id,status,head_version,updated_at').eq('id', periodId).maybeSingle();
+      // Use '*' to tolerate schema drift across environments (e.g. missing
+      // status/head_version columns) and avoid REST 400 on explicit column lists.
+      const { data: periodRow } = await supabase.from('payroll_periods').select('*').eq('id', periodId).maybeSingle();
       if (periodRow && periodRow.status && periodRow.status !== localMeta.status) {
         setPeriodMeta(periodId, { status: periodRow.status, label: `${start} to ${end}` });
         if (periodRow.status !== PERIOD_STATUSES.DRAFT) disablePayrollInputs();
