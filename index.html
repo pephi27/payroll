@@ -947,6 +947,16 @@ function __kvHasMeaningfulPeriodMap(obj){
   } catch(_) {}
   return false;
 }
+function __kvHasMeaningfulHoursMap(obj){
+  try {
+    if (!obj || typeof obj !== 'object') return false;
+    return Object.keys(obj).some((empId) => {
+      const v = Number(obj[empId]);
+      return Number.isFinite(v) && Math.abs(v) > 0.0001;
+    });
+  } catch (_) {}
+  return false;
+}
 const __kvBootCloudFirstPeriodKeys = new Set([
   'payroll_other_deductions_details',
   'payroll_other_deductions_total',
@@ -1027,6 +1037,16 @@ function __kvSetupRealtimeChannel(force = false) {
           const serialized = safeStringify(payload && payload.new ? payload.new.value : undefined);
           const nextValue = serialized == null ? 'null' : String(serialized);
           const current = localStorage.getItem(key);
+          // Guard against stale/empty cloud updates wiping computed payroll hours.
+          if (key === 'payroll_reg_hours' || key === 'payroll_ot_hours') {
+            try {
+              const incomingObj = JSON.parse(nextValue || 'null');
+              const currentObj = current ? JSON.parse(current) : null;
+              const incomingHas = __kvHasMeaningfulHoursMap(incomingObj);
+              const currentHas = __kvHasMeaningfulHoursMap(currentObj);
+              if (!incomingHas && currentHas) return;
+            } catch (_) {}
+          }
           if (nextValue !== current) {
             try { __origSetItem(key, nextValue); } catch {}
             queueHydrateRerender();
@@ -1328,6 +1348,14 @@ async function __kvHydrateOnce(){
         const localTs = __kvPayrollHistoryLatestTs(localObj);
         const cloudTs = __kvPayrollHistoryLatestTs(cloudObj);
         if (localTs > cloudTs) preferLocal = true;
+      }
+
+      // Protect computed payroll hours from being overwritten by an empty cloud payload
+      // during startup/reconnect races.
+      if (k === 'payroll_reg_hours' || k === 'payroll_ot_hours') {
+        const localHas = __kvHasMeaningfulHoursMap(localObj);
+        const cloudHas = __kvHasMeaningfulHoursMap(cloudObj);
+        if (localHas && !cloudHas) preferLocal = true;
       }
 
       if (preferLocal) {
@@ -19058,20 +19086,30 @@ function calculatePayrollFromRecords(){
       } catch (err) {}
       // Re-render the DTR results table with updated filters
       if (typeof renderResults === 'function') renderResults();
-      // Aggregate hours from the rendered DTR table
+      // Aggregate hours from the rendered DTR table.
+      // If no rows are available yet (transient render/filter state),
+      // fall back to direct record computation so OT pay does not reset to zero.
       const rows = document.querySelectorAll('#resultsTable tbody tr');
       const regTotals = {};
       const otTotals = {};
-      rows.forEach(row => {
-        const cells = row.cells;
-        if (!cells || cells.length < 13) return;
-        const empId = cells[0].textContent.trim();
-        // Column 11: total regular hours; column 12: OT hours
-        const regVal = parseFloat(cells[11].textContent) || 0;
-        const otVal  = parseFloat(cells[12].textContent) || 0;
-        regTotals[empId] = (regTotals[empId] || 0) + regVal;
-        otTotals[empId]  = (otTotals[empId]  || 0) + otVal;
-      });
+      if (rows.length > 0) {
+        rows.forEach(row => {
+          const cells = row.cells;
+          if (!cells || cells.length < 13) return;
+          const empId = cells[0].textContent.trim();
+          // Column 11: total regular hours; column 12: OT hours
+          const regVal = parseFloat(cells[11].textContent) || 0;
+          const otVal  = parseFloat(cells[12].textContent) || 0;
+          regTotals[empId] = (regTotals[empId] || 0) + regVal;
+          otTotals[empId]  = (otTotals[empId]  || 0) + otVal;
+        });
+      } else {
+        const directStart = (weekStartEl && weekStartEl.value) ? weekStartEl.value : '';
+        const directEnd = (weekEndEl && weekEndEl.value) ? weekEndEl.value : '';
+        const directTotals = computeHoursForDateRange(directStart, directEnd);
+        Object.assign(regTotals, (directTotals && directTotals.totalsReg) || {});
+        Object.assign(otTotals, (directTotals && directTotals.totalsOT) || {});
+      }
       // Restore original filters and search
       if (searchInput) searchInput.value = origSearch;
       if (filterSelect) {
@@ -19099,15 +19137,41 @@ function calculatePayrollFromRecords(){
       try {
         if (typeof window.applyDtrDateFilter === 'function') applyDtrDateFilter();
       } catch (_) {}
-      // Apply aggregated hours to regHours and otHours, rounding to two decimals
-      regHours = {};
-      otHours = {};
-      Object.keys(regTotals).forEach(id => {
-        regHours[id] = +(regTotals[id]).toFixed(2);
-      });
-      Object.keys(otTotals).forEach(id => {
-        otHours[id] = +(otTotals[id]).toFixed(2);
-      });
+      // Apply aggregated hours to regHours and otHours, rounding to two decimals.
+      // If the aggregation is empty while prior computed hours exist, keep the current
+      // values to avoid transient UI/network races wiping OT pay.
+      const regHasTotals = Object.keys(regTotals).length > 0;
+      const otHasTotals = Object.keys(otTotals).length > 0;
+      const hasAggregatedTotals = regHasTotals || otHasTotals;
+      const hasMeaningfulHoursMap = (obj) => {
+        try {
+          if (typeof __kvHasMeaningfulHoursMap === 'function') return __kvHasMeaningfulHoursMap(obj);
+        } catch (_) {}
+        try {
+          if (typeof window !== 'undefined' && typeof window.__kvHasMeaningfulHoursMap === 'function') {
+            return window.__kvHasMeaningfulHoursMap(obj);
+          }
+        } catch (_) {}
+        try {
+          if (!obj || typeof obj !== 'object') return false;
+          return Object.keys(obj).some((empId) => {
+            const v = Number(obj[empId]);
+            return Number.isFinite(v) && Math.abs(v) > 0.0001;
+          });
+        } catch (_) {}
+        return false;
+      };
+      const existingHasHours = hasMeaningfulHoursMap(regHours) || hasMeaningfulHoursMap(otHours);
+      if (hasAggregatedTotals || !existingHasHours) {
+        regHours = {};
+        otHours = {};
+        Object.keys(regTotals).forEach(id => {
+          regHours[id] = +(regTotals[id]).toFixed(2);
+        });
+        Object.keys(otTotals).forEach(id => {
+          otHours[id] = +(otTotals[id]).toFixed(2);
+        });
+      }
 
       // Compute Night Diff using the same payroll period boundaries.
       // This keeps ND in sync even when this Results-table path is used.
