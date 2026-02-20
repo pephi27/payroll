@@ -5114,6 +5114,46 @@ let otHours = JSON.parse(localStorage.getItem(LS_OT_HRS) || '{}');
 // Per-employee contribution deduction flags. Each entry keyed by employee ID holds booleans {pagibig, philhealth, sss}
 let contribFlags = JSON.parse(localStorage.getItem(LS_CONTRIB_FLAGS) || '{}');
 
+function readContribFlagsFromStorage(){
+  try {
+    const parsed = JSON.parse(localStorage.getItem(LS_CONTRIB_FLAGS) || '{}');
+    return (parsed && typeof parsed === 'object') ? parsed : {};
+  } catch (_) {
+    return {};
+  }
+}
+
+function getResolvedContribFlagsForEmployee(empId){
+  const byGlobal = (contribFlags && contribFlags[empId] && typeof contribFlags[empId] === 'object') ? contribFlags[empId] : {};
+  const byEmployee = (storedEmployees && storedEmployees[empId] && storedEmployees[empId].contribFlags && typeof storedEmployees[empId].contribFlags === 'object')
+    ? storedEmployees[empId].contribFlags
+    : {};
+  const resolveKey = (key) => {
+    if (Object.prototype.hasOwnProperty.call(byGlobal, key)) return byGlobal[key] !== false;
+    if (Object.prototype.hasOwnProperty.call(byEmployee, key)) return byEmployee[key] !== false;
+    return true;
+  };
+  return {
+    pagibig: resolveKey('pagibig'),
+    philhealth: resolveKey('philhealth'),
+    sss: resolveKey('sss')
+  };
+}
+
+function persistEmployeeContribFlag(empId, key, checked){
+  const latest = readContribFlagsFromStorage();
+  if (!latest[empId] || typeof latest[empId] !== 'object') latest[empId] = {};
+  latest[empId][key] = !!checked;
+  contribFlags = latest;
+  localStorage.setItem(LS_CONTRIB_FLAGS, JSON.stringify(latest));
+
+  if (storedEmployees && storedEmployees[empId]) {
+    if (!storedEmployees[empId].contribFlags || typeof storedEmployees[empId].contribFlags !== 'object') storedEmployees[empId].contribFlags = {};
+    storedEmployees[empId].contribFlags[key] = !!checked;
+    saveEmployeesToLS();
+  }
+}
+
 function migrateWeekRangeKeys(){
   try {
     if (!localStorage.getItem(LS_WEEKSTART)) {
@@ -17427,6 +17467,7 @@ function populateCompanySelect(selectEl, selectedValue){
 }
 
 function renderEmployees(){
+  contribFlags = readContribFlagsFromStorage();
   renderEmpScheduleDropdowns();
   renderProjectDropdowns();
   const empCompanySel = document.getElementById('empCompanySelect');
@@ -17451,6 +17492,11 @@ function renderEmployees(){
         needsSave = true;
       }
     }
+    const resolvedFlags = getResolvedContribFlagsForEmployee(id);
+    if (!contribFlags[id] || typeof contribFlags[id] !== 'object') contribFlags[id] = {};
+    contribFlags[id].pagibig = resolvedFlags.pagibig;
+    contribFlags[id].philhealth = resolvedFlags.philhealth;
+    contribFlags[id].sss = resolvedFlags.sss;
     let scheduleOptionsHtml = '';
     Object.keys(storedSchedules).forEach(sid=>{
       const label = storedSchedules[sid].name + (sid===defaultScheduleId ? ' (Default)' : '');
@@ -17491,25 +17537,19 @@ function renderEmployees(){
     const cbSss = tr.querySelector('.emp-sss');
     if (cbPagibig) {
       cbPagibig.addEventListener('change', () => {
-        if (!contribFlags[id]) contribFlags[id] = {};
-        contribFlags[id].pagibig = cbPagibig.checked;
-        localStorage.setItem(LS_CONTRIB_FLAGS, JSON.stringify(contribFlags));
+        persistEmployeeContribFlag(id, 'pagibig', cbPagibig.checked);
         calculateAll();
       });
     }
     if (cbPhilhealth) {
       cbPhilhealth.addEventListener('change', () => {
-        if (!contribFlags[id]) contribFlags[id] = {};
-        contribFlags[id].philhealth = cbPhilhealth.checked;
-        localStorage.setItem(LS_CONTRIB_FLAGS, JSON.stringify(contribFlags));
+        persistEmployeeContribFlag(id, 'philhealth', cbPhilhealth.checked);
         calculateAll();
       });
     }
     if (cbSss) {
       cbSss.addEventListener('change', () => {
-        if (!contribFlags[id]) contribFlags[id] = {};
-        contribFlags[id].sss = cbSss.checked;
-        localStorage.setItem(LS_CONTRIB_FLAGS, JSON.stringify(contribFlags));
+        persistEmployeeContribFlag(id, 'sss', cbSss.checked);
         calculateAll();
       });
     }
@@ -17592,6 +17632,11 @@ document.getElementById('addEmployeeBtn').addEventListener('click', ()=>{
     contribFlags[id] = { pagibig: true, philhealth: true, sss: true };
     localStorage.setItem(LS_CONTRIB_FLAGS, JSON.stringify(contribFlags));
   }
+  storedEmployees[id].contribFlags = {
+    pagibig: contribFlags[id].pagibig !== false,
+    philhealth: contribFlags[id].philhealth !== false,
+    sss: contribFlags[id].sss !== false
+  };
   saveEmployeesToLS();
   document.getElementById('empIdInput').value=''; document.getElementById('empNameInput').value=''; document.getElementById('empRateInput').value=''; document.getElementById('empBankInput').value='';
   if (companySelect) companySelect.value = COMPANY_OPTIONS[0] || '';
