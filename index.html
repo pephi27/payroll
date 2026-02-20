@@ -5612,6 +5612,18 @@ async function persistLoanTracker(){
   }
 }
 
+function persistLoanTrackerLocalCache(){
+  try {
+    ensureLoanTrackerShape(loanTracker);
+    const curStr = localStorage.getItem(LS_LOAN_TRACKER);
+    const nextStrNoMetaBump = JSON.stringify(loanTracker);
+    if (curStr && curStr === nextStrNoMetaBump) return;
+    loanTracker.__meta = loanTracker.__meta || {};
+    loanTracker.__meta.lastUpdatedAt = Date.now();
+    localStorage.setItem(LS_LOAN_TRACKER, JSON.stringify(loanTracker));
+  } catch(_){ }
+}
+
 
 // === Supabase Loan Tables (proper tables, realtime) ===
 // Using: employee_loans + loan_deductions + payroll_periods + employees
@@ -7428,27 +7440,31 @@ const loanTrackerRefresh = (() => {
     el.classList.remove('error');
     if (cls) el.classList.add(cls);
   };
-  const run = async (opts) => {
+  const run = async (opts, mode = 'full') => {
     timer = null;
-    try {
-      const baseOpts = opts || { createEntries: true };
-      baseOpts.updateMaps = true;
-      applyLoanTrackerToPeriod(currentPeriodKey || periodKey(), baseOpts);
-    } catch(_) {}
+    const baseOpts = Object.assign({ createEntries: true }, opts || {});
+    baseOpts.updateMaps = true;
+
+    try { applyLoanTrackerToPeriod(currentPeriodKey || periodKey(), baseOpts); } catch(_) {}
     try { saveCurrentPeriodDeductions(); } catch(_) {}
     try { await persistLoanTracker(); setStatus('Saved locally', 'saved'); } catch(e){ setStatus('Save failed', 'error'); }
-    try { calculateAll(); } catch(_) {}
-    try { renderLoanTrackerTable(); } catch(_) {}
+
+    // While typing, avoid expensive full-page recalcs and table re-renders that can cause lag/caret jumps.
+    if (mode === 'full') {
+      try { calculateAll(); } catch(_) {}
+      try { renderLoanTrackerTable(); } catch(_) {}
+    }
   };
   return {
     schedule(opts){
-      setStatus('Updating…');
+      setStatus('Saving…');
+      try { persistLoanTrackerLocalCache(); } catch(_){ }
       if (timer) window.clearTimeout(timer);
-      timer = window.setTimeout(() => run(opts), 350);
+      timer = window.setTimeout(() => run(opts, 'light'), 180);
     },
     flush(opts){
       if (timer) { window.clearTimeout(timer); timer = null; }
-      return run(opts);
+      return run(opts, 'full');
     }
   };
 })();
@@ -7498,7 +7514,11 @@ document.addEventListener('change', function(ev){
   const el = ev && ev.target;
   if (!el) return;
   if (el.id === 'loanTrackerActiveOnly') return;
-  applyLoanTrackerFieldChange(el);
+  const changed = applyLoanTrackerFieldChange(el);
+  if (!changed) return;
+  if (el.dataset && (el.dataset.field === 'principal' || el.dataset.field === 'weekly' || el.dataset.field === 'monthly')) {
+    loanTrackerRefresh.flush({ createEntries: true });
+  }
 });
 
 document.addEventListener('click', function(ev){
