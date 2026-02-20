@@ -11731,7 +11731,42 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!periodId || !window.supabase) return;
     try {
       const localMeta = getPeriodMeta(periodId);
-      const { data: periodRow } = await supabase.from('payroll_periods').select('id,status,head_version,updated_at').eq('id', periodId).maybeSingle();
+      const fallbackSelects = ['id,status,head_version,updated_at', 'id,status,updated_at', 'id,updated_at'];
+      const schemaProbe = (window.__payrollPeriodsSchemaProbe = window.__payrollPeriodsSchemaProbe || {
+        preferredIndex: 0,
+        disabledUntil: 0,
+        warned: false
+      });
+      if (schemaProbe.disabledUntil > Date.now()) {
+        updateSyncStatusUI();
+        return;
+      }
+      let periodRow = null;
+      let lastError = null;
+      for (let i = schemaProbe.preferredIndex; i < fallbackSelects.length; i += 1) {
+        const periodQuery = await supabase
+          .from('payroll_periods')
+          .select(fallbackSelects[i])
+          .eq('id', periodId)
+          .maybeSingle();
+        if (!periodQuery.error) {
+          schemaProbe.preferredIndex = i;
+          periodRow = periodQuery.data;
+          lastError = null;
+          break;
+        }
+        lastError = periodQuery.error;
+      }
+      if (lastError) {
+        if (!schemaProbe.warned) {
+          console.warn('payroll_periods pollPeriodSync query failed; pausing sync polling for 2 minutes', lastError);
+          schemaProbe.warned = true;
+        }
+        schemaProbe.disabledUntil = Date.now() + (2 * 60 * 1000);
+        updateSyncStatusUI();
+        return;
+      }
+      schemaProbe.warned = false;
       if (periodRow && periodRow.status && periodRow.status !== localMeta.status) {
         setPeriodMeta(periodId, { status: periodRow.status, label: `${start} to ${end}` });
         if (periodRow.status !== PERIOD_STATUSES.DRAFT) disablePayrollInputs();
