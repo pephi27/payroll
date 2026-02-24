@@ -959,6 +959,24 @@ function __kvHasMeaningfulHoursMap(obj){
 }
 try { window.__kvHasMeaningfulHoursMap = __kvHasMeaningfulHoursMap; } catch (_) {}
 const __KV_COMPUTED_LOCAL_KEYS = new Set(['payroll_reg_hours', 'payroll_ot_hours']);
+const __kvLastCloudTsByKey = Object.create(null);
+function __kvToMillis(ts){
+  const n = new Date(ts || 0).getTime();
+  return Number.isFinite(n) ? n : 0;
+}
+function __kvRememberCloudTs(key, ts){
+  if (!key) return;
+  const ms = __kvToMillis(ts);
+  if (!ms) return;
+  const prev = Number(__kvLastCloudTsByKey[key] || 0);
+  if (ms > prev) __kvLastCloudTsByKey[key] = ms;
+}
+function __kvIsStaleCloudTs(key, ts){
+  const incoming = __kvToMillis(ts);
+  if (!incoming) return false;
+  const prev = Number(__kvLastCloudTsByKey[key] || 0);
+  return prev > 0 && incoming < prev;
+}
 const __kvBootCloudFirstPeriodKeys = new Set([
   'payroll_other_deductions_details',
   'payroll_other_deductions_total',
@@ -1040,6 +1058,8 @@ function __kvSetupRealtimeChannel(force = false) {
           return;
         }
         if (eventType === 'INSERT' || eventType === 'UPDATE') {
+          const cloudUpdatedAt = payload && payload.new ? payload.new.updated_at : null;
+          if (__kvIsStaleCloudTs(key, cloudUpdatedAt)) return;
           const serialized = safeStringify(payload && payload.new ? payload.new.value : undefined);
           const nextValue = serialized == null ? 'null' : String(serialized);
           const current = localStorage.getItem(key);
@@ -1055,7 +1075,10 @@ function __kvSetupRealtimeChannel(force = false) {
           }
           if (nextValue !== current) {
             try { __origSetItem(key, nextValue); } catch {}
+            __kvRememberCloudTs(key, cloudUpdatedAt);
             queueHydrateRerender();
+          } else {
+            __kvRememberCloudTs(key, cloudUpdatedAt);
           }
         } else if (eventType === 'DELETE') {
           // Guard against remote deletes wiping computed payroll hour maps.
@@ -1330,7 +1353,7 @@ async function __kvHydrateOnce(){
     __kvHydrating = true;
     const { data, error } = await supabase
       .from(TABLE)
-      .select("key, value")
+      .select("key, value, updated_at")
       .in("key", KNOWN_KEYS);
     if (error) { console.warn("Supabase fetch error:", error.message); return false; }
 
@@ -1338,55 +1361,15 @@ async function __kvHydrateOnce(){
 
     for (const row of (data || [])) {
       const k = row.key;
+      __kvRememberCloudTs(k, row && row.updated_at);
       if (__KV_COMPUTED_LOCAL_KEYS.has(k)) {
         continue;
       }
       const cloudStr = safeStringify(row.value);
       const cur = localStorage.getItem(k);
 
-      // Conflict resolution (period-scoped maps): prefer the newer __meta.lastUpdatedAt side.
-      let preferLocal = false;
-      let cloudObj = null;
-      let localObj = null;
-      try {
-        cloudObj = (row && typeof row.value === 'object') ? row.value : JSON.parse(cloudStr || 'null');
-        localObj = cur ? JSON.parse(cur) : null;
-        const lc = localObj && localObj.__meta && Number(localObj.__meta.lastUpdatedAt);
-        const rc = cloudObj && cloudObj.__meta && Number(cloudObj.__meta.lastUpdatedAt);
-        const localHasMeaningful = __kvHasMeaningfulPeriodMap(localObj);
-        if (localHasMeaningful && lc && rc && lc > rc) preferLocal = true;
-      } catch(_) {}
-
-      // Safety: never auto-push local over cloud for Loan Tracker during boot hydrate.
-      if (k === 'payroll_loan_tracker') preferLocal = false;
-
-      // Safety: cloud-first on startup for Additional Income + Other Deductions to prevent an empty/stale PC overwriting newer cloud data.
-      try {
-        const decision = __kvBootCloudFirstDecision(k, localObj, cloudObj);
-        if (typeof decision === 'boolean') preferLocal = decision;
-      } catch(_) {}
-
-      // Payroll history is append-heavy and does not carry __meta timestamps.
-      // Prefer the side with the newer snapshot timeline so a newly finalized run
-      // is not lost after refresh when cloud replication is delayed.
-      if (k === 'payroll_hist') {
-        const localTs = __kvPayrollHistoryLatestTs(localObj);
-        const cloudTs = __kvPayrollHistoryLatestTs(cloudObj);
-        if (localTs > cloudTs) preferLocal = true;
-      }
-
-      // Protect computed payroll hours from being overwritten by an empty cloud payload
-      // during startup/reconnect races.
-      if (k === 'payroll_reg_hours' || k === 'payroll_ot_hours') {
-        const localHas = __kvHasMeaningfulHoursMap(localObj);
-        const cloudHas = __kvHasMeaningfulHoursMap(cloudObj);
-        if (localHas && !cloudHas) preferLocal = true;
-      }
-
-      if (preferLocal) {
-        try { await supabase.from(TABLE).upsert({ key: k, value: JSON.parse(cur) }, { onConflict: 'key' }); } catch(_){}
-        continue;
-      }
+      // Cloud-first strategy: Supabase is the source of truth.
+      // Local values are never auto-promoted during hydration.
 
       if (cloudStr != null && cloudStr !== cur) {
         // Important: write using the original setItem to avoid triggering mirroring back to cloud.
