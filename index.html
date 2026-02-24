@@ -5371,8 +5371,12 @@ function isLoanTypePagibig(type){
 }
 function loanEntryDefaults(type){
   if (isLoanTypePagibig(type)) return { monthly: 0, active: false };
-  if (isLoanTypeSSS(type)) return { principal: 0, monthly: 0, active: false };
-  return { principal: 0, weekly: 0, active: false };
+  if (isLoanTypeSSS(type)) return { principal: 0, monthly: 0, paidBaseline: 0, active: false };
+  return { principal: 0, weekly: 0, paidBaseline: 0, active: false };
+}
+function loanTrackerPaidBaseline(entry, type){
+  if (!entry || isLoanTypePagibig(type)) return 0;
+  return roundToCents(Number(entry.paidBaseline) || 0);
 }
 
 function loanTypeToProviderKind(type){
@@ -5514,6 +5518,7 @@ function migrateLoanTrackerLegacy(obj){
           let monthly = roundToCents(Number(e.monthly) || 0);
           if ((!monthly || monthly <= 0) && weekly > 0) monthly = roundToCents(weekly * div);
           e.monthly = roundToCents(monthly || 0);
+          e.paidBaseline = roundToCents(Number(e.paidBaseline) || 0);
           e.active = e.active === true;
           delete e.weekly;
         } else {
@@ -5521,6 +5526,7 @@ function migrateLoanTrackerLegacy(obj){
           const e = emp[type];
           e.principal = roundToCents(Number(e.principal) || 0);
           e.weekly = roundToCents(Number(e.weekly) || 0);
+          e.paidBaseline = roundToCents(Number(e.paidBaseline) || 0);
           e.active = e.active === true;
           delete e.monthly;
         }
@@ -6042,7 +6048,9 @@ function loanTrackerRemaining(periodKey, empId, type){
   if (!entry || isLoanTypePagibig(type)) return 0;
   const principal = roundToCents(entry.principal || 0);
   const paid = sumLoanTrackerAppliedUpTo(periodKey, empId, type);
-  const rem = principal - paid;
+  const baseline = loanTrackerPaidBaseline(entry, type);
+  const effectivePaid = Math.max(0, roundToCents(paid - baseline));
+  const rem = principal - effectivePaid;
   return roundToCents(rem < 0 ? 0 : rem);
 }
 function loanTrackerPerPeriodFromMonthly(monthly){
@@ -6123,7 +6131,9 @@ function applyLoanTrackerToPeriod(pk, options){
     }
 
     const paidBefore = sumLoanTrackerAppliedBefore(pk, empId, type);
-    const remainingBefore = roundToCents(principal - paidBefore);
+    const baseline = loanTrackerPaidBaseline(entry, type);
+    const effectivePaidBefore = Math.max(0, roundToCents(paidBefore - baseline));
+    const remainingBefore = roundToCents(principal - effectivePaidBefore);
     if (remainingBefore <= 0) {
       if (entry.active) { entry.active = false; changed = true; }
       clearForThisPeriod();
@@ -6186,7 +6196,9 @@ function applyLoanTrackerToPeriod(pk, options){
     }
 
     const paidBefore = sumLoanTrackerAppliedBefore(pk, empId, type);
-    const remainingBefore = roundToCents(principal - paidBefore);
+    const baseline = loanTrackerPaidBaseline(entry, type);
+    const effectivePaidBefore = Math.max(0, roundToCents(paidBefore - baseline));
+    const remainingBefore = roundToCents(principal - effectivePaidBefore);
     if (remainingBefore <= 0) {
       if (entry.active) { entry.active = false; changed = true; }
       clearForThisPeriod();
@@ -7631,7 +7643,18 @@ function applyLoanTrackerFieldChange(el){
   if (field === 'active') {
     entry.active = !!el.checked;
   } else if (field === 'principal') {
-    entry.principal = roundToCents(Number(el.value) || 0);
+    const nextPrincipal = roundToCents(Number(el.value) || 0);
+    const prevPrincipal = roundToCents(entry.principal || 0);
+    entry.principal = nextPrincipal;
+    if (!isLoanTypePagibig(type)) {
+      const baseline = loanTrackerPaidBaseline(entry, type);
+      const paidToDate = sumLoanTrackerAppliedUpTo(currentPeriodKey || periodKey(), empId, type);
+      const effectivePaid = Math.max(0, roundToCents(paidToDate - baseline));
+      const wasFullyPaid = prevPrincipal > 0 && effectivePaid >= prevPrincipal;
+      if (nextPrincipal > 0 && (entry.active !== true || wasFullyPaid)) {
+        entry.paidBaseline = roundToCents(paidToDate);
+      }
+    }
   } else if (field === 'weekly') {
     entry.weekly = roundToCents(Number(el.value) || 0);
   } else if (field === 'monthly') {
