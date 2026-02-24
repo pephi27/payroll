@@ -5275,6 +5275,17 @@ weekEndEl.value = weekEndSaved;
 divisorEl.value = divisor;
 
 function periodKey(){return (weekStartEl.value||'')+'_'+(weekEndEl.value||'');}
+function isValidPeriodDatePart(v){
+  return typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v);
+}
+function normalizePeriodKeyValue(key){
+  if (typeof key !== 'string') return '';
+  const parts = key.split('_');
+  const start = (parts[0] || '').trim();
+  const end = (parts[1] || '').trim();
+  if (!isValidPeriodDatePart(start) || !isValidPeriodDatePart(end)) return '';
+  return start + '_' + end;
+}
 const PERIOD_META_KEY='__meta';
 const PERIOD_DEFAULT_KEY='__default';
 function isPlainObject(val){ return !!val && typeof val === 'object' && !Array.isArray(val); }
@@ -6602,7 +6613,9 @@ if (periodPersistenceReady) {
   refreshPeriodScopedCachesFromStorage();
 }
 async function saveCurrentPeriodDeductions(){
-  if (!currentPeriodKey) return;
+  const targetKey = normalizePeriodKeyValue(currentPeriodKey);
+  if (!targetKey) return;
+  currentPeriodKey = targetKey;
   allLoanSSS[currentPeriodKey] = loanSSS || {};
   allLoanPI[currentPeriodKey] = loanPI || {};
   allVale[currentPeriodKey] = vale || {};
@@ -6628,7 +6641,8 @@ async function saveCurrentPeriodDeductions(){
 }
 saveCurrentPeriodDeductions();
 function syncPeriodScopedData(){
-  const pk = periodKey();
+  const pk = normalizePeriodKeyValue(periodKey());
+  if (!pk) return false;
   if (pk === currentPeriodKey) return false;
   const prevKey = currentPeriodKey;
   saveCurrentPeriodDeductions();
