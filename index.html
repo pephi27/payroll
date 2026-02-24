@@ -5165,52 +5165,7 @@ let regHours = JSON.parse(localStorage.getItem(LS_REG_HRS) || '{}');
 let otHours = JSON.parse(localStorage.getItem(LS_OT_HRS) || '{}');
 
 // Per-employee contribution deduction flags. Each entry keyed by employee ID holds booleans {pagibig, philhealth, sss}
-function normalizeContribFlags(raw) {
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
-  const normalized = {};
-  Object.keys(raw).forEach(empId => {
-    const flag = raw[empId];
-    if (!flag || typeof flag !== 'object' || Array.isArray(flag)) {
-      normalized[empId] = { pagibig: true, philhealth: true, sss: true };
-      return;
-    }
-    normalized[empId] = {
-      pagibig: flag.pagibig !== false,
-      philhealth: flag.philhealth !== false,
-      sss: flag.sss !== false
-    };
-  });
-  return normalized;
-}
-
-function loadContribFlagsFromLocalStorage() {
-  try {
-    return normalizeContribFlags(JSON.parse(localStorage.getItem(LS_CONTRIB_FLAGS) || '{}'));
-  } catch (_) {
-    return {};
-  }
-}
-
-function persistContribFlags() {
-  const normalized = normalizeContribFlags(contribFlags);
-  contribFlags = normalized;
-  try { localStorage.setItem(LS_CONTRIB_FLAGS, JSON.stringify(normalized)); } catch (_) {}
-  try { if (typeof window.writeKV === 'function') window.writeKV(LS_CONTRIB_FLAGS, normalized); } catch (_) {}
-}
-
-async function refreshContribFlagsFromStore() {
-  let next = null;
-  try {
-    if (typeof window.readKV === 'function') {
-      next = await window.readKV(LS_CONTRIB_FLAGS);
-    }
-  } catch (_) {}
-  if (!next) next = loadContribFlagsFromLocalStorage();
-  contribFlags = normalizeContribFlags(next);
-  persistContribFlags();
-}
-
-let contribFlags = loadContribFlagsFromLocalStorage();
+let contribFlags = JSON.parse(localStorage.getItem(LS_CONTRIB_FLAGS) || '{}');
 
 function migrateWeekRangeKeys(){
   try {
@@ -17591,7 +17546,7 @@ function renderEmployees(){
       cbPagibig.addEventListener('change', () => {
         if (!contribFlags[id]) contribFlags[id] = {};
         contribFlags[id].pagibig = cbPagibig.checked;
-        persistContribFlags();
+        localStorage.setItem(LS_CONTRIB_FLAGS, JSON.stringify(contribFlags));
         calculateAll();
       });
     }
@@ -17599,7 +17554,7 @@ function renderEmployees(){
       cbPhilhealth.addEventListener('change', () => {
         if (!contribFlags[id]) contribFlags[id] = {};
         contribFlags[id].philhealth = cbPhilhealth.checked;
-        persistContribFlags();
+        localStorage.setItem(LS_CONTRIB_FLAGS, JSON.stringify(contribFlags));
         calculateAll();
       });
     }
@@ -17607,7 +17562,7 @@ function renderEmployees(){
       cbSss.addEventListener('change', () => {
         if (!contribFlags[id]) contribFlags[id] = {};
         contribFlags[id].sss = cbSss.checked;
-        persistContribFlags();
+        localStorage.setItem(LS_CONTRIB_FLAGS, JSON.stringify(contribFlags));
         calculateAll();
       });
     }
@@ -17688,7 +17643,7 @@ document.getElementById('addEmployeeBtn').addEventListener('click', ()=>{
   // Initialize default contribution deduction flags for new employee if not already set
   if (!contribFlags[id]) {
     contribFlags[id] = { pagibig: true, philhealth: true, sss: true };
-    persistContribFlags();
+    localStorage.setItem(LS_CONTRIB_FLAGS, JSON.stringify(contribFlags));
   }
   saveEmployeesToLS();
   document.getElementById('empIdInput').value=''; document.getElementById('empNameInput').value=''; document.getElementById('empRateInput').value=''; document.getElementById('empBankInput').value='';
@@ -18710,7 +18665,6 @@ document.getElementById('clearProjectsBtn').addEventListener('click', ()=>{
 
 async function initApp(){
   if (window.ENABLE_SPLIT_OVERRIDES) await hydrateSplitOverrides();
-  await refreshContribFlagsFromStore();
   ensureSchedules();
   renderScheduleSelector();
   renderScheduleEditor();
