@@ -16765,7 +16765,34 @@ async function syncSplitOverrides(){
     Object.keys(splits || {}).forEach(k => keySet.add(baseKey(k)));
     Object.keys(overridesProjects || {}).forEach(k => keySet.add(baseKey(k)));
     Object.keys(overridesSchedules || {}).forEach(k => keySet.add(baseKey(k)));
+
+    // Keep remote table in sync with local state. Without pruning, rows that were
+    // removed locally can reappear after hydrate/realtime refresh.
+    const { data: existingRows, error: existingErr } = await window.supabase
+      .from(SPLIT_OVERRIDES_TABLE)
+      .select('emp_id,date');
+    if (existingErr) throw existingErr;
+
+    const staleRows = (existingRows || []).filter(function(row){
+      const key = String(row.emp_id || '') + '___' + __normalizeYmd(row.date);
+      return !keySet.has(key);
+    });
+
+    if (staleRows.length) {
+      for (const row of staleRows) {
+        const date = __normalizeYmd(row.date);
+        if (!row.emp_id || !date) continue;
+        const { error: delErr } = await window.supabase
+          .from(SPLIT_OVERRIDES_TABLE)
+          .delete()
+          .eq('emp_id', row.emp_id)
+          .eq('date', date);
+        if (delErr) console.warn('syncSplitOverrides delete error', delErr);
+      }
+    }
+
     if (keySet.size === 0) return;
+
     const rows = [];
     keySet.forEach(function(k){
       const parts = k.split('___');
