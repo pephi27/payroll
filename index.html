@@ -11725,6 +11725,43 @@ document.addEventListener('DOMContentLoaded', () => {
     return { snap, index: payrollHistory.indexOf(snap) };
   }
 
+  function createPeriodSnapshotRow({ periodId, revision, createdAt, status, snapshotData, snapshotHash, note = '' }) {
+    return {
+      snapshot_id: (crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`),
+      period_id: periodId,
+      revision,
+      created_at: createdAt,
+      created_by: 'admin',
+      status,
+      snapshot_data: snapshotData,
+      snapshot_hash: snapshotHash,
+      note
+    };
+  }
+
+  async function persistPeriodSnapshot({ snapshotRow, periodId, startDate, endDate, status, createdAt, syncErrorMessage }) {
+    const allSnapshots = getSnapshotsStore();
+    allSnapshots.push(snapshotRow);
+    setSnapshotsStore(allSnapshots);
+    setPeriodMeta(periodId, { status, label: `${startDate} to ${endDate}` });
+
+    try {
+      await __insertSnapshotRowCloud(snapshotRow);
+      await __upsertPeriodIndexCloud(periodId, startDate, endDate, status, createdAt);
+    } catch (err) {
+      console.warn(syncErrorMessage, err);
+    }
+  }
+
+  function refreshPayrollViews() {
+    saveHistory();
+    if (typeof renderHistory === 'function') renderHistory();
+    if (typeof renderActivePayrolls === 'function') renderActivePayrolls();
+    try { if (typeof window.populatePayrollDropdowns === 'function') window.populatePayrollDropdowns(); } catch (err) {}
+    try { if (typeof window.applyPayrollLockUI === 'function') window.applyPayrollLockUI(); } catch (err) {}
+    try { if (typeof window.checkAndToggleEditState === 'function') window.checkAndToggleEditState(); } catch (err) {}
+  }
+
   async function voidSnapshot(snap, reason) {
     if (!snap) return;
     const now = new Date().toISOString();
@@ -11750,32 +11787,27 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const snapData = { startDate: snap.startDate, endDate: snap.endDate, rows: snap.rows || [], totals: snap.totals || {}, reason };
     const revision = nextRevision(periodId);
-    const snapshotRow = {
-      snapshot_id: (crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`),
-      period_id: periodId,
+    const snapshotRow = createPeriodSnapshotRow({
+      periodId,
       revision,
-      created_at: now,
-      created_by: 'admin',
+      createdAt: now,
       status: PERIOD_STATUSES.VOIDED,
-      snapshot_data: snapData,
-      snapshot_hash: await computeSnapshotHash(snapData),
+      snapshotData: snapData,
+      snapshotHash: await computeSnapshotHash(snapData),
       note: reason
-    };
-    const allSnapshots = getSnapshotsStore();
-    allSnapshots.push(snapshotRow);
-    setSnapshotsStore(allSnapshots);
-    setPeriodMeta(periodId, { status: PERIOD_STATUSES.VOIDED, label: `${snap.startDate} to ${snap.endDate}` });
-    try {
-      await __insertSnapshotRowCloud(snapshotRow);
-      await __upsertPeriodIndexCloud(periodId, snap.startDate, snap.endDate, PERIOD_STATUSES.VOIDED, now);
-    } catch (e) { console.warn('void snapshot sync failed', e); }
+    });
 
-    saveHistory();
-    if (typeof renderHistory === 'function') renderHistory();
-    if (typeof renderActivePayrolls === 'function') renderActivePayrolls();
-    try { if (typeof window.populatePayrollDropdowns === 'function') window.populatePayrollDropdowns(); } catch (err) {}
-    try { if (typeof window.applyPayrollLockUI === 'function') window.applyPayrollLockUI(); } catch (err) {}
-    try { if (typeof window.checkAndToggleEditState === 'function') window.checkAndToggleEditState(); } catch (err) {}
+    await persistPeriodSnapshot({
+      snapshotRow,
+      periodId,
+      startDate: snap.startDate,
+      endDate: snap.endDate,
+      status: PERIOD_STATUSES.VOIDED,
+      createdAt: now,
+      syncErrorMessage: 'void snapshot sync failed'
+    });
+
+    refreshPayrollViews();
   }
 
   async function lockCurrentPeriod() {
@@ -11832,27 +11864,24 @@ document.addEventListener('DOMContentLoaded', () => {
     const computedHash = await computeSnapshotHash(snapshotPayload);
     if (!hashHex) hashHex = computedHash;
 
-    const snapshotRow = {
-      snapshot_id: (crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`),
-      period_id: periodId,
+    const snapshotRow = createPeriodSnapshotRow({
+      periodId,
       revision,
-      created_at: lockedAt,
-      created_by: 'admin',
+      createdAt: lockedAt,
       status: PERIOD_STATUSES.FINALIZED,
-      snapshot_data: snapshotPayload,
-      snapshot_hash: hashHex,
-      note: ''
-    };
+      snapshotData: snapshotPayload,
+      snapshotHash: hashHex
+    });
 
-    const allSnapshots = getSnapshotsStore();
-    allSnapshots.push(snapshotRow);
-    setSnapshotsStore(allSnapshots);
-    setPeriodMeta(periodId, { status: PERIOD_STATUSES.FINALIZED, label: `${start} to ${end}` });
-
-    try {
-      await __insertSnapshotRowCloud(snapshotRow);
-      await __upsertPeriodIndexCloud(periodId, start, end, PERIOD_STATUSES.FINALIZED, lockedAt);
-    } catch (e) { console.warn('finalize cloud sync failed', e); }
+    await persistPeriodSnapshot({
+      snapshotRow,
+      periodId,
+      startDate: start,
+      endDate: end,
+      status: PERIOD_STATUSES.FINALIZED,
+      createdAt: lockedAt,
+      syncErrorMessage: 'finalize cloud sync failed'
+    });
 
     try { await upsertSnapshotIndexEntry(start, end, { finalizedAt: lockedAt, hash: hashHex, revision, status: PERIOD_STATUSES.FINALIZED, ...(auditMeta || {}) }); } catch (err) { console.warn('Snapshot index update failed', err); }
 
