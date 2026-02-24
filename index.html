@@ -3188,8 +3188,8 @@ window.addEventListener('load', dashReports);
       <div class="bp-topbar-period" aria-label="Pay period controls">
         <select id="bpActivePayrollSelect" class="bp-select"></select>
         <button id="bpNewPayrollPeriod" class="bp-btn" type="button">New period</button>
-        <button id="bpFinalizeSnapshot" class="bp-btn primary" type="button">Finalize &amp; Snapshot</button>
-        <button id="bpVoidPayRun" class="bp-btn" type="button" disabled>Void</button>
+        <button id="bpFinalizeSnapshot" class="bp-btn primary" type="button">Lock Payroll</button>
+        <button id="bpVoidPayRun" class="bp-btn" type="button" disabled>Unlock Payroll</button>
       </div>
     </div>
 
@@ -3215,8 +3215,8 @@ window.addEventListener('load', dashReports);
           <span style="font-weight:600;color:#374151;">Payroll period:</span>
           <select id="activePayrollSelect" class="date-input activeWeekSelect" style="min-width:260px;"></select>
           <button id="newPayrollPeriod" type="button" class="date-input">New period</button>
-          <button id="lockSnapshotBtn" type="button" class="date-input">Finalize &amp; Snapshot</button>
-          <button id="voidPayRunBtn" type="button" class="date-input" disabled>Void Pay Run</button>
+          <button id="lockSnapshotBtn" type="button" class="date-input">Lock Payroll</button>
+          <button id="voidPayRunBtn" type="button" class="date-input" disabled>Unlock Payroll</button>
           <span id="syncStatusBadge" style="font-size:12px;color:#0f172a;font-weight:600;">Synced</span>
           <span id="dashLockStatus" style="display:none;font-size:12px;color:#111827;font-weight:600;"></span>
         </div>
@@ -3282,15 +3282,15 @@ window.addEventListener('load', dashReports);
         </div>
         <div id="voidPayRunModal">
           <div class="card">
-            <h3>Void Pay Run</h3>
-            <p style="margin:0;font-size:12px;color:#6b7280;">This will mark the finalized run as voided for audit history. You must provide a reason.</p>
-            <label for="voidReasonInput">Void reason (required)
-              <textarea id="voidReasonInput" placeholder="Enter void reason..."></textarea>
+            <h3>Unlock Payroll</h3>
+            <p style="margin:0;font-size:12px;color:#6b7280;">Unlocking reopens this payroll period so you can edit and correct it.</p>
+            <label for="voidReasonInput">Unlock note (optional)
+              <textarea id="voidReasonInput" placeholder="Add an optional note..."></textarea>
             </label>
-            <div class="error" id="voidReasonError">Please enter a void reason.</div>
+            <div class="error" id="voidReasonError">Unable to unlock this payroll period.</div>
             <div class="actions">
               <button id="cancelVoidPayRun" type="button">Cancel</button>
-              <button id="confirmVoidPayRun" type="button" class="primary" disabled>Confirm Void</button>
+              <button id="confirmVoidPayRun" type="button" class="primary">Confirm Unlock</button>
             </div>
           </div>
         </div>
@@ -3327,7 +3327,7 @@ window.addEventListener('load', dashReports);
        <tr>
          <th>Start</th>
          <th>End</th>
-         <th>Finalized At</th>
+         <th>Locked At</th>
          <th>Status</th>
          <th>Net Pay</th>
          <th>Actions</th>
@@ -11613,7 +11613,7 @@ document.addEventListener('DOMContentLoaded', () => {
       dashLockStatus.textContent = '';
       return;
     }
-    const parts = ['Finalized'];
+    const parts = ['Locked'];
     if (entry.lockedAt || entry.finalizedAt) {
       try {
         const stamp = entry.finalizedAt || entry.lockedAt;
@@ -11705,18 +11705,16 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   function updateVoidConfirmState() {
-    if (!voidConfirmBtn || !voidReasonInput) return;
-    const reason = (voidReasonInput.value || '').trim();
-    const ok = reason.length > 0;
-    voidConfirmBtn.disabled = !ok;
-    if (voidReasonError) voidReasonError.style.display = ok ? 'none' : 'block';
+    if (!voidConfirmBtn) return;
+    voidConfirmBtn.disabled = false;
+    if (voidReasonError) voidReasonError.style.display = 'none';
   }
 
   function openVoidModal(index = null) {
     pendingVoidIndex = Number.isFinite(index) ? index : null;
     if (voidReasonInput) voidReasonInput.value = '';
     if (voidReasonError) voidReasonError.style.display = 'none';
-    if (voidConfirmBtn) voidConfirmBtn.disabled = true;
+    if (voidConfirmBtn) voidConfirmBtn.disabled = false;
     setVoidModalState(true);
     setTimeout(() => { try { voidReasonInput && voidReasonInput.focus(); } catch (err) {} }, 0);
   }
@@ -11726,7 +11724,7 @@ document.addEventListener('DOMContentLoaded', () => {
     setVoidModalState(false);
   }
 
-  function resolveSnapshotToVoid() {
+  function resolveSnapshotToUnlock() {
     if (Number.isFinite(pendingVoidIndex)) {
       const snap = payrollHistory[pendingVoidIndex];
       return snap ? { snap, index: pendingVoidIndex } : null;
@@ -11774,27 +11772,30 @@ document.addEventListener('DOMContentLoaded', () => {
     try { if (typeof window.checkAndToggleEditState === 'function') window.checkAndToggleEditState(); } catch (err) {}
   }
 
-  async function voidSnapshot(snap, reason) {
+  async function unlockSnapshot(snap, reason) {
     if (!snap) return;
     const now = new Date().toISOString();
     const periodId = periodIdFromRange(snap.startDate, snap.endDate);
     const meta = getPeriodMeta(periodId);
-    if (meta.status !== PERIOD_STATUSES.FINALIZED) {
-      alert('Only FINALIZED period can be voided.');
+    const snapStatus = getSnapshotStatus(snap);
+    const isMetaLocked = meta.status === PERIOD_STATUSES.FINALIZED;
+    const isSnapshotLocked = snapStatus === 'finalized' || !!snap.locked || !!snap.finalized;
+    if (!isMetaLocked && !isSnapshotLocked) {
+      alert('Only LOCKED payroll can be unlocked.');
       return;
     }
     const flush = window.store ? await window.store.flushSync() : { ok: true, conflict: false };
     if (!flush.ok) {
-      alert(flush.conflict ? 'Conflict detected; reload period before voiding.' : 'Sync failed; check connection.');
+      alert(flush.conflict ? 'Conflict detected; reload period before unlocking.' : 'Sync failed; check connection.');
       return;
     }
 
-    snap.status = 'voided';
-    snap.voidedAt = now;
-    snap.voidedBy = snap.voidedBy || 'admin';
-    snap.voidReason = reason;
-    snap.locked = true;
-    snap.finalized = true;
+    snap.status = 'draft';
+    snap.voidedAt = '';
+    snap.voidedBy = '';
+    snap.voidReason = reason || '';
+    snap.locked = false;
+    snap.finalized = false;
     clearPeriodLockEntry(snap.startDate, snap.endDate);
 
     const snapData = { startDate: snap.startDate, endDate: snap.endDate, rows: snap.rows || [], totals: snap.totals || {}, reason };
@@ -11803,10 +11804,10 @@ document.addEventListener('DOMContentLoaded', () => {
       periodId,
       revision,
       createdAt: now,
-      status: PERIOD_STATUSES.VOIDED,
+      status: PERIOD_STATUSES.DRAFT,
       snapshotData: snapData,
       snapshotHash: await computeSnapshotHash(snapData),
-      note: reason
+      note: reason || 'Unlocked for corrections'
     });
 
     await persistPeriodSnapshot({
@@ -11814,9 +11815,9 @@ document.addEventListener('DOMContentLoaded', () => {
       periodId,
       startDate: snap.startDate,
       endDate: snap.endDate,
-      status: PERIOD_STATUSES.VOIDED,
+      status: PERIOD_STATUSES.DRAFT,
       createdAt: now,
-      syncErrorMessage: 'void snapshot sync failed'
+      syncErrorMessage: 'unlock snapshot sync failed'
     });
 
     refreshPayrollViews();
@@ -11831,7 +11832,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const periodId = periodIdFromRange(start, end);
     const currentMeta = getPeriodMeta(periodId);
     if (currentMeta.status !== PERIOD_STATUSES.DRAFT) {
-      alert('Only DRAFT can be finalized');
+      alert('Only DRAFT payroll can be locked.');
       return;
     }
 
@@ -12103,13 +12104,13 @@ document.addEventListener('DOMContentLoaded', () => {
       const statusTag = status === 'voided'
         ? '<span class="status-tag status-voided">Voided</span>'
         : (snap.locked || snap.finalized)
-          ? '<span class="status-tag status-finalized">Finalized</span>'
+          ? '<span class="status-tag status-finalized">Locked</span>'
           : '<span class="status-tag status-active">Active</span>';
       // Build row HTML; note small hash display for brevity
       // Build the actions column depending on lock status.
       const actions = [];
       if (status === 'finalized') {
-        actions.push(`<button type="button" class="voidSnapshot" data-index="${index}">Void Pay Run</button>`);
+        actions.push(`<button type="button" class="voidSnapshot" data-index="${index}">Unlock Payroll</button>`);
       }
       // Keep the Delete button enabled for every row; click handling decides whether
       // deletion is allowed for the selected snapshot.
@@ -12615,7 +12616,7 @@ document.addEventListener('DOMContentLoaded', () => {
     try {
       await Promise.resolve(lockCurrentPeriod());
     } catch (err) {
-      console.warn('Finalize & Snapshot failed', err);
+      console.warn('Lock payroll failed', err);
     } finally {
       isFinalizingSnapshot = false;
       if (dashLockButton && !isSelectedPeriodLocked()) dashLockButton.disabled = false;
@@ -12635,13 +12636,10 @@ document.addEventListener('DOMContentLoaded', () => {
     voidReasonInput && voidReasonInput.addEventListener('input', updateVoidConfirmState);
     voidConfirmBtn && voidConfirmBtn.addEventListener('click', async () => {
       const reason = (voidReasonInput && voidReasonInput.value ? voidReasonInput.value.trim() : '');
-      if (!reason) {
-        updateVoidConfirmState();
-        return;
-      }
-      const resolved = resolveSnapshotToVoid();
+
+      const resolved = resolveSnapshotToUnlock();
       if (!resolved || !resolved.snap) {
-        alert('No finalized snapshot found to void for this period.');
+        alert('No locked payroll found for this period.');
         closeVoidModal();
         return;
       }
@@ -12649,7 +12647,7 @@ document.addEventListener('DOMContentLoaded', () => {
         closeVoidModal();
         return;
       }
-      await voidSnapshot(resolved.snap, reason);
+      await unlockSnapshot(resolved.snap, reason);
       closeVoidModal();
     });
     voidModal.addEventListener('keydown', (ev) => {
