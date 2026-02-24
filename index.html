@@ -13277,15 +13277,17 @@ return { rootHash, manifestHash, segmentCount: Object.keys(segments).length, ver
       return;
     }
     if (actionBtn.classList.contains('deleteSnapshot')) {
-      // Keep button enabled for visibility, but guard deletions for locked/finalized entries.
+      // Allow deletion from history even for locked/finalized entries after explicit confirmation.
       const snapStatus = getSnapshotStatus(snap);
       const lockEntry = getLockEntry(snap.startDate, snap.endDate);
-      if (snap.locked || (lockEntry && lockEntry.locked) || snapStatus === 'finalized' || snapStatus === 'voided') {
-        alert('This payroll record is locked and cannot be deleted.');
-        return;
+      const isLockedSnapshot = !!(snap.locked || (lockEntry && lockEntry.locked) || snapStatus === 'finalized' || snapStatus === 'voided');
+      if (isLockedSnapshot) {
+        const lockedDeleteConfirmed = confirm('This payroll record is locked. Delete it from history anyway? This will also remove its lock record.');
+        if (!lockedDeleteConfirmed) return;
       }
       const confirmDel = confirm('Are you sure you want to delete this payroll record? This cannot be undone.');
       if (!confirmDel) return;
+      if (isLockedSnapshot) clearPeriodLockEntry(snap.startDate, snap.endDate);
       payrollHistory.splice(idx, 1);
       saveHistory();
       renderHistory();
