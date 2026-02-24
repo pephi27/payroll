@@ -1344,17 +1344,44 @@ async function __kvHydrateOnce(){
       const cloudStr = safeStringify(row.value);
       const cur = localStorage.getItem(k);
 
-      // Cloud-first strategy: Supabase is the source of truth.
-      // Local values are never auto-promoted during hydration.
+      // Conflict resolution (period-scoped maps): prefer the newer __meta.lastUpdatedAt side.
       let preferLocal = false;
       let cloudObj = null;
       let localObj = null;
       try {
         cloudObj = (row && typeof row.value === 'object') ? row.value : JSON.parse(cloudStr || 'null');
         localObj = cur ? JSON.parse(cur) : null;
+        const lc = localObj && localObj.__meta && Number(localObj.__meta.lastUpdatedAt);
+        const rc = cloudObj && cloudObj.__meta && Number(cloudObj.__meta.lastUpdatedAt);
+        const localHasMeaningful = __kvHasMeaningfulPeriodMap(localObj);
+        if (localHasMeaningful && lc && rc && lc > rc) preferLocal = true;
       } catch(_) {}
 
-      // Intentionally no local-wins exceptions here.
+      // Safety: never auto-push local over cloud for Loan Tracker during boot hydrate.
+      if (k === 'payroll_loan_tracker') preferLocal = false;
+
+      // Safety: cloud-first on startup for Additional Income + Other Deductions to prevent an empty/stale PC overwriting newer cloud data.
+      try {
+        const decision = __kvBootCloudFirstDecision(k, localObj, cloudObj);
+        if (typeof decision === 'boolean') preferLocal = decision;
+      } catch(_) {}
+
+      // Payroll history is append-heavy and does not carry __meta timestamps.
+      // Prefer the side with the newer snapshot timeline so a newly finalized run
+      // is not lost after refresh when cloud replication is delayed.
+      if (k === 'payroll_hist') {
+        const localTs = __kvPayrollHistoryLatestTs(localObj);
+        const cloudTs = __kvPayrollHistoryLatestTs(cloudObj);
+        if (localTs > cloudTs) preferLocal = true;
+      }
+
+      // Protect computed payroll hours from being overwritten by an empty cloud payload
+      // during startup/reconnect races.
+      if (k === 'payroll_reg_hours' || k === 'payroll_ot_hours') {
+        const localHas = __kvHasMeaningfulHoursMap(localObj);
+        const cloudHas = __kvHasMeaningfulHoursMap(cloudObj);
+        if (localHas && !cloudHas) preferLocal = true;
+      }
 
       if (preferLocal) {
         try { await supabase.from(TABLE).upsert({ key: k, value: JSON.parse(cur) }, { onConflict: 'key' }); } catch(_){}
@@ -1367,20 +1394,6 @@ async function __kvHydrateOnce(){
         changed = true;
       }
     }
-
-    // Remove local values for mirrored keys that don't exist in cloud so
-    // startup remains strictly cloud-first.
-    try {
-      const cloudKeys = new Set((data || []).map((row) => row && row.key).filter(Boolean));
-      for (const key of KNOWN_KEYS) {
-        if (__KV_COMPUTED_LOCAL_KEYS.has(key)) continue;
-        if (cloudKeys.has(key)) continue;
-        if (localStorage.getItem(key) !== null) {
-          try { __origRemoveItem(key); } catch(_) {}
-          changed = true;
-        }
-      }
-    } catch (_) {}
 
     // Hydration is done. Now it is safe to enable local->cloud mirroring.
     __kvEnableSync();
