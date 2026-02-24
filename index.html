@@ -11215,7 +11215,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function getSnapshotStatus(snap) {
     if (!snap || typeof snap !== 'object') return 'draft';
-    if (snap.status) return snap.status;
+    const rawStatus = typeof snap.status === 'string' ? snap.status.trim().toLowerCase() : '';
+    if (rawStatus === 'voided' || rawStatus === 'void') return 'voided';
+    if (rawStatus === 'finalized' || rawStatus === 'locked') return 'finalized';
+    if (rawStatus === 'draft' || rawStatus === 'active') return 'draft';
     if (snap.voidedAt || snap.voidedBy || snap.voidReason) return 'voided';
     // Backward-compatible finalized detection: older snapshots may have
     // finalizedAt populated but missing explicit boolean flags.
@@ -11242,8 +11245,8 @@ document.addEventListener('DOMContentLoaded', () => {
       if (!entry || entry.startDate !== start || entry.endDate !== end) return false;
       const status = getSnapshotStatus(entry);
       if (!includeVoided && status === 'voided') return false;
-      if (onlyFinalized && !(entry.locked || entry.finalized)) return false;
-      if (onlyUnlocked && (entry.locked || entry.finalized)) return false;
+      if (onlyFinalized && status !== 'finalized') return false;
+      if (onlyUnlocked && status !== 'draft') return false;
       return true;
     });
     if (!matches.length) return null;
