@@ -5691,6 +5691,56 @@ async function persistLoanTracker(){
       });
     });
 
+    // Remove orphaned rows that still exist in Supabase but are no longer present
+    // in local state for the same employee/provider/type composite key.
+    if (codes.length) {
+      const employeeIds = codes
+        .map(code => codeToId[String(code).trim()])
+        .filter(Boolean);
+
+      if (employeeIds.length) {
+        const expectedLoanKeys = new Set(
+          loanRows.map(r => [
+            String(r.employee_id),
+            String(r.provider).toUpperCase(),
+            String(r.loan_type).toUpperCase()
+          ].join('|'))
+        );
+
+        const existingRes = await sb
+          .from(LOANS_TABLE)
+          .select('employee_id,provider,loan_type')
+          .in('employee_id', employeeIds);
+
+        if (existingRes.error) {
+          console.warn('employee_loans existing rows fetch error', existingRes.error);
+        } else {
+          const orphanedRows = (existingRes.data || []).filter(r => {
+            const key = [
+              String(r.employee_id),
+              String(r.provider).toUpperCase(),
+              String(r.loan_type).toUpperCase()
+            ].join('|');
+            return !expectedLoanKeys.has(key);
+          });
+
+          if (orphanedRows.length) {
+            await Promise.all(orphanedRows.map(async orphanedRow => {
+              const delRes = await sb
+                .from(LOANS_TABLE)
+                .delete()
+                .eq('employee_id', orphanedRow.employee_id)
+                .eq('provider', orphanedRow.provider)
+                .eq('loan_type', orphanedRow.loan_type);
+              if (delRes.error) {
+                console.warn('employee_loans orphan delete error', delRes.error, orphanedRow);
+              }
+            }));
+          }
+        }
+      }
+    }
+
     // Upsert loans and fetch ids
     let loanKeyToId = {};
     if (loanRows.length) {
