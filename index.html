@@ -1570,6 +1570,12 @@ function safeStringify(v){
 
 
 /* Loan Tracker */
+.bp-shell #deductionsTab .loan-tracker {
+  background: var(--bp-surface);
+  border: 1px solid var(--bp-border);
+  border-radius: 12px;
+  padding: 10px;
+}
 .loan-tracker h3 { margin: 14px 0 6px; }
 .loan-tracker .table-wrap {
   overflow-x: auto;
@@ -1592,6 +1598,9 @@ function safeStringify(v){
 #loanTrackerTable td {
   vertical-align: middle;
   background: rgba(17, 19, 24, 0.75);
+}
+#loanTrackerTable tbody tr:hover td {
+  background: rgba(30, 41, 59, 0.85);
 }
 #loanTrackerTable tbody tr:nth-child(even) td {
   background: rgba(24, 28, 35, 0.88);
