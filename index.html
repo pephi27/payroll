@@ -5625,7 +5625,9 @@ async function persistLoanTracker(){
 
   if (!__hasSupabase()) return;
   try {
-    const sb = window.supabase;
+    __loanRealtimePaused = true;
+    try {
+      const sb = window.supabase;
 
     const byEmp = (loanTracker && loanTracker.byEmp) || {};
     const codes = Object.keys(byEmp || {});
@@ -5691,6 +5693,19 @@ async function persistLoanTracker(){
       });
     });
 
+    // Upsert loans and fetch ids
+    let loanKeyToId = {};
+    if (loanRows.length) {
+      const res = await sb
+        .from(LOANS_TABLE)
+        .upsert(loanRows, { onConflict: 'employee_id,provider,loan_type' })
+        .select('id,employee_id,provider,loan_type');
+      if (res.error) console.warn('employee_loans upsert error', res.error);
+      (res.data || []).forEach(r=>{
+        loanKeyToId[r.employee_id + '|' + String(r.provider).toUpperCase() + '|' + String(r.loan_type).toUpperCase()] = r.id;
+      });
+    }
+
     // Remove orphaned rows that still exist in Supabase but are no longer present
     // in local state for the same employee/provider/type composite key.
     if (codes.length) {
@@ -5741,19 +5756,6 @@ async function persistLoanTracker(){
       }
     }
 
-    // Upsert loans and fetch ids
-    let loanKeyToId = {};
-    if (loanRows.length) {
-      const res = await sb
-        .from(LOANS_TABLE)
-        .upsert(loanRows, { onConflict: 'employee_id,provider,loan_type' })
-        .select('id,employee_id,provider,loan_type');
-      if (res.error) console.warn('employee_loans upsert error', res.error);
-      (res.data || []).forEach(r=>{
-        loanKeyToId[r.employee_id + '|' + String(r.provider).toUpperCase() + '|' + String(r.loan_type).toUpperCase()] = r.id;
-      });
-    }
-
     // Upsert current period deductions (lightweight)
     const start = (weekStartEl && weekStartEl.value) ? weekStartEl.value : '';
     const end = (weekEndEl && weekEndEl.value) ? weekEndEl.value : '';
@@ -5790,6 +5792,9 @@ async function persistLoanTracker(){
       if (res2.error) console.warn('loan_deductions upsert error', res2.error);
     }
 
+    } finally {
+      __loanRealtimePaused = false;
+    }
   } catch (ex) {
     console.warn('persistLoanTracker failed', ex);
   }
@@ -5826,6 +5831,7 @@ const LOANS_TABLE = "employee_loans";
 const LOAN_DEDUCTIONS_TABLE = "loan_deductions"
 const EMPLOYEES_TABLE = "employees";
 const PERIODS_TABLE = "payroll_periods";
+let __loanRealtimePaused = false;
 ;
 
 function __hasSupabase(){
@@ -5954,6 +5960,7 @@ function setupLoanTablesRealtime(){
     window.__loanTablesChannel = ch;
 
     const refresh = () => {
+      if (__loanRealtimePaused) return;
       // simplest + safest: rehydrate from tables (keeps UI consistent)
       loadLoanTrackerFromSupabaseTables();
     };
