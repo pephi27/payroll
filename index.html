@@ -5165,7 +5165,64 @@ let regHours = JSON.parse(localStorage.getItem(LS_REG_HRS) || '{}');
 let otHours = JSON.parse(localStorage.getItem(LS_OT_HRS) || '{}');
 
 // Per-employee contribution deduction flags. Each entry keyed by employee ID holds booleans {pagibig, philhealth, sss}
-let contribFlags = JSON.parse(localStorage.getItem(LS_CONTRIB_FLAGS) || '{}');
+function normalizeContribFlags(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
+  const normalized = {};
+  Object.keys(raw).forEach(empId => {
+    const flag = raw[empId];
+    if (!flag || typeof flag !== 'object' || Array.isArray(flag)) {
+      normalized[empId] = { pagibig: true, philhealth: true, sss: true };
+      return;
+    }
+    normalized[empId] = {
+      pagibig: flag.pagibig !== false,
+      philhealth: flag.philhealth !== false,
+      sss: flag.sss !== false
+    };
+  });
+  return normalized;
+}
+
+function loadContribFlagsFromLocalStorage() {
+  try {
+    return normalizeContribFlags(JSON.parse(localStorage.getItem(LS_CONTRIB_FLAGS) || '{}'));
+  } catch (_) {
+    return {};
+  }
+}
+
+function persistContribFlags() {
+  const normalized = normalizeContribFlags(contribFlags);
+  contribFlags = normalized;
+  try { localStorage.setItem(LS_CONTRIB_FLAGS, JSON.stringify(normalized)); } catch (_) {}
+  try { if (typeof window.writeKV === 'function') window.writeKV(LS_CONTRIB_FLAGS, normalized); } catch (_) {}
+}
+
+async function refreshContribFlagsFromStore() {
+  const localFlags = loadContribFlagsFromLocalStorage();
+  let cloudFlags = null;
+  try {
+    if (typeof window.readKV === 'function') {
+      cloudFlags = normalizeContribFlags(await window.readKV(LS_CONTRIB_FLAGS));
+    }
+  } catch (_) {}
+
+  const localHasData = Object.keys(localFlags).length > 0;
+  const cloudHasData = !!cloudFlags && Object.keys(cloudFlags).length > 0;
+
+  if (cloudHasData) {
+    // Merge conservatively: keep cloud as baseline but let current local state win
+    // for overlapping employee IDs to prevent immediate F5 reverts.
+    contribFlags = { ...cloudFlags, ...localFlags };
+  } else {
+    contribFlags = localFlags;
+  }
+
+  // Normalize/persist whichever state we chose so local and cloud converge.
+  if (cloudHasData || localHasData) persistContribFlags();
+}
+
+let contribFlags = loadContribFlagsFromLocalStorage();
 
 function migrateWeekRangeKeys(){
   try {
@@ -17546,7 +17603,7 @@ function renderEmployees(){
       cbPagibig.addEventListener('change', () => {
         if (!contribFlags[id]) contribFlags[id] = {};
         contribFlags[id].pagibig = cbPagibig.checked;
-        localStorage.setItem(LS_CONTRIB_FLAGS, JSON.stringify(contribFlags));
+        persistContribFlags();
         calculateAll();
       });
     }
@@ -17554,7 +17611,7 @@ function renderEmployees(){
       cbPhilhealth.addEventListener('change', () => {
         if (!contribFlags[id]) contribFlags[id] = {};
         contribFlags[id].philhealth = cbPhilhealth.checked;
-        localStorage.setItem(LS_CONTRIB_FLAGS, JSON.stringify(contribFlags));
+        persistContribFlags();
         calculateAll();
       });
     }
@@ -17562,7 +17619,7 @@ function renderEmployees(){
       cbSss.addEventListener('change', () => {
         if (!contribFlags[id]) contribFlags[id] = {};
         contribFlags[id].sss = cbSss.checked;
-        localStorage.setItem(LS_CONTRIB_FLAGS, JSON.stringify(contribFlags));
+        persistContribFlags();
         calculateAll();
       });
     }
@@ -17643,7 +17700,7 @@ document.getElementById('addEmployeeBtn').addEventListener('click', ()=>{
   // Initialize default contribution deduction flags for new employee if not already set
   if (!contribFlags[id]) {
     contribFlags[id] = { pagibig: true, philhealth: true, sss: true };
-    localStorage.setItem(LS_CONTRIB_FLAGS, JSON.stringify(contribFlags));
+    persistContribFlags();
   }
   saveEmployeesToLS();
   document.getElementById('empIdInput').value=''; document.getElementById('empNameInput').value=''; document.getElementById('empRateInput').value=''; document.getElementById('empBankInput').value='';
@@ -18665,6 +18722,7 @@ document.getElementById('clearProjectsBtn').addEventListener('click', ()=>{
 
 async function initApp(){
   if (window.ENABLE_SPLIT_OVERRIDES) await hydrateSplitOverrides();
+  await refreshContribFlagsFromStore();
   ensureSchedules();
   renderScheduleSelector();
   renderScheduleEditor();
