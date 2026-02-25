@@ -22785,8 +22785,6 @@ function hideRemoteDtrAlert(){
 document.addEventListener('DOMContentLoaded', async function () {
   window.__dtrHydrationDone = false;
 
-  const LS_LAST  = 'payroll_dtr_last_saved_keys';
-
   const getCurrentLocalRecords = () => {
     const fromWindow = (typeof window !== 'undefined' && Array.isArray(window.storedRecords))
       ? window.storedRecords
@@ -22842,8 +22840,6 @@ document.addEventListener('DOMContentLoaded', async function () {
       try {
         storedRecords = merged;
         window.storedRecords = merged;
-        localStorage.setItem(LS_RECORDS, JSON.stringify(merged));
-        __dtrSaveJson(LS_LAST, Array.from(new Set(merged.map(__dtrRecId).filter(Boolean))));
       } catch(e) {}
 
       if (typeof renderResults === 'function') { try { renderResults(); } catch (e) {} }
