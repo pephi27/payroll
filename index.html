@@ -19705,10 +19705,8 @@ function restoreData(file) {
           String(r.empId) === record.empId && r.date === record.date && r.time === record.time
         );
         if (!exists) storedRecords.push(record);
-        // Persist to localStorage
-        localStorage.setItem(LS_RECORDS, JSON.stringify(storedRecords));
-        // Persist to Supabase for cross-device sync
-        if (typeof saveDtrToCloud === 'function') saveDtrToCloud(storedRecords);
+        // Persist to Supabase (authoritative) after in-memory update
+        persistStoredRecords();
       } catch(e) { console.error('Saving manual DTR failed', e); }
       closeManualModal();
       if(typeof renderResults === 'function') renderResults();
@@ -19859,8 +19857,7 @@ function restoreData(file) {
             }
           }
         }
-        localStorage.setItem(LS_RECORDS, JSON.stringify(storedRecords));
-        try { if (typeof saveDtrToCloud === 'function') saveDtrToCloud(storedRecords); } catch (e) {}
+        persistStoredRecords();
         renderResults();
       } catch(e){ console.error('DTR delete failed', e); }
     });
@@ -19966,14 +19963,8 @@ function restoreData(file) {
               }
             }
           }
-          // Persist updated records to localStorage
-          localStorage.setItem(LS_RECORDS, JSON.stringify(storedRecords));
-          // Also persist to Supabase so all devices reflect the deletion
-          try {
-            if (typeof saveDtrToCloud === 'function') saveDtrToCloud(storedRecords);
-          } catch (e) {
-            console.warn('Failed to sync DTR deletion to Supabase', e);
-          }
+          // Persist to Supabase so all devices reflect the deletion
+          persistStoredRecords();
           renderResults();
         } catch(e){ console.error('DTR delete failed', e); }
       });
@@ -23528,7 +23519,6 @@ document.addEventListener('DOMContentLoaded', async function () {
   }
 
   function persistStoredRecords(){
-    try { localStorage.setItem(LS_RECORDS, JSON.stringify(storedRecords)); } catch(e){}
     try {
       if (typeof saveDtrToCloud === 'function') saveDtrToCloud(storedRecords);
     } catch(e){
