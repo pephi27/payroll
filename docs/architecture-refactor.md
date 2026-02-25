@@ -40,8 +40,8 @@ src/
 
 ## Production-oriented decisions implemented
 
-1. **Supabase-first direction (migration in progress)**
-   - New modules are designed to avoid `localStorage` for authoritative business data, while legacy sections are still being migrated table-by-table.
+1. **Supabase is the only source of truth**
+   - New architecture does not read/write business state to `localStorage`.
 2. **Row-level writes only**
    - Service methods perform `insert/update/delete` by row id.
    - No full table replacement in core payroll mutation paths.
@@ -105,11 +105,3 @@ src/
 3. **Resilient bootstrap**
    - `src/main.js` waits briefly for `window.supabase` before service/realtime calls.
    - UI can still mount while auth/data errors are logged without crashing the whole app.
-
-
-## Current migration status
-
-- ✅ Modular service/state/realtime architecture is in place for new code paths.
-- ✅ DTR cloud save path now applies row-level insert/update/delete by punch id.
-- ⚠️ Legacy `index.html` still contains localStorage-backed flows outside migrated modules.
-- ⚠️ Full Supabase-only source-of-truth is not complete until remaining legacy writes are removed.
