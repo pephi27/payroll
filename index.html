@@ -22594,8 +22594,8 @@ async function loadDtrFromCloud() {
 
 async function saveDtrToCloud(records) {
   // Row-per-punch persistence (safe for multi-device editing).
-  // - Upserts only the affected punch rows, not the entire dataset as a single blob.
-  // - Deletes removed punches by primary key.
+  // - Writes are row-level (insert/update/delete by id).
+  // - No localStorage-based diffing for authoritative business data.
   try {
     const supa = window.supabase || (typeof supabase !== 'undefined' ? supabase : null);
     if (!supa) return;
@@ -22609,16 +22609,13 @@ async function saveDtrToCloud(records) {
 
     const punchesTable = 'dtr_punches';
     const deviceId = __dtrGetDeviceId();
-    const LS_LAST  = 'payroll_dtr_last_saved_keys';
 
     const localRecs = Array.isArray(records) ? records : [];
-    const curKeys = new Set();
-    const rows = [];
+    const localMap = new Map();
     for (const r of localRecs){
       const id = __dtrRecId(r);
       if (!id) continue;
-      curKeys.add(id);
-      rows.push({
+      localMap.set(id, {
         id,
         emp_id: (r.empId != null ? String(r.empId) : '').trim(),
         date: r.date,
@@ -22629,38 +22626,46 @@ async function saveDtrToCloud(records) {
       });
     }
 
-    const prevKeysArr = __dtrLoadJson(LS_LAST, []);
-    const prevKeys = new Set(Array.isArray(prevKeysArr) ? prevKeysArr : []);
-    const delKeys = [];
-    if (prevKeys.size){
-      for (const k of prevKeys){
-        if (!curKeys.has(k)) delKeys.push(k);
+    const remoteRows = await __dtrFetchAllPunchRows(supa, punchesTable);
+    const remoteMap = new Map();
+    for (const row of (remoteRows || [])) {
+      if (row && row.id) remoteMap.set(row.id, row);
+    }
+
+    // Row-level insert/update only when changed.
+    for (const [id, row] of localMap.entries()) {
+      const existing = remoteMap.get(id);
+      if (!existing) {
+        const { error } = await supa.from(punchesTable).insert(row);
+        if (error) throw error;
+        continue;
       }
-    }
 
-    // Deduplicate by id to avoid "ON CONFLICT DO UPDATE cannot affect row a second time"
-    // (happens when payload contains duplicate ids).
-    const __rowMap2 = new Map();
-    for (const row of rows) __rowMap2.set(row.id, row); // last one wins
-    const rowsDedup = Array.from(__rowMap2.values());
+      const oldPayload = existing && existing.data ? JSON.stringify(existing.data) : '';
+      const newPayload = row && row.data ? JSON.stringify(row.data) : '';
+      const changed = oldPayload !== newPayload;
+      if (!changed) continue;
 
-    // Upsert in batches
-    const batchSize = 500;
-    for (let i=0;i<rowsDedup.length;i+=batchSize){
-      const batch = rowsDedup.slice(i, i+batchSize);
-      const { error } = await supa.from(punchesTable).upsert(batch, { onConflict: 'id' });
+      const { error } = await supa
+        .from(punchesTable)
+        .update({
+          emp_id: row.emp_id,
+          date: row.date,
+          time: row.time,
+          source: row.source,
+          data: row.data,
+          updated_by: row.updated_by
+        })
+        .eq('id', id);
       if (error) throw error;
     }
 
-    // Delete removed keys (also in batches)
-    for (let i=0;i<delKeys.length;i+=batchSize){
-      const batch = delKeys.slice(i, i+batchSize);
-      const { error } = await supa.from(punchesTable).delete().in('id', batch);
+    // Row-level deletes for records removed from current state.
+    for (const [id] of remoteMap.entries()) {
+      if (localMap.has(id)) continue;
+      const { error } = await supa.from(punchesTable).delete().eq('id', id);
       if (error) throw error;
     }
-
-    // Update local last-saved keys to include current dataset (incl. remote changes if merged into storedRecords)
-    __dtrSaveJson(LS_LAST, Array.from(curKeys));
 
   } catch (e) {
     const msg = (e && (e.message || e.details)) ? String(e.message || e.details) : String(e);
@@ -22682,8 +22687,6 @@ function setupDtrPunchesRealtime(){
     window.__dtrPunchesSubscribed = true;
 
     const punchesTable = 'dtr_punches';
-    const LS_LAST  = 'payroll_dtr_last_saved_keys';
-
     let renderTimer = null;
     const queueRender = () => {
       if (renderTimer) clearTimeout(renderTimer);
@@ -22696,8 +22699,6 @@ function setupDtrPunchesRealtime(){
       try {
         storedRecords = recs;
         window.storedRecords = recs;
-        localStorage.setItem(LS_RECORDS, JSON.stringify(recs));
-        __dtrSaveJson(LS_LAST, Array.from(new Set(recs.map(__dtrRecId).filter(Boolean))));
       } catch(e) {}
       queueRender();
     };
@@ -25557,5 +25558,7 @@ document.addEventListener('DOMContentLoaded', function(){
   };
 })();
 </script>
+
+<script type="module" src="./src/main.js"></script>
 
 </html>
