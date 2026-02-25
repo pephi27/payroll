@@ -92,3 +92,16 @@ src/
 2. Move UI actions to call `payrollService` methods.
 3. Remove localStorage write paths table-by-table.
 4. Add RLS policies that enforce lock rules server-side for defense in depth.
+
+
+## Post-review hardening updates
+
+1. **Prevent duplicate GoTrue clients**
+   - `src/config/supabaseClient.js` now reuses `window.supabase` when already initialized by legacy code.
+   - This avoids "Multiple GoTrueClient instances detected" warnings and shared storage-key races.
+2. **Credential source compatibility**
+   - Client bootstrap now reads `window.SUPABASE_KEY` first (existing app convention), then `window.SUPABASE_ANON_KEY`.
+   - Prevents 401 failures caused by missing/placeholder keys.
+3. **Resilient bootstrap**
+   - `src/main.js` handles both pre/post DOM-ready execution and degrades gracefully when period fetch fails.
+   - Realtime startup failure no longer blocks UI mount.
