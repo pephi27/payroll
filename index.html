@@ -5954,6 +5954,18 @@ function setupLoanTablesRealtime(){
   if (window.__loanTablesSubscribed) return;
   window.__loanTablesSubscribed = true;
 
+  const hasLocalLoanTrackerData = () => {
+    try {
+      const local = loadLoanTrackerFromStorage();
+      const byEmpCount = local && local.byEmp ? Object.keys(local.byEmp).length : 0;
+      const appliedCount = local && local.applied ? Object.keys(local.applied).length : 0;
+      const paymentCount = local && local.paymentsByPeriod ? Object.keys(local.paymentsByPeriod).length : 0;
+      return (byEmpCount + appliedCount + paymentCount) > 0;
+    } catch(_) {
+      return false;
+    }
+  };
+
   try {
     const sb = window.supabase;
     const ch = sb.channel('loan_tables_sync');
@@ -5961,6 +5973,9 @@ function setupLoanTablesRealtime(){
 
     const refresh = () => {
       if (__loanRealtimePaused) return;
+      // Loan Tracker is KV-first. Avoid clobbering local/KV edits with stale table
+      // rows during realtime events; table rehydrate is only for empty-state fallback.
+      if (hasLocalLoanTrackerData()) return;
       // simplest + safest: rehydrate from tables (keeps UI consistent)
       loadLoanTrackerFromSupabaseTables();
     };
@@ -17512,8 +17527,44 @@ function renderEmpScheduleDropdownsInTable(){
   });
 }
 
+function syncProjectsKVAfterLocalSave(forceCloudWrite){
+  if (!forceCloudWrite) return;
+  try {
+    const writeLatest = () => {
+      try {
+        if (typeof window.writeKV !== 'function') return;
+        const snapshot = (typeof storedProjects === 'object' && storedProjects) ? storedProjects : {};
+        const p = window.writeKV(LS_PROJECTS, snapshot);
+        if (p && typeof p.catch === 'function') p.catch(err => console.warn('writeKV projects failed', err));
+      } catch (err) {
+        console.warn('writeKV projects threw', err);
+      }
+    };
+
+    if (window && window.__kv_cloud_ready === true) {
+      writeLatest();
+      return;
+    }
+
+    // If the user edited projects before kv hydrate completes, flush once cloud is ready
+    // so boot hydration cannot later revert local edits.
+    window.__projectsKVPending = true;
+    if (!window.__projectsKVPendingHooked) {
+      window.__projectsKVPendingHooked = true;
+      window.addEventListener('kv-cloud-ready', () => {
+        try {
+          if (!window.__projectsKVPending) return;
+          window.__projectsKVPending = false;
+          writeLatest();
+        } catch (_) {}
+      });
+    }
+  } catch (_) {}
+}
+
 function saveProjectsToLS(options = {}){
   localStorage.setItem(LS_PROJECTS, JSON.stringify(storedProjects));
+  syncProjectsKVAfterLocalSave(!!(options && options.userEdited));
   if(!(options && options.skipRender)){
     renderProjects();
   }
@@ -17559,7 +17610,7 @@ function renderProjects(){
       const isActive = !!e.target.checked;
       storedProjects[id].active = isActive;
       storedProjects[id].deactivatedAt = isActive ? null : new Date().toISOString();
-      saveProjectsToLS();
+      saveProjectsToLS({ userEdited: true });
       renderEmployees();
     });
   });
@@ -17574,7 +17625,7 @@ function renderProjects(){
       if(confirm(`${action} project "${proj.name}"?`)){
         proj.active = !isActive;
         proj.deactivatedAt = proj.active ? null : new Date().toISOString();
-        saveProjectsToLS();
+        saveProjectsToLS({ userEdited: true });
         renderEmployees();
       }
     });
@@ -17584,7 +17635,7 @@ function renderProjects(){
     inp.addEventListener('change', e => {
       const id = e.target.dataset.id;
       storedProjects[id].name = e.target.value;
-      saveProjectsToLS();
+      saveProjectsToLS({ userEdited: true });
     });
   });
 
@@ -17598,7 +17649,7 @@ function renderProjects(){
         e.target.value = value;
       }
       storedProjects[id].company = value;
-      saveProjectsToLS();
+      saveProjectsToLS({ userEdited: true });
     });
   });
 }
@@ -18858,11 +18909,11 @@ document.getElementById('addProjectBtn').addEventListener('click', ()=>{
   storedProjects[id] = { name, company, active: true, deactivatedAt: null };
   document.getElementById('projectNameInput').value='';
   if (companySelect) companySelect.value = COMPANY_OPTIONS[0] || '';
-  saveProjectsToLS();
+  saveProjectsToLS({ userEdited: true });
 });
 document.getElementById('clearProjectsBtn').addEventListener('click', ()=>{
   if(!confirm('Clear all projects?')) return;
-  storedProjects = {}; saveProjectsToLS();
+  storedProjects = {}; saveProjectsToLS({ userEdited: true });
 });
 
 async function initApp(){
