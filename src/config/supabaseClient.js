@@ -35,3 +35,14 @@ function buildSupabaseClient() {
 }
 
 export const supabase = buildSupabaseClient();
+const SUPABASE_KEY = window.SUPABASE_ANON_KEY || '<SECRET>';
+
+export const supabase = createClient(SUPABASE_URL, SUPABASE_KEY, {
+  auth: {
+    persistSession: false,
+    autoRefreshToken: false,
+  },
+  realtime: {
+    params: { eventsPerSecond: 20 },
+  },
+});
