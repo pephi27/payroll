@@ -23512,10 +23512,17 @@ document.addEventListener('DOMContentLoaded', async function () {
         const rec = storedRecords[i];
         if (String(rec.empId) === String(empId) && rec.date === date && rec.time === t){
           storedRecords.splice(i, 1);
-          break;
         }
       }
     });
+  }
+
+  function hasStoredRecord(empId, date, time){
+    return storedRecords.some(rec => (
+      String(rec.empId) === String(empId) &&
+      rec.date === date &&
+      rec.time === time
+    ));
   }
 
   function persistStoredRecords(){
@@ -23580,7 +23587,9 @@ document.addEventListener('DOMContentLoaded', async function () {
     }
     if (toAdd.size){
       Array.from(toAdd).forEach(time => {
-        storedRecords.push({ empId: String(empId), date, time, manual: true });
+        if (!hasStoredRecord(empId, date, time)) {
+          storedRecords.push({ empId: String(empId), date, time, manual: true });
+        }
       });
     }
     fields.forEach(field => {
@@ -23659,6 +23668,7 @@ document.addEventListener('DOMContentLoaded', async function () {
           const otVal  = otInput  ? (parseFloat(otInput.value)  || 0) : 0;
           const kHalf = keyForRow(tr);
           const kBase = baseKeyForRow(tr);
+          const usesSplitKey = !!(tr.dataset && tr.dataset.half);
           const origR = parseFloat(tr.dataset.origReg || 'NaN');
           const origO = parseFloat(tr.dataset.origOt  || 'NaN');
           const hadPrevReg = (tr.dataset.hadRegEdited === '1');
@@ -23668,18 +23678,40 @@ document.addEventListener('DOMContentLoaded', async function () {
           const regEdited  = changedReg || hadPrevReg;
           const otEdited   = changedOt  || hadPrevOt;
           const timeResult = applyTimeUpdates(tr, timeFields, idxMap);
+          if (!changedReg && !changedOt && !timeResult.changed){
+            const ovExisting = overridesHours && (overridesHours[kHalf] || overridesHours[kBase]);
+            if (regCell){
+              const displayReg = ovExisting ? (parseFloat(ovExisting.reg) || 0) : regVal;
+              const starReg = ovExisting ? (Object.prototype.hasOwnProperty.call(ovExisting,'regEdited') ? !!ovExisting.regEdited : true) : false;
+              regCell.textContent = displayReg.toFixed(2) + (starReg ? ' *' : '');
+            }
+            if (otCell){
+              const displayOt = ovExisting ? (parseFloat(ovExisting.ot) || 0) : otVal;
+              const starOt = ovExisting ? (Object.prototype.hasOwnProperty.call(ovExisting,'otEdited') ? !!ovExisting.otEdited : true) : false;
+              otCell.textContent = displayOt.toFixed(2) + (starOt ? ' *' : '');
+            }
+            btn.textContent = 'Edit';
+            recomputeDtrSummaryFromTable();
+            return;
+          }
           let overridesTouched = false;
           if (timeResult.changed && !changedReg && !changedOt){
             try { if (overridesHours && Object.prototype.hasOwnProperty.call(overridesHours, kHalf)) { delete overridesHours[kHalf]; overridesTouched = true; } } catch(_){ }
-            try { if (overridesHours && Object.prototype.hasOwnProperty.call(overridesHours, kBase)) { delete overridesHours[kBase]; overridesTouched = true; } } catch(_){ }
+            if (!usesSplitKey){
+              try { if (overridesHours && Object.prototype.hasOwnProperty.call(overridesHours, kBase)) { delete overridesHours[kBase]; overridesTouched = true; } } catch(_){ }
+            }
           } else if (regEdited || otEdited){
             const payload = { reg: regVal, ot: otVal, regEdited: !!regEdited, otEdited: !!otEdited };
             overridesHours[kHalf] = payload;
-            overridesHours[kBase] = payload;
+            if (!usesSplitKey){
+              overridesHours[kBase] = payload;
+            }
             overridesTouched = true;
           } else {
             try { if (overridesHours && Object.prototype.hasOwnProperty.call(overridesHours, kHalf)) { delete overridesHours[kHalf]; overridesTouched = true; } } catch(_){ }
-            try { if (overridesHours && Object.prototype.hasOwnProperty.call(overridesHours, kBase)) { delete overridesHours[kBase]; overridesTouched = true; } } catch(_){ }
+            if (!usesSplitKey){
+              try { if (overridesHours && Object.prototype.hasOwnProperty.call(overridesHours, kBase)) { delete overridesHours[kBase]; overridesTouched = true; } } catch(_){ }
+            }
           }
           if (overridesTouched){
             saveOverridesHours();
