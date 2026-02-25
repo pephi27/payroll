@@ -5954,6 +5954,18 @@ function setupLoanTablesRealtime(){
   if (window.__loanTablesSubscribed) return;
   window.__loanTablesSubscribed = true;
 
+  const hasLocalLoanTrackerData = () => {
+    try {
+      const local = loadLoanTrackerFromStorage();
+      const byEmpCount = local && local.byEmp ? Object.keys(local.byEmp).length : 0;
+      const appliedCount = local && local.applied ? Object.keys(local.applied).length : 0;
+      const paymentCount = local && local.paymentsByPeriod ? Object.keys(local.paymentsByPeriod).length : 0;
+      return (byEmpCount + appliedCount + paymentCount) > 0;
+    } catch(_) {
+      return false;
+    }
+  };
+
   try {
     const sb = window.supabase;
     const ch = sb.channel('loan_tables_sync');
@@ -5961,6 +5973,9 @@ function setupLoanTablesRealtime(){
 
     const refresh = () => {
       if (__loanRealtimePaused) return;
+      // Loan Tracker is KV-first. Avoid clobbering local/KV edits with stale table
+      // rows during realtime events; table rehydrate is only for empty-state fallback.
+      if (hasLocalLoanTrackerData()) return;
       // simplest + safest: rehydrate from tables (keeps UI consistent)
       loadLoanTrackerFromSupabaseTables();
     };
