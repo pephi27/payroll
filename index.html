@@ -23678,6 +23678,22 @@ document.addEventListener('DOMContentLoaded', async function () {
           const regEdited  = changedReg || hadPrevReg;
           const otEdited   = changedOt  || hadPrevOt;
           const timeResult = applyTimeUpdates(tr, timeFields, idxMap);
+          if (!changedReg && !changedOt && !timeResult.changed){
+            const ovExisting = overridesHours && (overridesHours[kHalf] || overridesHours[kBase]);
+            if (regCell){
+              const displayReg = ovExisting ? (parseFloat(ovExisting.reg) || 0) : regVal;
+              const starReg = ovExisting ? (Object.prototype.hasOwnProperty.call(ovExisting,'regEdited') ? !!ovExisting.regEdited : true) : false;
+              regCell.textContent = displayReg.toFixed(2) + (starReg ? ' *' : '');
+            }
+            if (otCell){
+              const displayOt = ovExisting ? (parseFloat(ovExisting.ot) || 0) : otVal;
+              const starOt = ovExisting ? (Object.prototype.hasOwnProperty.call(ovExisting,'otEdited') ? !!ovExisting.otEdited : true) : false;
+              otCell.textContent = displayOt.toFixed(2) + (starOt ? ' *' : '');
+            }
+            btn.textContent = 'Edit';
+            recomputeDtrSummaryFromTable();
+            return;
+          }
           let overridesTouched = false;
           if (timeResult.changed && !changedReg && !changedOt){
             try { if (overridesHours && Object.prototype.hasOwnProperty.call(overridesHours, kHalf)) { delete overridesHours[kHalf]; overridesTouched = true; } } catch(_){ }
