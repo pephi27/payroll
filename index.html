@@ -2411,6 +2411,57 @@ window.addEventListener('load', dashReports);
   .results-wrapper {
     overflow-x: auto;
   }
+  .dtr-tab-content {
+    position: relative;
+    min-height: 160px;
+  }
+  #dtrLoadingOverlay {
+    position: absolute;
+    inset: 0;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    background: rgba(15, 23, 42, 0.42);
+    z-index: 30;
+    pointer-events: all;
+  }
+  #dtrLoadingOverlay[data-state="error"] {
+    background: rgba(127, 29, 29, 0.28);
+  }
+  .dtr-loading-card {
+    min-width: 240px;
+    max-width: 90%;
+    background: #fff;
+    border: 1px solid #cbd5e1;
+    border-radius: 10px;
+    padding: 12px 14px;
+    text-align: center;
+    box-shadow: 0 10px 28px rgba(2, 6, 23, 0.2);
+  }
+  .dtr-loading-spinner {
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    border: 3px solid #cbd5e1;
+    border-top-color: #0ea5a4;
+    margin: 0 auto 10px;
+    animation: dtr-spin 0.9s linear infinite;
+  }
+  @keyframes dtr-spin { to { transform: rotate(360deg); } }
+  #dtrLoadingMessage { font-size: 13px; color: #0f172a; }
+  #dtrLoadingInlineError {
+    display: none;
+    margin: 8px 0;
+    padding: 8px 10px;
+    border: 1px solid #fecaca;
+    background: #fef2f2;
+    color: #7f1d1d;
+    border-radius: 6px;
+    font-size: 12px;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+  }
   </style>
   <style>
 
@@ -3535,6 +3586,16 @@ window.addEventListener('load', dashReports);
            banner is hidden by default and shown via showRemoteDtrAlert() -->
       <div id="remoteDtrAlert" style="display:none;margin:8px 0;padding:10px;border:1px solid #facc15;background:#fef9c3;color:#713f12;border-radius:6px;font-weight:600;">
         ⚠ No remote DTR data found. Import a .DAT/.TXT file on this device to populate cloud data.
+      </div>
+      <div id="dtrLoadingOverlay" role="status" aria-live="polite" aria-hidden="true">
+        <div class="dtr-loading-card">
+          <div class="dtr-loading-spinner" aria-hidden="true"></div>
+          <div id="dtrLoadingMessage">Loading DTR logs…</div>
+        </div>
+      </div>
+      <div id="dtrLoadingInlineError" role="alert">
+        <span id="dtrLoadingInlineErrorMessage"></span>
+        <button id="retryDtrLoadBtn" type="button">Retry</button>
       </div>
       <!-- Wrap the results table in a scrollable container so horizontal overflow
            is always visible. Without this wrapper some layouts (especially when
@@ -17233,7 +17294,7 @@ function showTab(name){
         window.__dtrFilterBackup = null;
       }
     } catch (e) {}
-    if (typeof renderResults === 'function') { try { renderResults(); } catch (e) {} }
+    if (typeof window.renderDtrWithOverlay === 'function') { try { window.renderDtrWithOverlay('Loading DTR logs…'); } catch (e) {} } else if (typeof renderResults === 'function') { try { renderResults(); } catch (e) {} }
     try { if (typeof checkAndToggleEditState === 'function') checkAndToggleEditState(); } catch (e) {}
   }
   // When the dashboard is selected, activate its tab and panel
@@ -19489,6 +19550,7 @@ function calculatePayrollFromRecords(){
 weekStartEl.addEventListener('change', () => {
   if (dtrStartEl) dtrStartEl.value = weekStartEl.value;
   syncPeriodScopedData();
+  if (typeof window.renderDtrWithOverlay === 'function') { window.renderDtrWithOverlay('Loading DTR logs…'); }
   try {
     if (typeof calculatePayrollFromResultsTable === 'function') calculatePayrollFromResultsTable();
     else if (typeof calculatePayrollFromRecords === 'function') calculatePayrollFromRecords();
@@ -19501,6 +19563,7 @@ weekStartEl.addEventListener('change', () => {
 weekEndEl.addEventListener('change', () => {
   if (dtrEndEl) dtrEndEl.value = weekEndEl.value;
   syncPeriodScopedData();
+  if (typeof window.renderDtrWithOverlay === 'function') { window.renderDtrWithOverlay('Loading DTR logs…'); }
   try {
     if (typeof calculatePayrollFromResultsTable === 'function') calculatePayrollFromResultsTable();
     else if (typeof calculatePayrollFromRecords === 'function') calculatePayrollFromRecords();
@@ -22782,13 +22845,44 @@ function hideRemoteDtrAlert(){
 // On initial load, attempt to hydrate storedRecords from Supabase.  If
 // remote data exists it will overwrite the current storedRecords array
 // and localStorage.  This ensures that the latest DTR data is available
-// across devices while preserving offline capability.  The call is
-// performed after DOMContentLoaded to ensure that other scripts have
-// defined storedRecords and renderResults() before we modify them.
-// On initial load, attempt to hydrate storedRecords from Supabase.
-// Best-practice: DTR is stored row-per-punch in `dtr_punches` so multiple devices can edit safely.
-document.addEventListener('DOMContentLoaded', async function () {
+// across devices while preserving offline capability.
+function showDtrLoading(message){
+  const overlay = document.getElementById('dtrLoadingOverlay');
+  const messageEl = document.getElementById('dtrLoadingMessage');
+  if (messageEl) messageEl.textContent = message || 'Loading DTR logs…';
+  if (overlay) {
+    overlay.style.display = 'flex';
+    overlay.dataset.state = 'loading';
+    overlay.setAttribute('aria-hidden', 'false');
+  }
+}
+function hideDtrLoading(){
+  const overlay = document.getElementById('dtrLoadingOverlay');
+  if (!overlay) return;
+  overlay.style.display = 'none';
+  overlay.dataset.state = '';
+  overlay.setAttribute('aria-hidden', 'true');
+}
+function setDtrLoadingError(message){
+  const overlay = document.getElementById('dtrLoadingOverlay');
+  const messageEl = document.getElementById('dtrLoadingMessage');
+  const inlineError = document.getElementById('dtrLoadingInlineError');
+  const inlineErrorMessage = document.getElementById('dtrLoadingInlineErrorMessage');
+  const text = message || 'Unable to load DTR logs right now.';
+  if (messageEl) messageEl.textContent = text;
+  if (overlay) overlay.dataset.state = 'error';
+  if (inlineErrorMessage) inlineErrorMessage.textContent = text;
+  if (inlineError) inlineError.style.display = 'flex';
+}
+function clearDtrLoadingError(){
+  const inlineError = document.getElementById('dtrLoadingInlineError');
+  if (inlineError) inlineError.style.display = 'none';
+}
+
+async function hydrateDtrLogsAndRender(){
   window.__dtrHydrationDone = false;
+  showDtrLoading('Loading DTR logs…');
+  await new Promise((resolve) => requestAnimationFrame(resolve));
 
   const getCurrentLocalRecords = () => {
     const fromWindow = (typeof window !== 'undefined' && Array.isArray(window.storedRecords))
@@ -22804,11 +22898,9 @@ document.addEventListener('DOMContentLoaded', async function () {
     if (res && res.status === 'ok' && Array.isArray(res.records) && res.records.length) {
       const remoteRecs = res.records;
 
-      // If we loaded from legacy blob and punches table exists, migrate once (then we'll operate on punches going forward)
       if (res.meta && res.meta.needsMigration) {
         const migrated = await migrateLegacyDtrToPunches(remoteRecs);
         if (migrated) {
-          // Re-load from punches to ensure canonical shape
           const again = await loadDtrFromCloud();
           if (again && again.status === 'ok' && Array.isArray(again.records)) {
             remoteRecs.splice(0, remoteRecs.length, ...again.records);
@@ -22816,10 +22908,6 @@ document.addEventListener('DOMContentLoaded', async function () {
         }
       }
 
-      // Merge: remote is source of truth, but keep any local-only punches (offline adds) that are not in remote.
-      // IMPORTANT: pull local records *after* the async cloud fetch resolves. If a user creates
-      // a manual DTR while hydration is in flight, we must merge that latest local state so the
-      // new punch is not overwritten by a stale pre-fetch snapshot.
       const localRecs = getCurrentLocalRecords();
       const remoteKeys = new Set(remoteRecs.map(__dtrRecId).filter(Boolean));
       const merged = remoteRecs.slice();
@@ -22828,7 +22916,6 @@ document.addEventListener('DOMContentLoaded', async function () {
         if (k && !remoteKeys.has(k)) merged.push(r);
       }
 
-      // Stable ordering for nicer UI
       merged.sort((a,b)=>{
         const ea = (a && a.empId != null) ? String(a.empId) : '';
         const eb = (b && b.empId != null) ? String(b.empId) : '';
@@ -22849,21 +22936,18 @@ document.addEventListener('DOMContentLoaded', async function () {
 
       if (typeof renderResults === 'function') { try { renderResults(); } catch (e) {} }
       if (typeof hideRemoteDtrAlert === 'function') hideRemoteDtrAlert();
+      clearDtrLoadingError();
 
-      // Seed remote with any local-only punches (safe: only inserts new ids)
       if (localRecs && localRecs.length) {
-        // If there are local-only records, save will upsert missing ids; it will not wipe remote.
         window.__dtrHydrationDone = true;
         try { await saveDtrToCloud(merged); } catch(e) {}
         window.__dtrHydrationDone = false;
       }
 
     } else if (res && (res.status === 'not_found' || (res.status === 'ok' && (!res.records || !res.records.length)))) {
-      // Remote is empty/missing
       const localRecs = getCurrentLocalRecords();
       if (localRecs && localRecs.length) {
-        // Seed remote from local
-        window.__dtrHydrationDone = true; // allow save
+        window.__dtrHydrationDone = true;
         try { await saveDtrToCloud(localRecs); } catch(e) {}
         if (typeof hideRemoteDtrAlert === 'function') hideRemoteDtrAlert();
       } else {
@@ -22874,21 +22958,22 @@ document.addEventListener('DOMContentLoaded', async function () {
           showRemoteDtrAlert(reason);
         }
       }
+      clearDtrLoadingError();
     } else {
-      // Cloud unreachable or no client - keep local data
       if (typeof showRemoteDtrAlert === 'function') {
         showRemoteDtrAlert('Cloud DTR unavailable right now. Using local copy on this device.');
       }
+      setDtrLoadingError('Cloud DTR unavailable. Check your connection and retry.');
     }
   } catch (e) {
     console.error('Error hydrating DTR from Supabase', e);
     if (typeof showRemoteDtrAlert === 'function') {
       showRemoteDtrAlert('Cloud DTR unavailable right now. Using local copy on this device.');
     }
+    setDtrLoadingError('Failed to load DTR logs. Please retry.');
   } finally {
     window.__dtrHydrationDone = true;
 
-    // Flush any queued save that happened before hydration finished
     if (window.__pendingDtrSave && Array.isArray(window.__queuedDtrRecords)) {
       const q = window.__queuedDtrRecords;
       window.__pendingDtrSave = false;
@@ -22896,9 +22981,35 @@ document.addEventListener('DOMContentLoaded', async function () {
       try { await saveDtrToCloud(q); } catch(e) {}
     }
 
-    // Start realtime subscription (if the punches table exists)
     try { setupDtrPunchesRealtime(); } catch(e) {}
+    hideDtrLoading();
   }
+}
+window.hydrateDtrLogsAndRender = hydrateDtrLogsAndRender;
+
+async function renderDtrWithOverlay(message){
+  showDtrLoading(message || 'Loading DTR logs…');
+  await new Promise((resolve) => requestAnimationFrame(resolve));
+  try {
+    if (typeof renderResults === 'function') renderResults();
+    clearDtrLoadingError();
+  } catch (e) {
+    setDtrLoadingError('Unable to render DTR table. Please retry.');
+  } finally {
+    hideDtrLoading();
+  }
+}
+window.renderDtrWithOverlay = renderDtrWithOverlay;
+
+document.addEventListener('DOMContentLoaded', async function () {
+  const retryBtn = document.getElementById('retryDtrLoadBtn');
+  if (retryBtn && !retryBtn.dataset.bound) {
+    retryBtn.dataset.bound = 'true';
+    retryBtn.addEventListener('click', async () => {
+      await hydrateDtrLogsAndRender();
+    });
+  }
+  await hydrateDtrLogsAndRender();
 });
 </script>
 
