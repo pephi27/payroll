@@ -12644,9 +12644,74 @@ document.addEventListener('DOMContentLoaded', () => {
   }
   window.checkAndToggleEditState = checkAndToggleEditState;
 
-  // Persist payrollHistory to localStorage
+  function showSyncFailedBanner(message) {
+    try {
+      let el = document.getElementById('payrollHistorySyncBanner');
+      if (!el) {
+        el = document.createElement('div');
+        el.id = 'payrollHistorySyncBanner';
+        el.style.position = 'fixed';
+        el.style.right = '16px';
+        el.style.bottom = '16px';
+        el.style.zIndex = '99999';
+        el.style.padding = '10px 12px';
+        el.style.borderRadius = '8px';
+        el.style.background = '#ef4444';
+        el.style.color = '#fff';
+        el.style.fontSize = '12px';
+        el.style.fontWeight = '600';
+        el.style.boxShadow = '0 8px 20px rgba(0,0,0,.2)';
+        document.body.appendChild(el);
+      }
+      el.textContent = message || 'Sync failed';
+      el.style.display = 'block';
+      window.clearTimeout(el.__hideTimer);
+      el.__hideTimer = window.setTimeout(() => {
+        try { el.style.display = 'none'; } catch (_) {}
+      }, 2600);
+    } catch (_) {}
+  }
+
+  window.showSyncFailedBanner = showSyncFailedBanner;
+
+  async function persistKV(key, value) {
+    if (typeof window.writeKV === 'function') {
+      try {
+        const ok = await window.writeKV(key, value);
+        if (!ok) throw new Error('writeKV returned false');
+        return true;
+      } catch (error) {
+        console.warn('Payroll History kv_store sync failed', { key, error });
+        showSyncFailedBanner('Sync failed');
+        return false;
+      }
+    }
+
+    if (window.store && typeof window.store.setJSON === 'function') {
+      try {
+        const ok = window.store.setJSON(key, value);
+        if (!ok) throw new Error('store.setJSON returned false');
+        return true;
+      } catch (error) {
+        console.warn('Payroll History store sync failed', { key, error });
+        showSyncFailedBanner('Sync failed');
+        return false;
+      }
+    }
+
+    try {
+      localStorage.setItem(key, JSON.stringify(value));
+      return true;
+    } catch (error) {
+      console.warn('Payroll History local save failed', { key, error });
+      showSyncFailedBanner('Sync failed');
+      return false;
+    }
+  }
+
+  // Persist payrollHistory through the kv_store sync path (with local fallback).
   function saveHistory() {
-    localStorage.setItem(PAYROLL_HIST_KEY, JSON.stringify(payrollHistory));
+    return persistKV(PAYROLL_HIST_KEY, payrollHistory);
   }
   // Expose saveHistory globally so it can be called from other scripts
   window.saveHistory = saveHistory;
@@ -22014,7 +22079,16 @@ function updateWeekInputs(snap) {
     } else {
       const localHist = loadHistory();
       localHist.push(newSnap);
-      localStorage.setItem(PAYROLL_HIST_KEY, JSON.stringify(localHist));
+      if (typeof window.writeKV === 'function') {
+        window.writeKV(PAYROLL_HIST_KEY, localHist).catch((error) => {
+          console.warn('Payroll History kv_store sync failed', { key: PAYROLL_HIST_KEY, error });
+          try {
+            if (typeof window.showSyncFailedBanner === 'function') window.showSyncFailedBanner('Sync failed');
+          } catch (_) {}
+        });
+      } else {
+        localStorage.setItem(PAYROLL_HIST_KEY, JSON.stringify(localHist));
+      }
     }
     // Refresh UI pieces
     try { if (typeof renderHistory === 'function') renderHistory(); } catch {}
