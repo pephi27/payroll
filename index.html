@@ -23533,13 +23533,57 @@ document.addEventListener('DOMContentLoaded', async function () {
     }
   }
 
+  function normalizeEditableTimeValue(value){
+    const raw = String(value || '').trim();
+    if (!raw) return '';
+    const base = (typeof stripNextDaySuffix === 'function') ? stripNextDaySuffix(raw) : raw;
+    const parts = String(base).split(':');
+    if (parts.length < 2) return '';
+    const hh = String(parts[0]).replace(/\D/g, '');
+    const mm = String(parts[1]).replace(/\D/g, '');
+    if (hh === '' || mm === '') return '';
+    const hNum = Number(hh);
+    const mNum = Number(mm);
+    if (!Number.isFinite(hNum) || !Number.isFinite(mNum)) return '';
+    return String(hNum).padStart(2, '0') + ':' + String(mNum).padStart(2, '0');
+  }
+
+  function hasTimeInputChanges(tr, fields, idxMap){
+    if (!tr || !Array.isArray(fields) || !fields.length) return false;
+    for (const field of fields){
+      const idxProp = field + 'Idx';
+      const idx = idxMap[idxProp];
+      const prev = normalizeEditableTimeValue((tr.dataset && tr.dataset[field]) || '');
+      if (typeof idx !== 'number' || idx < 0) continue;
+      const cell = tr.cells[idx];
+      if (!cell) continue;
+      const input = cell.querySelector('input.edit-time');
+      const next = normalizeEditableTimeValue(input && input.value ? input.value : '');
+      if (next !== prev) return true;
+    }
+    return false;
+  }
+
+  function restoreHoursDisplay(regCell, otCell, ovEntry, regFallback, otFallback){
+    if (regCell){
+      const displayReg = ovEntry ? (parseFloat(ovEntry.reg) || 0) : regFallback;
+      const starReg = ovEntry ? (Object.prototype.hasOwnProperty.call(ovEntry,'regEdited') ? !!ovEntry.regEdited : true) : false;
+      regCell.textContent = displayReg.toFixed(2) + (starReg ? ' *' : '');
+    }
+    if (otCell){
+      const displayOt = ovEntry ? (parseFloat(ovEntry.ot) || 0) : otFallback;
+      const starOt = ovEntry ? (Object.prototype.hasOwnProperty.call(ovEntry,'otEdited') ? !!ovEntry.otEdited : true) : false;
+      otCell.textContent = displayOt.toFixed(2) + (starOt ? ' *' : '');
+    }
+  }
+
   function applyTimeUpdates(tr, fields, idxMap){
     if (!tr) return { changed: false };
     const values = {};
     const prevValues = {};
     let changed = false;
     fields.forEach(field => {
-      const prev = (tr.dataset && tr.dataset[field]) || '';
+      const prev = normalizeEditableTimeValue((tr.dataset && tr.dataset[field]) || '');
       prevValues[field] = prev;
       const idxProp = field + 'Idx';
       const idx = idxMap[idxProp];
@@ -23553,7 +23597,7 @@ document.addEventListener('DOMContentLoaded', async function () {
         return;
       }
       const input = cell.querySelector('input.edit-time');
-      const val = input && input.value ? input.value : '';
+      const val = normalizeEditableTimeValue(input && input.value ? input.value : '');
       values[field] = val;
       if (val !== prev) changed = true;
     });
@@ -23594,7 +23638,7 @@ document.addEventListener('DOMContentLoaded', async function () {
     }
     fields.forEach(field => {
       const nextVal = values[field] || '';
-      tr.dataset[field] = nextVal;
+      tr.dataset[field] = normalizeEditableTimeValue(nextVal);
     });
     const allTimes = fields
       .map(field => tr.dataset && tr.dataset[field] ? tr.dataset[field] : '')
@@ -23677,6 +23721,15 @@ document.addEventListener('DOMContentLoaded', async function () {
           const changedOt  = (otInput  && isFinite(origO)) ? Math.abs(otVal  - origO) > 1e-9 : false;
           const regEdited  = changedReg || hadPrevReg;
           const otEdited   = changedOt  || hadPrevOt;
+          const timeChanged = hasTimeInputChanges(tr, timeFields, idxMap);
+          if (!changedReg && !changedOt && !timeChanged){
+            const ovExisting = overridesHours && (overridesHours[kHalf] || overridesHours[kBase]);
+            restoreHoursDisplay(regCell, otCell, ovExisting, regVal, otVal);
+            revertTimeCellsToDisplay(tr, timeFields, idxMap);
+            btn.textContent = 'Edit';
+            recomputeDtrSummaryFromTable();
+            return;
+          }
           const timeResult = applyTimeUpdates(tr, timeFields, idxMap);
           if (!changedReg && !changedOt && !timeResult.changed){
             const ovExisting = overridesHours && (overridesHours[kHalf] || overridesHours[kBase]);
@@ -23723,10 +23776,7 @@ document.addEventListener('DOMContentLoaded', async function () {
             return;
           }
           const ovNow = overridesHours && (overridesHours[kHalf] || overridesHours[kBase]);
-          const starReg = ovNow ? (Object.prototype.hasOwnProperty.call(ovNow,'regEdited') ? !!ovNow.regEdited : true) : false;
-          const starOt  = ovNow ? (Object.prototype.hasOwnProperty.call(ovNow,'otEdited')  ? !!ovNow.otEdited  : true) : false;
-          if (regCell) regCell.textContent = regVal.toFixed(2) + (starReg ? ' *' : '');
-          if (otCell)  otCell.textContent  = otVal.toFixed(2) + (starOt ? ' *' : '');
+          restoreHoursDisplay(regCell, otCell, ovNow, regVal, otVal);
           btn.textContent = 'Edit';
           recomputeDtrSummaryFromTable();
         }
