@@ -882,17 +882,7 @@ function markHydrated() {
 }
 
 let __kvRerenderTimer = null;
-let __renderResultsTimer = null;
-function scheduleRenderResults(reason, delay = 120) {
-  try { window.__lastRenderResultsReason = reason || ''; } catch (_) {}
-  try { if (__renderResultsTimer) window.clearTimeout(__renderResultsTimer); } catch (_) {}
-  __renderResultsTimer = window.setTimeout(() => {
-    __renderResultsTimer = null;
-    try { if (typeof window.renderResults === 'function') window.renderResults(); } catch (_) {}
-  }, delay);
-}
 function queueHydrateRerender() {
-
   markHydrated();
   try {
     if (typeof window.refreshCoreStoresFromStorage === 'function') {
@@ -912,8 +902,8 @@ function queueHydrateRerender() {
     try {
       if (typeof renderLoanTrackerTable === 'function') renderLoanTrackerTable();
     } catch {}
-    try { if (typeof window.scheduleCalculateAll === 'function') window.scheduleCalculateAll('hydrate-rerender'); } catch {}
-    try { scheduleRenderResults('hydrate-rerender'); } catch {}
+    try { if (typeof window.calculateAll === 'function') window.calculateAll(); } catch {}
+    try { if (typeof window.renderResults === 'function') window.renderResults(); } catch {}
   };
   try {
     let shouldDefer = false;
@@ -1016,7 +1006,6 @@ function __kvPayrollHistoryLatestTs(list){
   }catch(_){ return 0; }
 }
 try { window.queueHydrateRerender = queueHydrateRerender; } catch (_) {}
-try { window.scheduleRenderResults = scheduleRenderResults; } catch (_) {}
 
 let __kvPeriodicHydrateInFlight = false;
 async function __kvPeriodicHydrate() {
@@ -4692,8 +4681,8 @@ function updatePayrollSettings(partial, options = {}) {
   if (options.persist !== false) {
     persistPayrollSettings();
   }
-  if (options.recalculate !== false && typeof scheduleCalculateAll === 'function') {
-    scheduleCalculateAll('payroll-settings-update');
+  if (options.recalculate !== false && typeof calculateAll === 'function') {
+    calculateAll();
   }
 }
 
@@ -4706,7 +4695,7 @@ async function loadPayrollSettings() {
     payrollSettings = normalizePayrollSettings(stored);
     otMultiplier = getOvertimeMultiplier();
     syncPayrollSettingsInputs();
-    if (typeof scheduleCalculateAll === 'function') scheduleCalculateAll('payroll-settings-load');
+    if (typeof calculateAll === 'function') calculateAll();
   } catch (err) {
     console.warn('Loading payroll settings failed', err);
   }
@@ -4969,7 +4958,7 @@ function initPayrollSettingsUI() {
     otInput.addEventListener('input', () => {
       updatePayrollSettings({ overtime: { multiplier: parseFloat(otInput.value) || 0 } });
       try { renderOvertimeTable(); } catch (_) {}
-      try { scheduleCalculateAll('ot-multiplier-input'); } catch (_) {}
+      try { calculateAll(); } catch (_) {}
     });
     otInput.__settingsBound = true;
   }
@@ -6782,7 +6771,7 @@ if (divisorDedsEl) {
     try { applyLoanTrackerToPeriod(currentPeriodKey || periodKey(), { createEntries: false, force: true, updateMaps: true }); } catch(_){ }
     try { persistLoanTracker(); } catch(_){ }
     try { saveCurrentPeriodDeductions(); } catch(_){ }
-    scheduleCalculateAll('deductions-divisor-change');
+    calculateAll();
   });
 }
 
@@ -6798,7 +6787,7 @@ divisorEl.addEventListener('change', () => {
   try { applyLoanTrackerToPeriod(currentPeriodKey || periodKey(), { createEntries: false, force: true, updateMaps: true }); } catch(_){ }
   try { persistLoanTracker(); } catch(_){ }
   try { saveCurrentPeriodDeductions(); } catch(_){ }
-  scheduleCalculateAll('payroll-divisor-change');
+  calculateAll();
 });
 function loadEmployees() {
   const stored = JSON.parse(localStorage.getItem('att_employees_v2') || '{}');
@@ -7676,7 +7665,7 @@ const loanTrackerRefresh = (() => {
 
     // While typing, avoid expensive full-page recalcs and table re-renders that can cause lag/caret jumps.
     if (mode === 'full') {
-      try { scheduleCalculateAll('loan-tracker-refresh'); } catch(_) {}
+      try { calculateAll(); } catch(_) {}
       try { renderLoanTrackerTable(); } catch(_) {}
     }
   };
@@ -8245,7 +8234,7 @@ function renderTable(){
     tbody.appendChild(frag);
     attachRowEvents();
     // Compute all rows in one pass without updating totals each mutation
-    scheduleCalculateAll('render-table-batch');
+    calculateAll();
     try { renderOvertimeTable(); } catch (err) { console.warn('renderOvertimeTable failed', err); }
   } finally {
     // Resume totals and request one totals update after batch render
@@ -8615,7 +8604,7 @@ function renderSssTable(){
       cur.splice(i,1);
       setSssTable(cur);
       renderSssTable();
-      scheduleCalculateAll('deduction-table-edit');
+      calculateAll();
     });
   });
 }
@@ -8628,7 +8617,7 @@ function updateRow(i, minI, maxI, empI, erI){
   if (!Number.isFinite(employerVal)) employerVal = employeeVal;
   cur[i] = {min:minVal, max:maxVal, employee:employeeVal, employer:employerVal};
   setSssTable(cur);
-  scheduleCalculateAll('deduction-table-edit');
+  calculateAll();
 }
 
 function bindSssControls(){
@@ -8646,7 +8635,7 @@ function bindSssControls(){
         const mapped = SSS_SEED_2025.map(r=>({min:r[0], max:r[1], employee:r[2], employer: (typeof r[3] !== 'undefined' ? r[3] : r[2])}));
         setSssTable(mapped);
         renderSssTable();
-        scheduleCalculateAll('deduction-table-edit');
+        calculateAll();
       }
     });
     resetSssBtn.__bound = true;
@@ -8654,7 +8643,7 @@ function bindSssControls(){
   const clearSssBtn = document.getElementById('clearSss');
   if (clearSssBtn && !clearSssBtn.__bound) {
     clearSssBtn.addEventListener('click', ()=>{
-      if(confirm('Clear all SSS ranges?')){ setSssTable([]); renderSssTable(); scheduleCalculateAll('deduction-table-edit'); }
+      if(confirm('Clear all SSS ranges?')){ setSssTable([]); renderSssTable(); calculateAll(); }
     });
     clearSssBtn.__bound = true;
   }
@@ -8693,7 +8682,7 @@ function bindSssControls(){
             out.push({min, max, employee, employer});
           }
         }
-        setSssTable(out); renderSssTable(); scheduleCalculateAll('deduction-table-edit');
+        setSssTable(out); renderSssTable(); calculateAll();
       };
       reader.readAsText(f);
     });
@@ -8740,7 +8729,7 @@ function renderPagibigTable(){
       const cur = getPagibigTable();
       cur[i] = {min: Number(minI.value) || 0, max: Number(maxI.value) || 0, rate: Number(rateI.value) || 0};
       setPagibigTable(cur);
-      scheduleCalculateAll('deduction-table-edit');
+      calculateAll();
       if (typeof renderDeductionsTable === 'function') renderDeductionsTable();
     }
     minI.addEventListener('input', () => update(idx));
@@ -8751,7 +8740,7 @@ function renderPagibigTable(){
       cur.splice(idx, 1);
       setPagibigTable(cur);
       renderPagibigTable();
-      scheduleCalculateAll('deduction-table-edit');
+      calculateAll();
       if (typeof renderDeductionsTable === 'function') renderDeductionsTable();
     });
   });
@@ -8791,7 +8780,7 @@ function renderPhilhealthTable(){
       const cur = getPhilhealthTable();
       cur[i] = {min: Number(minI.value) || 0, max: Number(maxI.value) || 0, rate: Number(rateI.value) || 0};
       setPhilhealthTable(cur);
-      scheduleCalculateAll('deduction-table-edit');
+      calculateAll();
       if (typeof renderDeductionsTable === 'function') renderDeductionsTable();
     }
     minI.addEventListener('input', () => update(idx));
@@ -8802,7 +8791,7 @@ function renderPhilhealthTable(){
       cur.splice(idx, 1);
       setPhilhealthTable(cur);
       renderPhilhealthTable();
-      scheduleCalculateAll('deduction-table-edit');
+      calculateAll();
       if (typeof renderDeductionsTable === 'function') renderDeductionsTable();
     });
   });
@@ -8814,21 +8803,21 @@ document.addEventListener('click', (e) => {
     cur.push({min: 0, max: 0, rate: 0});
     setPagibigTable(cur);
     renderPagibigTable();
-    scheduleCalculateAll('deduction-table-edit');
+    calculateAll();
     if (typeof renderDeductionsTable === 'function') renderDeductionsTable();
   } else if (e.target && e.target.id === 'resetPagibig') {
     if (confirm('Reset Pag-IBIG table to defaults?')) {
       const mapped = PAGIBIG_SEED.map(r => ({min: r[0], max: r[1], rate: r[2]}));
       setPagibigTable(mapped);
       renderPagibigTable();
-      scheduleCalculateAll('deduction-table-edit');
+      calculateAll();
       if (typeof renderDeductionsTable === 'function') renderDeductionsTable();
     }
   } else if (e.target && e.target.id === 'clearPagibig') {
     if (confirm('Clear all Pag-IBIG ranges?')) {
       setPagibigTable([]);
       renderPagibigTable();
-      scheduleCalculateAll('deduction-table-edit');
+      calculateAll();
       if (typeof renderDeductionsTable === 'function') renderDeductionsTable();
     }
   } else if (e.target && e.target.id === 'addPhilRow') {
@@ -8836,21 +8825,21 @@ document.addEventListener('click', (e) => {
     cur.push({min: 0, max: 0, rate: 0});
     setPhilhealthTable(cur);
     renderPhilhealthTable();
-    scheduleCalculateAll('deduction-table-edit');
+    calculateAll();
     if (typeof renderDeductionsTable === 'function') renderDeductionsTable();
   } else if (e.target && e.target.id === 'resetPhil') {
     if (confirm('Reset PhilHealth table to defaults?')) {
       const mapped = PHILHEALTH_SEED.map(r => ({min: r[0], max: r[1], rate: r[2]}));
       setPhilhealthTable(mapped);
       renderPhilhealthTable();
-      scheduleCalculateAll('deduction-table-edit');
+      calculateAll();
       if (typeof renderDeductionsTable === 'function') renderDeductionsTable();
     }
   } else if (e.target && e.target.id === 'clearPhil') {
     if (confirm('Clear all PhilHealth ranges?')) {
       setPhilhealthTable([]);
       renderPhilhealthTable();
-      scheduleCalculateAll('deduction-table-edit');
+      calculateAll();
       if (typeof renderDeductionsTable === 'function') renderDeductionsTable();
     }
   }
@@ -9082,77 +9071,6 @@ function calculateAll(){
   renderDeductionsTable();
 }
 
-const CALCULATE_ALL_DEBOUNCE_MS = 300;
-let __calculateAllTimer = null;
-let __calculateAllRunning = false;
-let __calculateAllQueuedWhileRunning = false;
-function setCalculatePendingState(isPending){
-  try { document.body.classList.toggle('calc-pending', !!isPending); } catch (_) {}
-}
-function __runCalculateAllNow(){
-  if (__calculateAllRunning) {
-    __calculateAllQueuedWhileRunning = true;
-    return;
-  }
-  __calculateAllRunning = true;
-  setCalculatePendingState(false);
-  try {
-    calculateAll();
-  } finally {
-    __calculateAllRunning = false;
-    if (__calculateAllQueuedWhileRunning) {
-      __calculateAllQueuedWhileRunning = false;
-      __runCalculateAllNow();
-    }
-  }
-}
-function scheduleCalculateAll(reason){
-  try { window.__lastCalculateAllReason = reason || ''; } catch (_) {}
-  if (__calculateAllTimer) window.clearTimeout(__calculateAllTimer);
-  setCalculatePendingState(true);
-  __calculateAllTimer = window.setTimeout(() => {
-    __calculateAllTimer = null;
-    __runCalculateAllNow();
-  }, CALCULATE_ALL_DEBOUNCE_MS);
-}
-function flushCalculateAll(reason){
-  try { window.__lastCalculateAllReason = reason || ''; } catch (_) {}
-  if (__calculateAllTimer) {
-    window.clearTimeout(__calculateAllTimer);
-    __calculateAllTimer = null;
-  }
-  __runCalculateAllNow();
-}
-try {
-  window.scheduleCalculateAll = scheduleCalculateAll;
-  window.flushCalculateAll = flushCalculateAll;
-} catch (_) {}
-
-function ensureCalculatePendingBadge(){
-  const badgeId = 'calcPendingBadge';
-  let badge = document.getElementById(badgeId);
-  if (!badge) {
-    badge = document.createElement('div');
-    badge.id = badgeId;
-    badge.textContent = 'Calculating…';
-    badge.setAttribute('aria-live', 'polite');
-    badge.style.cssText = 'position:fixed;right:14px;bottom:14px;z-index:1000;padding:6px 10px;border-radius:999px;background:#111827;color:#fff;font-size:12px;opacity:0;pointer-events:none;transition:opacity .15s ease;';
-    document.body.appendChild(badge);
-  }
-  const refresh = () => {
-    const pending = document.body.classList.contains('calc-pending');
-    badge.style.opacity = pending ? '0.9' : '0';
-  };
-  refresh();
-  const obs = new MutationObserver(refresh);
-  obs.observe(document.body, { attributes: true, attributeFilter: ['class'] });
-}
-if (document.readyState === 'loading') {
-  document.addEventListener('DOMContentLoaded', ensureCalculatePendingBadge, { once: true });
-} else {
-  ensureCalculatePendingBadge();
-}
-
 let otherDeductionsRenderPending = false;
 let otherDeductionsFocusCount = 0;
 let adjustmentHoursRenderPending = false;
@@ -9176,7 +9094,7 @@ const otherDeductionsRefresh = (() => {
   const statusEl = () => document.getElementById('otherDeductionsSaveStatus');
   const run = () => {
     timer = null;
-    scheduleCalculateAll('deduction-table-edit');
+    calculateAll();
     const el = statusEl();
     if (el) {
       el.textContent = 'Saved locally';
@@ -10382,7 +10300,7 @@ async function restoreOtherDeductionsFromPrompt(){
     persistCurrentAdjustmentHours();
     renderOtherDeductionsTable();
     renderAdjustmentHoursTable();
-    scheduleCalculateAll('deduction-table-edit');
+    calculateAll();
     const el = document.getElementById('otherDeductionsSaveStatus');
     if (el) {
       el.textContent = 'Other deductions restored';
@@ -10424,7 +10342,7 @@ function initializeContributionRates() {
         if (val > 1) val = 1;
         pagibigRate = val;
         localStorage.setItem(LS_PAGIBIG_RATE, String(val));
-        scheduleCalculateAll('deduction-table-edit');
+        calculateAll();
         updateContributionNote();
       }
     });
@@ -10440,7 +10358,7 @@ function initializeContributionRates() {
         if (val > 1) val = 1;
         philhealthRate = val;
         localStorage.setItem(LS_PHILHEALTH_RATE, String(val));
-        scheduleCalculateAll('deduction-table-edit');
+        calculateAll();
         updateContributionNote();
       }
     });
@@ -10630,7 +10548,6 @@ window.formatDateRange = formatDateRange;
 document.addEventListener('DOMContentLoaded', function(){
   const btn = document.getElementById('printPayrollBtn');
   if (btn) btn.addEventListener('click', function(){
-    try { if (typeof flushCalculateAll === 'function') flushCalculateAll('print-payroll'); } catch (_) {}
     const srcTable = document.getElementById('payrollTable');
     if (!srcTable) {
       alert('Payroll table is missing or empty.');
@@ -10867,7 +10784,6 @@ document.addEventListener('DOMContentLoaded', function(){
     updateDeductionsContributionBreakdownDisplay(liveReport.contributionTotals);
   } catch (_) {}
   btn.addEventListener('click', function(){
-    try { if (typeof flushCalculateAll === 'function') flushCalculateAll('print-deductions'); } catch (_) {}
     if (!getEmployeeList() || !getEmployeeList().length) {
       alert('No employees available for the deductions report.');
       return;
@@ -10979,7 +10895,6 @@ document.addEventListener('DOMContentLoaded', function(){
   const btn = document.getElementById('printOvertimeBtn');
   if (!btn) return;
   btn.addEventListener('click', function(){
-    try { if (typeof flushCalculateAll === 'function') flushCalculateAll('print-overtime'); } catch (_) {}
     if (!getEmployeeList() || !getEmployeeList().length) {
       alert('No employees available for the overtime report.');
       return;
@@ -11060,7 +10975,6 @@ document.addEventListener('DOMContentLoaded', function(){
   const btn = document.getElementById('printPayrollExcelBtn');
   if (!btn) return;
   btn.addEventListener('click', function(){
-    try { if (typeof flushCalculateAll === 'function') flushCalculateAll('export-payroll-excel'); } catch (_) {}
     if (typeof XLSX === 'undefined' || !XLSX || !XLSX.utils) {
       alert('Excel library not available');
       return;
@@ -12021,7 +11935,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     await finalizeCashAdvancesForPeriod(start, end);
-    try { if (typeof flushCalculateAll === 'function') await Promise.resolve(flushCalculateAll('lock-period-finalize')); } catch (err) {}
+    try { if (typeof calculateAll === 'function') await Promise.resolve(calculateAll()); } catch (err) {}
     try { if (typeof updatePayrollGrandTotals === 'function') updatePayrollGrandTotals(); } catch (err) {}
 
     const snapshot = await buildSnapshot(start, end);
@@ -12825,8 +12739,8 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     // Ensure all payroll values are recalculated before taking a snapshot for generation
       try {
-        if (typeof flushCalculateAll === 'function') {
-          flushCalculateAll('snapshot-generation');
+        if (typeof calculateAll === 'function') {
+          calculateAll();
         }
       } catch (e) {
         // Suppress errors from calculateAll; snapshot will reflect current cell values
@@ -16888,7 +16802,7 @@ function splitRecord(key) {
   // an object so we can track split state per segment.
   splits[key] = { AM: true, PM: true, OT: true };
   saveSplits();
-  scheduleRenderResults('dtr-split-toggle');
+  renderResults();
 }
 function unsplitRecord(key) {
   // Group AM/PM/OT segments by their resolved project IDs.  Each group with
@@ -16955,7 +16869,7 @@ function unsplitRecord(key) {
 
   saveSplits();
   saveOverrides();
-  scheduleRenderResults('dtr-split-toggle');
+  renderResults();
 }
 function saveOverrides(){
   localStorage.setItem(LS_OVERRIDES_SCHEDULES, JSON.stringify(overridesSchedules));
@@ -17138,8 +17052,8 @@ function subscribeSplitOverrides(){
           }
           // Refresh UI tables that depend on overrides/splits
           try { if (typeof queueDtrDropdownRender === 'function') queueDtrDropdownRender(); } catch(_){}
-          try { scheduleRenderResults('split-overrides-realtime'); } catch(_){ }
-          try { if (typeof window.scheduleCalculateAll === 'function') window.scheduleCalculateAll('split-overrides-realtime'); } catch(_){}
+          try { if (typeof renderResults === 'function') renderResults(); } catch(_){}
+          try { if (typeof window.calculateAll === 'function') window.calculateAll(); } catch(_){}
         } catch (e) {
           console.warn('split_overrides realtime handler error', e);
         }
@@ -17384,7 +17298,7 @@ function showTab(name){
         window.__dtrFilterBackup = null;
       }
     } catch (e) {}
-    try { scheduleRenderResults('tab-activation-dtr'); } catch (e) {}
+    if (typeof renderResults === 'function') { try { renderResults(); } catch (e) {} }
     try { if (typeof checkAndToggleEditState === 'function') checkAndToggleEditState(); } catch (e) {}
   }
   // When the dashboard is selected, activate its tab and panel
@@ -17415,7 +17329,7 @@ function showTab(name){
       if (dtrEndEl && weekEndEl && !weekEndEl.value) weekEndEl.value = dtrEndEl.value;
     } catch (e) {}
     // Ensure the DTR grid is available so payroll can derive hours
-    try { scheduleRenderResults('tab-activation-dtr'); } catch (e) {}
+    if (typeof renderResults === 'function') { try { renderResults(); } catch (e) {} }
     // Derive hours directly from the DTR results table
     try {
       if (typeof calculatePayrollFromResultsTable === 'function') calculatePayrollFromResultsTable();
@@ -17449,7 +17363,7 @@ function showTab(name){
         localStorage.removeItem(LS_FROM);
         localStorage.removeItem(LS_TO);
       } catch (e) {}
-      try { scheduleRenderResults('tab-activation-dtr'); } catch (e) {}
+      if (typeof renderResults === 'function') { try { renderResults(); } catch (e) {} }
     } catch (e) {}
   }
   if(name==='audit'){
@@ -17494,7 +17408,7 @@ if (tabs.tabMain) tabs.tabMain.addEventListener('click', () => {
       } catch (e) {}
       window.__dtrFilterBackup = null;
     }
-    scheduleRenderResults('dtr-split-toggle');
+    renderResults();
   } catch (e) {}
   try {
     if (typeof checkAndToggleEditState === 'function') {
@@ -17516,7 +17430,7 @@ if (tabs.tabPayroll) tabs.tabPayroll.addEventListener('click', ()=>{
   // Ensure the DTR grid is rendered so payroll hours can be derived even if the user
   // hasn't opened the DTR tab in this session.
   try {
-    scheduleRenderResults('dtr-hours-restore');
+    if (typeof renderResults === 'function') renderResults();
   } catch (e) {}
   // When entering the payroll tab, derive hours directly from the DTR results table
   try {
@@ -17530,7 +17444,7 @@ if (tabs.tabPayroll) tabs.tabPayroll.addEventListener('click', ()=>{
 (function ensureDtrRenderedOnBoot(){
   const renderDtr = () => {
     try {
-      scheduleRenderResults('dtr-hours-restore');
+      if (typeof renderResults === 'function') renderResults();
     } catch (e) {}
   };
 
@@ -17639,7 +17553,7 @@ function saveRangesFromUI(){
     storedSchedules[sel][i.dataset.key] = i.value || "";
   });
   saveSchedulesToLS();
-  scheduleRenderResults('dtr-split-toggle');
+  renderResults();
 }
 function resetRanges(){
   const sel = scheduleSelect && scheduleSelect.value;
@@ -17649,7 +17563,7 @@ function resetRanges(){
   });
   saveSchedulesToLS();
   renderScheduleEditor();
-  scheduleRenderResults('dtr-split-toggle');
+  renderResults();
 }
 document.getElementById('saveRangesBtn').addEventListener('click', saveRangesFromUI);
 document.getElementById('resetRangesBtn').addEventListener('click', resetRanges);
@@ -17723,7 +17637,7 @@ function saveProjectsToLS(options = {}){
   renderProjectFilterOptions();
   try { if (typeof renderAdditionalIncomeTable === 'function') renderAdditionalIncomeTable(); } catch (_) {}
   try { if (typeof renderAdjustmentHoursTable === 'function') renderAdjustmentHoursTable(); } catch (_) {}
-  scheduleRenderResults('dtr-split-toggle');
+  renderResults();
 }
 function renderProjects(){
   const tbody = document.querySelector('#projectsTable tbody'); tbody.innerHTML = '';
@@ -17861,7 +17775,7 @@ function renderProjectFilterOptions(){
 filterProjectSel && filterProjectSel.addEventListener('change', ()=>{
   currentProjectFilter = filterProjectSel.value || 'all';
   localStorage.setItem(LS_FILTER_PROJECT, currentProjectFilter);
-  scheduleRenderResults('dtr-split-toggle');
+  renderResults();
 });
 
 function buildCompanyOptionsHtml(selectedValue){
@@ -17952,7 +17866,7 @@ function renderEmployees(){
         if (!contribFlags[id]) contribFlags[id] = {};
         contribFlags[id].pagibig = cbPagibig.checked;
         persistContribFlags();
-        scheduleCalculateAll('employee-contrib-toggle');
+        calculateAll();
       });
     }
     if (cbPhilhealth) {
@@ -17960,7 +17874,7 @@ function renderEmployees(){
         if (!contribFlags[id]) contribFlags[id] = {};
         contribFlags[id].philhealth = cbPhilhealth.checked;
         persistContribFlags();
-        scheduleCalculateAll('employee-contrib-toggle');
+        calculateAll();
       });
     }
     if (cbSss) {
@@ -17968,7 +17882,7 @@ function renderEmployees(){
         if (!contribFlags[id]) contribFlags[id] = {};
         contribFlags[id].sss = cbSss.checked;
         persistContribFlags();
-        scheduleCalculateAll('employee-contrib-toggle');
+        calculateAll();
       });
     }
   });
@@ -17976,7 +17890,7 @@ function renderEmployees(){
   if (needsSave) saveEmployeesToLS();
 
   document.querySelectorAll('.emp-name-input').forEach(inp=> inp.addEventListener('change', (e)=>{
-    storedEmployees[e.target.dataset.id].name = e.target.value; saveEmployeesToLS(); scheduleRenderResults('employee-name-change');
+    storedEmployees[e.target.dataset.id].name = e.target.value; saveEmployeesToLS(); renderResults();
   }));
   document.querySelectorAll('.emp-rate-input').forEach(inp=> inp.addEventListener('change', (e)=>{
     const id = e.target.dataset.id;
@@ -17984,16 +17898,13 @@ function renderEmployees(){
     storedEmployees[id].hourlyRate = val; saveEmployeesToLS();
     try { payrollRates[id] = val; localStorage.setItem(LS_RATES, JSON.stringify(payrollRates)); } catch(err) {}
     try { if (typeof renderTable === 'function') renderTable(); } catch (err) { console.warn('renderTable failed', err); }
-    scheduleRenderResults('employee-rate-change');
-    scheduleCalculateAll('employee-rate-change');
+    renderResults();
   }));
 document.querySelectorAll('.emp-sel-schedule').forEach(sel=> sel.addEventListener('change', (e)=>{
-    storedEmployees[e.target.dataset.id].scheduleId = e.target.value; saveEmployeesToLS(); scheduleRenderResults('employee-schedule-change');
-    scheduleCalculateAll('employee-schedule-change');
+    storedEmployees[e.target.dataset.id].scheduleId = e.target.value; saveEmployeesToLS(); renderResults();
   }));
   document.querySelectorAll('.emp-sel-project').forEach(sel=> sel.addEventListener('change', (e)=>{
-    storedEmployees[e.target.dataset.id].projectId = e.target.value || null; saveEmployeesToLS(); scheduleRenderResults('employee-project-change');
-    scheduleCalculateAll('employee-project-change');
+    storedEmployees[e.target.dataset.id].projectId = e.target.value || null; saveEmployeesToLS(); renderResults();
   }));
   document.querySelectorAll('.emp-company-select').forEach(sel=> sel.addEventListener('change', (e)=>{
     const id = e.target.dataset.id;
@@ -18005,7 +17916,7 @@ document.querySelectorAll('.emp-sel-schedule').forEach(sel=> sel.addEventListene
     }
     storedEmployees[id].company = value;
     saveEmployeesToLS();
-    scheduleRenderResults('employee-company-change');
+    renderResults();
   }));
   document.querySelectorAll('.emp-active').forEach(cb=> cb.addEventListener('change', (e)=>{
     const id = e.target.dataset.id;
@@ -18015,7 +17926,7 @@ document.querySelectorAll('.emp-sel-schedule').forEach(sel=> sel.addEventListene
     storedEmployees[id].deactivatedAt = isActive ? null : new Date().toISOString();
     saveEmployeesToLS();
     renderEmployees();
-    scheduleRenderResults('employee-active-toggle');
+    renderResults();
   }));
   document.querySelectorAll('.del-emp').forEach(btn=> btn.addEventListener('click', (e)=>{
     const id=e.target.dataset.id;
@@ -18030,7 +17941,7 @@ document.querySelectorAll('.emp-sel-schedule').forEach(sel=> sel.addEventListene
         emp.deactivatedAt = emp.active ? null : new Date().toISOString();
         saveEmployeesToLS();
         renderEmployees();
-        scheduleRenderResults('employee-activate-toggle');
+        renderResults();
       }
     }
   }));
@@ -18231,7 +18142,7 @@ function __inRange(d){
         // Persist records locally for offline use
         try { localStorage.setItem(LS_RECORDS, JSON.stringify(storedRecords)); } catch(e){}
         // Refresh the DTR grid
-        scheduleRenderResults('dtr-hours-restore');
+        if (typeof renderResults === 'function') renderResults();
         // Persist the records to Supabase for cross-device sync
         try {
           if (typeof saveDtrToCloud === 'function') saveDtrToCloud(storedRecords);
@@ -18315,7 +18226,7 @@ function queueDtrDropdownRender(){
       setTimeout(run, 120);
       return;
     }
-    scheduleRenderResults('dtr-split-toggle');
+    renderResults();
   };
   setTimeout(run, 0);
 }
@@ -19085,7 +18996,7 @@ async function initApp(){
     document.getElementById('filterProject').value = savedFilter;
     currentProjectFilter = savedFilter;
   }
-  scheduleRenderResults('dtr-split-toggle');
+  renderResults();
 }
 
 async function bootAfterKvHydrate() {
@@ -19417,7 +19328,7 @@ const dtrStartEl = document.getElementById('filterStart');
 const dtrEndEl = document.getElementById('filterEnd');
 
 function calculatePayrollFromRecords(){
-  try { scheduleRenderResults('dtr-hours-restore'); } catch(e){ console.warn('renderResults failed', e); }
+  try { if (typeof renderResults === 'function') renderResults(); } catch(e){ console.warn('renderResults failed', e); }
 
   /*
    * Instead of deriving regular and OT hours from the filtered results table
@@ -19519,7 +19430,7 @@ function calculatePayrollFromRecords(){
         if (weekEndEl   && dtrEnd)   dtrEnd.value   = weekEndEl.value;
       } catch (err) {}
       // Re-render the DTR results table with updated filters
-      scheduleRenderResults('dtr-hours-restore');
+      if (typeof renderResults === 'function') renderResults();
       // Aggregate hours from the rendered DTR table.
       // If no rows are available yet (transient render/filter state),
       // fall back to direct record computation so OT pay does not reset to zero.
@@ -19565,7 +19476,7 @@ function calculatePayrollFromRecords(){
         if (typeof window.applyDtrDateFilter === 'function') applyDtrDateFilter();
       } catch (_) {}
       // Re-render the DTR table with the original filter/search and date range
-      scheduleRenderResults('dtr-hours-restore');
+      if (typeof renderResults === 'function') renderResults();
       // Some pages patch renderResults to invoke the filter automatically,
       // but call it explicitly as a safeguard so the restored range is respected.
       try {
@@ -19650,7 +19561,7 @@ weekStartEl.addEventListener('change', () => {
   if (typeof renderTable === 'function') renderTable();
   if (typeof renderOtherDeductionsTable === 'function') renderOtherDeductionsTable();
   if (typeof renderAdjustmentHoursTable === 'function') renderAdjustmentHoursTable();
-  scheduleCalculateAll('period-range-change-start');
+  calculateAll();
 });
 weekEndEl.addEventListener('change', () => {
   if (dtrEndEl) dtrEndEl.value = weekEndEl.value;
@@ -19662,7 +19573,7 @@ weekEndEl.addEventListener('change', () => {
   if (typeof renderTable === 'function') renderTable();
   if (typeof renderOtherDeductionsTable === 'function') renderOtherDeductionsTable();
   if (typeof renderAdjustmentHoursTable === 'function') renderAdjustmentHoursTable();
-  scheduleCalculateAll('period-range-change-end');
+  calculateAll();
 });
 if (dtrStartEl) {
   dtrStartEl.addEventListener('change', () => {
@@ -19800,12 +19711,12 @@ function restoreData(file) {
     modal.__lastActiveElement = null;
   }
   function syncPayrollAfterOverride(){
-    try { scheduleRenderResults('dtr-override-sync-render'); } catch (e) {}
+    if (typeof renderResults === 'function') { try { renderResults(); } catch (e) {} }
     try {
       if (typeof calculatePayrollFromResultsTable === 'function') calculatePayrollFromResultsTable();
       else if (typeof calculatePayrollFromRecords === 'function') calculatePayrollFromRecords();
     } catch (e) {}
-    try { if (typeof scheduleCalculateAll === 'function') scheduleCalculateAll('dtr-override-sync'); } catch (e) {}
+    try { if (typeof calculateAll === 'function') calculateAll(); } catch (e) {}
   }
   function openManualModal(){
     const modal = document.getElementById('manualDtrModal');
@@ -19864,7 +19775,7 @@ function restoreData(file) {
         persistStoredRecords();
       } catch(e) { console.error('Saving manual DTR failed', e); }
       closeManualModal();
-      scheduleRenderResults('manual-dtr-save');
+      if(typeof renderResults === 'function') renderResults();
       setTimeout(function(){ saveBtn.__savingManual = false; }, 150);
     });
     if (saveBtn) saveBtn.__wiredManualSave = true;
@@ -20013,7 +19924,7 @@ function restoreData(file) {
           }
         }
         persistStoredRecords();
-        scheduleRenderResults('dtr-split-toggle');
+        renderResults();
       } catch(e){ console.error('DTR delete failed', e); }
     });
     table.__dtrDelBound = true;
@@ -20120,7 +20031,7 @@ function restoreData(file) {
           }
           // Persist to Supabase so all devices reflect the deletion
           persistStoredRecords();
-          scheduleRenderResults('dtr-split-toggle');
+          renderResults();
         } catch(e){ console.error('DTR delete failed', e); }
       });
       actionTd.appendChild(btn);
@@ -20228,7 +20139,7 @@ function restoreData(file) {
         localStorage.removeItem(LS_FROM);
         localStorage.removeItem(LS_TO);
       } catch (e) {}
-      try { scheduleRenderResults('project-filter-clear'); } catch (e) {}
+      try { renderResults(); } catch (e) {}
       showTab('projectTotals');
     });
   }
@@ -20255,7 +20166,7 @@ function restoreData(file) {
   // DTR name search live filter
   if (document.getElementById('dtrSearchName')) {
     document.getElementById('dtrSearchName').addEventListener('input', ()=>{
-      scheduleRenderResults('dtr-split-toggle');
+      renderResults();
     });
   }
 // CSV export
@@ -21579,7 +21490,9 @@ function loadSaved(){
       const toVal = t?.value || '';
       try { localStorage.setItem(LS_FROM, fromVal); } catch (e) {}
       try { localStorage.setItem(LS_TO, toVal); } catch (e) {}
-      try { scheduleRenderResults('dtr-date-filter-change'); } catch (e) {}
+      if (typeof renderResults === 'function') {
+        try { renderResults(); return; } catch (e) {}
+      }
       applyDtrDateFilter();
     };
     if (f) f.addEventListener('change', rerenderWithDateFilters);
@@ -21589,7 +21502,9 @@ function loadSaved(){
       if (t) t.value = '';
       try { localStorage.removeItem(LS_FROM); } catch(e){}
       try { localStorage.removeItem(LS_TO); } catch(e){}
-      try { scheduleRenderResults('dtr-date-filter-clear'); } catch (e) {}
+      if (typeof renderResults === 'function') {
+        try { renderResults(); return; } catch (e) {}
+      }
       applyDtrDateFilter();
     });
   }
@@ -21849,8 +21764,8 @@ function loadSaved(){
 
   function reRenderAll(){
     try{ applyActiveWeekToGlobals(); }catch(_){}
-    try{ scheduleRenderResults('re-render-all'); }catch(_){}
-    try{ window.scheduleCalculateAll && scheduleCalculateAll('re-render-all'); }catch(_){}
+    try{ window.renderResults && renderResults(); }catch(_){}
+    try{ window.calculateAll && calculateAll(); }catch(_){}
     try{ window.renderReportTable && renderReportTable(); }catch(_){}
     // If you have totals/project tables:
     try{ window.formatAllNumbers && formatAllNumbers(); }catch(_){}
@@ -22042,7 +21957,7 @@ function updateWeekInputs(snap) {
   }
 
   // Refresh DTR list immediately
-  try { scheduleRenderResults('history-restore-dtr-refresh'); } catch (e) {}
+  try { if (typeof renderResults === 'function') { renderResults(); } } catch (e) {}
 
   // Recalculate payroll if available, deriving hours from the DTR results table
   if (!isLockedSnapshot) {
@@ -22855,7 +22770,7 @@ function setupDtrPunchesRealtime(){
     const queueRender = () => {
       if (renderTimer) clearTimeout(renderTimer);
       renderTimer = setTimeout(() => {
-        try { scheduleRenderResults('dtr-realtime-row-event'); } catch(e) {}
+        try { if (typeof renderResults === 'function') renderResults(); } catch(e) {}
       }, 120);
     };
 
@@ -23006,7 +22921,7 @@ document.addEventListener('DOMContentLoaded', async function () {
         window.storedRecords = merged;
       } catch(e) {}
 
-      try { scheduleRenderResults('tab-activation-dtr'); } catch (e) {}
+      if (typeof renderResults === 'function') { try { renderResults(); } catch (e) {} }
       if (typeof hideRemoteDtrAlert === 'function') hideRemoteDtrAlert();
 
       // Seed remote with any local-only punches (safe: only inserts new ids)
@@ -23411,7 +23326,7 @@ document.addEventListener('DOMContentLoaded', async function () {
           logMsg('LocalStorage hydrated: ' + lsKeys.length + ' keys');
         } catch(e){ logMsg('LocalStorage hydrate warning: ' + e.message); }
         try {
-          if (typeof scheduleCalculateAll === 'function') scheduleCalculateAll('backup-localstorage-hydrate');
+          if (typeof calculateAll === 'function') calculateAll();
           if (typeof renderDeductionsTable === 'function') renderDeductionsTable();
           if (typeof renderTable === 'function') renderTable();
         } catch(e){}
@@ -23960,7 +23875,7 @@ document.addEventListener('DOMContentLoaded', async function () {
           }
           if (timeResult.changed){
             btn.textContent = 'Edit';
-            try { scheduleRenderResults('dtr-inline-edit-save'); } catch(e){}
+            try { renderResults(); } catch(e){}
             return;
           }
           const ovNow = overridesHours && (overridesHours[kHalf] || overridesHours[kBase]);
@@ -24282,7 +24197,6 @@ document.addEventListener('DOMContentLoaded', async function () {
     if (btn && !btn.__cleanPrint){
       btn.addEventListener('click', function(ev){
         ev.preventDefault();
-        try { if (typeof flushCalculateAll === 'function') flushCalculateAll('print-reports-clean'); } catch (_) {}
         withPrintOrientation(function(orientation){
           printReportsClean('r_table', 'r_range_hint', orientation);
         });
@@ -24293,7 +24207,6 @@ document.addEventListener('DOMContentLoaded', async function () {
     if (otBtn && !otBtn.__cleanPrint){
       otBtn.addEventListener('click', function(ev){
         ev.preventDefault();
-        try { if (typeof flushCalculateAll === 'function') flushCalculateAll('print-overtime-clean'); } catch (_) {}
         withPrintOrientation(function(orientation){
           printReportsClean('r_ot_table', 'r_ot_range_hint', orientation);
         });
