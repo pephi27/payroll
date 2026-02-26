@@ -21420,13 +21420,26 @@ function loadSaved(){
     const f = getEl('dtrDateFrom');
     const t = getEl('dtrDateTo');
     const c = getEl('dtrDateClear');
-    if (f) f.addEventListener('change', applyDtrDateFilter);
-    if (t) t.addEventListener('change', applyDtrDateFilter);
+    const rerenderWithDateFilters = () => {
+      const fromVal = f?.value || '';
+      const toVal = t?.value || '';
+      try { localStorage.setItem(LS_FROM, fromVal); } catch (e) {}
+      try { localStorage.setItem(LS_TO, toVal); } catch (e) {}
+      if (typeof renderResults === 'function') {
+        try { renderResults(); return; } catch (e) {}
+      }
+      applyDtrDateFilter();
+    };
+    if (f) f.addEventListener('change', rerenderWithDateFilters);
+    if (t) t.addEventListener('change', rerenderWithDateFilters);
     if (c) c.addEventListener('click', ()=>{
       if (f) f.value = '';
       if (t) t.value = '';
       try { localStorage.removeItem(LS_FROM); } catch(e){}
       try { localStorage.removeItem(LS_TO); } catch(e){}
+      if (typeof renderResults === 'function') {
+        try { renderResults(); return; } catch (e) {}
+      }
       applyDtrDateFilter();
     });
   }
