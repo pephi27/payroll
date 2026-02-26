@@ -25632,8 +25632,8 @@ document.addEventListener('DOMContentLoaded', function(){
       }
     }
 
-    renderAuditSubtabs(rendered);
-    if (rendered.length) setActiveAuditSubtab(rendered[0]);
+    resetAuditTabs();
+    cont.querySelectorAll('[data-audit-segment]').forEach(card=>{ card.style.display = ''; });
     setStatus(rendered.length ? ('Loaded ' + rendered.length + ' segment(s).') : 'No stored segments found.');
   }
 
