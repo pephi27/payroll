@@ -2,6 +2,7 @@ const initialState = {
   currentPeriodId: null,
   payrollPeriods: new Map(),
   payrollSnapshots: new Map(),
+  dtrRecords: new Map(),
   dtrPunches: new Map(),
   employees: new Map(),
   projects: new Map(),
@@ -15,6 +16,7 @@ const initialState = {
     realtimeStatus: 'idle',
     currentPeriodLocked: null,
     lastRealtimeEvent: null,
+    lastConflict: null,
   },
 };
 
@@ -82,4 +84,14 @@ export function setRealtimeStatus(status) {
 export function setLastRealtimeEvent(event) {
   state.diagnostics.lastRealtimeEvent = event;
   notify({ type: 'diagnostics_realtime_event', event });
+}
+
+export function reportConflict(conflict) {
+  state.diagnostics.lastConflict = conflict;
+  notify({ type: 'diagnostics_conflict', conflict });
+}
+
+export function clearConflict() {
+  state.diagnostics.lastConflict = null;
+  notify({ type: 'diagnostics_conflict_clear' });
 }

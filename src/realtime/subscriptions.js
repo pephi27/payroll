@@ -4,6 +4,7 @@ import { mergeRow, removeRow, setLastRealtimeEvent, setRealtimeStatus } from '..
 const TABLE_TO_STATE_KEY = {
   payroll_periods: 'payrollPeriods',
   payroll_period_snapshots: 'payrollSnapshots',
+  pp_dtr_records: 'dtrRecords',
   dtr_punches: 'dtrPunches',
   pp_employees: 'employees',
   pp_projects: 'projects',
