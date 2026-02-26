@@ -1,5 +1,5 @@
 import { payrollService } from './services/payrollService.js';
-import { setCurrentPeriod } from './state/store.js';
+import { setCurrentPeriod, setSupabaseConnected } from './state/store.js';
 import { startRealtimeSubscriptions } from './realtime/subscriptions.js';
 import { mountPayrollController } from './ui/payrollController.js';
 import { waitForSupabaseClient } from './config/supabaseClient.js';
@@ -17,17 +17,36 @@ async function bootstrapPayrollApp() {
 
   const supabase = await waitForSupabaseClient({ timeoutMs: 8000, intervalMs: 80 });
   if (!supabase) {
+    setSupabaseConnected(false);
     console.error('Payroll bootstrap failed: Supabase client not available on window.supabase.');
     return;
   }
 
   try {
+    const { error } = await supabase.from('payroll_periods').select('id').limit(1);
+    setSupabaseConnected(!error);
+    if (error) console.warn('Supabase connectivity check failed', error);
+  } catch (error) {
+    setSupabaseConnected(false);
+    console.warn('Supabase connectivity check failed', error);
+  }
+
+  let currentPeriodId = null;
+
+  try {
     const periods = await payrollService.loadPeriods();
     if (periods.length) {
-      setCurrentPeriod(periods[0].id);
+      currentPeriodId = periods[0].id;
+      setCurrentPeriod(currentPeriodId);
     }
   } catch (error) {
     console.error('Payroll periods load failed', error);
+  }
+
+  try {
+    await payrollService.loadCoreReadModels({ periodId: currentPeriodId });
+  } catch (error) {
+    console.error('Payroll core read models load failed', error);
   }
 
   try {
