@@ -1,5 +1,5 @@
 import { getSupabaseClient } from '../config/supabaseClient.js';
-import { mergeRow, removeRow, setLastRealtimeEvent, setRealtimeStatus } from '../state/store.js';
+import { mergeRow, removeRow } from '../state/store.js';
 
 const TABLE_TO_STATE_KEY = {
   payroll_periods: 'payrollPeriods',
@@ -15,14 +15,6 @@ const TABLE_TO_STATE_KEY = {
 };
 
 function handleChange(table, payload) {
-  const event = {
-    table,
-    type: payload.eventType,
-    timestamp: new Date().toISOString(),
-  };
-  setLastRealtimeEvent(event);
-  console.info('[payroll:realtime:event]', event);
-
   const stateKey = TABLE_TO_STATE_KEY[table];
   if (!stateKey) return;
 
@@ -40,8 +32,6 @@ export function startRealtimeSubscriptions() {
     throw new Error('Supabase client is not ready for realtime subscriptions.');
   }
 
-  setRealtimeStatus('connecting');
-
   const channels = Object.keys(TABLE_TO_STATE_KEY).map((table) => {
     return supabase
       .channel(`rt:${table}`)
@@ -50,13 +40,10 @@ export function startRealtimeSubscriptions() {
         { event: '*', schema: 'public', table },
         (payload) => handleChange(table, payload),
       )
-      .subscribe((status) => {
-        setRealtimeStatus(status);
-      });
+      .subscribe();
   });
 
   return () => {
-    setRealtimeStatus('closed');
     channels.forEach((channel) => supabase.removeChannel(channel));
   };
 }
