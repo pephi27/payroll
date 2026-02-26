@@ -882,7 +882,17 @@ function markHydrated() {
 }
 
 let __kvRerenderTimer = null;
+let __renderResultsTimer = null;
+function scheduleRenderResults(reason, delay = 120) {
+  try { window.__lastRenderResultsReason = reason || ''; } catch (_) {}
+  try { if (__renderResultsTimer) window.clearTimeout(__renderResultsTimer); } catch (_) {}
+  __renderResultsTimer = window.setTimeout(() => {
+    __renderResultsTimer = null;
+    try { if (typeof window.renderResults === 'function') window.renderResults(); } catch (_) {}
+  }, delay);
+}
 function queueHydrateRerender() {
+
   markHydrated();
   try {
     if (typeof window.refreshCoreStoresFromStorage === 'function') {
@@ -902,8 +912,8 @@ function queueHydrateRerender() {
     try {
       if (typeof renderLoanTrackerTable === 'function') renderLoanTrackerTable();
     } catch {}
-    try { if (typeof window.calculateAll === 'function') window.calculateAll(); } catch {}
-    try { if (typeof window.renderResults === 'function') window.renderResults(); } catch {}
+    try { if (typeof window.scheduleCalculateAll === 'function') window.scheduleCalculateAll('hydrate-rerender'); } catch {}
+    try { if (typeof window.scheduleRenderResults === 'function') window.scheduleRenderResults('hydrate-rerender'); } catch {}
   };
   try {
     let shouldDefer = false;
@@ -1006,6 +1016,7 @@ function __kvPayrollHistoryLatestTs(list){
   }catch(_){ return 0; }
 }
 try { window.queueHydrateRerender = queueHydrateRerender; } catch (_) {}
+try { window.scheduleRenderResults = scheduleRenderResults; } catch (_) {}
 
 let __kvPeriodicHydrateInFlight = false;
 async function __kvPeriodicHydrate() {
@@ -9071,6 +9082,52 @@ function calculateAll(){
   renderDeductionsTable();
 }
 
+const CALCULATE_ALL_DEBOUNCE_MS = 300;
+let __calculateAllTimer = null;
+let __calculateAllRunning = false;
+let __calculateAllQueuedWhileRunning = false;
+function setCalculatePendingState(isPending){
+  try { document.body.classList.toggle('calc-pending', !!isPending); } catch (_) {}
+}
+function __runCalculateAllNow(){
+  if (__calculateAllRunning) {
+    __calculateAllQueuedWhileRunning = true;
+    return;
+  }
+  __calculateAllRunning = true;
+  setCalculatePendingState(false);
+  try {
+    calculateAll();
+  } finally {
+    __calculateAllRunning = false;
+    if (__calculateAllQueuedWhileRunning) {
+      __calculateAllQueuedWhileRunning = false;
+      __runCalculateAllNow();
+    }
+  }
+}
+function scheduleCalculateAll(reason){
+  try { window.__lastCalculateAllReason = reason || ''; } catch (_) {}
+  if (__calculateAllTimer) window.clearTimeout(__calculateAllTimer);
+  setCalculatePendingState(true);
+  __calculateAllTimer = window.setTimeout(() => {
+    __calculateAllTimer = null;
+    __runCalculateAllNow();
+  }, CALCULATE_ALL_DEBOUNCE_MS);
+}
+function flushCalculateAll(reason){
+  try { window.__lastCalculateAllReason = reason || ''; } catch (_) {}
+  if (__calculateAllTimer) {
+    window.clearTimeout(__calculateAllTimer);
+    __calculateAllTimer = null;
+  }
+  __runCalculateAllNow();
+}
+try {
+  window.scheduleCalculateAll = scheduleCalculateAll;
+  window.flushCalculateAll = flushCalculateAll;
+} catch (_) {}
+
 let otherDeductionsRenderPending = false;
 let otherDeductionsFocusCount = 0;
 let adjustmentHoursRenderPending = false;
@@ -10548,6 +10605,7 @@ window.formatDateRange = formatDateRange;
 document.addEventListener('DOMContentLoaded', function(){
   const btn = document.getElementById('printPayrollBtn');
   if (btn) btn.addEventListener('click', function(){
+    try { if (typeof flushCalculateAll === 'function') flushCalculateAll('print-payroll'); } catch (_) {}
     const srcTable = document.getElementById('payrollTable');
     if (!srcTable) {
       alert('Payroll table is missing or empty.');
@@ -10784,6 +10842,7 @@ document.addEventListener('DOMContentLoaded', function(){
     updateDeductionsContributionBreakdownDisplay(liveReport.contributionTotals);
   } catch (_) {}
   btn.addEventListener('click', function(){
+    try { if (typeof flushCalculateAll === 'function') flushCalculateAll('print-deductions'); } catch (_) {}
     if (!getEmployeeList() || !getEmployeeList().length) {
       alert('No employees available for the deductions report.');
       return;
@@ -10895,6 +10954,7 @@ document.addEventListener('DOMContentLoaded', function(){
   const btn = document.getElementById('printOvertimeBtn');
   if (!btn) return;
   btn.addEventListener('click', function(){
+    try { if (typeof flushCalculateAll === 'function') flushCalculateAll('print-overtime'); } catch (_) {}
     if (!getEmployeeList() || !getEmployeeList().length) {
       alert('No employees available for the overtime report.');
       return;
@@ -10975,6 +11035,7 @@ document.addEventListener('DOMContentLoaded', function(){
   const btn = document.getElementById('printPayrollExcelBtn');
   if (!btn) return;
   btn.addEventListener('click', function(){
+    try { if (typeof flushCalculateAll === 'function') flushCalculateAll('export-payroll-excel'); } catch (_) {}
     if (typeof XLSX === 'undefined' || !XLSX || !XLSX.utils) {
       alert('Excel library not available');
       return;
@@ -11935,7 +11996,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     await finalizeCashAdvancesForPeriod(start, end);
-    try { if (typeof calculateAll === 'function') await Promise.resolve(calculateAll()); } catch (err) {}
+    try { if (typeof flushCalculateAll === 'function') await Promise.resolve(flushCalculateAll('lock-period-finalize')); } catch (err) {}
     try { if (typeof updatePayrollGrandTotals === 'function') updatePayrollGrandTotals(); } catch (err) {}
 
     const snapshot = await buildSnapshot(start, end);
@@ -12739,8 +12800,8 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     // Ensure all payroll values are recalculated before taking a snapshot for generation
       try {
-        if (typeof calculateAll === 'function') {
-          calculateAll();
+        if (typeof flushCalculateAll === 'function') {
+          flushCalculateAll('snapshot-generation');
         }
       } catch (e) {
         // Suppress errors from calculateAll; snapshot will reflect current cell values
@@ -17052,8 +17113,8 @@ function subscribeSplitOverrides(){
           }
           // Refresh UI tables that depend on overrides/splits
           try { if (typeof queueDtrDropdownRender === 'function') queueDtrDropdownRender(); } catch(_){}
-          try { if (typeof renderResults === 'function') renderResults(); } catch(_){}
-          try { if (typeof window.calculateAll === 'function') window.calculateAll(); } catch(_){}
+          try { if (typeof window.scheduleRenderResults === 'function') window.scheduleRenderResults('split-overrides-realtime'); } catch(_){}
+          try { if (typeof window.scheduleCalculateAll === 'function') window.scheduleCalculateAll('split-overrides-realtime'); } catch(_){}
         } catch (e) {
           console.warn('split_overrides realtime handler error', e);
         }
@@ -19561,7 +19622,7 @@ weekStartEl.addEventListener('change', () => {
   if (typeof renderTable === 'function') renderTable();
   if (typeof renderOtherDeductionsTable === 'function') renderOtherDeductionsTable();
   if (typeof renderAdjustmentHoursTable === 'function') renderAdjustmentHoursTable();
-  calculateAll();
+  scheduleCalculateAll('period-range-change-start');
 });
 weekEndEl.addEventListener('change', () => {
   if (dtrEndEl) dtrEndEl.value = weekEndEl.value;
@@ -19573,7 +19634,7 @@ weekEndEl.addEventListener('change', () => {
   if (typeof renderTable === 'function') renderTable();
   if (typeof renderOtherDeductionsTable === 'function') renderOtherDeductionsTable();
   if (typeof renderAdjustmentHoursTable === 'function') renderAdjustmentHoursTable();
-  calculateAll();
+  scheduleCalculateAll('period-range-change-end');
 });
 if (dtrStartEl) {
   dtrStartEl.addEventListener('change', () => {
@@ -19716,7 +19777,7 @@ function restoreData(file) {
       if (typeof calculatePayrollFromResultsTable === 'function') calculatePayrollFromResultsTable();
       else if (typeof calculatePayrollFromRecords === 'function') calculatePayrollFromRecords();
     } catch (e) {}
-    try { if (typeof calculateAll === 'function') calculateAll(); } catch (e) {}
+    try { if (typeof scheduleCalculateAll === 'function') scheduleCalculateAll('dtr-override-sync'); } catch (e) {}
   }
   function openManualModal(){
     const modal = document.getElementById('manualDtrModal');
@@ -21765,7 +21826,7 @@ function loadSaved(){
   function reRenderAll(){
     try{ applyActiveWeekToGlobals(); }catch(_){}
     try{ window.renderResults && renderResults(); }catch(_){}
-    try{ window.calculateAll && calculateAll(); }catch(_){}
+    try{ window.scheduleCalculateAll && scheduleCalculateAll('re-render-all'); }catch(_){}
     try{ window.renderReportTable && renderReportTable(); }catch(_){}
     // If you have totals/project tables:
     try{ window.formatAllNumbers && formatAllNumbers(); }catch(_){}
@@ -23326,7 +23387,7 @@ document.addEventListener('DOMContentLoaded', async function () {
           logMsg('LocalStorage hydrated: ' + lsKeys.length + ' keys');
         } catch(e){ logMsg('LocalStorage hydrate warning: ' + e.message); }
         try {
-          if (typeof calculateAll === 'function') calculateAll();
+          if (typeof scheduleCalculateAll === 'function') scheduleCalculateAll('backup-localstorage-hydrate');
           if (typeof renderDeductionsTable === 'function') renderDeductionsTable();
           if (typeof renderTable === 'function') renderTable();
         } catch(e){}
@@ -24197,6 +24258,7 @@ document.addEventListener('DOMContentLoaded', async function () {
     if (btn && !btn.__cleanPrint){
       btn.addEventListener('click', function(ev){
         ev.preventDefault();
+        try { if (typeof flushCalculateAll === 'function') flushCalculateAll('print-reports-clean'); } catch (_) {}
         withPrintOrientation(function(orientation){
           printReportsClean('r_table', 'r_range_hint', orientation);
         });
@@ -24207,6 +24269,7 @@ document.addEventListener('DOMContentLoaded', async function () {
     if (otBtn && !otBtn.__cleanPrint){
       otBtn.addEventListener('click', function(ev){
         ev.preventDefault();
+        try { if (typeof flushCalculateAll === 'function') flushCalculateAll('print-overtime-clean'); } catch (_) {}
         withPrintOrientation(function(orientation){
           printReportsClean('r_ot_table', 'r_ot_range_hint', orientation);
         });
