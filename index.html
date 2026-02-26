@@ -809,7 +809,7 @@ const TABLE = "kv_store"
 // devices, add them here as well.  Without inclusion in this list the
 // `Storage.prototype.setItem` hook will ignore them and they will remain
 // strictly device-local.
-const KNOWN_KEYS = [
+const SHARED_KEYS = [
   "att_employees_v2",
   "att_schedules_v2",
   "att_schedules_default",
@@ -852,7 +852,11 @@ const KNOWN_KEYS = [
   ,"deductionTypeOptions"
   ,"payroll_loan_tracker"
   ,"payroll_print_orientation"
+  ,"att_overrides_schedules"
+  ,"att_overrides_projects"
+  ,"att_splits_v1"
 ]
+const KNOWN_KEYS = SHARED_KEYS;
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY, {
   auth: {
@@ -875,9 +879,75 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_KEY, {
 // provides a simple, predictable global reference.
 window.supabase = supabase;
 window.SUPABASE_TABLE = TABLE;
+window.__sharedSyncState = { hydrated: false, status: 'syncing', conflict: false, offline: !navigator.onLine };
+
+function ensureCloudSyncStatusBanner(){
+  try {
+    if (document.getElementById('cloudSyncStatusBanner')) return;
+    const banner = document.createElement('div');
+    banner.id = 'cloudSyncStatusBanner';
+    banner.style.cssText = 'position:fixed;bottom:12px;right:12px;z-index:99999;padding:8px 10px;border-radius:8px;background:#111827;color:#fff;font-size:12px;opacity:.92;';
+    banner.textContent = 'Cloud Sync Status: syncing';
+    document.body.appendChild(banner);
+  } catch (_) {}
+}
+function updateCloudSyncStatus(next){
+  try {
+    window.__sharedSyncState = Object.assign({}, window.__sharedSyncState || {}, next || {});
+    const st = window.__sharedSyncState || {};
+    let label = 'syncing';
+    if (st.offline) label = 'offline';
+    else if (st.conflict) label = 'conflict';
+    else if (st.hydrated) label = 'hydrated';
+    st.status = label;
+    ensureCloudSyncStatusBanner();
+    const el = document.getElementById('cloudSyncStatusBanner');
+    if (el) el.textContent = 'Cloud Sync Status: ' + label;
+  } catch (_) {}
+}
+window.addEventListener('online', () => updateCloudSyncStatus({ offline: false }));
+window.addEventListener('offline', () => updateCloudSyncStatus({ offline: true }));
+
+const __sharedSeededKeys = new Set();
+async function readShared(key, fallback = null){
+  let cloudVal;
+  try { if (typeof window.readKV === 'function') cloudVal = await window.readKV(key, undefined); } catch(_) {}
+  if (cloudVal !== undefined && cloudVal !== null) {
+    try { localStorage.setItem(key, JSON.stringify(cloudVal)); } catch(_) {}
+    return cloudVal;
+  }
+  let localVal = fallback;
+  try {
+    const raw = localStorage.getItem(key);
+    if (raw != null) localVal = JSON.parse(raw);
+  } catch (_) {}
+  const shouldSeed = !__sharedSeededKeys.has(key) && localVal !== undefined && localVal !== null;
+  if (shouldSeed) {
+    try {
+      const isEmpty = (typeof localVal === 'object') ? Object.keys(localVal || {}).length === 0 : String(localVal) === '';
+      if (!isEmpty && typeof window.writeKV === 'function') {
+        await window.writeKV(key, localVal);
+        __sharedSeededKeys.add(key);
+      }
+    } catch (_) {}
+  }
+  return localVal;
+}
+async function writeShared(key, value){
+  try { updateCloudSyncStatus({ hydrated: !!(window.__sharedSyncState && window.__sharedSyncState.hydrated), offline: !navigator.onLine }); } catch(_) {}
+  try { localStorage.setItem(key, JSON.stringify(value)); } catch (_) {}
+  if (typeof window.writeKV === 'function') {
+    try { await window.writeKV(key, value); } catch (_) {}
+  }
+  updateCloudSyncStatus({ hydrated: true, offline: !navigator.onLine });
+  return value;
+}
+window.readShared = readShared;
+window.writeShared = writeShared;
 
 function markHydrated() {
   try { window.__kv_hydrated = true; } catch {}
+  updateCloudSyncStatus({ hydrated: true, offline: !navigator.onLine });
   try { window.dispatchEvent(new Event('kv-hydrated')); } catch {}
 }
 
@@ -6801,7 +6871,7 @@ divisorEl.addEventListener('change', () => {
   window.scheduleCalculateAll?.('payroll-divisor-change');
 });
 function loadEmployees() {
-  const stored = JSON.parse(localStorage.getItem('att_employees_v2') || '{}');
+  const stored = (typeof storedEmployees !== 'undefined' && storedEmployees) ? storedEmployees : safeParseStorageJSON('att_employees_v2', {});
   let list = Object.keys(stored).filter(id => !(stored[id] && stored[id].active === false)).map(id=>({id, name: stored[id]?.name || ''}));
   if (list.length === 0) list = [{id:'001', name:'Sample Employee'}];
   list.sort((a,b)=> (a.name||'').localeCompare(b.name||''));
@@ -6832,7 +6902,8 @@ function setSssTable(rows){
     const employer = Number.isFinite(employerRaw) ? employerRaw : employee;
     return { min, max, employee, employer };
   }) : [];
-  localStorage.setItem(LS_SSS_TABLE, JSON.stringify(clean));
+  try { localStorage.setItem(LS_SSS_TABLE, JSON.stringify(clean)); } catch(_) {}
+  try { writeShared(LS_SSS_TABLE, clean); } catch(_) {}
 }
 
 function formatDeductionDisplay(value){
@@ -8718,7 +8789,8 @@ function getPagibigTable(){
   })).sort((a,b) => a.min - b.min);
 }
 function setPagibigTable(rows){
-  localStorage.setItem(LS_PAGIBIG_TABLE, JSON.stringify(rows));
+  try { localStorage.setItem(LS_PAGIBIG_TABLE, JSON.stringify(rows)); } catch(_) {}
+  try { writeShared(LS_PAGIBIG_TABLE, rows); } catch(_) {}
 }
 function renderPagibigTable(){
   const tbodyP = document.querySelector('#pagibigTable tbody');
@@ -8769,7 +8841,8 @@ function getPhilhealthTable(){
   })).sort((a,b) => a.min - b.min);
 }
 function setPhilhealthTable(rows){
-  localStorage.setItem(LS_PHILHEALTH_TABLE, JSON.stringify(rows));
+  try { localStorage.setItem(LS_PHILHEALTH_TABLE, JSON.stringify(rows)); } catch(_) {}
+  try { writeShared(LS_PHILHEALTH_TABLE, rows); } catch(_) {}
 }
 function renderPhilhealthTable(){
   const tbodyPh = document.querySelector('#philhealthTable tbody');
@@ -16645,7 +16718,9 @@ async function ensureSplitOverridesAvailable(){
     __splitOverridesAvailable = true;
   } catch (e) {
     __splitOverridesAvailable = false;
-    try { if (window.ENABLE_SPLIT_OVERRIDES) console.warn('split_overrides not available; using local-only overrides', e); } catch(_) {}
+    try { if (window.ENABLE_SPLIT_OVERRIDES) console.warn('split_overrides not available; disabling split override edits', e); } catch(_) {}
+    try { updateCloudSyncStatus({ conflict: true }); } catch(_) {}
+    try { window.__splitOverridesEditDisabled = true; } catch(_) {}
     // Disable so we don't keep trying every time
     try { window.ENABLE_SPLIT_OVERRIDES = false; } catch(_) {}
   }
@@ -16655,8 +16730,8 @@ async function ensureSplitOverridesAvailable(){
 
 const COMPANY_OPTIONS = ['Edifice', 'Portafolio'];
 
-let overridesSchedules = JSON.parse(localStorage.getItem(LS_OVERRIDES_SCHEDULES) || '{}');
-let overridesProjects = JSON.parse(localStorage.getItem(LS_OVERRIDES_PROJECTS) || '{}');
+let overridesSchedules = {};
+let overridesProjects = {};
 const LS_DTR_OVERRIDES = 'dtr_overrides_v1';
 const OVERNIGHT_CUTOFF_HOUR = 6;
 let dtrOverrides = loadDtrOverrides();
@@ -16869,31 +16944,28 @@ function openPunchEditor(rowContext) {
 // LS_SPLITS. Keys are formatted as empId + '___' + date.
 const LS_SPLITS = 'att_splits_v1';
 let splits = {};
-try {
-  splits = JSON.parse(localStorage.getItem(LS_SPLITS) || '{}');
-} catch (e) {
-  splits = {};
-}
-function saveSplits() {
+async function saveSplitsShared() {
   try {
-    localStorage.setItem(LS_SPLITS, JSON.stringify(splits));
+    await writeShared(LS_SPLITS, splits);
   } catch (e) {
     console.warn('Saving splits failed', e);
   }
-  syncSplitOverrides();
 }
+function saveSplits(){ return saveSplitsShared(); }
 // Toggle split and unsplit state for a given employee/date key.  These helper
 // functions are used by the DTR table buttons to avoid inline IIFEs.  They set
 // the split flag in the `splits` object, persist it to localStorage via
 // saveSplits(), and trigger a re-render of the results.
 function splitRecord(key) {
+  if (window.__splitOverridesEditDisabled) { alert('Cloud split override table is missing. Editing is disabled to avoid cross-device mismatch.'); return; }
   // When splitting, mark all three segments (AM, PM, OT) as split.  Use
   // an object so we can track split state per segment.
   splits[key] = { AM: true, PM: true, OT: true };
-  saveSplits();
+  saveSplitsShared();
   window.scheduleRenderResults?.('dtr-split-toggle');
 }
 function unsplitRecord(key) {
+  if (window.__splitOverridesEditDisabled) { alert('Cloud split override table is missing. Editing is disabled to avoid cross-device mismatch.'); return; }
   // Group AM/PM/OT segments by their resolved project IDs.  Each group with
   // more than one segment is recombined (segment-level overrides cleared and
   // marked as unsplit).  Groups with a single segment remain split.
@@ -16956,15 +17028,15 @@ function unsplitRecord(key) {
     delete splits[key];
   }
 
-  saveSplits();
-  saveOverrides();
+  saveSplitsShared();
+  saveOverridesShared();
   window.scheduleRenderResults?.('dtr-split-toggle');
 }
-function saveOverrides(){
-  localStorage.setItem(LS_OVERRIDES_SCHEDULES, JSON.stringify(overridesSchedules));
-  localStorage.setItem(LS_OVERRIDES_PROJECTS, JSON.stringify(overridesProjects));
-  syncSplitOverrides();
+async function saveOverridesShared(){
+  await writeShared(LS_OVERRIDES_SCHEDULES, overridesSchedules);
+  await writeShared(LS_OVERRIDES_PROJECTS, overridesProjects);
 }
+function saveOverrides(){ return saveOverridesShared(); }
 
 function baseKey(k){
   const parts = String(k || '').split('___');
@@ -17214,10 +17286,10 @@ const DEFAULT_SCHEDULE = {
 let storedRecords = (typeof window !== 'undefined' && Array.isArray(window.storedRecords))
   ? window.storedRecords
   : [];
-let storedEmployees = JSON.parse(localStorage.getItem(LS_EMPLOYEES) || '{}');
-let storedSchedules = JSON.parse(localStorage.getItem(LS_SCHEDULES) || 'null');
+let storedEmployees = safeParseStorageJSON(LS_EMPLOYEES, {});
+let storedSchedules = safeParseStorageJSON(LS_SCHEDULES, null);
 let defaultScheduleId = localStorage.getItem(LS_SCHEDULES_DEFAULT) || null;
-let storedProjects = JSON.parse(localStorage.getItem(LS_PROJECTS) || '{}');
+let storedProjects = safeParseStorageJSON(LS_PROJECTS, {});
 
 function safeParseStorageJSON(key, fallbackValue) {
   try {
@@ -17228,6 +17300,36 @@ function safeParseStorageJSON(key, fallbackValue) {
   } catch (_) {
     return fallbackValue;
   }
+}
+
+
+
+async function hydrateSharedDatasets(){
+  const keys = [
+    LS_EMPLOYEES,
+    LS_PROJECTS,
+    LS_SCHEDULES,
+    LS_SCHEDULES_DEFAULT,
+    LS_OVERRIDES_PROJECTS,
+    LS_OVERRIDES_SCHEDULES,
+    LS_SPLITS,
+    LS_CONTRIB_FLAGS,
+    LS_SSS_TABLE,
+    LS_PAGIBIG_TABLE,
+    LS_PHILHEALTH_TABLE,
+    PAYROLL_SETTINGS_KEY,
+    LS_LOAN_TRACKER,
+    LS_OTHER_DEDUCTIONS_DETAILS,
+    LS_OTHER_DEDUCTIONS_TOTAL,
+    LS_ADDITIONAL_INCOME_DETAILS,
+    LS_ADDITIONAL_INCOME_TOTAL
+  ];
+  for (const k of keys) {
+    try { await readShared(k, null); } catch(_) {}
+  }
+  refreshCoreStoresFromStorage();
+  defaultScheduleId = localStorage.getItem(LS_SCHEDULES_DEFAULT) || defaultScheduleId || null;
+  updateCloudSyncStatus({ hydrated: true, offline: !navigator.onLine });
 }
 
 function refreshCoreStoresFromStorage() {
@@ -17313,10 +17415,11 @@ function ensureSchedules(){
     }
   }
 }
-function saveSchedulesToLS(){
-  localStorage.setItem(LS_SCHEDULES, JSON.stringify(storedSchedules));
-  localStorage.setItem(LS_SCHEDULES_DEFAULT, defaultScheduleId);
+async function saveSchedulesShared(){
+  await writeShared(LS_SCHEDULES, storedSchedules);
+  await writeShared(LS_SCHEDULES_DEFAULT, defaultScheduleId);
 }
+function saveSchedulesToLS(){ return saveSchedulesShared(); }
 
 const LS_ACTIVE_MAIN_TAB = 'bp_active_main_tab';
 
@@ -17657,7 +17760,8 @@ function resetRanges(){
 document.getElementById('saveRangesBtn').addEventListener('click', saveRangesFromUI);
 document.getElementById('resetRangesBtn').addEventListener('click', resetRanges);
 
-function saveEmployeesToLS(){ localStorage.setItem(LS_EMPLOYEES, JSON.stringify(storedEmployees)); }
+async function saveEmployeesShared(){ await writeShared(LS_EMPLOYEES, storedEmployees); }
+function saveEmployeesToLS(){ return saveEmployeesShared(); }
 function renderEmpScheduleDropdowns(){
   const sel = document.getElementById('empScheduleSelect'); if(!sel) return;
   sel.innerHTML = '';
@@ -17716,8 +17820,8 @@ function syncProjectsKVAfterLocalSave(forceCloudWrite){
   } catch (_) {}
 }
 
-function saveProjectsToLS(options = {}){
-  localStorage.setItem(LS_PROJECTS, JSON.stringify(storedProjects));
+async function saveProjectsShared(options = {}){
+  await writeShared(LS_PROJECTS, storedProjects);
   syncProjectsKVAfterLocalSave(!!(options && options.userEdited));
   if(!(options && options.skipRender)){
     renderProjects();
@@ -17728,6 +17832,7 @@ function saveProjectsToLS(options = {}){
   try { if (typeof renderAdjustmentHoursTable === 'function') renderAdjustmentHoursTable(); } catch (_) {}
   window.scheduleRenderResults?.('dtr-split-toggle');
 }
+function saveProjectsToLS(options = {}){ return saveProjectsShared(options); }
 function renderProjects(){
   const tbody = document.querySelector('#projectsTable tbody'); tbody.innerHTML = '';
   const projectCompanySel = document.getElementById('projectCompanySelect');
@@ -19102,10 +19207,10 @@ async function bootAfterKvHydrate() {
     });
   }
   try {
-    if (typeof window.refreshCoreStoresFromStorage === 'function') {
-      window.refreshCoreStoresFromStorage();
-    }
-  } catch (_) {}
+    await hydrateSharedDatasets();
+  } catch (_) {
+    if (typeof window.refreshCoreStoresFromStorage === 'function') window.refreshCoreStoresFromStorage();
+  }
   await initApp();
 }
 bootAfterKvHydrate();
