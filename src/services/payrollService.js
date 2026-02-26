@@ -1,19 +1,6 @@
 import { getSupabaseClient } from '../config/supabaseClient.js';
 import { getState, mergeRow } from '../state/store.js';
 
-function summarizePayload(payload) {
-  if (!payload || typeof payload !== 'object') return payload;
-  const summary = {};
-  for (const key of ['id', 'payroll_period_id', 'employee_id', 'project_id', 'created_at', 'updated_at']) {
-    if (key in payload) summary[key] = payload[key];
-  }
-  return summary;
-}
-
-function logWrite(action, table, payload) {
-  console.info('[payroll:write]', { action, table, payload: summarizePayload(payload), at: new Date().toISOString() });
-}
-
 const TABLES = {
   periods: 'payroll_periods',
   snapshots: 'payroll_period_snapshots',
@@ -73,8 +60,6 @@ export const payrollService = {
       meta,
     };
 
-    logWrite('insert', TABLES.punches, row);
-
     const { data, error } = await requireSupabaseClient()
       .from(TABLES.punches)
       .insert(row)
@@ -92,8 +77,6 @@ export const payrollService = {
     if (!existing) throw new Error(`Punch ${punchId} not found in state.`);
 
     await ensurePeriodUnlocked(existing.payroll_period_id);
-
-    logWrite('update', TABLES.punches, { id: punchId, ...patch });
 
     const { data, error } = await requireSupabaseClient()
       .from(TABLES.punches)
@@ -114,8 +97,6 @@ export const payrollService = {
 
     await ensurePeriodUnlocked(existing.payroll_period_id);
 
-    logWrite('delete', TABLES.punches, { id: punchId });
-
     const { error } = await requireSupabaseClient()
       .from(TABLES.punches)
       .delete()
@@ -128,8 +109,6 @@ export const payrollService = {
   async saveSnapshot(snapshot) {
     const { payroll_period_id: periodId } = snapshot;
     await ensurePeriodUnlocked(periodId);
-
-    logWrite('insert', TABLES.snapshots, snapshot);
 
     const { data, error } = await requireSupabaseClient()
       .from(TABLES.snapshots)
