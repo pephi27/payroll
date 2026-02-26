@@ -700,7 +700,7 @@
       };
       window.writeKV = async function writeKV(key, value) {
         const trySetLocal = () => {
-          try { window.__kvBypassNextSetItem = true; __kvBypassNextSetItem = true; localStorage.setItem(key, JSON.stringify(value)); } catch {}
+          try { window.__kvBypassNextSetItem = true; __kvBypassNextSetItem = true; cacheSet(key, value); } catch {}
         };
         const isNavLockTimeout = (err) => {
           const msg = (err && err.message) ? String(err.message) : String(err || '');
@@ -962,8 +962,8 @@ async function readShared(key, fallback = null){
   const canSeed = cloudReadOk && cloudMissing && !__sharedSeededKeys.has(key) && __sharedHasSeedableValue(localVal);
   if (canSeed) {
     try {
-      if (typeof window.writeKV === 'function') {
-        await window.writeKV(key, localVal);
+      if (typeof window.writeShared === 'function') {
+        await window.writeShared(key, localVal);
         __sharedSeededKeys.add(key);
       }
     } catch (_) {}
@@ -1216,7 +1216,7 @@ function __kvSetupRealtimeChannel(force = false) {
                 // Keep local computed values and heal cloud row asynchronously.
                 try {
                   if (window.__kvSyncEnabled && window.__kvSyncEnabled() && typeof window.writeKV === 'function') {
-                    window.writeKV(key, currentObj);
+                    if (typeof window.writeShared === 'function') window.writeShared(key, currentObj);
                   }
                 } catch (_) {}
                 return;
@@ -1387,13 +1387,13 @@ let __kvSyncEnabled = false;
 let __kvHydrating = false;
 try { window.__kvSyncEnabled = () => __kvSyncEnabled; } catch(_) {}
 
-function __kvEnableSync(){ __kvSyncEnabled = true; }
+function __kvEnableSync(){ __kvSyncEnabled = false; }
 function __kvDisableSync(){ __kvSyncEnabled = false; }
 try { window.__kvEnableSync = __kvEnableSync; window.__kvDisableSync = __kvDisableSync; } catch(_) {}
 
 let __kvBypassNextSetItem = false;
 const __CLOUD_ONLY_KEYS = new Set(['payroll_loan_tracker','payroll_loan_sss','payroll_loan_pagibig','payroll_vale','payroll_vale_wed','payroll_other_deductions_details','payroll_other_deductions_total','payroll_additional_income_details','payroll_additional_income_total']);
-function __kvShouldMirror(k){ return KNOWN_KEYS.includes(k) && !__CLOUD_ONLY_KEYS.has(k) && !__KV_COMPUTED_LOCAL_KEYS.has(k); }
+function __kvShouldMirror(k){ return false; }
 
 const store = (() => {
   const pendingTimers = new Map();
@@ -4509,7 +4509,7 @@ let bantayProj = {};
       try { v = JSON.parse(localStorage.getItem(LS_BANTAY_PROJ) || '{}'); } catch(_){}
     }
     if (v && typeof v==='object') bantayProj = v;
-    try { localStorage.setItem(LS_BANTAY_PROJ, JSON.stringify(bantayProj)); } catch(_){ }
+    void writeShared(LS_BANTAY_PROJ, bantayProj).catch(() => {});
     try { if (typeof window.rebuildReports === 'function') window.rebuildReports(); } catch(_){ }
   }catch(e){}
 })();
@@ -4766,8 +4766,8 @@ function getNightDifferentialPayForEmployee(empId) {
 }
 
 async function persistPayrollSettings() {
-  const writer = (typeof window !== 'undefined' && typeof window.writeKV === 'function')
-    ? window.writeKV
+  const writer = (typeof window !== 'undefined' && typeof window.writeShared === 'function')
+    ? window.writeShared
     : null;
   if (!writer) return;
   try {
@@ -4875,28 +4875,16 @@ function getDeductionTypeOptions(){
 async function persistIncomeTypeOptions(next){
   const normalized = normalizeIncomeTypeOptions(next);
   incomeTypeOptions = normalized;
-  try { localStorage.setItem(LS_INCOME_TYPE_OPTIONS, JSON.stringify(normalized)); } catch (_) {}
-  if (typeof window !== 'undefined' && typeof window.writeKV === 'function') {
-    try {
-      const result = window.writeKV(LS_INCOME_TYPE_OPTIONS, normalized);
-      if (result && typeof result.then === 'function') await result;
-    } catch (err) {
-      console.warn('Persisting income type options failed', err);
-    }
+  try { await writeShared(LS_INCOME_TYPE_OPTIONS, normalized); } catch (err) {
+    console.warn('Persisting income type options failed', err);
   }
 }
 
 async function persistDeductionTypeOptions(next){
   const normalized = normalizeDeductionTypeOptions(next);
   deductionTypeOptions = normalized;
-  try { localStorage.setItem(LS_DEDUCTION_TYPE_OPTIONS, JSON.stringify(normalized)); } catch (_) {}
-  if (typeof window !== 'undefined' && typeof window.writeKV === 'function') {
-    try {
-      const result = window.writeKV(LS_DEDUCTION_TYPE_OPTIONS, normalized);
-      if (result && typeof result.then === 'function') await result;
-    } catch (err) {
-      console.warn('Persisting deduction type options failed', err);
-    }
+  try { await writeShared(LS_DEDUCTION_TYPE_OPTIONS, normalized); } catch (err) {
+    console.warn('Persisting deduction type options failed', err);
   }
 }
 
@@ -4910,7 +4898,7 @@ async function loadIncomeTypeOptions(){
       try { stored = JSON.parse(localStorage.getItem(LS_INCOME_TYPE_OPTIONS) || 'null'); } catch(_) { stored = null; }
     }
     incomeTypeOptions = normalizeIncomeTypeOptions(stored);
-    try { localStorage.setItem(LS_INCOME_TYPE_OPTIONS, JSON.stringify(incomeTypeOptions)); } catch(_) {}
+    void writeShared(LS_INCOME_TYPE_OPTIONS, incomeTypeOptions).catch(() => {});
     renderIncomeTypeOptionsUI();
     try {
       if (typeof queueAdditionalIncomeRerender === 'function') queueAdditionalIncomeRerender();
@@ -4931,7 +4919,7 @@ async function loadDeductionTypeOptions(){
       try { stored = JSON.parse(localStorage.getItem(LS_DEDUCTION_TYPE_OPTIONS) || 'null'); } catch(_) { stored = null; }
     }
     deductionTypeOptions = normalizeDeductionTypeOptions(stored);
-    try { localStorage.setItem(LS_DEDUCTION_TYPE_OPTIONS, JSON.stringify(deductionTypeOptions)); } catch(_) {}
+    void writeShared(LS_DEDUCTION_TYPE_OPTIONS, deductionTypeOptions).catch(() => {});
     renderDeductionTypeOptionsUI();
     try {
       if (typeof queueOtherDeductionsRerender === 'function') queueOtherDeductionsRerender();
@@ -5224,7 +5212,7 @@ function ensureSeededSSS() {
     const cur = JSON.parse(localStorage.getItem(LS_SSS_TABLE) || '[]');
     if (!Array.isArray(cur) || cur.length === 0) {
       const mapped = SSS_SEED_2025.map(r=>({min:r[0], max:r[1], employee:r[2], employer: (typeof r[3] !== 'undefined' ? r[3] : r[2])}));
-      localStorage.setItem(LS_SSS_TABLE, JSON.stringify(mapped));
+      void writeShared(LS_SSS_TABLE, mapped).catch(() => {});
     } else {
       const normalized = cur.map(row => {
         const min = Number(row && typeof row.min !== 'undefined' ? row.min : 0) || 0;
@@ -5234,11 +5222,11 @@ function ensureSeededSSS() {
         const employer = Number.isFinite(employerRaw) ? employerRaw : employee;
         return { min, max, employee, employer };
       });
-      localStorage.setItem(LS_SSS_TABLE, JSON.stringify(normalized));
+      void writeShared(LS_SSS_TABLE, normalized).catch(() => {});
     }
   } catch (e) {
     const mapped = SSS_SEED_2025.map(r=>({min:r[0], max:r[1], employee:r[2], employer: (typeof r[3] !== 'undefined' ? r[3] : r[2])}));
-    localStorage.setItem(LS_SSS_TABLE, JSON.stringify(mapped));
+    void writeShared(LS_SSS_TABLE, mapped).catch(() => {});
   }
 }
 ensureSeededSSS();
@@ -5256,11 +5244,11 @@ function ensureSeededPagibig() {
     const cur = JSON.parse(localStorage.getItem(LS_PAGIBIG_TABLE) || '[]');
     if (!Array.isArray(cur) || cur.length === 0) {
       const mapped = PAGIBIG_SEED.map(r => ({min: r[0], max: r[1], rate: r[2]}));
-      localStorage.setItem(LS_PAGIBIG_TABLE, JSON.stringify(mapped));
+      void writeShared(LS_PAGIBIG_TABLE, mapped).catch(() => {});
     }
   } catch (e) {
     const mapped = PAGIBIG_SEED.map(r => ({min: r[0], max: r[1], rate: r[2]}));
-    localStorage.setItem(LS_PAGIBIG_TABLE, JSON.stringify(mapped));
+    void writeShared(LS_PAGIBIG_TABLE, mapped).catch(() => {});
   }
 }
 
@@ -5269,11 +5257,11 @@ function ensureSeededPhilhealth() {
     const cur = JSON.parse(localStorage.getItem(LS_PHILHEALTH_TABLE) || '[]');
     if (!Array.isArray(cur) || cur.length === 0) {
       const mapped = PHILHEALTH_SEED.map(r => ({min: r[0], max: r[1], rate: r[2]}));
-      localStorage.setItem(LS_PHILHEALTH_TABLE, JSON.stringify(mapped));
+      void writeShared(LS_PHILHEALTH_TABLE, mapped).catch(() => {});
     }
   } catch (e) {
     const mapped = PHILHEALTH_SEED.map(r => ({min: r[0], max: r[1], rate: r[2]}));
-    localStorage.setItem(LS_PHILHEALTH_TABLE, JSON.stringify(mapped));
+    void writeShared(LS_PHILHEALTH_TABLE, mapped).catch(() => {});
   }
 }
 ensureSeededPagibig();
@@ -5312,8 +5300,7 @@ function loadContribFlagsFromLocalStorage() {
 function persistContribFlags() {
   const normalized = normalizeContribFlags(contribFlags);
   contribFlags = normalized;
-  try { localStorage.setItem(LS_CONTRIB_FLAGS, JSON.stringify(normalized)); } catch (_) {}
-  try { if (typeof window.writeKV === 'function') window.writeKV(LS_CONTRIB_FLAGS, normalized); } catch (_) {}
+  void writeShared(LS_CONTRIB_FLAGS, normalized).catch(() => {});
 }
 
 async function refreshContribFlagsFromStore() {
@@ -5346,14 +5333,14 @@ function migrateWeekRangeKeys(){
   try {
     if (!localStorage.getItem(LS_WEEKSTART)) {
       const legacyStart = localStorage.getItem(LEGACY_WEEKSTART_KEY);
-      if (legacyStart) localStorage.setItem(LS_WEEKSTART, legacyStart);
+      if (legacyStart) void writeShared(LS_WEEKSTART, legacyStart).catch(() => {});
     }
     if (!localStorage.getItem(LS_WEEKEND)) {
       const legacyEnd = localStorage.getItem(LEGACY_WEEKEND_KEY);
-      if (legacyEnd) localStorage.setItem(LS_WEEKEND, legacyEnd);
+      if (legacyEnd) void writeShared(LS_WEEKEND, legacyEnd).catch(() => {});
     }
-    localStorage.removeItem(LEGACY_WEEKSTART_KEY);
-    localStorage.removeItem(LEGACY_WEEKEND_KEY);
+    void writeShared(LEGACY_WEEKSTART_KEY, null).catch(() => {});
+    void writeShared(LEGACY_WEEKEND_KEY, null).catch(() => {});
   } catch (e) {}
 }
 
@@ -5703,7 +5690,7 @@ async function persistLoanTracker(){
   } catch(_){}
 
   let savedStr = null;
-  try { savedStr = JSON.stringify(loanTracker); localStorage.setItem(LS_LOAN_TRACKER, savedStr); } catch(_){}
+  try { savedStr = JSON.stringify(loanTracker); } catch(_){}
 
   // KV sync (realtime across devices): write to kv_store using writeKV, debounced.
   try {
@@ -5716,7 +5703,7 @@ async function persistLoanTracker(){
       if (window.__loanTrackerKVTimer) { try { clearTimeout(window.__loanTrackerKVTimer); } catch(_){ } }
       window.__loanTrackerKVTimer = setTimeout(() => {
         try {
-          const p = window.writeKV(LS_LOAN_TRACKER, snapshot);
+          const p = writeShared(LS_LOAN_TRACKER, snapshot);
           if (p && typeof p.catch === 'function') p.catch(err => console.warn('writeKV loan tracker failed', err));
         } catch(err) { console.warn('writeKV loan tracker threw', err); }
       }, 350);
@@ -5739,7 +5726,7 @@ async function persistLoanTracker(){
                   const rc = (cloud && cloud.__meta && Number(cloud.__meta.lastUpdatedAt)) || 0;
                   if (rc && lc && rc > lc) return; // cloud newer; don't overwrite
                 }
-                const p = window.writeKV(LS_LOAN_TRACKER, latest);
+                const p = writeShared(LS_LOAN_TRACKER, latest);
                 if (p && typeof p.catch === 'function') p.catch(err => console.warn('writeKV loan tracker flush failed', err));
               } catch(_){ }
             })();
@@ -5934,7 +5921,7 @@ function persistLoanTrackerLocalCache(){
     if (curStr && curStr === nextStrNoMetaBump) return;
     loanTracker.__meta = loanTracker.__meta || {};
     loanTracker.__meta.lastUpdatedAt = Date.now();
-    localStorage.setItem(LS_LOAN_TRACKER, JSON.stringify(loanTracker));
+    void writeShared(LS_LOAN_TRACKER, loanTracker).catch(() => {});
   } catch(_){ }
 }
 
@@ -6062,7 +6049,7 @@ async function loadLoanTrackerFromSupabaseTables(){
     loanTracker = migrateLoanTrackerLegacy(next);
     try { window.loanTracker = loanTracker; } catch(_){}
     // local cache only
-    try { localStorage.setItem(LS_LOAN_TRACKER, JSON.stringify(loanTracker)); } catch(_){}
+    try { void writeShared(LS_LOAN_TRACKER, loanTracker).catch(() => {}); } catch(_){}
 
     try { applyLoanTrackerToPeriod(currentPeriodKey || periodKey(), { createEntries: true, updateMaps: true }); } catch(_){}
     try { saveCurrentPeriodDeductions(); } catch(_){}
@@ -6510,10 +6497,10 @@ function persistPeriodScopedMap(lsKey, map){
       if (isPlainObject(map.__meta)) map.__meta.lastUpdatedAt = Date.now();
     }
   } catch(_){}
-  try { localStorage.setItem(lsKey, JSON.stringify(map)); } catch(e){}
+  cacheSet(lsKey, map);
 
-  const writer = (typeof window !== 'undefined' && typeof window.writeKV === 'function')
-    ? window.writeKV
+  const writer = (typeof window !== 'undefined' && typeof window.writeShared === 'function')
+    ? window.writeShared
     : null;
 
   // Auditor-safe: NEVER write cloud until initial KV hydrate completes.
@@ -6534,7 +6521,7 @@ function persistPeriodScopedMap(lsKey, map){
         window.addEventListener('kv-cloud-ready', () => {
           (async () => {
             try {
-              if (!window.__periodScopedKVPending || typeof window.writeKV !== 'function') return;
+              if (!window.__periodScopedKVPending || typeof window.writeShared !== 'function') return;
               const keys = Object.keys(window.__periodScopedKVPending);
               window.__periodScopedKVPending = {};
 
@@ -6553,7 +6540,7 @@ function persistPeriodScopedMap(lsKey, map){
                       const decision = __kvBootCloudFirstDecision(k, localVal, cloudVal);
                       if (decision === false) continue; // cloud wins
                       if (decision === true) {
-                        const p0 = window.writeKV(k, localVal);
+                        const p0 = window.writeShared(k, localVal);
                         if (p0 && typeof p0.catch === 'function') p0.catch(err => console.warn('writeKV period map flush failed', err));
                         continue;
                       }
@@ -6576,7 +6563,7 @@ function persistPeriodScopedMap(lsKey, map){
                     } catch(_){}
                   }
 
-                  const p = window.writeKV(k, localVal);
+                  const p = window.writeShared(k, localVal);
                   if (p && typeof p.catch === 'function') p.catch(err => console.warn('writeKV period map flush failed', err));
                 } catch(_){}
               }
@@ -6652,7 +6639,7 @@ try { window.loanTracker = loanTracker; } catch(_){ }
       if (!cloud || !__loanTrackerHasMeaningfulData(cloud)) {
         local.__meta = local.__meta || {};
         if (!local.__meta.lastUpdatedAt) local.__meta.lastUpdatedAt = Date.now();
-        await window.writeKV(LS_LOAN_TRACKER, local);
+        await writeShared(LS_LOAN_TRACKER, local);
       }
     } catch(e){ console.warn('LoanTracker migrate-to-KV failed', e); }
   }
@@ -6668,9 +6655,9 @@ try { window.loanTracker = loanTracker; } catch(_){ }
       // Fallback: load from proper loan tables (if you created them), then seed KV for future realtime sync.
       await loadLoanTrackerFromSupabaseTables();
       try {
-        if (window && window.__kv_cloud_ready === true && typeof window.writeKV === 'function') {
+        if (window && window.__kv_cloud_ready === true && typeof window.writeShared === 'function') {
           const seeded = loadLoanTrackerFromStorage();
-          if (__loanTrackerHasMeaningfulData(seeded)) await window.writeKV(LS_LOAN_TRACKER, seeded);
+          if (__loanTrackerHasMeaningfulData(seeded)) await writeShared(LS_LOAN_TRACKER, seeded);
         }
       } catch(_){}
       try { setupLoanTablesRealtime(); } catch(_){}
@@ -6882,7 +6869,7 @@ function syncPeriodScopedData(){
       allBantay = v;
       bantay = allBantay[currentPeriodKey] || {};
     }
-    try { localStorage.setItem(LS_BANTAY, JSON.stringify(allBantay)); } catch(_){ }
+    void writeShared(LS_BANTAY, allBantay).catch(() => {});
     try{ if (typeof renderSssTable==='function') renderSssTable(); }catch(_){ }
     try { if (typeof window.rebuildReports === 'function') window.rebuildReports(); } catch(_){ }
   }catch(e){}
@@ -6893,7 +6880,7 @@ if (divisorDedsEl) {
   divisorDedsEl.addEventListener('change', () => {
     divisor = parseInt(divisorDedsEl.value, 10) || 1;
     divisorEl.value = String(divisor);
-    localStorage.setItem(LS_DIVISOR, String(divisor));
+    void writeShared(LS_DIVISOR, String(divisor)).catch(() => {});
     try { applyLoanTrackerToPeriod(currentPeriodKey || periodKey(), { createEntries: false, force: true, updateMaps: true }); } catch(_){ }
     try { persistLoanTracker(); } catch(_){ }
     try { saveCurrentPeriodDeductions(); } catch(_){ }
@@ -6901,11 +6888,11 @@ if (divisorDedsEl) {
   });
 }
 
-weekStartEl.addEventListener('input', ()=> localStorage.setItem(LS_WEEKSTART, weekStartEl.value));
-weekEndEl.addEventListener('input', ()=> localStorage.setItem(LS_WEEKEND, weekEndEl.value));
+weekStartEl.addEventListener('input', ()=> { void writeShared(LS_WEEKSTART, weekStartEl.value).catch(() => {}); });
+weekEndEl.addEventListener('input', ()=> { void writeShared(LS_WEEKEND, weekEndEl.value).catch(() => {}); });
 divisorEl.addEventListener('change', () => {
   divisor = parseInt(divisorEl.value, 10) || 1;
-  localStorage.setItem(LS_DIVISOR, String(divisor));
+  void writeShared(LS_DIVISOR, String(divisor)).catch(() => {});
   // Sync the Deductions tab divisor select if it exists
   if (typeof divisorDedsEl !== 'undefined' && divisorDedsEl) {
     divisorDedsEl.value = String(divisor);
@@ -6947,7 +6934,6 @@ function setSssTable(rows){
     const employer = Number.isFinite(employerRaw) ? employerRaw : employee;
     return { min, max, employee, employer };
   }) : [];
-  try { localStorage.setItem(LS_SSS_TABLE, JSON.stringify(clean)); } catch(_) {}
   void writeShared(LS_SSS_TABLE, clean).catch(() => {});
 }
 
@@ -8605,14 +8591,14 @@ function chooseBantayProject(empId, anchorEl){
       if (!v || v === '__clear__'){
         // Clear assignment
         try { delete bantayProj[empId]; } catch(e){}
-        try { await window.writeKV(LS_BANTAY_PROJ, bantayProj); } catch(e){}
+        try { await writeShared(LS_BANTAY_PROJ, bantayProj); } catch(e){}
         try { if (typeof window.rebuildReports === 'function') window.rebuildReports(); } catch(e){}
         close();
         return;
       }
       if (storedProjects && storedProjects[v]){
         bantayProj[empId] = v;
-        try { await window.writeKV(LS_BANTAY_PROJ, bantayProj); } catch(e){}
+        try { await writeShared(LS_BANTAY_PROJ, bantayProj); } catch(e){}
         try { if (typeof window.rebuildReports === 'function') window.rebuildReports(); } catch(e){}
       }
       close();
@@ -8661,8 +8647,8 @@ function attachRowEvents(){
         if (vWI && typeof vWI.value !== 'undefined') {
           valeWed[id] = +(Number(vWI.value)||0).toFixed(2);
         }
-        localStorage.setItem(LS_REG_HRS, JSON.stringify(regHours));
-        localStorage.setItem(LS_RATES, JSON.stringify(payrollRates));
+        void writeShared(LS_REG_HRS, regHours).catch(() => {});
+        void writeShared(LS_RATES, payrollRates).catch(() => {});
         saveCurrentPeriodDeductions();
         if (typeof renderDeductionsTable === 'function') renderDeductionsTable();
         calculateRow(row);
@@ -8675,8 +8661,8 @@ function attachRowEvents(){
         bantayI.addEventListener('input', async () => {
         bantay[id] = bantayI.value;
         allBantay[currentPeriodKey] = bantay;
-        try { localStorage.setItem(LS_BANTAY, JSON.stringify(allBantay)); } catch(_){ }
-        await window.writeKV(LS_BANTAY, allBantay);
+        void writeShared(LS_BANTAY, allBantay).catch(() => {});
+        await writeShared(LS_BANTAY, allBantay);
         calculateRow(row);
         try { if (typeof window.rebuildReports === 'function') window.rebuildReports(); } catch(e){}
         // Auto-open project picker when entering a positive amount and no assignment yet
@@ -8688,7 +8674,7 @@ function attachRowEvents(){
         // Auto-clear assignment when reset to zero or blank
         if (!(val > 0) && bantayProj[id]) {
           try { delete bantayProj[id]; } catch(_){ }
-          try { await window.writeKV(LS_BANTAY_PROJ, bantayProj); } catch(_){ }
+          try { await writeShared(LS_BANTAY_PROJ, bantayProj); } catch(_){ }
           try { if (typeof window.rebuildReports === 'function') window.rebuildReports(); } catch(_){ }
         }
       });
@@ -8834,7 +8820,6 @@ function getPagibigTable(){
   })).sort((a,b) => a.min - b.min);
 }
 function setPagibigTable(rows){
-  try { localStorage.setItem(LS_PAGIBIG_TABLE, JSON.stringify(rows)); } catch(_) {}
   void writeShared(LS_PAGIBIG_TABLE, rows).catch(() => {});
 }
 function renderPagibigTable(){
@@ -8886,7 +8871,6 @@ function getPhilhealthTable(){
   })).sort((a,b) => a.min - b.min);
 }
 function setPhilhealthTable(rows){
-  try { localStorage.setItem(LS_PHILHEALTH_TABLE, JSON.stringify(rows)); } catch(_) {}
   void writeShared(LS_PHILHEALTH_TABLE, rows).catch(() => {});
 }
 function renderPhilhealthTable(){
@@ -10543,7 +10527,7 @@ function initializeContributionRates() {
         if (val < 0) val = 0;
         if (val > 1) val = 1;
         pagibigRate = val;
-        localStorage.setItem(LS_PAGIBIG_RATE, String(val));
+        void writeShared(LS_PAGIBIG_RATE, String(val)).catch(() => {});
         window.scheduleCalculateAll?.('deduction-table-edit');
         updateContributionNote();
       }
@@ -10559,7 +10543,7 @@ function initializeContributionRates() {
         if (val < 0) val = 0;
         if (val > 1) val = 1;
         philhealthRate = val;
-        localStorage.setItem(LS_PHILHEALTH_RATE, String(val));
+        void writeShared(LS_PHILHEALTH_RATE, String(val)).catch(() => {});
         window.scheduleCalculateAll?.('deduction-table-edit');
         updateContributionNote();
       }
@@ -12882,9 +12866,9 @@ document.addEventListener('DOMContentLoaded', () => {
   window.showSyncFailedBanner = showSyncFailedBanner;
 
   async function persistKV(key, value) {
-    if (typeof window.writeKV === 'function') {
+    if (typeof window.writeShared === 'function') {
       try {
-        const ok = await window.writeKV(key, value);
+        const ok = await window.writeShared(key, value);
         if (!ok) throw new Error('writeKV returned false');
         return true;
       } catch (error) {
@@ -12907,7 +12891,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     try {
-      localStorage.setItem(key, JSON.stringify(value));
+      cacheSet(key, value);
       return true;
     } catch (error) {
       console.warn('Payroll History local save failed', { key, error });
@@ -13046,7 +13030,7 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     }
     if (!ok) {
-      try { localStorage.setItem(key, JSON.stringify(value)); ok = true; }
+      try { cacheSet(key, value); ok = true; }
       catch (err) { console.warn('Local snapshot write failed for', key, err); }
     }
     return ok;
@@ -16793,7 +16777,7 @@ function loadDtrOverrides() {
 }
 function saveDtrOverrides() {
   try {
-    localStorage.setItem(LS_DTR_OVERRIDES, JSON.stringify(dtrOverrides || {}));
+    void writeShared(LS_DTR_OVERRIDES, (dtrOverrides || {})).catch(() => {});
   } catch (e) {
     console.warn('Failed to save DTR overrides', e);
   }
@@ -17185,9 +17169,9 @@ async function hydrateSplitOverrides(){
         });
       }
     });
-    try { localStorage.setItem(LS_SPLITS, JSON.stringify(splits)); } catch(e){}
-    try { localStorage.setItem(LS_OVERRIDES_PROJECTS, JSON.stringify(overridesProjects)); } catch(e){}
-    try { localStorage.setItem(LS_OVERRIDES_SCHEDULES, JSON.stringify(overridesSchedules)); } catch(e){}
+    cacheSet(LS_SPLITS, splits);
+    cacheSet(LS_OVERRIDES_PROJECTS, overridesProjects);
+    cacheSet(LS_OVERRIDES_SCHEDULES, overridesSchedules);
   } catch (e) {
     console.warn('hydrate split_overrides failed', e);
   }
@@ -17237,9 +17221,9 @@ function applySplitOverrideRow(row, isDelete){
   }
 
   // Persist to localStorage so reload keeps the newest state
-  try { localStorage.setItem(LS_SPLITS, JSON.stringify(splits)); } catch(e){}
-  try { localStorage.setItem(LS_OVERRIDES_PROJECTS, JSON.stringify(overridesProjects)); } catch(e){}
-  try { localStorage.setItem(LS_OVERRIDES_SCHEDULES, JSON.stringify(overridesSchedules)); } catch(e){}
+  cacheSet(LS_SPLITS, splits);
+  cacheSet(LS_OVERRIDES_PROJECTS, overridesProjects);
+  cacheSet(LS_OVERRIDES_SCHEDULES, overridesSchedules);
 }
 
 function subscribeSplitOverrides(){
@@ -17350,26 +17334,7 @@ function safeParseStorageJSON(key, fallbackValue) {
 
 
 async function hydrateSharedDatasets(){
-  const keys = [
-    LS_EMPLOYEES,
-    LS_PROJECTS,
-    LS_SCHEDULES,
-    LS_SCHEDULES_DEFAULT,
-    LS_OVERRIDES_PROJECTS,
-    LS_OVERRIDES_SCHEDULES,
-    LS_SPLITS,
-    LS_CONTRIB_FLAGS,
-    LS_SSS_TABLE,
-    LS_PAGIBIG_TABLE,
-    LS_PHILHEALTH_TABLE,
-    PAYROLL_SETTINGS_KEY,
-    LS_LOAN_TRACKER,
-    LS_OTHER_DEDUCTIONS_DETAILS,
-    LS_OTHER_DEDUCTIONS_TOTAL,
-    LS_ADDITIONAL_INCOME_DETAILS,
-    LS_ADDITIONAL_INCOME_TOTAL
-  ];
-  for (const k of keys) {
+  for (const k of SHARED_KEYS) {
     try { await readShared(k, null); } catch(_) {}
   }
   refreshCoreStoresFromStorage();
@@ -17837,7 +17802,7 @@ function syncProjectsKVAfterLocalSave(forceCloudWrite){
       try {
         if (typeof window.writeKV !== 'function') return;
         const snapshot = (typeof storedProjects === 'object' && storedProjects) ? storedProjects : {};
-        const p = window.writeKV(LS_PROJECTS, snapshot);
+        const p = writeShared(LS_PROJECTS, snapshot);
         if (p && typeof p.catch === 'function') p.catch(err => console.warn('writeKV projects failed', err));
       } catch (err) {
         console.warn('writeKV projects threw', err);
@@ -18135,7 +18100,7 @@ function renderEmployees(){
     const id = e.target.dataset.id;
     const val = parseFloat(e.target.value) || 0;
     storedEmployees[id].hourlyRate = val; saveEmployeesToLS();
-    try { payrollRates[id] = val; localStorage.setItem(LS_RATES, JSON.stringify(payrollRates)); } catch(err) {}
+    try { payrollRates[id] = val; void writeShared(LS_RATES, payrollRates).catch(() => {}); } catch(err) {}
     try { if (typeof renderTable === 'function') renderTable(); } catch (err) { console.warn('renderTable failed', err); }
     window.scheduleRenderResults?.('employee-rate-change');
     window.scheduleCalculateAll?.('employee-rate-change');
@@ -19241,6 +19206,10 @@ async function initApp(){
   window.scheduleRenderResults?.('dtr-split-toggle');
 }
 
+// Acceptance checklist:
+// - Browser A/B shared edits (projects/schedules/overrides) converge after refresh via Supabase-first hydration.
+// - defaultScheduleId remains a plain string (not quoted JSON string) and maps to a valid schedule key.
+// - Offline edits stay in cache and sync after connectivity returns; no stale local->cloud seed on failed reads.
 async function bootAfterKvHydrate() {
   if (!window.__kv_hydrated) {
     await new Promise((resolve) => {
@@ -19613,8 +19582,8 @@ function calculatePayrollFromRecords(){
     });
     // Persist hours to localStorage
     try {
-      localStorage.setItem(LS_REG_HRS, JSON.stringify(regHours));
-      localStorage.setItem(LS_OT_HRS, JSON.stringify(otHours));
+      void writeShared(LS_REG_HRS, regHours).catch(() => {});
+      void writeShared(LS_OT_HRS, otHours).catch(() => {});
     } catch (err) {
       console.warn('LS save failed', err);
     }
@@ -19629,7 +19598,7 @@ function calculatePayrollFromRecords(){
   });
   // Persist rates
   try {
-    localStorage.setItem(LS_RATES, JSON.stringify(payrollRates));
+    void writeShared(LS_RATES, payrollRates).catch(() => {});
   } catch (err) {}
   // Rebuild the payroll table with the newly computed hours
   try {
@@ -19797,8 +19766,8 @@ function calculatePayrollFromRecords(){
       });
       // Persist the hours to localStorage
       try {
-        localStorage.setItem(LS_REG_HRS, JSON.stringify(regHours));
-        localStorage.setItem(LS_OT_HRS, JSON.stringify(otHours));
+        void writeShared(LS_REG_HRS, regHours).catch(() => {});
+        void writeShared(LS_OT_HRS, otHours).catch(() => {});
       } catch (err) {}
       // Rebuild the payroll table using the computed hours
       if (typeof renderTable === 'function') renderTable();
@@ -22335,7 +22304,7 @@ function updateWeekInputs(snap) {
       const localHist = loadHistory();
       localHist.push(newSnap);
       if (typeof window.writeKV === 'function') {
-        window.writeKV(PAYROLL_HIST_KEY, localHist).catch((error) => {
+        window.writeShared(PAYROLL_HIST_KEY, localHist).catch((error) => {
           console.warn('Payroll History kv_store sync failed', { key: PAYROLL_HIST_KEY, error });
           try {
             if (typeof window.showSyncFailedBanner === 'function') window.showSyncFailedBanner('Sync failed');
@@ -23659,7 +23628,7 @@ document.addEventListener('DOMContentLoaded', async function () {
   const LS_OVR_HOURS = 'att_overrides_hours_v1';
   let overridesHours = {};
   try { overridesHours = JSON.parse(localStorage.getItem(LS_OVR_HOURS) || '{}') || {}; } catch(e){ overridesHours = {}; }
-  function saveOverridesHours(){ try { localStorage.setItem(LS_OVR_HOURS, JSON.stringify(overridesHours)); } catch(e){} }
+  function saveOverridesHours(){ void writeShared(LS_OVR_HOURS, overridesHours).catch(() => {}); }
   // Persist overrides to Supabase (kv_store) and fetch initial remote data
   function saveOverridesHoursRemote(){
     try {
