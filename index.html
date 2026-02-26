@@ -6644,7 +6644,7 @@ try { window.loanTracker = loanTracker; } catch(_){ }
   async function __migrateLocalLoanTrackerToKV(){
     try {
       if (!(window && window.__kv_cloud_ready === true)) return;
-      if (typeof window.writeShared !== 'function' || typeof window.readKV !== 'function') return;
+      if (typeof window.writeKV !== 'function' || typeof window.readKV !== 'function') return;
 
       const local = loadLoanTrackerFromStorage();
       if (!__loanTrackerHasMeaningfulData(local)) return;
@@ -13036,9 +13036,9 @@ document.addEventListener('DOMContentLoaded', () => {
     const key = composeSnapshotStorageKey(segment, startDate, endDate);
     if (!key) return false;
     let ok = false;
-    if (typeof window.writeShared === 'function') {
+    if (typeof window.writeKV === 'function') {
       try {
-        ok = await window.writeShared(key, value);
+        ok = await window.writeKV(key, value);
       } catch (err) {
         console.warn('KV write failed for', key, err);
       }
@@ -13259,12 +13259,12 @@ return { rootHash, manifestHash, segmentCount: Object.keys(segments).length, ver
   async function writeSnapshotIndex(list) {
     const normalized = Array.isArray(list) ? list : [];
     let ok = false;
-    if (typeof window.writeShared === 'function') {
-      try { ok = await window.writeShared('snap:index', normalized); }
+    if (typeof window.writeKV === 'function') {
+      try { ok = await window.writeKV('snap:index', normalized); }
       catch (err) { console.warn('writeSnapshotIndex KV failed', err); }
     }
     if (!ok) {
-      try { cacheSet('snap:index', normalized); ok = true; }
+      try { localStorage.setItem('snap:index', JSON.stringify(normalized)); ok = true; }
       catch (err) { console.warn('writeSnapshotIndex local failed', err); }
     }
     return ok;
