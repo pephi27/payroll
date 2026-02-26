@@ -17698,10 +17698,11 @@ function renderProjectFilterOptions(){
   const make = (value, label)=>{ const o=document.createElement('option'); o.value=value; o.textContent=label; return o; };
   filterProjectSel.appendChild(make('all','All Projects'));
   filterProjectSel.appendChild(make('none','(No project)'));
-  Object.keys(storedProjects).forEach(pid=>{
-    const isActive = !(storedProjects[pid] && storedProjects[pid].active === false);
-    filterProjectSel.appendChild(make(pid, storedProjects[pid].name + (isActive ? '' : ' (inactive)')));
-  });
+  Object.keys(storedProjects)
+    .filter(pid => !(storedProjects[pid] && storedProjects[pid].active === false))
+    .forEach(pid=>{
+      filterProjectSel.appendChild(make(pid, storedProjects[pid].name));
+    });
   if([...filterProjectSel.options].some(o=>o.value===prev)) filterProjectSel.value = prev;
   else filterProjectSel.value = 'all';
   currentProjectFilter = filterProjectSel.value;
