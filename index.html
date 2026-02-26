@@ -700,7 +700,7 @@
       };
       window.writeKV = async function writeKV(key, value) {
         const trySetLocal = () => {
-          try { window.__kvBypassNextSetItem = true; __kvBypassNextSetItem = true; if (typeof window.cacheSet === 'function') window.cacheSet(key, value); else localStorage.setItem(key, JSON.stringify(value)); } catch {}
+          try { window.__kvBypassNextSetItem = true; __kvBypassNextSetItem = true; localStorage.setItem(key, JSON.stringify(value)); } catch {}
         };
         const isNavLockTimeout = (err) => {
           const msg = (err && err.message) ? String(err.message) : String(err || '');
@@ -809,11 +809,12 @@ const TABLE = "kv_store"
 // devices, add them here as well.  Without inclusion in this list the
 // `Storage.prototype.setItem` hook will ignore them and they will remain
 // strictly device-local.
-const SHARED_KEYS = [
+const KNOWN_KEYS = [
   "att_employees_v2",
   "att_schedules_v2",
   "att_schedules_default",
   "att_projects_v1",
+  // payroll configuration keys
   "payroll_rates",
   "payroll_reg_hours",
   "payroll_ot_hours",
@@ -831,30 +832,27 @@ const SHARED_KEYS = [
   "payroll_vale_wed",
   "payroll_hist",
   "payrollColumnWidths",
-  "payroll_other_deductions_details",
-  "payroll_other_deductions_total",
-  "payroll_pagibig_rate",
-  "payroll_philhealth_rate",
-  "payroll_pagibig_table",
-  "payroll_philhealth_table",
-  "payroll_adjustment_hours",
-  "payroll_additional_income_details",
-  "payroll_additional_income_total",
-  "payroll_bantay",
-  "payroll_bantay_proj",
-  "payroll_contrib_flags",
-  "att_overrides_hours_v1",
-  "payroll_lock_state",
-  "dtr_overrides_v1",
-  "incomeTypeOptions",
-  "deductionTypeOptions",
-  "payroll_loan_tracker",
-  "payroll_print_orientation",
-  "att_overrides_schedules",
-  "att_overrides_projects",
-  "att_splits_v1"
+  // additional filter & state keys not previously persisted
+  ,"payroll_other_deductions_details"
+  ,"payroll_other_deductions_total"
+  ,"payroll_pagibig_rate"
+  ,"payroll_philhealth_rate"
+  ,"payroll_pagibig_table"
+  ,"payroll_philhealth_table"
+  ,"payroll_adjustment_hours"
+  ,"payroll_additional_income_details"
+  ,"payroll_additional_income_total"
+  ,"payroll_bantay"
+  ,"payroll_bantay_proj"
+  ,"payroll_contrib_flags"
+  ,"att_overrides_hours_v1"
+  ,"payroll_lock_state"
+  ,"dtr_overrides_v1"
+  ,"incomeTypeOptions"
+  ,"deductionTypeOptions"
+  ,"payroll_loan_tracker"
+  ,"payroll_print_orientation"
 ]
-const KNOWN_KEYS = SHARED_KEYS;
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY, {
   auth: {
@@ -877,151 +875,9 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_KEY, {
 // provides a simple, predictable global reference.
 window.supabase = supabase;
 window.SUPABASE_TABLE = TABLE;
-window.__sharedSyncState = { hydrated: false, status: 'syncing', conflict: false, offline: !navigator.onLine };
-
-function ensureCloudSyncStatusBanner(){
-  try {
-    if (document.getElementById('cloudSyncStatusBanner')) return;
-    const banner = document.createElement('div');
-    banner.id = 'cloudSyncStatusBanner';
-    banner.style.cssText = 'position:fixed;bottom:12px;right:12px;z-index:99999;padding:8px 10px;border-radius:8px;background:#111827;color:#fff;font-size:12px;opacity:.92;';
-    banner.textContent = 'Cloud Sync Status: syncing';
-    document.body.appendChild(banner);
-  } catch (_) {}
-}
-function updateCloudSyncStatus(next){
-  try {
-    window.__sharedSyncState = Object.assign({}, window.__sharedSyncState || {}, next || {});
-    const st = window.__sharedSyncState || {};
-    let label = 'syncing';
-    if (st.offline) label = 'offline';
-    else if (st.conflict) label = 'conflict';
-    else if (st.hydrated) label = 'hydrated';
-    st.status = label;
-    ensureCloudSyncStatusBanner();
-    const el = document.getElementById('cloudSyncStatusBanner');
-    if (el) el.textContent = 'Cloud Sync Status: ' + label;
-  } catch (_) {}
-}
-window.addEventListener('online', () => updateCloudSyncStatus({ offline: false }));
-window.addEventListener('offline', () => updateCloudSyncStatus({ offline: true }));
-
-const __sharedSeededKeys = new Set();
-
-function cacheSet(key, value){
-  try {
-    if (value === null || typeof value === 'undefined') {
-      localStorage.removeItem(key);
-      return;
-    }
-    const t = typeof value;
-    if (t === 'object') {
-      localStorage.setItem(key, JSON.stringify(value));
-      return;
-    }
-    localStorage.setItem(key, String(value));
-  } catch (_) {}
-}
-
-function cacheGet(key, fallback = null){
-  try {
-    const raw = localStorage.getItem(key);
-    if (raw == null) return fallback;
-    try { return JSON.parse(raw); } catch (_) { return raw; }
-  } catch (_) {
-    return fallback;
-  }
-}
-
-function __sharedHasSeedableValue(v){
-  if (v == null) return false;
-  if (typeof v === 'object') return Object.keys(v || {}).length > 0;
-  if (typeof v === 'string') return String(v).trim() !== '';
-  return (typeof v === 'number' || typeof v === 'boolean');
-}
-
-async function readShared(key, fallback = null){
-  let cloudVal;
-  let cloudReadOk = false;
-  try {
-    if (typeof window.readKV === 'function') {
-      cloudVal = await window.readKV(key, undefined);
-      cloudReadOk = true;
-    }
-  } catch (_) {
-    cloudReadOk = false;
-  }
-
-  const cloudMissing = (cloudVal === undefined || cloudVal === null);
-  if (!cloudMissing) {
-    cacheSet(key, cloudVal);
-    return cloudVal;
-  }
-
-  const localVal = cacheGet(key, fallback);
-  const canSeed = cloudReadOk && cloudMissing && !__sharedSeededKeys.has(key) && __sharedHasSeedableValue(localVal);
-  if (canSeed) {
-    try {
-      if (typeof window.writeShared === 'function') {
-        await window.writeShared(key, localVal);
-        __sharedSeededKeys.add(key);
-      }
-    } catch (_) {}
-  }
-  return localVal;
-}
-
-const __sharedPendingWrites = new Map();
-let __sharedPendingFlushHooked = false;
-
-async function __flushSharedPendingWrites(){
-  if (!window.__kv_cloud_ready || typeof window.writeKV !== 'function') return;
-  const items = Array.from(__sharedPendingWrites.entries());
-  __sharedPendingWrites.clear();
-  for (const [k, v] of items) {
-    try { await window.writeKV(k, v); }
-    catch (_) { __sharedPendingWrites.set(k, v); }
-  }
-}
-
-function __ensureSharedPendingFlushHook(){
-  if (__sharedPendingFlushHooked) return;
-  __sharedPendingFlushHooked = true;
-  window.addEventListener('kv-cloud-ready', () => {
-    void __flushSharedPendingWrites().catch(() => {});
-  });
-}
-
-async function writeShared(key, value){
-  updateCloudSyncStatus({ hydrated: !!(window.__sharedSyncState && window.__sharedSyncState.hydrated), offline: !navigator.onLine });
-  cacheSet(key, value);
-
-  if (!window.__kv_cloud_ready || typeof window.writeKV !== 'function') {
-    __sharedPendingWrites.set(key, value);
-    __ensureSharedPendingFlushHook();
-    updateCloudSyncStatus({ offline: !navigator.onLine });
-    return value;
-  }
-
-  try {
-    await window.writeKV(key, value);
-    updateCloudSyncStatus({ hydrated: true, offline: !navigator.onLine, conflict: false });
-  } catch (_) {
-    __sharedPendingWrites.set(key, value);
-    __ensureSharedPendingFlushHook();
-    updateCloudSyncStatus({ offline: !navigator.onLine, conflict: true });
-  }
-  return value;
-}
-
-window.cacheSet = cacheSet;
-window.cacheGet = cacheGet;
-window.readShared = readShared;
-window.writeShared = writeShared;
 
 function markHydrated() {
   try { window.__kv_hydrated = true; } catch {}
-  updateCloudSyncStatus({ hydrated: true, offline: !navigator.onLine });
   try { window.dispatchEvent(new Event('kv-hydrated')); } catch {}
 }
 
@@ -1245,7 +1101,7 @@ function __kvSetupRealtimeChannel(force = false) {
                 // Keep local computed values and heal cloud row asynchronously.
                 try {
                   if (window.__kvSyncEnabled && window.__kvSyncEnabled() && typeof window.writeKV === 'function') {
-                    if (typeof window.writeShared === 'function') window.writeShared(key, currentObj);
+                    window.writeKV(key, currentObj);
                   }
                 } catch (_) {}
                 return;
@@ -1416,13 +1272,13 @@ let __kvSyncEnabled = false;
 let __kvHydrating = false;
 try { window.__kvSyncEnabled = () => __kvSyncEnabled; } catch(_) {}
 
-function __kvEnableSync(){ __kvSyncEnabled = false; }
+function __kvEnableSync(){ __kvSyncEnabled = true; }
 function __kvDisableSync(){ __kvSyncEnabled = false; }
 try { window.__kvEnableSync = __kvEnableSync; window.__kvDisableSync = __kvDisableSync; } catch(_) {}
 
 let __kvBypassNextSetItem = false;
 const __CLOUD_ONLY_KEYS = new Set(['payroll_loan_tracker','payroll_loan_sss','payroll_loan_pagibig','payroll_vale','payroll_vale_wed','payroll_other_deductions_details','payroll_other_deductions_total','payroll_additional_income_details','payroll_additional_income_total']);
-function __kvShouldMirror(k){ return false; }
+function __kvShouldMirror(k){ return KNOWN_KEYS.includes(k) && !__CLOUD_ONLY_KEYS.has(k) && !__KV_COMPUTED_LOCAL_KEYS.has(k); }
 
 const store = (() => {
   const pendingTimers = new Map();
@@ -4538,7 +4394,7 @@ let bantayProj = {};
       try { v = JSON.parse(localStorage.getItem(LS_BANTAY_PROJ) || '{}'); } catch(_){}
     }
     if (v && typeof v==='object') bantayProj = v;
-    void writeShared(LS_BANTAY_PROJ, bantayProj).catch(() => {});
+    try { localStorage.setItem(LS_BANTAY_PROJ, JSON.stringify(bantayProj)); } catch(_){ }
     try { if (typeof window.rebuildReports === 'function') window.rebuildReports(); } catch(_){ }
   }catch(e){}
 })();
@@ -4795,8 +4651,8 @@ function getNightDifferentialPayForEmployee(empId) {
 }
 
 async function persistPayrollSettings() {
-  const writer = (typeof window !== 'undefined' && typeof window.writeShared === 'function')
-    ? window.writeShared
+  const writer = (typeof window !== 'undefined' && typeof window.writeKV === 'function')
+    ? window.writeKV
     : null;
   if (!writer) return;
   try {
@@ -4904,16 +4760,28 @@ function getDeductionTypeOptions(){
 async function persistIncomeTypeOptions(next){
   const normalized = normalizeIncomeTypeOptions(next);
   incomeTypeOptions = normalized;
-  try { await writeShared(LS_INCOME_TYPE_OPTIONS, normalized); } catch (err) {
-    console.warn('Persisting income type options failed', err);
+  try { localStorage.setItem(LS_INCOME_TYPE_OPTIONS, JSON.stringify(normalized)); } catch (_) {}
+  if (typeof window !== 'undefined' && typeof window.writeKV === 'function') {
+    try {
+      const result = window.writeKV(LS_INCOME_TYPE_OPTIONS, normalized);
+      if (result && typeof result.then === 'function') await result;
+    } catch (err) {
+      console.warn('Persisting income type options failed', err);
+    }
   }
 }
 
 async function persistDeductionTypeOptions(next){
   const normalized = normalizeDeductionTypeOptions(next);
   deductionTypeOptions = normalized;
-  try { await writeShared(LS_DEDUCTION_TYPE_OPTIONS, normalized); } catch (err) {
-    console.warn('Persisting deduction type options failed', err);
+  try { localStorage.setItem(LS_DEDUCTION_TYPE_OPTIONS, JSON.stringify(normalized)); } catch (_) {}
+  if (typeof window !== 'undefined' && typeof window.writeKV === 'function') {
+    try {
+      const result = window.writeKV(LS_DEDUCTION_TYPE_OPTIONS, normalized);
+      if (result && typeof result.then === 'function') await result;
+    } catch (err) {
+      console.warn('Persisting deduction type options failed', err);
+    }
   }
 }
 
@@ -4927,7 +4795,7 @@ async function loadIncomeTypeOptions(){
       try { stored = JSON.parse(localStorage.getItem(LS_INCOME_TYPE_OPTIONS) || 'null'); } catch(_) { stored = null; }
     }
     incomeTypeOptions = normalizeIncomeTypeOptions(stored);
-    void writeShared(LS_INCOME_TYPE_OPTIONS, incomeTypeOptions).catch(() => {});
+    try { localStorage.setItem(LS_INCOME_TYPE_OPTIONS, JSON.stringify(incomeTypeOptions)); } catch(_) {}
     renderIncomeTypeOptionsUI();
     try {
       if (typeof queueAdditionalIncomeRerender === 'function') queueAdditionalIncomeRerender();
@@ -4948,7 +4816,7 @@ async function loadDeductionTypeOptions(){
       try { stored = JSON.parse(localStorage.getItem(LS_DEDUCTION_TYPE_OPTIONS) || 'null'); } catch(_) { stored = null; }
     }
     deductionTypeOptions = normalizeDeductionTypeOptions(stored);
-    void writeShared(LS_DEDUCTION_TYPE_OPTIONS, deductionTypeOptions).catch(() => {});
+    try { localStorage.setItem(LS_DEDUCTION_TYPE_OPTIONS, JSON.stringify(deductionTypeOptions)); } catch(_) {}
     renderDeductionTypeOptionsUI();
     try {
       if (typeof queueOtherDeductionsRerender === 'function') queueOtherDeductionsRerender();
@@ -5236,15 +5104,29 @@ const SSS_SEED_2025 = [
   [34750, 100000000, 1750, 1750]
 ];
 
-async function ensureSeededSSS() {
+function ensureSeededSSS() {
   try {
-    const cur = await readShared(LS_SSS_TABLE, []);
+    const cur = JSON.parse(localStorage.getItem(LS_SSS_TABLE) || '[]');
     if (!Array.isArray(cur) || cur.length === 0) {
       const mapped = SSS_SEED_2025.map(r=>({min:r[0], max:r[1], employee:r[2], employer: (typeof r[3] !== 'undefined' ? r[3] : r[2])}));
-      await writeShared(LS_SSS_TABLE, mapped);
+      localStorage.setItem(LS_SSS_TABLE, JSON.stringify(mapped));
+    } else {
+      const normalized = cur.map(row => {
+        const min = Number(row && typeof row.min !== 'undefined' ? row.min : 0) || 0;
+        const max = Number(row && typeof row.max !== 'undefined' ? row.max : 0) || 0;
+        const employee = Number(row && typeof row.employee !== 'undefined' ? row.employee : 0) || 0;
+        const employerRaw = Number(row && typeof row.employer !== 'undefined' ? row.employer : employee);
+        const employer = Number.isFinite(employerRaw) ? employerRaw : employee;
+        return { min, max, employee, employer };
+      });
+      localStorage.setItem(LS_SSS_TABLE, JSON.stringify(normalized));
     }
-  } catch (_) {}
+  } catch (e) {
+    const mapped = SSS_SEED_2025.map(r=>({min:r[0], max:r[1], employee:r[2], employer: (typeof r[3] !== 'undefined' ? r[3] : r[2])}));
+    localStorage.setItem(LS_SSS_TABLE, JSON.stringify(mapped));
+  }
 }
+ensureSeededSSS();
 // Seed the Pag-IBIG and PhilHealth tables with default rates if empty.  These tables
 // define income ranges and the corresponding employee contribution rate (decimal).
 const PAGIBIG_SEED = [
@@ -5254,31 +5136,33 @@ const PHILHEALTH_SEED = [
   [0, 100000000, 0.025]
 ];
 
-async function ensureSeededPagibig() {
+function ensureSeededPagibig() {
   try {
-    const cur = await readShared(LS_PAGIBIG_TABLE, []);
+    const cur = JSON.parse(localStorage.getItem(LS_PAGIBIG_TABLE) || '[]');
     if (!Array.isArray(cur) || cur.length === 0) {
       const mapped = PAGIBIG_SEED.map(r => ({min: r[0], max: r[1], rate: r[2]}));
-      await writeShared(LS_PAGIBIG_TABLE, mapped);
+      localStorage.setItem(LS_PAGIBIG_TABLE, JSON.stringify(mapped));
     }
-  } catch (_) {}
+  } catch (e) {
+    const mapped = PAGIBIG_SEED.map(r => ({min: r[0], max: r[1], rate: r[2]}));
+    localStorage.setItem(LS_PAGIBIG_TABLE, JSON.stringify(mapped));
+  }
 }
 
-async function ensureSeededPhilhealth() {
+function ensureSeededPhilhealth() {
   try {
-    const cur = await readShared(LS_PHILHEALTH_TABLE, []);
+    const cur = JSON.parse(localStorage.getItem(LS_PHILHEALTH_TABLE) || '[]');
     if (!Array.isArray(cur) || cur.length === 0) {
       const mapped = PHILHEALTH_SEED.map(r => ({min: r[0], max: r[1], rate: r[2]}));
-      await writeShared(LS_PHILHEALTH_TABLE, mapped);
+      localStorage.setItem(LS_PHILHEALTH_TABLE, JSON.stringify(mapped));
     }
-  } catch (_) {}
+  } catch (e) {
+    const mapped = PHILHEALTH_SEED.map(r => ({min: r[0], max: r[1], rate: r[2]}));
+    localStorage.setItem(LS_PHILHEALTH_TABLE, JSON.stringify(mapped));
+  }
 }
-
-async function ensureSeededContributionTables(){
-  await ensureSeededSSS();
-  await ensureSeededPagibig();
-  await ensureSeededPhilhealth();
-}
+ensureSeededPagibig();
+ensureSeededPhilhealth();
 let payrollRates = JSON.parse(localStorage.getItem(LS_RATES) || '{}');
 let regHours = JSON.parse(localStorage.getItem(LS_REG_HRS) || '{}');
 let otHours = JSON.parse(localStorage.getItem(LS_OT_HRS) || '{}');
@@ -5313,7 +5197,8 @@ function loadContribFlagsFromLocalStorage() {
 function persistContribFlags() {
   const normalized = normalizeContribFlags(contribFlags);
   contribFlags = normalized;
-  void writeShared(LS_CONTRIB_FLAGS, normalized).catch(() => {});
+  try { localStorage.setItem(LS_CONTRIB_FLAGS, JSON.stringify(normalized)); } catch (_) {}
+  try { if (typeof window.writeKV === 'function') window.writeKV(LS_CONTRIB_FLAGS, normalized); } catch (_) {}
 }
 
 async function refreshContribFlagsFromStore() {
@@ -5342,25 +5227,23 @@ async function refreshContribFlagsFromStore() {
 
 let contribFlags = loadContribFlagsFromLocalStorage();
 
-async function migrateWeekRangeKeys(){
+function migrateWeekRangeKeys(){
   try {
-    const cloudStart = await readShared(LS_WEEKSTART, null);
-    const cloudEnd = await readShared(LS_WEEKEND, null);
-    if (!cloudStart) {
+    if (!localStorage.getItem(LS_WEEKSTART)) {
       const legacyStart = localStorage.getItem(LEGACY_WEEKSTART_KEY);
-      if (legacyStart) await writeShared(LS_WEEKSTART, legacyStart);
+      if (legacyStart) localStorage.setItem(LS_WEEKSTART, legacyStart);
     }
-    if (!cloudEnd) {
+    if (!localStorage.getItem(LS_WEEKEND)) {
       const legacyEnd = localStorage.getItem(LEGACY_WEEKEND_KEY);
-      if (legacyEnd) await writeShared(LS_WEEKEND, legacyEnd);
+      if (legacyEnd) localStorage.setItem(LS_WEEKEND, legacyEnd);
     }
-    await writeShared(LEGACY_WEEKSTART_KEY, null);
-    await writeShared(LEGACY_WEEKEND_KEY, null);
+    localStorage.removeItem(LEGACY_WEEKSTART_KEY);
+    localStorage.removeItem(LEGACY_WEEKEND_KEY);
   } catch (e) {}
 }
 
 otMultiplier = getOvertimeMultiplier();
-void migrateWeekRangeKeys().catch(() => {});
+migrateWeekRangeKeys();
 let weekStartSaved = localStorage.getItem(LS_WEEKSTART) || '';
 let weekEndSaved = localStorage.getItem(LS_WEEKEND) || '';
 let divisor = parseInt(localStorage.getItem(LS_DIVISOR) || '1', 10);
@@ -5705,11 +5588,11 @@ async function persistLoanTracker(){
   } catch(_){}
 
   let savedStr = null;
-  try { savedStr = JSON.stringify(loanTracker); } catch(_){}
+  try { savedStr = JSON.stringify(loanTracker); localStorage.setItem(LS_LOAN_TRACKER, savedStr); } catch(_){}
 
   // KV sync (realtime across devices): write to kv_store using writeKV, debounced.
   try {
-    const canCloudWrite = !!(window && window.__kv_cloud_ready === true && typeof window.writeShared === 'function');
+    const canCloudWrite = !!(window && window.__kv_cloud_ready === true && typeof window.writeKV === 'function');
     if (canCloudWrite) {
       const snapshot = (savedStr != null)
         ? (function(){ try { return JSON.parse(savedStr); } catch(_){ return loanTracker; } })()
@@ -5718,7 +5601,7 @@ async function persistLoanTracker(){
       if (window.__loanTrackerKVTimer) { try { clearTimeout(window.__loanTrackerKVTimer); } catch(_){ } }
       window.__loanTrackerKVTimer = setTimeout(() => {
         try {
-          const p = writeShared(LS_LOAN_TRACKER, snapshot);
+          const p = window.writeKV(LS_LOAN_TRACKER, snapshot);
           if (p && typeof p.catch === 'function') p.catch(err => console.warn('writeKV loan tracker failed', err));
         } catch(err) { console.warn('writeKV loan tracker threw', err); }
       }, 350);
@@ -5731,7 +5614,7 @@ async function persistLoanTracker(){
           try {
             if (!window.__loanTrackerKVPending) return;
             window.__loanTrackerKVPending = false;
-            if (typeof window.writeShared !== 'function') return;
+            if (typeof window.writeKV !== 'function') return;
             (async () => {
               try {
                 const latest = loadLoanTrackerFromStorage();
@@ -5741,7 +5624,7 @@ async function persistLoanTracker(){
                   const rc = (cloud && cloud.__meta && Number(cloud.__meta.lastUpdatedAt)) || 0;
                   if (rc && lc && rc > lc) return; // cloud newer; don't overwrite
                 }
-                const p = writeShared(LS_LOAN_TRACKER, latest);
+                const p = window.writeKV(LS_LOAN_TRACKER, latest);
                 if (p && typeof p.catch === 'function') p.catch(err => console.warn('writeKV loan tracker flush failed', err));
               } catch(_){ }
             })();
@@ -5936,7 +5819,7 @@ function persistLoanTrackerLocalCache(){
     if (curStr && curStr === nextStrNoMetaBump) return;
     loanTracker.__meta = loanTracker.__meta || {};
     loanTracker.__meta.lastUpdatedAt = Date.now();
-    void writeShared(LS_LOAN_TRACKER, loanTracker).catch(() => {});
+    localStorage.setItem(LS_LOAN_TRACKER, JSON.stringify(loanTracker));
   } catch(_){ }
 }
 
@@ -6064,7 +5947,7 @@ async function loadLoanTrackerFromSupabaseTables(){
     loanTracker = migrateLoanTrackerLegacy(next);
     try { window.loanTracker = loanTracker; } catch(_){}
     // local cache only
-    try { void writeShared(LS_LOAN_TRACKER, loanTracker).catch(() => {}); } catch(_){}
+    try { localStorage.setItem(LS_LOAN_TRACKER, JSON.stringify(loanTracker)); } catch(_){}
 
     try { applyLoanTrackerToPeriod(currentPeriodKey || periodKey(), { createEntries: true, updateMaps: true }); } catch(_){}
     try { saveCurrentPeriodDeductions(); } catch(_){}
@@ -6512,10 +6395,10 @@ function persistPeriodScopedMap(lsKey, map){
       if (isPlainObject(map.__meta)) map.__meta.lastUpdatedAt = Date.now();
     }
   } catch(_){}
-  cacheSet(lsKey, map);
+  try { localStorage.setItem(lsKey, JSON.stringify(map)); } catch(e){}
 
-  const writer = (typeof window !== 'undefined' && typeof window.writeShared === 'function')
-    ? window.writeShared
+  const writer = (typeof window !== 'undefined' && typeof window.writeKV === 'function')
+    ? window.writeKV
     : null;
 
   // Auditor-safe: NEVER write cloud until initial KV hydrate completes.
@@ -6536,7 +6419,7 @@ function persistPeriodScopedMap(lsKey, map){
         window.addEventListener('kv-cloud-ready', () => {
           (async () => {
             try {
-              if (!window.__periodScopedKVPending || typeof window.writeShared !== 'function') return;
+              if (!window.__periodScopedKVPending || typeof window.writeKV !== 'function') return;
               const keys = Object.keys(window.__periodScopedKVPending);
               window.__periodScopedKVPending = {};
 
@@ -6555,7 +6438,7 @@ function persistPeriodScopedMap(lsKey, map){
                       const decision = __kvBootCloudFirstDecision(k, localVal, cloudVal);
                       if (decision === false) continue; // cloud wins
                       if (decision === true) {
-                        const p0 = window.writeShared(k, localVal);
+                        const p0 = window.writeKV(k, localVal);
                         if (p0 && typeof p0.catch === 'function') p0.catch(err => console.warn('writeKV period map flush failed', err));
                         continue;
                       }
@@ -6578,7 +6461,7 @@ function persistPeriodScopedMap(lsKey, map){
                     } catch(_){}
                   }
 
-                  const p = window.writeShared(k, localVal);
+                  const p = window.writeKV(k, localVal);
                   if (p && typeof p.catch === 'function') p.catch(err => console.warn('writeKV period map flush failed', err));
                 } catch(_){}
               }
@@ -6654,7 +6537,7 @@ try { window.loanTracker = loanTracker; } catch(_){ }
       if (!cloud || !__loanTrackerHasMeaningfulData(cloud)) {
         local.__meta = local.__meta || {};
         if (!local.__meta.lastUpdatedAt) local.__meta.lastUpdatedAt = Date.now();
-        await writeShared(LS_LOAN_TRACKER, local);
+        await window.writeKV(LS_LOAN_TRACKER, local);
       }
     } catch(e){ console.warn('LoanTracker migrate-to-KV failed', e); }
   }
@@ -6670,9 +6553,9 @@ try { window.loanTracker = loanTracker; } catch(_){ }
       // Fallback: load from proper loan tables (if you created them), then seed KV for future realtime sync.
       await loadLoanTrackerFromSupabaseTables();
       try {
-        if (window && window.__kv_cloud_ready === true && typeof window.writeShared === 'function') {
+        if (window && window.__kv_cloud_ready === true && typeof window.writeKV === 'function') {
           const seeded = loadLoanTrackerFromStorage();
-          if (__loanTrackerHasMeaningfulData(seeded)) await writeShared(LS_LOAN_TRACKER, seeded);
+          if (__loanTrackerHasMeaningfulData(seeded)) await window.writeKV(LS_LOAN_TRACKER, seeded);
         }
       } catch(_){}
       try { setupLoanTablesRealtime(); } catch(_){}
@@ -6884,7 +6767,7 @@ function syncPeriodScopedData(){
       allBantay = v;
       bantay = allBantay[currentPeriodKey] || {};
     }
-    void writeShared(LS_BANTAY, allBantay).catch(() => {});
+    try { localStorage.setItem(LS_BANTAY, JSON.stringify(allBantay)); } catch(_){ }
     try{ if (typeof renderSssTable==='function') renderSssTable(); }catch(_){ }
     try { if (typeof window.rebuildReports === 'function') window.rebuildReports(); } catch(_){ }
   }catch(e){}
@@ -6895,7 +6778,7 @@ if (divisorDedsEl) {
   divisorDedsEl.addEventListener('change', () => {
     divisor = parseInt(divisorDedsEl.value, 10) || 1;
     divisorEl.value = String(divisor);
-    void writeShared(LS_DIVISOR, String(divisor)).catch(() => {});
+    localStorage.setItem(LS_DIVISOR, String(divisor));
     try { applyLoanTrackerToPeriod(currentPeriodKey || periodKey(), { createEntries: false, force: true, updateMaps: true }); } catch(_){ }
     try { persistLoanTracker(); } catch(_){ }
     try { saveCurrentPeriodDeductions(); } catch(_){ }
@@ -6903,11 +6786,11 @@ if (divisorDedsEl) {
   });
 }
 
-weekStartEl.addEventListener('input', ()=> { void writeShared(LS_WEEKSTART, weekStartEl.value).catch(() => {}); });
-weekEndEl.addEventListener('input', ()=> { void writeShared(LS_WEEKEND, weekEndEl.value).catch(() => {}); });
+weekStartEl.addEventListener('input', ()=> localStorage.setItem(LS_WEEKSTART, weekStartEl.value));
+weekEndEl.addEventListener('input', ()=> localStorage.setItem(LS_WEEKEND, weekEndEl.value));
 divisorEl.addEventListener('change', () => {
   divisor = parseInt(divisorEl.value, 10) || 1;
-  void writeShared(LS_DIVISOR, String(divisor)).catch(() => {});
+  localStorage.setItem(LS_DIVISOR, String(divisor));
   // Sync the Deductions tab divisor select if it exists
   if (typeof divisorDedsEl !== 'undefined' && divisorDedsEl) {
     divisorDedsEl.value = String(divisor);
@@ -6918,7 +6801,7 @@ divisorEl.addEventListener('change', () => {
   window.scheduleCalculateAll?.('payroll-divisor-change');
 });
 function loadEmployees() {
-  const stored = (typeof storedEmployees !== 'undefined' && storedEmployees) ? storedEmployees : safeParseStorageJSON('att_employees_v2', {});
+  const stored = JSON.parse(localStorage.getItem('att_employees_v2') || '{}');
   let list = Object.keys(stored).filter(id => !(stored[id] && stored[id].active === false)).map(id=>({id, name: stored[id]?.name || ''}));
   if (list.length === 0) list = [{id:'001', name:'Sample Employee'}];
   list.sort((a,b)=> (a.name||'').localeCompare(b.name||''));
@@ -6949,7 +6832,7 @@ function setSssTable(rows){
     const employer = Number.isFinite(employerRaw) ? employerRaw : employee;
     return { min, max, employee, employer };
   }) : [];
-  void writeShared(LS_SSS_TABLE, clean).catch(() => {});
+  localStorage.setItem(LS_SSS_TABLE, JSON.stringify(clean));
 }
 
 function formatDeductionDisplay(value){
@@ -8606,14 +8489,14 @@ function chooseBantayProject(empId, anchorEl){
       if (!v || v === '__clear__'){
         // Clear assignment
         try { delete bantayProj[empId]; } catch(e){}
-        try { await writeShared(LS_BANTAY_PROJ, bantayProj); } catch(e){}
+        try { await window.writeKV(LS_BANTAY_PROJ, bantayProj); } catch(e){}
         try { if (typeof window.rebuildReports === 'function') window.rebuildReports(); } catch(e){}
         close();
         return;
       }
       if (storedProjects && storedProjects[v]){
         bantayProj[empId] = v;
-        try { await writeShared(LS_BANTAY_PROJ, bantayProj); } catch(e){}
+        try { await window.writeKV(LS_BANTAY_PROJ, bantayProj); } catch(e){}
         try { if (typeof window.rebuildReports === 'function') window.rebuildReports(); } catch(e){}
       }
       close();
@@ -8662,8 +8545,8 @@ function attachRowEvents(){
         if (vWI && typeof vWI.value !== 'undefined') {
           valeWed[id] = +(Number(vWI.value)||0).toFixed(2);
         }
-        void writeShared(LS_REG_HRS, regHours).catch(() => {});
-        void writeShared(LS_RATES, payrollRates).catch(() => {});
+        localStorage.setItem(LS_REG_HRS, JSON.stringify(regHours));
+        localStorage.setItem(LS_RATES, JSON.stringify(payrollRates));
         saveCurrentPeriodDeductions();
         if (typeof renderDeductionsTable === 'function') renderDeductionsTable();
         calculateRow(row);
@@ -8676,7 +8559,8 @@ function attachRowEvents(){
         bantayI.addEventListener('input', async () => {
         bantay[id] = bantayI.value;
         allBantay[currentPeriodKey] = bantay;
-        await writeShared(LS_BANTAY, allBantay);
+        try { localStorage.setItem(LS_BANTAY, JSON.stringify(allBantay)); } catch(_){ }
+        await window.writeKV(LS_BANTAY, allBantay);
         calculateRow(row);
         try { if (typeof window.rebuildReports === 'function') window.rebuildReports(); } catch(e){}
         // Auto-open project picker when entering a positive amount and no assignment yet
@@ -8688,7 +8572,7 @@ function attachRowEvents(){
         // Auto-clear assignment when reset to zero or blank
         if (!(val > 0) && bantayProj[id]) {
           try { delete bantayProj[id]; } catch(_){ }
-          try { await writeShared(LS_BANTAY_PROJ, bantayProj); } catch(_){ }
+          try { await window.writeKV(LS_BANTAY_PROJ, bantayProj); } catch(_){ }
           try { if (typeof window.rebuildReports === 'function') window.rebuildReports(); } catch(_){ }
         }
       });
@@ -8834,7 +8718,7 @@ function getPagibigTable(){
   })).sort((a,b) => a.min - b.min);
 }
 function setPagibigTable(rows){
-  void writeShared(LS_PAGIBIG_TABLE, rows).catch(() => {});
+  localStorage.setItem(LS_PAGIBIG_TABLE, JSON.stringify(rows));
 }
 function renderPagibigTable(){
   const tbodyP = document.querySelector('#pagibigTable tbody');
@@ -8885,7 +8769,7 @@ function getPhilhealthTable(){
   })).sort((a,b) => a.min - b.min);
 }
 function setPhilhealthTable(rows){
-  void writeShared(LS_PHILHEALTH_TABLE, rows).catch(() => {});
+  localStorage.setItem(LS_PHILHEALTH_TABLE, JSON.stringify(rows));
 }
 function renderPhilhealthTable(){
   const tbodyPh = document.querySelector('#philhealthTable tbody');
@@ -10541,7 +10425,7 @@ function initializeContributionRates() {
         if (val < 0) val = 0;
         if (val > 1) val = 1;
         pagibigRate = val;
-        void writeShared(LS_PAGIBIG_RATE, String(val)).catch(() => {});
+        localStorage.setItem(LS_PAGIBIG_RATE, String(val));
         window.scheduleCalculateAll?.('deduction-table-edit');
         updateContributionNote();
       }
@@ -10557,7 +10441,7 @@ function initializeContributionRates() {
         if (val < 0) val = 0;
         if (val > 1) val = 1;
         philhealthRate = val;
-        void writeShared(LS_PHILHEALTH_RATE, String(val)).catch(() => {});
+        localStorage.setItem(LS_PHILHEALTH_RATE, String(val));
         window.scheduleCalculateAll?.('deduction-table-edit');
         updateContributionNote();
       }
@@ -12880,9 +12764,9 @@ document.addEventListener('DOMContentLoaded', () => {
   window.showSyncFailedBanner = showSyncFailedBanner;
 
   async function persistKV(key, value) {
-    if (typeof window.writeShared === 'function') {
+    if (typeof window.writeKV === 'function') {
       try {
-        const ok = await window.writeShared(key, value);
+        const ok = await window.writeKV(key, value);
         if (!ok) throw new Error('writeKV returned false');
         return true;
       } catch (error) {
@@ -12905,7 +12789,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     try {
-      cacheSet(key, value);
+      localStorage.setItem(key, JSON.stringify(value));
       return true;
     } catch (error) {
       console.warn('Payroll History local save failed', { key, error });
@@ -13044,7 +12928,7 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     }
     if (!ok) {
-      try { cacheSet(key, value); ok = true; }
+      try { localStorage.setItem(key, JSON.stringify(value)); ok = true; }
       catch (err) { console.warn('Local snapshot write failed for', key, err); }
     }
     return ok;
@@ -16761,9 +16645,7 @@ async function ensureSplitOverridesAvailable(){
     __splitOverridesAvailable = true;
   } catch (e) {
     __splitOverridesAvailable = false;
-    try { if (window.ENABLE_SPLIT_OVERRIDES) console.warn('split_overrides not available; disabling split override edits', e); } catch(_) {}
-    try { updateCloudSyncStatus({ conflict: true }); } catch(_) {}
-    try { window.__splitOverridesEditDisabled = true; } catch(_) {}
+    try { if (window.ENABLE_SPLIT_OVERRIDES) console.warn('split_overrides not available; using local-only overrides', e); } catch(_) {}
     // Disable so we don't keep trying every time
     try { window.ENABLE_SPLIT_OVERRIDES = false; } catch(_) {}
   }
@@ -16773,8 +16655,8 @@ async function ensureSplitOverridesAvailable(){
 
 const COMPANY_OPTIONS = ['Edifice', 'Portafolio'];
 
-let overridesSchedules = {};
-let overridesProjects = {};
+let overridesSchedules = JSON.parse(localStorage.getItem(LS_OVERRIDES_SCHEDULES) || '{}');
+let overridesProjects = JSON.parse(localStorage.getItem(LS_OVERRIDES_PROJECTS) || '{}');
 const LS_DTR_OVERRIDES = 'dtr_overrides_v1';
 const OVERNIGHT_CUTOFF_HOUR = 6;
 let dtrOverrides = loadDtrOverrides();
@@ -16791,7 +16673,7 @@ function loadDtrOverrides() {
 }
 function saveDtrOverrides() {
   try {
-    void writeShared(LS_DTR_OVERRIDES, (dtrOverrides || {})).catch(() => {});
+    localStorage.setItem(LS_DTR_OVERRIDES, JSON.stringify(dtrOverrides || {}));
   } catch (e) {
     console.warn('Failed to save DTR overrides', e);
   }
@@ -16987,28 +16869,31 @@ function openPunchEditor(rowContext) {
 // LS_SPLITS. Keys are formatted as empId + '___' + date.
 const LS_SPLITS = 'att_splits_v1';
 let splits = {};
-async function saveSplitsShared() {
+try {
+  splits = JSON.parse(localStorage.getItem(LS_SPLITS) || '{}');
+} catch (e) {
+  splits = {};
+}
+function saveSplits() {
   try {
-    await writeShared(LS_SPLITS, splits);
+    localStorage.setItem(LS_SPLITS, JSON.stringify(splits));
   } catch (e) {
     console.warn('Saving splits failed', e);
   }
+  syncSplitOverrides();
 }
-function saveSplits(){ return saveSplitsShared(); }
 // Toggle split and unsplit state for a given employee/date key.  These helper
 // functions are used by the DTR table buttons to avoid inline IIFEs.  They set
 // the split flag in the `splits` object, persist it to localStorage via
 // saveSplits(), and trigger a re-render of the results.
 function splitRecord(key) {
-  if (window.__splitOverridesEditDisabled) { alert('Cloud split override table is missing. Editing is disabled to avoid cross-device mismatch.'); return; }
   // When splitting, mark all three segments (AM, PM, OT) as split.  Use
   // an object so we can track split state per segment.
   splits[key] = { AM: true, PM: true, OT: true };
-  saveSplitsShared();
+  saveSplits();
   window.scheduleRenderResults?.('dtr-split-toggle');
 }
 function unsplitRecord(key) {
-  if (window.__splitOverridesEditDisabled) { alert('Cloud split override table is missing. Editing is disabled to avoid cross-device mismatch.'); return; }
   // Group AM/PM/OT segments by their resolved project IDs.  Each group with
   // more than one segment is recombined (segment-level overrides cleared and
   // marked as unsplit).  Groups with a single segment remain split.
@@ -17071,15 +16956,15 @@ function unsplitRecord(key) {
     delete splits[key];
   }
 
-  saveSplitsShared();
-  saveOverridesShared();
+  saveSplits();
+  saveOverrides();
   window.scheduleRenderResults?.('dtr-split-toggle');
 }
-async function saveOverridesShared(){
-  await writeShared(LS_OVERRIDES_SCHEDULES, overridesSchedules);
-  await writeShared(LS_OVERRIDES_PROJECTS, overridesProjects);
+function saveOverrides(){
+  localStorage.setItem(LS_OVERRIDES_SCHEDULES, JSON.stringify(overridesSchedules));
+  localStorage.setItem(LS_OVERRIDES_PROJECTS, JSON.stringify(overridesProjects));
+  syncSplitOverrides();
 }
-function saveOverrides(){ return saveOverridesShared(); }
 
 function baseKey(k){
   const parts = String(k || '').split('___');
@@ -17183,9 +17068,9 @@ async function hydrateSplitOverrides(){
         });
       }
     });
-    cacheSet(LS_SPLITS, splits);
-    cacheSet(LS_OVERRIDES_PROJECTS, overridesProjects);
-    cacheSet(LS_OVERRIDES_SCHEDULES, overridesSchedules);
+    try { localStorage.setItem(LS_SPLITS, JSON.stringify(splits)); } catch(e){}
+    try { localStorage.setItem(LS_OVERRIDES_PROJECTS, JSON.stringify(overridesProjects)); } catch(e){}
+    try { localStorage.setItem(LS_OVERRIDES_SCHEDULES, JSON.stringify(overridesSchedules)); } catch(e){}
   } catch (e) {
     console.warn('hydrate split_overrides failed', e);
   }
@@ -17235,9 +17120,9 @@ function applySplitOverrideRow(row, isDelete){
   }
 
   // Persist to localStorage so reload keeps the newest state
-  cacheSet(LS_SPLITS, splits);
-  cacheSet(LS_OVERRIDES_PROJECTS, overridesProjects);
-  cacheSet(LS_OVERRIDES_SCHEDULES, overridesSchedules);
+  try { localStorage.setItem(LS_SPLITS, JSON.stringify(splits)); } catch(e){}
+  try { localStorage.setItem(LS_OVERRIDES_PROJECTS, JSON.stringify(overridesProjects)); } catch(e){}
+  try { localStorage.setItem(LS_OVERRIDES_SCHEDULES, JSON.stringify(overridesSchedules)); } catch(e){}
 }
 
 function subscribeSplitOverrides(){
@@ -17329,10 +17214,10 @@ const DEFAULT_SCHEDULE = {
 let storedRecords = (typeof window !== 'undefined' && Array.isArray(window.storedRecords))
   ? window.storedRecords
   : [];
-let storedEmployees = safeParseStorageJSON(LS_EMPLOYEES, {});
-let storedSchedules = safeParseStorageJSON(LS_SCHEDULES, null);
-let defaultScheduleId = cacheGet(LS_SCHEDULES_DEFAULT, null) || null;
-let storedProjects = safeParseStorageJSON(LS_PROJECTS, {});
+let storedEmployees = JSON.parse(localStorage.getItem(LS_EMPLOYEES) || '{}');
+let storedSchedules = JSON.parse(localStorage.getItem(LS_SCHEDULES) || 'null');
+let defaultScheduleId = localStorage.getItem(LS_SCHEDULES_DEFAULT) || null;
+let storedProjects = JSON.parse(localStorage.getItem(LS_PROJECTS) || '{}');
 
 function safeParseStorageJSON(key, fallbackValue) {
   try {
@@ -17343,17 +17228,6 @@ function safeParseStorageJSON(key, fallbackValue) {
   } catch (_) {
     return fallbackValue;
   }
-}
-
-
-
-async function hydrateSharedDatasets(){
-  for (const k of SHARED_KEYS) {
-    try { await readShared(k, null); } catch(_) {}
-  }
-  refreshCoreStoresFromStorage();
-  defaultScheduleId = cacheGet(LS_SCHEDULES_DEFAULT, defaultScheduleId) || defaultScheduleId || null;
-  updateCloudSyncStatus({ hydrated: true, offline: !navigator.onLine });
 }
 
 function refreshCoreStoresFromStorage() {
@@ -17439,11 +17313,10 @@ function ensureSchedules(){
     }
   }
 }
-async function saveSchedulesShared(){
-  await writeShared(LS_SCHEDULES, storedSchedules);
-  await writeShared(LS_SCHEDULES_DEFAULT, defaultScheduleId);
+function saveSchedulesToLS(){
+  localStorage.setItem(LS_SCHEDULES, JSON.stringify(storedSchedules));
+  localStorage.setItem(LS_SCHEDULES_DEFAULT, defaultScheduleId);
 }
-function saveSchedulesToLS(){ return saveSchedulesShared(); }
 
 const LS_ACTIVE_MAIN_TAB = 'bp_active_main_tab';
 
@@ -17784,8 +17657,7 @@ function resetRanges(){
 document.getElementById('saveRangesBtn').addEventListener('click', saveRangesFromUI);
 document.getElementById('resetRangesBtn').addEventListener('click', resetRanges);
 
-async function saveEmployeesShared(){ await writeShared(LS_EMPLOYEES, storedEmployees); }
-function saveEmployeesToLS(){ return saveEmployeesShared(); }
+function saveEmployeesToLS(){ localStorage.setItem(LS_EMPLOYEES, JSON.stringify(storedEmployees)); }
 function renderEmpScheduleDropdowns(){
   const sel = document.getElementById('empScheduleSelect'); if(!sel) return;
   sel.innerHTML = '';
@@ -17814,9 +17686,9 @@ function syncProjectsKVAfterLocalSave(forceCloudWrite){
   try {
     const writeLatest = () => {
       try {
-        if (typeof window.writeShared !== 'function') return;
+        if (typeof window.writeKV !== 'function') return;
         const snapshot = (typeof storedProjects === 'object' && storedProjects) ? storedProjects : {};
-        const p = writeShared(LS_PROJECTS, snapshot);
+        const p = window.writeKV(LS_PROJECTS, snapshot);
         if (p && typeof p.catch === 'function') p.catch(err => console.warn('writeKV projects failed', err));
       } catch (err) {
         console.warn('writeKV projects threw', err);
@@ -17844,8 +17716,8 @@ function syncProjectsKVAfterLocalSave(forceCloudWrite){
   } catch (_) {}
 }
 
-async function saveProjectsShared(options = {}){
-  await writeShared(LS_PROJECTS, storedProjects);
+function saveProjectsToLS(options = {}){
+  localStorage.setItem(LS_PROJECTS, JSON.stringify(storedProjects));
   syncProjectsKVAfterLocalSave(!!(options && options.userEdited));
   if(!(options && options.skipRender)){
     renderProjects();
@@ -17856,7 +17728,6 @@ async function saveProjectsShared(options = {}){
   try { if (typeof renderAdjustmentHoursTable === 'function') renderAdjustmentHoursTable(); } catch (_) {}
   window.scheduleRenderResults?.('dtr-split-toggle');
 }
-function saveProjectsToLS(options = {}){ return saveProjectsShared(options); }
 function renderProjects(){
   const tbody = document.querySelector('#projectsTable tbody'); tbody.innerHTML = '';
   const projectCompanySel = document.getElementById('projectCompanySelect');
@@ -18114,7 +17985,7 @@ function renderEmployees(){
     const id = e.target.dataset.id;
     const val = parseFloat(e.target.value) || 0;
     storedEmployees[id].hourlyRate = val; saveEmployeesToLS();
-    try { payrollRates[id] = val; void writeShared(LS_RATES, payrollRates).catch(() => {}); } catch(err) {}
+    try { payrollRates[id] = val; localStorage.setItem(LS_RATES, JSON.stringify(payrollRates)); } catch(err) {}
     try { if (typeof renderTable === 'function') renderTable(); } catch (err) { console.warn('renderTable failed', err); }
     window.scheduleRenderResults?.('employee-rate-change');
     window.scheduleCalculateAll?.('employee-rate-change');
@@ -19220,10 +19091,6 @@ async function initApp(){
   window.scheduleRenderResults?.('dtr-split-toggle');
 }
 
-// Acceptance checklist:
-// - Browser A/B shared edits (projects/schedules/overrides) converge after refresh via Supabase-first hydration.
-// - defaultScheduleId remains a plain string (not quoted JSON string) and maps to a valid schedule key.
-// - Offline edits stay in cache and sync after connectivity returns; no stale local->cloud seed on failed reads.
 async function bootAfterKvHydrate() {
   if (!window.__kv_hydrated) {
     await new Promise((resolve) => {
@@ -19235,26 +19102,11 @@ async function bootAfterKvHydrate() {
     });
   }
   try {
-    await hydrateSharedDatasets();
-    await ensureSeededContributionTables();
-  } catch (_) {
-    if (typeof window.refreshCoreStoresFromStorage === 'function') window.refreshCoreStoresFromStorage();
-  }
-  await initApp();
-  try {
-    const ds = defaultScheduleId;
-    if (ds != null && (typeof ds !== 'string' || (/^".*"$/.test(ds)))) {
-      console.warn('Sanity check failed: defaultScheduleId should be an unquoted string', ds);
-    }
-    if (storedSchedules && typeof storedSchedules === 'object') {
-      const keys = Object.keys(storedSchedules);
-      if (keys.length && (!defaultScheduleId || !storedSchedules[defaultScheduleId])) {
-        defaultScheduleId = keys[0];
-        void writeShared(LS_SCHEDULES_DEFAULT, defaultScheduleId).catch(() => {});
-        console.warn('Sanity check corrected defaultScheduleId to valid schedule key', defaultScheduleId);
-      }
+    if (typeof window.refreshCoreStoresFromStorage === 'function') {
+      window.refreshCoreStoresFromStorage();
     }
   } catch (_) {}
+  await initApp();
 }
 bootAfterKvHydrate();
   </script>
@@ -19597,8 +19449,8 @@ function calculatePayrollFromRecords(){
     });
     // Persist hours to localStorage
     try {
-      void writeShared(LS_REG_HRS, regHours).catch(() => {});
-      void writeShared(LS_OT_HRS, otHours).catch(() => {});
+      localStorage.setItem(LS_REG_HRS, JSON.stringify(regHours));
+      localStorage.setItem(LS_OT_HRS, JSON.stringify(otHours));
     } catch (err) {
       console.warn('LS save failed', err);
     }
@@ -19613,7 +19465,7 @@ function calculatePayrollFromRecords(){
   });
   // Persist rates
   try {
-    void writeShared(LS_RATES, payrollRates).catch(() => {});
+    localStorage.setItem(LS_RATES, JSON.stringify(payrollRates));
   } catch (err) {}
   // Rebuild the payroll table with the newly computed hours
   try {
@@ -19781,8 +19633,8 @@ function calculatePayrollFromRecords(){
       });
       // Persist the hours to localStorage
       try {
-        void writeShared(LS_REG_HRS, regHours).catch(() => {});
-        void writeShared(LS_OT_HRS, otHours).catch(() => {});
+        localStorage.setItem(LS_REG_HRS, JSON.stringify(regHours));
+        localStorage.setItem(LS_OT_HRS, JSON.stringify(otHours));
       } catch (err) {}
       // Rebuild the payroll table using the computed hours
       if (typeof renderTable === 'function') renderTable();
@@ -22319,7 +22171,7 @@ function updateWeekInputs(snap) {
       const localHist = loadHistory();
       localHist.push(newSnap);
       if (typeof window.writeKV === 'function') {
-        window.writeShared(PAYROLL_HIST_KEY, localHist).catch((error) => {
+        window.writeKV(PAYROLL_HIST_KEY, localHist).catch((error) => {
           console.warn('Payroll History kv_store sync failed', { key: PAYROLL_HIST_KEY, error });
           try {
             if (typeof window.showSyncFailedBanner === 'function') window.showSyncFailedBanner('Sync failed');
@@ -23643,7 +23495,7 @@ document.addEventListener('DOMContentLoaded', async function () {
   const LS_OVR_HOURS = 'att_overrides_hours_v1';
   let overridesHours = {};
   try { overridesHours = JSON.parse(localStorage.getItem(LS_OVR_HOURS) || '{}') || {}; } catch(e){ overridesHours = {}; }
-  function saveOverridesHours(){ void writeShared(LS_OVR_HOURS, overridesHours).catch(() => {}); }
+  function saveOverridesHours(){ try { localStorage.setItem(LS_OVR_HOURS, JSON.stringify(overridesHours)); } catch(e){} }
   // Persist overrides to Supabase (kv_store) and fetch initial remote data
   function saveOverridesHoursRemote(){
     try {
