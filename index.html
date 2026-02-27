@@ -7642,6 +7642,9 @@ function updateDeductionRowDisplay(empId){
   if (!Number.isFinite(rate)) rate = 0;
   try { if (payrollRates && typeof payrollRates === 'object') payrollRates[empKey] = rate; } catch (_) {}
   const rH = Number(regHours?.[empKey] ?? 0);
+  const otH = Number(getOvertimeFinalHours(empKey)) || 0;
+  const regAdjH = Number(getRegularAdjustmentHours(empKey)) || 0;
+  const hasWorkedTime = (rH > 0) || (otH > 0) || (regAdjH > 0);
   const lSSS = roundToCents(loanSSS?.[empKey] ?? 0);
   const lPI = roundToCents(loanPI?.[empKey] ?? 0);
   const v = roundToCents(vale?.[empKey] ?? 0);
@@ -7657,8 +7660,8 @@ function updateDeductionRowDisplay(empId){
   const philhealth = (flags.philhealth === false) ? 0 : +((regPay * phRate).toFixed(2));
   const sssFull = (flags.sss === false) ? 0 : sssShareByMonthly(monthly);
   const sss = (flags.sss === false) ? 0 : +((sssFull / div).toFixed(2));
-  const sssLoan = +(lSSS / div).toFixed(2);
-  const piLoan = +(lPI / div).toFixed(2);
+  const sssLoan = hasWorkedTime ? +(lSSS / div).toFixed(2) : 0;
+  const piLoan = hasWorkedTime ? +(lPI / div).toFixed(2) : 0;
   const rowRaw = {
     pagibig,
     philhealth,
@@ -8506,13 +8509,14 @@ function calculateRow(tr){  const readNum = sel => { const el = tr.querySelector
   // Check per-employee contribution deduction flags; default to true if not set
   const flags = contribFlags[id] || {};
   const div = Number(divisor) || 1;
-  const hasCompensation = (reg > 0) || (otTotal > 0) || (regAdjHours > 0) || (additionalIncomeShown > 0);
+  const hasWorkedTime = (reg > 0) || (otTotal > 0) || (regAdjHours > 0);
+  const hasCompensation = hasWorkedTime || (additionalIncomeShown > 0);
   const pagibig = (hasCompensation && flags.pagibig !== false ? +((regPay * piRate)).toFixed(2) : 0);
   const philhealth = (hasCompensation && flags.philhealth !== false ? +((regPay * phRate)).toFixed(2) : 0);
   const sssFull = hasCompensation ? sssShareByMonthly(monthly) : 0;
   const sss = (hasCompensation && flags.sss !== false ? +(sssFull / div).toFixed(2) : 0);
-  const sssLoan = +(lSSS / div).toFixed(2);
-  const piLoan = +(lPI / div).toFixed(2);
+  const sssLoan = hasWorkedTime ? +(lSSS / div).toFixed(2) : 0;
+  const piLoan = hasWorkedTime ? +(lPI / div).toFixed(2) : 0;
   const valeAmt = v;
   const wedValeAmt = vW;
 
