@@ -23425,7 +23425,7 @@ document.addEventListener('DOMContentLoaded', async function () {
       const btn = document.createElement('button');
       btn.textContent = 'Edit';
       btn.className = 'dtr-edit-btn';
-      btn.addEventListener('click', () => {
+      btn.addEventListener('click', async () => {
         const regCell = (regIdx >= 0) ? tr.cells[regIdx] : null;
         const otCell  = (otIdx >= 0) ? tr.cells[otIdx] : null;
         const timeFields = getTimeFieldsForRow(tr);
@@ -23525,8 +23525,8 @@ document.addEventListener('DOMContentLoaded', async function () {
             }
           }
           if (overridesTouched){
-            saveOverridesHours();
-            
+            await saveOverridesHours();
+
           }
           if (timeResult.changed){
             btn.textContent = 'Edit';
