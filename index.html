@@ -21185,53 +21185,12 @@ function loadSaved(){
   }
 
   function applyDtrDateFilter(){
+    // Keep date filter state in storage only; renderResults already performs
+    // authoritative data-level filtering using dtrDateFrom/dtrDateTo.
     const f = getEl('dtrDateFrom')?.value || '';
     const t = getEl('dtrDateTo')?.value || '';
     try { localStorage.setItem(LS_FROM, f); } catch(e){}
     try { localStorage.setItem(LS_TO, t); } catch(e){}
-
-    const tbody = document.querySelector('#resultsTable tbody');
-    if (!tbody) return;
-    const hasRange = !!(f || t);
-
-    Array.from(tbody.rows).forEach(tr=>{
-      // Adjust the index below if your Date column index is different.
-      // Assuming the "Date" column is 4 (0-based), change as necessary.
-      const dateStr = (tr.cells[4]?.textContent || '').trim();
-      const show = !hasRange || withinRange(dateStr, f, t);
-      tr.style.display = show ? '' : 'none';
-    });
-
-    // After applying the date filter, recompute the DTR summary to reflect only visible rows.
-    const summaryEl = document.getElementById('dtrSummary');
-    if (summaryEl) {
-      // Initialize totals
-      let regSum = 0;
-      let otSum  = 0;
-      const empSet = new Set();
-      const rows = Array.from(tbody.rows);
-      let visibleCount = 0;
-      rows.forEach(row => {
-        // Skip rows hidden by the date filter
-        if (row.style.display === 'none') return;
-        visibleCount++;
-        // Extract values from the Total Regular Hrs and OT Hrs columns (indices 11 and 12)
-        const regVal = parseFloat((row.cells[11]?.textContent || '').trim()) || 0;
-        const otVal  = parseFloat((row.cells[12]?.textContent || '').trim()) || 0;
-        regSum += regVal;
-        otSum  += otVal;
-        // Collect unique employee IDs (column 0)
-        const idCell = (row.cells[0]?.textContent || '').trim();
-        if (idCell) empSet.add(idCell);
-      });
-      // If there are visible rows, update the summary text; otherwise clear it
-      if (visibleCount > 0) {
-        const totalHours = regSum + otSum;
-        summaryEl.textContent = `Grand Total Hours: ${formatHours(totalHours)} | Regular Hours: ${formatHours(regSum)} | OT Hours: ${formatHours(otSum)} | Employees: ${empSet.size}`;
-      } else {
-        summaryEl.textContent = '';
-      }
-    }
   }
 
   function hookUI(){
