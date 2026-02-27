@@ -19513,7 +19513,7 @@ function restoreData(file) {
       cancelBtn.__wiredManualCancel = true;
       cancelBtn.addEventListener('click', closeManualModal);
     }
-    if(saveBtn && !saveBtn.__wiredManualSave) saveBtn.addEventListener('click', function(){
+    if(saveBtn && !saveBtn.__wiredManualSave) saveBtn.addEventListener('click', async function(){
       if (saveBtn.__savingManual) return;
       saveBtn.__savingManual = true;
       const empId = (document.getElementById('manualEmpSelect')||{}).value;
@@ -19531,7 +19531,7 @@ function restoreData(file) {
         );
         if (!exists) storedRecords.push(record);
         // Persist to Supabase (authoritative) after in-memory update
-        persistStoredRecords();
+        await persistStoredRecords();
       } catch(e) { console.error('Saving manual DTR failed', e); }
       closeManualModal();
       window.scheduleRenderResults?.('manual-dtr-save');
@@ -19643,7 +19643,7 @@ function restoreData(file) {
   function setupDtrDeleteDelegation(){
     const table = document.getElementById('resultsTable');
     if (!table || table.__dtrDelBound) return;
-    table.addEventListener('click', function(ev){
+    table.addEventListener('click', async function(ev){
       const btn = ev.target && ev.target.closest ? ev.target.closest('.dtr-del-btn') : null;
       if (!btn) return;
       const tr = btn.closest('tr');
@@ -19682,7 +19682,7 @@ function restoreData(file) {
             }
           }
         }
-        persistStoredRecords();
+        await persistStoredRecords();
         window.scheduleRenderResults?.('dtr-split-toggle');
       } catch(e){ console.error('DTR delete failed', e); }
     });
@@ -19735,7 +19735,7 @@ function restoreData(file) {
       const btn = document.createElement('button');
       btn.textContent = 'Delete';
       btn.className = 'dtr-del-btn';
-      btn.addEventListener('click', () => {
+      btn.addEventListener('click', async () => {
         // Get empId and date from row cells (empId at col 0, date at col 4)
         const empIdCell = tr.cells[0] ? tr.cells[0].textContent.trim() : '';
         const dateCell  = tr.cells[4] ? tr.cells[4].textContent.trim() : '';
@@ -19789,7 +19789,7 @@ function restoreData(file) {
             }
           }
           // Persist to Supabase so all devices reflect the deletion
-          persistStoredRecords();
+          await persistStoredRecords();
           window.scheduleRenderResults?.('dtr-split-toggle');
         } catch(e){ console.error('DTR delete failed', e); }
       });
@@ -23120,6 +23120,17 @@ document.addEventListener('DOMContentLoaded', async function () {
 (function(){
   const LS_OVR_HOURS = 'att_overrides_hours_v1';
   let overridesHours = (window.cacheGet ? window.cacheGet(LS_OVR_HOURS, {}) : {});
+  if (!overridesHours || typeof overridesHours !== 'object' || Array.isArray(overridesHours)) overridesHours = {};
+
+  function reloadOverridesHoursFromCache(){
+    try {
+      const latest = (window.cacheGet ? window.cacheGet(LS_OVR_HOURS, {}) : {});
+      overridesHours = (latest && typeof latest === 'object' && !Array.isArray(latest)) ? latest : {};
+    } catch (_) {
+      overridesHours = {};
+    }
+  }
+
   async function saveOverridesHours(){
     if (window.sharedSet) await window.sharedSet(LS_OVR_HOURS, overridesHours);
     else { try { localStorage.setItem(LS_OVR_HOURS, JSON.stringify(overridesHours)); } catch(e){} }
@@ -23167,8 +23178,8 @@ document.addEventListener('DOMContentLoaded', async function () {
   // - base key: stable across devices (empId + date)
   // - half key: includes segment when table is split (AM/PM/OT)
   function baseKeyForRow(tr){
-    const empId = tr.cells[0] ? tr.cells[0].textContent.trim() : '';
-    const date  = tr.cells[4] ? tr.cells[4].textContent.trim() : '';
+    const empId = (tr?.dataset?.empId || (tr.cells[0] ? tr.cells[0].textContent : '') || '').trim();
+    const date  = (tr?.dataset?.date  || (tr.cells[4] ? tr.cells[4].textContent : '') || '').trim();
     return empId + '___' + date;
   }
   function keyForRow(tr){
@@ -23283,9 +23294,18 @@ document.addEventListener('DOMContentLoaded', async function () {
     ));
   }
 
-  function persistStoredRecords(){
+  async function persistStoredRecords(){
+    const snapshot = Array.isArray(storedRecords) ? storedRecords.slice() : [];
+    try { window.storedRecords = snapshot; } catch(_) {}
     try {
-      if (typeof saveDtrToCloud === 'function') saveDtrToCloud(storedRecords);
+      if (window.sharedSet) await window.sharedSet(LS_RECORDS, snapshot);
+      else if (window.cacheSet) window.cacheSet(LS_RECORDS, snapshot);
+      else localStorage.setItem(LS_RECORDS, JSON.stringify(snapshot));
+    } catch(e){
+      console.warn('Failed to persist DTR records locally', e);
+    }
+    try {
+      if (typeof saveDtrToCloud === 'function') await saveDtrToCloud(snapshot);
     } catch(e){
       console.warn('Failed to save DTR to Supabase', e);
     }
@@ -23335,7 +23355,7 @@ document.addEventListener('DOMContentLoaded', async function () {
     }
   }
 
-  function applyTimeUpdates(tr, fields, idxMap){
+  async function applyTimeUpdates(tr, fields, idxMap){
     if (!tr) return { changed: false };
     const values = {};
     const prevValues = {};
@@ -23407,7 +23427,7 @@ document.addEventListener('DOMContentLoaded', async function () {
     } catch(_) {
       tr.dataset.times = '[]';
     }
-    persistStoredRecords();
+    await persistStoredRecords();
     return { changed: true };
   }
 
@@ -23488,7 +23508,7 @@ document.addEventListener('DOMContentLoaded', async function () {
             recomputeDtrSummaryFromTable();
             return;
           }
-          const timeResult = applyTimeUpdates(tr, timeFields, idxMap);
+          const timeResult = await applyTimeUpdates(tr, timeFields, idxMap);
           if (!changedReg && !changedOt && !timeResult.changed){
             const ovExisting = overridesHours && (overridesHours[kHalf] || overridesHours[kBase]);
             if (regCell){
@@ -23545,6 +23565,7 @@ document.addEventListener('DOMContentLoaded', async function () {
   }
 
   function afterRender(){
+    reloadOverridesHoursFromCache();
     applyOverridesToTable();
     addDtrEditorButtons();
     recomputeDtrSummaryFromTable();
