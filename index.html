@@ -662,289 +662,773 @@
     });
   </script>
 
-<!-- === Supabase KV Sync Adapter (single unified shared storage) === -->
-<script type="module">
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2?bundle";
+<!-- === Supabase KV Sync Adapter (no-login, auto-sync) === -->
+<script>
+  // Global KV helpers for classic scripts; Supabase-aware if available.
+  (function () {
+    if (!window.__kvUnifiedLogged) {
+      console.log("KV: using unified read/write");
+      window.__kvUnifiedLogged = true;
+    }
+    if (!window.readKV) {
+      window.readKV = async function readKV(key, defaultValue = null) {
+        try {
+          if (window.supabase && window.SUPABASE_TABLE) {
+            const { data, error } = await window.supabase
+              .from(window.SUPABASE_TABLE)
+              .select('value')
+              .eq('key', key)
+              .maybeSingle();
+            if (error || !data) return defaultValue;
+            return (data.value ?? defaultValue);
+          } else {
+            const raw = localStorage.getItem(key);
+            if (raw === null) return defaultValue;
+            try { return JSON.parse(raw); } catch { return raw; }
+          }
+        } catch (e) {
+          console.warn('readKV failed', e);
+          return defaultValue;
+        }
+      };
+    }
+    if (!window.writeKV) {
+      const isAbortError = (err) => {
+        if (!err) return false;
+        const message = err.message || err.details || String(err);
+        return err.name === 'AbortError' || /aborterror|signal is aborted/i.test(message);
+      };
+      window.writeKV = async function writeKV(key, value) {
+        const trySetLocal = () => {
+          try { window.__kvBypassNextSetItem = true; __kvBypassNextSetItem = true; localStorage.setItem(key, JSON.stringify(value)); } catch {}
+        };
+        const isNavLockTimeout = (err) => {
+          const msg = (err && err.message) ? String(err.message) : String(err || '');
+          return /Navigator Lock/i.test(msg) && /timed out/i.test(msg);
+        };
+        window.__kvSleep = window.__kvSleep || (ms => new Promise(r => setTimeout(r, ms)));
+        try {
+          if (window.supabase && window.SUPABASE_TABLE) {
+            let lastErr = null;
+            for (let attempt = 0; attempt < 3; attempt++) {
+              const { error } = await window.supabase
+                .from(window.SUPABASE_TABLE)
+                .upsert({ key, value }, { onConflict: 'key' });
+              if (!error) { lastErr = null; break; }
+              if (isAbortError(error)) { lastErr = null; break; }
+              lastErr = error;
+              if (isNavLockTimeout(error) && attempt < 2) {
+                await window.__kvSleep(350 * (attempt + 1));
+                continue;
+              }
+              break;
+            }
+            trySetLocal();
+            if (lastErr && !isAbortError(lastErr)) console.warn('writeKV error', lastErr);
+          } else {
+            trySetLocal();
+          }
+          return true;
+        } catch (e) {
+          if (!isAbortError(e)) console.warn('writeKV failed', e);
+          trySetLocal();
+          return false;
+        }
+      };
 
-const SUPABASE_URL = window.SUPABASE_URL || "https://qzkzugzfpegozpiqutdv.supabase.co";
-const SUPABASE_KEY = window.SUPABASE_KEY || "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InF6a3p1Z3pmcGVnb3pwaXF1dGR2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTU4MTc5MDMsImV4cCI6MjA3MTM5MzkwM30.mdFYuFjbRfsILWPkQQmVUCDR7dGqEo-mdPZ6iwolvGk";
-const TABLE = "kv_store";
-const SHARED_KEYS = ["att_employees_v2","att_schedules_v2","att_schedules_default","att_projects_v1","att_records_v2","att_overrides_hours_v1","dtr_overrides_v1","payroll_rates","payroll_ot_multiplier","payroll_week_start","payroll_week_end","settings_payroll","payroll_deduction_divisor","payroll_sss_table","payroll_pagibig_table","payroll_philhealth_table","payroll_pagibig_rate","payroll_philhealth_rate","payroll_loan_sss","payroll_loan_pagibig","payroll_loan_tracker","payroll_vale","payroll_vale_wed","payroll_hist","payroll_other_deductions_details","payroll_other_deductions_total","payroll_additional_income_details","payroll_additional_income_total","payroll_adjustment_hours","payroll_bantay","payroll_bantay_proj","payroll_contrib_flags","payroll_lock_state","incomeTypeOptions","deductionTypeOptions","payroll_print_orientation"];
-const SHARED_KEY_SET = new Set(SHARED_KEYS);
-const PENDING_KEY = '__shared_pending_writes_v1';
-const META_KEY = '__shared_meta_v1';
-const DEVICE_KEY = '__device_id';
+      // Batch upsert to reduce Supabase auth-lock contention (especially during Finalize/Snapshot).
+      window.writeKVBatch = async function writeKVBatch(pairs, opts = {}) {
+        const trySetLocalPair = (k, v) => {
+          try { window.__kvBypassNextSetItem = true; __kvBypassNextSetItem = true; localStorage.setItem(k, JSON.stringify(v)); } catch {}
+        };
+        const isNavLockTimeout = (err) => {
+          const msg = (err && err.message) ? String(err.message) : String(err || '');
+          return /Navigator Lock/i.test(msg) && /timed out/i.test(msg);
+        };
+        window.__kvSleep = window.__kvSleep || (ms => new Promise(r => setTimeout(r, ms)));
+
+        const items = Array.isArray(pairs) ? pairs.filter(p => p && p.key) : [];
+        const chunkSize = Math.max(1, Math.min(25, Number(opts.chunkSize || 10)));
+
+        // No Supabase? Just local cache.
+        if (!(window.supabase && window.SUPABASE_TABLE)) {
+          for (const p of items) trySetLocalPair(p.key, p.value);
+          return true;
+        }
+
+        let allOk = true;
+        for (let i = 0; i < items.length; i += chunkSize) {
+          const chunk = items.slice(i, i + chunkSize).map(p => ({ key: p.key, value: p.value }));
+          let lastErr = null;
+          for (let attempt = 0; attempt < 3; attempt++) {
+            const { error } = await window.supabase
+              .from(window.SUPABASE_TABLE)
+              .upsert(chunk, { onConflict: 'key' });
+            if (!error) { lastErr = null; break; }
+            if (isAbortError(error)) { lastErr = null; break; }
+            lastErr = error;
+            if (isNavLockTimeout(error) && attempt < 2) {
+              await window.__kvSleep(500 * (attempt + 1));
+              continue;
+            }
+            break;
+          }
+          if (lastErr && !isAbortError(lastErr)) {
+            console.warn('writeKVBatch error', lastErr);
+            allOk = false;
+          }
+          // Keep local cache aligned (best-effort)
+          for (const p of chunk) trySetLocalPair(p.key, p.value);
+        }
+        return allOk;
+      };
+}
+  })();
+</script>
+<script type="module">
+// Minimal, no-login cloud persistence by mirroring localStorage to Supabase.
+// 1) Create a table in Supabase named: kv_store
+//    Columns:
+//      key text PRIMARY KEY
+//      value jsonb
+//      updated_at timestamptz DEFAULT now()
+// 2) Turn RLS ON and add permissive policies if you truly want no-login use:
+//    - SELECT: USING (true)
+//    - INSERT: WITH CHECK (true)
+//    - UPDATE: USING (true)  WITH CHECK (true)   // optional; you can omit to prevent edits
+//    - DELETE: USING (false)                      // optional; disallow deletes
+// 3) Paste your Supabase project URL and anon key below.
+
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2?bundle"
+
+const SUPABASE_URL = window.SUPABASE_URL || "https://qzkzugzfpegozpiqutdv.supabase.co"
+const SUPABASE_KEY = window.SUPABASE_KEY || "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InF6a3p1Z3pmcGVnb3pwaXF1dGR2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTU4MTc5MDMsImV4cCI6MjA3MTM5MzkwM30.mdFYuFjbRfsILWPkQQmVUCDR7dGqEo-mdPZ6iwolvGk"
+const TABLE = "kv_store"
+// List of localStorage keys that should be mirrored to Supabase.  If you add
+// new keys anywhere in the application that you want to persist across
+// devices, add them here as well.  Without inclusion in this list the
+// `Storage.prototype.setItem` hook will ignore them and they will remain
+// strictly device-local.
+const KNOWN_KEYS = [
+  "att_employees_v2",
+  "att_schedules_v2",
+  "att_schedules_default",
+  "att_projects_v1",
+  // payroll configuration keys
+  "payroll_rates",
+  "payroll_reg_hours",
+  "payroll_ot_hours",
+  "payroll_ot_multiplier",
+  "ui_payroll_week_start_local",
+  "ui_payroll_week_end_local",
+  "payroll_week_start",
+  "payroll_week_end",
+  "settings_payroll",
+  "payroll_deduction_divisor",
+  "payroll_sss_table",
+  "payroll_loan_sss",
+  "payroll_loan_pagibig",
+  "payroll_vale",
+  "payroll_vale_wed",
+  "payroll_hist",
+  "payrollColumnWidths",
+  // additional filter & state keys not previously persisted
+  ,"payroll_other_deductions_details"
+  ,"payroll_other_deductions_total"
+  ,"payroll_pagibig_rate"
+  ,"payroll_philhealth_rate"
+  ,"payroll_pagibig_table"
+  ,"payroll_philhealth_table"
+  ,"payroll_adjustment_hours"
+  ,"payroll_additional_income_details"
+  ,"payroll_additional_income_total"
+  ,"payroll_bantay"
+  ,"payroll_bantay_proj"
+  ,"payroll_contrib_flags"
+  ,"att_overrides_hours_v1"
+  ,"payroll_lock_state"
+  ,"dtr_overrides_v1"
+  ,"incomeTypeOptions"
+  ,"deductionTypeOptions"
+  ,"payroll_loan_tracker"
+  ,"payroll_print_orientation"
+]
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY, {
-  auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false }
-});
+  auth: {
+    // We use anon access + RLS policies; no interactive auth needed.
+    // Disabling session persistence avoids Navigator Lock timeouts on sb-*-auth-token.
+    persistSession: false,
+    autoRefreshToken: false,
+    detectSessionInUrl: false
+  }
+})
+
+// Expose the Supabase client on the global window so that other
+// non-module scripts (e.g. the boot guard) can access it without
+// re-importing the library.  Also expose the table name used for
+// key/value storage.  Without this, any attempt to read from
+// Supabase outside of this module would require a duplicate client
+// instantiation, and due to the asynchronous execution order of
+// module scripts it is not guaranteed that the client would be
+// available when the boot guard runs.  Assigning to `window`
+// provides a simple, predictable global reference.
 window.supabase = supabase;
 window.SUPABASE_TABLE = TABLE;
-window.SHARED_KEYS = SHARED_KEYS;
-window.SHARED_KEY_SET = SHARED_KEY_SET;
-window.__supabase_ready = true;
-window.__sharedSyncState = window.__sharedSyncState || { hydrated:false, offline:false, lastSyncAt:0, conflict:false };
-try { console.warn('[boot] supabase ready'); window.dispatchEvent(new Event('supabase-ready')); } catch (_) {}
 
-const __origGetItem = window.localStorage.getItem.bind(window.localStorage);
-const __origSetItem = window.localStorage.setItem.bind(window.localStorage);
-const __origRemoveItem = window.localStorage.removeItem.bind(window.localStorage);
+function markHydrated() {
+  try { window.__kv_hydrated = true; } catch {}
+  try { window.dispatchEvent(new Event('kv-hydrated')); } catch {}
+}
 
-function cacheGet(key, fallback = null) {
+let __kvRerenderTimer = null;
+let __renderResultsTimer = null;
+function scheduleRenderResults(reason, delay = 120) {
+  try { window.__lastRenderResultsReason = reason || ''; } catch (_) {}
+  try { if (__renderResultsTimer) window.clearTimeout(__renderResultsTimer); } catch (_) {}
+  __renderResultsTimer = window.setTimeout(() => {
+    __renderResultsTimer = null;
+    try { if (typeof window.renderResults === 'function') window.renderResults(); } catch (_) {}
+  }, delay);
+}
+function queueHydrateRerender() {
+
+  markHydrated();
   try {
-    const raw = __origGetItem ? __origGetItem(key) : localStorage.getItem(key);
-    if (raw == null) return fallback;
-    try { return JSON.parse(raw); } catch (_) { return raw; }
-  } catch (_) {
-    return fallback;
+    if (typeof window.refreshCoreStoresFromStorage === 'function') {
+      window.refreshCoreStoresFromStorage();
+    }
+  } catch (_) {}
+  try { if (typeof refreshPeriodScopedCachesFromStorage === 'function') refreshPeriodScopedCachesFromStorage(); } catch {}
+  try { if (typeof refreshLoanTrackerCacheFromStorage === 'function') refreshLoanTrackerCacheFromStorage(); } catch {}
+  const rerender = () => {
+    try {
+      if (typeof renderOtherDeductionsTable === 'function') renderOtherDeductionsTable();
+      if (typeof renderAdjustmentHoursTable === 'function') renderAdjustmentHoursTable();
+    } catch {}
+    try {
+      if (typeof renderAdditionalIncomeTable === 'function') renderAdditionalIncomeTable();
+    } catch {}
+    try {
+      if (typeof renderLoanTrackerTable === 'function') renderLoanTrackerTable();
+    } catch {}
+    try { if (typeof window.scheduleCalculateAll === 'function') window.scheduleCalculateAll?.('hydrate-rerender'); } catch {}
+    try { window.scheduleRenderResults?.('hydrate-rerender'); } catch {}
+  };
+  try {
+    let shouldDefer = false;
+    if (typeof window.isOtherDeductionsInputFocused === 'function' && window.isOtherDeductionsInputFocused()) {
+      window.__otherDeductionsHydratePending = true;
+      shouldDefer = true;
+    }
+    if (typeof window.isAdditionalIncomeInputFocused === 'function' && window.isAdditionalIncomeInputFocused()) {
+      window.__additionalIncomeHydratePending = true;
+      shouldDefer = true;
+    }
+    if (shouldDefer) return;
+  } catch (_) {}
+
+  const schedule = () => {
+    try { if (__kvRerenderTimer) window.clearTimeout(__kvRerenderTimer); } catch {}
+    __kvRerenderTimer = window.setTimeout(() => {
+      __kvRerenderTimer = null;
+      rerender();
+    }, 120);
+  };
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', schedule, { once: true });
+  } else {
+    schedule();
   }
 }
-function cacheSet(key, value) {
+
+function __kvHasMeaningfulPeriodMap(obj){
+  try{
+    if (!obj || typeof obj !== 'object') return false;
+    for (const pk of Object.keys(obj)) {
+      if (pk === '__meta') continue;
+      const pv = obj[pk];
+      if (pv == null) continue;
+      if (Array.isArray(pv)) { if (pv.length) return true; continue; }
+      if (typeof pv === 'object') { if (Object.keys(pv).length) return true; continue; }
+      if (pv !== '' && pv !== 0 && pv !== false) return true;
+    }
+  } catch(_) {}
+  return false;
+}
+function __kvHasMeaningfulHoursMap(obj){
   try {
-    if (value === undefined) { __origRemoveItem(key); return; }
-    __origSetItem(key, JSON.stringify(value));
+    if (!obj || typeof obj !== 'object') return false;
+    return Object.keys(obj).some((empId) => {
+      const v = Number(obj[empId]);
+      return Number.isFinite(v) && Math.abs(v) > 0.0001;
+    });
+  } catch (_) {}
+  return false;
+}
+try { window.__kvHasMeaningfulHoursMap = __kvHasMeaningfulHoursMap; } catch (_) {}
+const __KV_COMPUTED_LOCAL_KEYS = new Set(['payroll_reg_hours', 'payroll_ot_hours']);
+const __kvLastCloudTsByKey = Object.create(null);
+function __kvToMillis(ts){
+  const n = new Date(ts || 0).getTime();
+  return Number.isFinite(n) ? n : 0;
+}
+function __kvRememberCloudTs(key, ts){
+  if (!key) return;
+  const ms = __kvToMillis(ts);
+  if (!ms) return;
+  const prev = Number(__kvLastCloudTsByKey[key] || 0);
+  if (ms > prev) __kvLastCloudTsByKey[key] = ms;
+}
+function __kvIsStaleCloudTs(key, ts){
+  const incoming = __kvToMillis(ts);
+  if (!incoming) return false;
+  const prev = Number(__kvLastCloudTsByKey[key] || 0);
+  return prev > 0 && incoming < prev;
+}
+const __kvBootCloudFirstPeriodKeys = new Set([
+  'payroll_other_deductions_details',
+  'payroll_other_deductions_total',
+  'payroll_additional_income_details',
+  'payroll_additional_income_total',
+  'payroll_lock_state'
+]);
+function __kvBootCloudFirstDecision(k, localObj, cloudObj){
+  if (!__kvBootCloudFirstPeriodKeys.has(k)) return null;
+  const cloudHas = __kvHasMeaningfulPeriodMap(cloudObj);
+  if (cloudHas) return false; // never overwrite meaningful cloud with local
+  const localHas = __kvHasMeaningfulPeriodMap(localObj);
+  if (localHas) return true;  // seed cloud if cloud empty/missing
+  return false;
+}
+function __kvPayrollHistoryLatestTs(list){
+  try{
+    if (!Array.isArray(list) || !list.length) return 0;
+    let maxTs = 0;
+    for (const item of list){
+      if (!item || typeof item !== 'object') continue;
+      const stamp = item.finalizedAt || item.lockedAt || item.createdAt || item.voidedAt || '';
+      const ts = stamp ? new Date(stamp).getTime() : 0;
+      if (Number.isFinite(ts) && ts > maxTs) maxTs = ts;
+    }
+    return maxTs;
+  }catch(_){ return 0; }
+}
+try { window.queueHydrateRerender = queueHydrateRerender; } catch (_) {}
+try { window.scheduleRenderResults = scheduleRenderResults; } catch (_) {}
+
+let __kvPeriodicHydrateInFlight = false;
+async function __kvPeriodicHydrate() {
+  if (__kvPeriodicHydrateInFlight) return;
+  __kvPeriodicHydrateInFlight = true;
+  try {
+    if (document.visibilityState && document.visibilityState !== 'visible') return;
+    if (typeof __kvHydrateOnce === 'function') await __kvHydrateOnce();
+  } catch (_) {
+  } finally {
+    __kvPeriodicHydrateInFlight = false;
+  }
+}
+
+function __kvScheduleRealtimeReconnect(delayMs = 1500) {
+  try {
+    if (window.__kvReconnectTimer) return;
+    window.__kvReconnectTimer = window.setTimeout(() => {
+      window.__kvReconnectTimer = null;
+      try { __kvSetupRealtimeChannel(true); } catch (_) {}
+    }, Math.max(400, Number(delayMs) || 1500));
   } catch (_) {}
 }
-window.cacheGet = cacheGet;
-window.cacheSet = cacheSet;
 
-function getDeviceId() {
-  let id = localStorage.getItem(DEVICE_KEY) || '';
-  if (!id) {
-    id = (crypto?.randomUUID?.() || `dev_${Date.now()}_${Math.random().toString(36).slice(2)}`);
-    __origSetItem(DEVICE_KEY, id);
-  }
-  return id;
-}
-function wrapForStore(value) {
-  return { __data: value, __meta: { updatedAt: Date.now(), deviceId: getDeviceId() } };
-}
-function unwrapFromStore(value) {
-  if (value && typeof value === 'object' && Object.prototype.hasOwnProperty.call(value, '__deleted') && value.__deleted) return undefined;
-  if (value && typeof value === 'object' && Object.prototype.hasOwnProperty.call(value, '__data')) return value.__data;
-  return value;
-}
-function metaFromStore(value) {
-  if (value && typeof value === 'object' && value.__meta && typeof value.__meta === 'object') {
-    return { updatedAt: Number(value.__meta.updatedAt || 0), deviceId: String(value.__meta.deviceId || '') };
-  }
-  return { updatedAt: 0, deviceId: '' };
-}
-function loadMetaMap(){ const m = cacheGet(META_KEY, {}); return (m && typeof m === 'object' && !Array.isArray(m)) ? m : {}; }
-let metaMap = loadMetaMap();
-function saveMetaMap(){ cacheSet(META_KEY, metaMap); }
-function setMetaForKey(key, meta){ metaMap[key] = { updatedAt:Number(meta?.updatedAt||0), deviceId:String(meta?.deviceId||'') }; saveMetaMap(); }
-
-async function kvReadCloud(key) {
-  const { data, error } = await supabase.from(TABLE).select('value, updated_at').eq('key', key).maybeSingle();
-  if (error) throw error;
-  return data || null;
-}
-async function kvWriteCloud(key, wrapped) {
-  const { error } = await supabase.from(TABLE).upsert({ key, value: wrapped }, { onConflict: 'key' });
-  if (error) throw error;
-}
-async function kvDeleteCloud(key) {
-  const { error } = await supabase.from(TABLE).delete().eq('key', key);
-  if (error) throw error;
-}
-
-function getPending(){ const q = cacheGet(PENDING_KEY, {}); return (q && typeof q === 'object' && !Array.isArray(q)) ? q : {}; }
-function setPending(v){ cacheSet(PENDING_KEY, v || {}); }
-
-async function sharedGet(key, fallback = null) {
-  if (!SHARED_KEY_SET.has(key)) return cacheGet(key, fallback);
-  if (window.__sharedSyncState.hydrated) return cacheGet(key, fallback);
+function __kvSetupRealtimeChannel(force = false) {
   try {
-    const row = await kvReadCloud(key);
-    if (!row || row.value === undefined) return cacheGet(key, fallback);
-    const unwrapped = unwrapFromStore(row.value);
-    cacheSet(key, unwrapped);
-    setMetaForKey(key, metaFromStore(row.value));
-    return unwrapped === undefined ? fallback : unwrapped;
-  } catch (_) {
-    return cacheGet(key, fallback);
+    if (!force && window.__kvSubscribed && window.__kvChannel) return;
+    if (window.__kvChannel) {
+      try {
+        if (typeof window.__kvChannel.unsubscribe === 'function') {
+          window.__kvChannel.unsubscribe();
+        } else if (window.supabase && typeof window.supabase.removeChannel === 'function') {
+          window.supabase.removeChannel(window.__kvChannel);
+        }
+      } catch (_) {}
+      window.__kvChannel = null;
+    }
+
+    const channel = supabase.channel('kv_store_sync');
+    window.__kvSubscribed = true;
+    window.__kvChannel = channel;
+
+    channel.on('postgres_changes', { event: '*', schema: 'public', table: TABLE }, (payload) => {
+      try {
+        const eventType = payload && payload.eventType;
+        const key = (payload && payload.new && payload.new.key) || (payload && payload.old && payload.old.key);
+        if (!key || !KNOWN_KEYS.includes(key)) return;
+        if (__KV_COMPUTED_LOCAL_KEYS.has(key)) {
+          // Regular/OT hours are derived from records on each device; do not ingest cloud realtime events.
+          return;
+        }
+        if (eventType === 'INSERT' || eventType === 'UPDATE') {
+          const cloudUpdatedAt = payload && payload.new ? payload.new.updated_at : null;
+          if (__kvIsStaleCloudTs(key, cloudUpdatedAt)) return;
+          const serialized = safeStringify(payload && payload.new ? payload.new.value : undefined);
+          const nextValue = serialized == null ? 'null' : String(serialized);
+          const current = localStorage.getItem(key);
+          // Guard against stale/empty cloud updates wiping computed payroll hours.
+          if (key === 'payroll_reg_hours' || key === 'payroll_ot_hours') {
+            try {
+              const incomingObj = JSON.parse(nextValue || 'null');
+              const currentObj = current ? JSON.parse(current) : null;
+              const incomingHas = __kvHasMeaningfulHoursMap(incomingObj);
+              const currentHas = __kvHasMeaningfulHoursMap(currentObj);
+              if (!incomingHas && currentHas) return;
+            } catch (_) {}
+          }
+          if (nextValue !== current) {
+            try { __origSetItem(key, nextValue); } catch {}
+            __kvRememberCloudTs(key, cloudUpdatedAt);
+            queueHydrateRerender();
+          } else {
+            __kvRememberCloudTs(key, cloudUpdatedAt);
+          }
+        } else if (eventType === 'DELETE') {
+          // Guard against remote deletes wiping computed payroll hour maps.
+          if (key === 'payroll_reg_hours' || key === 'payroll_ot_hours') {
+            try {
+              const currentRaw = localStorage.getItem(key);
+              const currentObj = currentRaw ? JSON.parse(currentRaw) : null;
+              if (__kvHasMeaningfulHoursMap(currentObj)) {
+                // Keep local computed values and heal cloud row asynchronously.
+                try {
+                  if (window.__kvSyncEnabled && window.__kvSyncEnabled() && typeof window.writeKV === 'function') {
+                    window.writeKV(key, currentObj);
+                  }
+                } catch (_) {}
+                return;
+              }
+            } catch (_) {}
+          }
+          if (localStorage.getItem(key) !== null) {
+            try { __origRemoveItem(key); } catch {}
+            queueHydrateRerender();
+          }
+        }
+      } catch (err) {
+        console.warn('Supabase realtime sync failed', err);
+      }
+    });
+
+    const subscribeResult = channel.subscribe((status) => {
+      if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
+        console.warn('Supabase channel status issue:', status);
+        __kvScheduleRealtimeReconnect(1800);
+      }
+    });
+
+    if (subscribeResult && typeof subscribeResult.catch === 'function') {
+      subscribeResult.catch((err) => {
+        console.warn('Supabase channel subscribe promise rejected', err);
+        __kvScheduleRealtimeReconnect(1800);
+      });
+    }
+
+    if (!window.__kvRealtimeVisibilityHooked) {
+      document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'hidden') {
+          try { __kvFlushUpsertQueue(true); } catch {}
+        }
+        if (document.visibilityState === 'visible') {
+          __kvPeriodicHydrate();
+          __kvSetupRealtimeChannel(true);
+        }
+      });
+      window.__kvRealtimeVisibilityHooked = true;
+    }
+
+    if (!window.__kvRealtimeFallbackTimer) {
+      window.__kvRealtimeFallbackTimer = window.setInterval(() => {
+        __kvPeriodicHydrate();
+      }, 90000);
+    }
+
+    if (!window.__kvUnloadCleanup) {
+      
+      // Flush any pending debounced upserts when the page is being hidden/unloaded
+      window.addEventListener('pagehide', () => { try { __kvFlushUpsertQueue(true); } catch {} }, { once: true });
+      window.__kvPagehideFlush = true;
+
+window.addEventListener('beforeunload', () => {
+        try {
+          if (window.__kvReconnectTimer) {
+            window.clearTimeout(window.__kvReconnectTimer);
+            window.__kvReconnectTimer = null;
+          }
+          if (window.__kvRealtimeFallbackTimer) {
+            window.clearInterval(window.__kvRealtimeFallbackTimer);
+            window.__kvRealtimeFallbackTimer = null;
+          }
+          if (window.__kvChannel) {
+            if (typeof window.__kvChannel.unsubscribe === 'function') {
+              window.__kvChannel.unsubscribe();
+            } else if (window.supabase && typeof window.supabase.removeChannel === 'function') {
+              window.supabase.removeChannel(window.__kvChannel);
+            }
+          }
+        } catch {}
+      }, { once: true });
+      window.__kvUnloadCleanup = true;
+    }
+  } catch (err) {
+    console.warn('Supabase realtime channel setup failed', err);
+    __kvScheduleRealtimeReconnect(2200);
   }
 }
 
-async function sharedSet(key, value) {
-  if (!SHARED_KEY_SET.has(key)) { cacheSet(key, value); return true; }
-  if (value === undefined) {
-    const meta = { updatedAt: Date.now(), deviceId: getDeviceId() };
-    const tomb = { __deleted: true, __meta: meta };
-    cacheSet(key, undefined);
-    setMetaForKey(key, meta);
+if (!window.__kvSubscribed) __kvSetupRealtimeChannel();
+
+const __origSetItem = window.localStorage.setItem.bind(window.localStorage)
+const __origRemoveItem = window.localStorage.removeItem.bind(window.localStorage)
+
+async function cloudUpsert(key, value) {
+  try {
+    // Try upsert
+    const { error } = await supabase
+      .from(TABLE)
+      .upsert({ key, value: tryParse(value) }, { onConflict: "key" })
+    if (error) {
+      if (error.name === 'AbortError' || String(error.message || '').includes('AbortError')) return
+      console.warn("Supabase upsert error:", error.message)
+    }
+  } catch (e) {
+    if (e && (e.name === 'AbortError' || String(e.message || '').includes('AbortError'))) return
+    console.warn("Supabase upsert failed", e)
+  }
+}
+async function cloudDelete(key) {
+  try {
+    const { error } = await supabase.from(TABLE).delete().eq("key", key)
+    if (error) console.warn("Supabase delete error:", error.message)
+  } catch (e) { console.warn("Supabase delete failed", e) }
+}
+function tryParse(v) {
+  try { return JSON.parse(v) } catch { return v }
+}
+
+const __kvUpsertDebounceMs = 400
+const __kvUpsertQueue = new Map()
+function scheduleCloudUpsert(key, value) {
+  if (!key) return
+  const existing = __kvUpsertQueue.get(key)
+  if (existing && existing.timer) window.clearTimeout(existing.timer)
+  __kvUpsertQueue.set(key, {
+    value,
+    timer: window.setTimeout(async () => {
+      __kvUpsertQueue.delete(key)
+      await cloudUpsert(key, value)
+    }, __kvUpsertDebounceMs)
+  })
+}
+
+async function __kvFlushUpsertQueue(useKeepalive = false) {
+  try {
+    if (!__kvUpsertQueue || __kvUpsertQueue.size === 0) return;
+    const entries = Array.from(__kvUpsertQueue.entries());
+    for (const [k, obj] of entries) {
+      try { if (obj && obj.timer) window.clearTimeout(obj.timer); } catch {}
+      __kvUpsertQueue.delete(k);
+    }
+    const tasks = entries.map(([k, obj]) => {
+      const v = obj ? obj.value : null;
+      return useKeepalive ? cloudUpsertKeepalive(k, v) : cloudUpsert(k, v);
+    });
+    await Promise.allSettled(tasks);
+  } catch (_) {}
+}
+
+// Best-effort keepalive upsert for pagehide/beforeunload so last edits are less likely to be lost
+function cloudUpsertKeepalive(key, value) {
+  try {
+    if (!key) return Promise.resolve();
+    const url = `${SUPABASE_URL}/rest/v1/${TABLE}?on_conflict=key`;
+    const headers = {
+      "apikey": SUPABASE_KEY,
+      "Authorization": `Bearer ${SUPABASE_KEY}`,
+      "Content-Type": "application/json",
+      "Prefer": "resolution=merge-duplicates,return=minimal"
+    };
+    const payload = [{ key, value: tryParse(value) }];
+    return fetch(url, { method: "POST", headers, body: JSON.stringify(payload), keepalive: true }).catch(() => {});
+  } catch (_) {
+    return Promise.resolve();
+  }
+}
+
+
+// Cloud-first syncing:
+// - Cloud is the source of truth on boot
+// - A brand-new/empty PC will NEVER overwrite existing cloud data
+// - We only mirror localStorage -> cloud AFTER we successfully hydrated at least once
+let __kvSyncEnabled = false;
+let __kvHydrating = false;
+try { window.__kvSyncEnabled = () => __kvSyncEnabled; } catch(_) {}
+
+function __kvEnableSync(){ __kvSyncEnabled = true; }
+function __kvDisableSync(){ __kvSyncEnabled = false; }
+try { window.__kvEnableSync = __kvEnableSync; window.__kvDisableSync = __kvDisableSync; } catch(_) {}
+
+let __kvBypassNextSetItem = false;
+const __CLOUD_ONLY_KEYS = new Set(['payroll_loan_tracker','payroll_loan_sss','payroll_loan_pagibig','payroll_vale','payroll_vale_wed','payroll_other_deductions_details','payroll_other_deductions_total','payroll_additional_income_details','payroll_additional_income_total']);
+function __kvShouldMirror(k){ return KNOWN_KEYS.includes(k) && !__CLOUD_ONLY_KEYS.has(k) && !__KV_COMPUTED_LOCAL_KEYS.has(k); }
+
+const store = (() => {
+  const pendingTimers = new Map();
+  const queueKey = '__payroll_sync_queue_v1';
+  const stateKey = '__payroll_sync_state_v1';
+
+  function getJSON(key, fallback = null) {
     try {
-      await kvWriteCloud(key, tomb);
-      window.__sharedSyncState.offline = false;
-      window.__sharedSyncState.lastSyncAt = Date.now();
-      return true;
+      const raw = window.localStorage.getItem(key);
+      return raw == null ? fallback : JSON.parse(raw);
     } catch (_) {
-      const pending = getPending();
-      pending[key] = tomb;
-      setPending(pending);
-      window.__sharedSyncState.offline = true;
-      return false;
+      return fallback;
     }
   }
-  const wrapped = wrapForStore(value);
-  cacheSet(key, value);
-  setMetaForKey(key, wrapped.__meta);
-  try {
-    await kvWriteCloud(key, wrapped);
-    window.__sharedSyncState.offline = false;
-    window.__sharedSyncState.lastSyncAt = Date.now();
+
+  function setJSON(key, value) {
+    const text = JSON.stringify(value);
+    try { __origSetItem(key, text); } catch (_) { return false; }
+    if (__kvSyncEnabled && (__kvShouldMirror(key) || __CLOUD_ONLY_KEYS.has(key))) {
+      scheduleCloudUpsert(key, text);
+    }
     return true;
-  } catch (_) {
-    const pending = getPending();
-    pending[key] = wrapped;
-    setPending(pending);
-    window.__sharedSyncState.offline = true;
-    return false;
   }
-}
 
-window.sharedGet = sharedGet;
-window.sharedSet = sharedSet;
-window.readKV = sharedGet;
-window.writeKV = sharedSet;
-window.writeKVBatch = async (pairs=[]) => {
-  const out = await Promise.all((Array.isArray(pairs)?pairs:[]).map(p => sharedSet(p.key, p.value)));
-  return out.every(Boolean);
-};
+  function update(key, fn, fallback = null) {
+    const current = getJSON(key, fallback);
+    const next = fn(current);
+    setJSON(key, next);
+    return next;
+  }
 
-let __rerenderTimer = null;
-function queueSharedRerender(){
-  try { if (__rerenderTimer) clearTimeout(__rerenderTimer); } catch(_) {}
-  __rerenderTimer = setTimeout(() => {
-    __rerenderTimer = null;
-    try { window.refreshCoreStoresFromStorage?.(); } catch(_) {}
-    try { window.scheduleRenderResults?.('shared-realtime'); } catch(_) {}
-    try { window.renderProjects?.(); } catch(_) {}
-    try { window.renderEmployees?.(); } catch(_) {}
-    try { window.renderTable?.(); } catch(_) {}
-  }, 120);
-}
+  function debouncedSave(key, value, wait = 500) {
+    if (pendingTimers.has(key)) window.clearTimeout(pendingTimers.get(key));
+    pendingTimers.set(key, window.setTimeout(() => {
+      pendingTimers.delete(key);
+      setJSON(key, value);
+    }, Math.max(300, Math.min(800, Number(wait) || 500))));
+  }
 
-async function flushPending() {
-  const pending = getPending();
-  const keys = Object.keys(pending);
-  if (!keys.length) return;
-  const remain = {};
-  for (const key of keys) {
-    const localWrapped = pending[key];
-    try {
-      const cloud = await kvReadCloud(key);
-      const cloudMeta = metaFromStore(cloud && cloud.value);
-      const localMeta = metaFromStore(localWrapped);
-      if (Number(cloudMeta.updatedAt || 0) > Number(localMeta.updatedAt || 0)) {
-        window.__sharedSyncState.conflict = true;
-        const cloudUnwrapped = unwrapFromStore(cloud && cloud.value);
-        cacheSet(key, cloudUnwrapped);
-        setMetaForKey(key, cloudMeta);
+  function enqueueSync(change) {
+    const queue = getJSON(queueKey, []);
+    queue.push({ ...change, ts: change && change.ts ? change.ts : new Date().toISOString() });
+    setJSON(queueKey, queue);
+    const syncState = getJSON(stateKey, {});
+    syncState.pendingCount = queue.length;
+    setJSON(stateKey, syncState);
+  }
+
+  async function flushSync() {
+    const queue = getJSON(queueKey, []);
+    if (!Array.isArray(queue) || !queue.length) return { ok: true, conflict: false };
+    for (let i = 0; i < queue.length; i += 1) {
+      const change = queue[i];
+      const nextVersion = Number(change.expected_version) + 1;
+      const { data, error } = await supabase
+        .from('payroll_period_segments')
+        .update({ data: change.new_data, version: nextVersion, updated_at: new Date().toISOString() })
+        .eq('period_id', change.period_id)
+        .eq('segment_key', change.segment_key)
+        .eq('version', Number(change.expected_version))
+        .select('version');
+      if (error) return { ok: false, conflict: false, error };
+      if (!data || !data.length) { const st = getJSON(stateKey, {}); st.conflict = true; setJSON(stateKey, st); return { ok: false, conflict: true }; }
+      queue.shift();
+      setJSON(queueKey, queue);
+    }
+    const syncState = getJSON(stateKey, {});
+    syncState.pendingCount = 0;
+    syncState.conflict = false;
+    syncState.lastPushAt = new Date().toISOString();
+    setJSON(stateKey, syncState);
+    return { ok: true, conflict: false };
+  }
+
+  return { getJSON, setJSON, update, debouncedSave, enqueueSync, flushSync };
+})();
+
+window.store = store;
+window.addEventListener('beforeunload', () => { __kvFlushUpsertQueue(true).catch(() => {}); });
+
+async function __kvHydrateOnce(){
+  try {
+    __kvHydrating = true;
+    const { data, error } = await supabase
+      .from(TABLE)
+      .select("key, value, updated_at")
+      .in("key", KNOWN_KEYS);
+    if (error) { console.warn("Supabase fetch error:", error.message); return false; }
+
+    let changed = false;
+
+    for (const row of (data || [])) {
+      const k = row.key;
+      __kvRememberCloudTs(k, row && row.updated_at);
+      if (__KV_COMPUTED_LOCAL_KEYS.has(k)) {
         continue;
       }
-      if (localWrapped && localWrapped.__deleted) {
-        await kvWriteCloud(key, localWrapped);
-        cacheSet(key, undefined);
-        setMetaForKey(key, localMeta);
-      } else {
-        await kvWriteCloud(key, localWrapped);
-        setMetaForKey(key, localMeta);
-      }
-      window.__sharedSyncState.lastSyncAt = Date.now();
-      window.__sharedSyncState.offline = false;
-    } catch (_) {
-      remain[key] = localWrapped;
-      window.__sharedSyncState.offline = true;
-    }
-  }
-  setPending(remain);
-}
+      const cloudStr = safeStringify(row.value);
+      const cur = localStorage.getItem(k);
 
-async function sharedHydrateAll() {
-  try {
-    const { data, error } = await supabase.from(TABLE).select('key,value,updated_at').in('key', SHARED_KEYS);
-    if (error) throw error;
-    for (const row of (data || [])) {
-      const key = row?.key;
-      if (!key || !SHARED_KEY_SET.has(key)) continue;
-      const m = metaFromStore(row.value);
-      const unwrapped = unwrapFromStore(row.value);
-      if (unwrapped === undefined) {
-        cacheSet(key, undefined);
-        delete metaMap[key];
-        saveMetaMap();
-      } else {
-        cacheSet(key, unwrapped);
-        setMetaForKey(key, m);
+      // Cloud-first strategy: Supabase is the source of truth.
+      // Local values are never auto-promoted during hydration.
+
+      if (cloudStr != null && cloudStr !== cur) {
+        // Important: write using the original setItem to avoid triggering mirroring back to cloud.
+        try { __origSetItem(k, cloudStr); } catch {}
+        changed = true;
       }
     }
-    await flushPending();
-    window.__sharedSyncState.offline = false;
+
+    // Hydration is done. Now it is safe to enable local->cloud mirroring.
+    __kvEnableSync();
+    try { window.__kv_cloud_ready = true; window.dispatchEvent(new Event('kv-cloud-ready')); } catch(_){ }
+
+    if (changed) {
+      try { sessionStorage.removeItem("__kv_reloaded"); } catch {}
+      queueHydrateRerender();
+    } else {
+      markHydrated();
+    }
+    return true;
   } catch (e) {
-    console.warn('sharedHydrateAll offline/failed:', e?.message || e);
+    console.warn("Initial hydrate failed", e);
+    return false;
   } finally {
-    window.__sharedSyncState.hydrated = true;
-    window.__sharedSyncState.lastSyncAt = Date.now();
-    window.__kv_hydrated = true;
-    window.__kv_cloud_ready = true;
-    try { window.dispatchEvent(new Event('kv-hydrated')); window.dispatchEvent(new Event('kv-cloud-ready')); } catch (_) {}
+    __kvHydrating = false;
   }
 }
-window.sharedHydrateAll = sharedHydrateAll;
 
-const kvChannel = supabase.channel('kv_store_realtime')
-  .on('postgres_changes', { event:'*', schema:'public', table: TABLE }, (payload) => {
-    try {
-      const eventType = payload?.eventType;
-      const row = (eventType === 'DELETE') ? payload?.old : payload?.new;
-      const key = row?.key;
-      if (!key || !SHARED_KEY_SET.has(key)) return;
+// Boot hydrate with retry (prevents an empty PC from wiping cloud data if network is slow/offline).
+;(async function __kvBootHydrate(){
+  const ok = await __kvHydrateOnce();
+  if (ok) return;
 
-      if (eventType === 'DELETE') {
-        cacheSet(key, undefined);
-        delete metaMap[key];
-        saveMetaMap();
-        queueSharedRerender();
-        return;
-      }
-
-      const incomingMeta = metaFromStore(row?.value);
-      const localMeta = metaMap[key] || { updatedAt:0, deviceId:'' };
-      if (Number(incomingMeta.updatedAt || 0) < Number(localMeta.updatedAt || 0)) return;
-
-      cacheSet(key, unwrapFromStore(row.value));
-      setMetaForKey(key, incomingMeta);
-      window.__sharedSyncState.lastSyncAt = Date.now();
-      queueSharedRerender();
-    } catch (e) {
-      console.warn('shared realtime apply failed', e);
-    }
-  });
-kvChannel.subscribe();
-window.__sharedKvChannel = kvChannel;
-
-window.addEventListener('online', () => { flushPending().catch(() => {}); });
-
-if (!window.__sharedStorageHooked) {
-  window.__sharedStorageHooked = true;
-  window.localStorage.setItem = function patchedSetItem(key, value) {
-    if (SHARED_KEY_SET.has(key)) {
-      let parsed = value;
-      try { parsed = JSON.parse(String(value)); } catch (_) {}
-      sharedSet(key, parsed);
-      return;
-    }
-    return __origSetItem(key, value);
+  // Allow the app to run locally, but keep sync disabled until we have fetched cloud at least once.
+  markHydrated();
+  let attempts = 0;
+  const retry = async () => {
+    if (__kvSyncEnabled) return;
+    attempts++;
+    const success = await __kvHydrateOnce();
+    if (success) return;
+    // Keep retrying; low overhead because it is just one SELECT for known keys.
+    window.setTimeout(retry, 3000);
   };
-  window.localStorage.removeItem = function patchedRemoveItem(key) {
-    if (SHARED_KEY_SET.has(key)) {
-      sharedSet(key, undefined);
-      return;
-    }
-    return __origRemoveItem(key);
-  };
+  window.setTimeout(retry, 3000);
+})();
+
+function safeStringify(v){
+  try { return typeof v === "string" ? v : JSON.stringify(v) } catch { return null }
 }
 </script>
 
@@ -2996,7 +3480,7 @@ window.addEventListener('load', dashReports);
       try{
         await supa.from(DTR_TABLE).upsert({ id:'records', data: Array.isArray(rows)?rows:[] }, { onConflict:'id' });
         window.storedRecords = Array.isArray(rows)?rows:[];
-        try{ if (window.sharedSet) window.sharedSet('att_records_v2', window.storedRecords); else localStorage.setItem('att_records_v2', JSON.stringify(window.storedRecords)); }catch(_){ }
+        try{ localStorage.setItem('att_records_v2', JSON.stringify(window.storedRecords)); }catch(_){ }
       }catch(e){ log('DTR upsert error: ' + String(e)); }
     }
 
@@ -4622,10 +5106,10 @@ const SSS_SEED_2025 = [
 
 function ensureSeededSSS() {
   try {
-    const cur = (window.cacheGet ? window.cacheGet(LS_SSS_TABLE, []) : JSON.parse(localStorage.getItem(LS_SSS_TABLE) || '[]'));
+    const cur = JSON.parse(localStorage.getItem(LS_SSS_TABLE) || '[]');
     if (!Array.isArray(cur) || cur.length === 0) {
       const mapped = SSS_SEED_2025.map(r=>({min:r[0], max:r[1], employee:r[2], employer: (typeof r[3] !== 'undefined' ? r[3] : r[2])}));
-      if (window.sharedSet) window.sharedSet(LS_SSS_TABLE, mapped); else localStorage.setItem(LS_SSS_TABLE, JSON.stringify(mapped));
+      localStorage.setItem(LS_SSS_TABLE, JSON.stringify(mapped));
     } else {
       const normalized = cur.map(row => {
         const min = Number(row && typeof row.min !== 'undefined' ? row.min : 0) || 0;
@@ -4635,11 +5119,11 @@ function ensureSeededSSS() {
         const employer = Number.isFinite(employerRaw) ? employerRaw : employee;
         return { min, max, employee, employer };
       });
-      if (window.sharedSet) window.sharedSet(LS_SSS_TABLE, normalized); else localStorage.setItem(LS_SSS_TABLE, JSON.stringify(normalized));
+      localStorage.setItem(LS_SSS_TABLE, JSON.stringify(normalized));
     }
   } catch (e) {
     const mapped = SSS_SEED_2025.map(r=>({min:r[0], max:r[1], employee:r[2], employer: (typeof r[3] !== 'undefined' ? r[3] : r[2])}));
-    if (window.sharedSet) window.sharedSet(LS_SSS_TABLE, mapped); else localStorage.setItem(LS_SSS_TABLE, JSON.stringify(mapped));
+    localStorage.setItem(LS_SSS_TABLE, JSON.stringify(mapped));
   }
 }
 ensureSeededSSS();
@@ -4654,34 +5138,34 @@ const PHILHEALTH_SEED = [
 
 function ensureSeededPagibig() {
   try {
-    const cur = (window.cacheGet ? window.cacheGet(LS_PAGIBIG_TABLE, []) : JSON.parse(localStorage.getItem(LS_PAGIBIG_TABLE) || '[]'));
+    const cur = JSON.parse(localStorage.getItem(LS_PAGIBIG_TABLE) || '[]');
     if (!Array.isArray(cur) || cur.length === 0) {
       const mapped = PAGIBIG_SEED.map(r => ({min: r[0], max: r[1], rate: r[2]}));
-      if (window.sharedSet) window.sharedSet(LS_PAGIBIG_TABLE, mapped); else localStorage.setItem(LS_PAGIBIG_TABLE, JSON.stringify(mapped));
+      localStorage.setItem(LS_PAGIBIG_TABLE, JSON.stringify(mapped));
     }
   } catch (e) {
     const mapped = PAGIBIG_SEED.map(r => ({min: r[0], max: r[1], rate: r[2]}));
-    if (window.sharedSet) window.sharedSet(LS_PAGIBIG_TABLE, mapped); else localStorage.setItem(LS_PAGIBIG_TABLE, JSON.stringify(mapped));
+    localStorage.setItem(LS_PAGIBIG_TABLE, JSON.stringify(mapped));
   }
 }
 
 function ensureSeededPhilhealth() {
   try {
-    const cur = (window.cacheGet ? window.cacheGet(LS_PHILHEALTH_TABLE, []) : JSON.parse(localStorage.getItem(LS_PHILHEALTH_TABLE) || '[]'));
+    const cur = JSON.parse(localStorage.getItem(LS_PHILHEALTH_TABLE) || '[]');
     if (!Array.isArray(cur) || cur.length === 0) {
       const mapped = PHILHEALTH_SEED.map(r => ({min: r[0], max: r[1], rate: r[2]}));
-      if (window.sharedSet) window.sharedSet(LS_PHILHEALTH_TABLE, mapped); else localStorage.setItem(LS_PHILHEALTH_TABLE, JSON.stringify(mapped));
+      localStorage.setItem(LS_PHILHEALTH_TABLE, JSON.stringify(mapped));
     }
   } catch (e) {
     const mapped = PHILHEALTH_SEED.map(r => ({min: r[0], max: r[1], rate: r[2]}));
-    if (window.sharedSet) window.sharedSet(LS_PHILHEALTH_TABLE, mapped); else localStorage.setItem(LS_PHILHEALTH_TABLE, JSON.stringify(mapped));
+    localStorage.setItem(LS_PHILHEALTH_TABLE, JSON.stringify(mapped));
   }
 }
 ensureSeededPagibig();
 ensureSeededPhilhealth();
-let payrollRates = (window.cacheGet ? window.cacheGet(LS_RATES, {}) : JSON.parse(localStorage.getItem(LS_RATES) || '{}'));
-let regHours = (window.cacheGet ? window.cacheGet(LS_REG_HRS, {}) : JSON.parse(localStorage.getItem(LS_REG_HRS) || '{}'));
-let otHours = (window.cacheGet ? window.cacheGet(LS_OT_HRS, {}) : JSON.parse(localStorage.getItem(LS_OT_HRS) || '{}'));
+let payrollRates = JSON.parse(localStorage.getItem(LS_RATES) || '{}');
+let regHours = JSON.parse(localStorage.getItem(LS_REG_HRS) || '{}');
+let otHours = JSON.parse(localStorage.getItem(LS_OT_HRS) || '{}');
 
 // Per-employee contribution deduction flags. Each entry keyed by employee ID holds booleans {pagibig, philhealth, sss}
 function normalizeContribFlags(raw) {
@@ -4704,7 +5188,7 @@ function normalizeContribFlags(raw) {
 
 function loadContribFlagsFromLocalStorage() {
   try {
-    return normalizeContribFlags(window.cacheGet ? window.cacheGet(LS_CONTRIB_FLAGS, {}) : JSON.parse(localStorage.getItem(LS_CONTRIB_FLAGS) || '{}'));
+    return normalizeContribFlags(JSON.parse(localStorage.getItem(LS_CONTRIB_FLAGS) || '{}'));
   } catch (_) {
     return {};
   }
@@ -4713,8 +5197,8 @@ function loadContribFlagsFromLocalStorage() {
 function persistContribFlags() {
   const normalized = normalizeContribFlags(contribFlags);
   contribFlags = normalized;
-  try { if (window.cacheSet) window.cacheSet(LS_CONTRIB_FLAGS, normalized); else localStorage.setItem(LS_CONTRIB_FLAGS, JSON.stringify(normalized)); } catch (_) {}
-  try { if (typeof window.sharedSet === 'function') window.sharedSet(LS_CONTRIB_FLAGS, normalized); } catch (_) {}
+  try { localStorage.setItem(LS_CONTRIB_FLAGS, JSON.stringify(normalized)); } catch (_) {}
+  try { if (typeof window.writeKV === 'function') window.writeKV(LS_CONTRIB_FLAGS, normalized); } catch (_) {}
 }
 
 async function refreshContribFlagsFromStore() {
@@ -6317,7 +6801,7 @@ divisorEl.addEventListener('change', () => {
   window.scheduleCalculateAll?.('payroll-divisor-change');
 });
 function loadEmployees() {
-  const stored = (window.cacheGet ? window.cacheGet('att_employees_v2', {}) : JSON.parse(localStorage.getItem('att_employees_v2') || '{}'));
+  const stored = JSON.parse(localStorage.getItem('att_employees_v2') || '{}');
   let list = Object.keys(stored).filter(id => !(stored[id] && stored[id].active === false)).map(id=>({id, name: stored[id]?.name || ''}));
   if (list.length === 0) list = [{id:'001', name:'Sample Employee'}];
   list.sort((a,b)=> (a.name||'').localeCompare(b.name||''));
@@ -6326,7 +6810,7 @@ function loadEmployees() {
 function getEmployeeList(){ return loadEmployees(); }
 function getSssTable(){
   let arr = [];
-  try { arr = (window.cacheGet ? window.cacheGet(LS_SSS_TABLE, []) : JSON.parse(localStorage.getItem(LS_SSS_TABLE) || '[]')); }
+  try { arr = JSON.parse(localStorage.getItem(LS_SSS_TABLE) || '[]'); }
   catch(e){ arr = []; }
   if (!Array.isArray(arr)) arr = [];
   arr = arr.map(r=>{
@@ -6348,7 +6832,7 @@ function setSssTable(rows){
     const employer = Number.isFinite(employerRaw) ? employerRaw : employee;
     return { min, max, employee, employer };
   }) : [];
-  if (window.sharedSet) window.sharedSet(LS_SSS_TABLE, clean); else localStorage.setItem(LS_SSS_TABLE, JSON.stringify(clean));
+  localStorage.setItem(LS_SSS_TABLE, JSON.stringify(clean));
 }
 
 function formatDeductionDisplay(value){
@@ -8061,8 +8545,8 @@ function attachRowEvents(){
         if (vWI && typeof vWI.value !== 'undefined') {
           valeWed[id] = +(Number(vWI.value)||0).toFixed(2);
         }
-        if (window.cacheSet) window.cacheSet(LS_REG_HRS, regHours); else localStorage.setItem(LS_REG_HRS, JSON.stringify(regHours));
-        if (window.sharedSet) window.sharedSet(LS_RATES, payrollRates); else localStorage.setItem(LS_RATES, JSON.stringify(payrollRates));
+        localStorage.setItem(LS_REG_HRS, JSON.stringify(regHours));
+        localStorage.setItem(LS_RATES, JSON.stringify(payrollRates));
         saveCurrentPeriodDeductions();
         if (typeof renderDeductionsTable === 'function') renderDeductionsTable();
         calculateRow(row);
@@ -8224,7 +8708,7 @@ function bindSssControls(){
 function getPagibigTable(){
   let arr = [];
   try {
-    arr = (window.cacheGet ? window.cacheGet(LS_PAGIBIG_TABLE, []) : JSON.parse(localStorage.getItem(LS_PAGIBIG_TABLE) || '[]'));
+    arr = JSON.parse(localStorage.getItem(LS_PAGIBIG_TABLE) || '[]');
   } catch(e) { arr = []; }
   if (!Array.isArray(arr)) arr = [];
   return arr.map(r => ({
@@ -8234,7 +8718,7 @@ function getPagibigTable(){
   })).sort((a,b) => a.min - b.min);
 }
 function setPagibigTable(rows){
-  if (window.sharedSet) window.sharedSet(LS_PAGIBIG_TABLE, rows); else localStorage.setItem(LS_PAGIBIG_TABLE, JSON.stringify(rows));
+  localStorage.setItem(LS_PAGIBIG_TABLE, JSON.stringify(rows));
 }
 function renderPagibigTable(){
   const tbodyP = document.querySelector('#pagibigTable tbody');
@@ -8275,7 +8759,7 @@ function renderPagibigTable(){
 function getPhilhealthTable(){
   let arr = [];
   try {
-    arr = (window.cacheGet ? window.cacheGet(LS_PHILHEALTH_TABLE, []) : JSON.parse(localStorage.getItem(LS_PHILHEALTH_TABLE) || '[]'));
+    arr = JSON.parse(localStorage.getItem(LS_PHILHEALTH_TABLE) || '[]');
   } catch(e) { arr = []; }
   if (!Array.isArray(arr)) arr = [];
   return arr.map(r => ({
@@ -8285,7 +8769,7 @@ function getPhilhealthTable(){
   })).sort((a,b) => a.min - b.min);
 }
 function setPhilhealthTable(rows){
-  if (window.sharedSet) window.sharedSet(LS_PHILHEALTH_TABLE, rows); else localStorage.setItem(LS_PHILHEALTH_TABLE, JSON.stringify(rows));
+  localStorage.setItem(LS_PHILHEALTH_TABLE, JSON.stringify(rows));
 }
 function renderPhilhealthTable(){
   const tbodyPh = document.querySelector('#philhealthTable tbody');
@@ -12695,13 +13179,8 @@ return { rootHash, manifestHash, segmentCount: Object.keys(segments).length, ver
       }
     }
     try {
-      if (window.cacheGet) {
-        const localVal = window.cacheGet(key, null);
-        if (localVal != null) return localVal;
-      } else {
-        const raw = localStorage.getItem(key);
-        if (raw != null) return JSON.parse(raw);
-      }
+      const raw = localStorage.getItem(key);
+      if (raw != null) return JSON.parse(raw);
     } catch (err) {
       console.warn('Local snapshot read failed for', key, err);
     }
@@ -16176,17 +16655,16 @@ async function ensureSplitOverridesAvailable(){
 
 const COMPANY_OPTIONS = ['Edifice', 'Portafolio'];
 
-let overridesSchedules = (window.cacheGet ? window.cacheGet(LS_OVERRIDES_SCHEDULES, {}) : JSON.parse(localStorage.getItem(LS_OVERRIDES_SCHEDULES) || '{}'));
-let overridesProjects = (window.cacheGet ? window.cacheGet(LS_OVERRIDES_PROJECTS, {}) : JSON.parse(localStorage.getItem(LS_OVERRIDES_PROJECTS) || '{}'));
+let overridesSchedules = JSON.parse(localStorage.getItem(LS_OVERRIDES_SCHEDULES) || '{}');
+let overridesProjects = JSON.parse(localStorage.getItem(LS_OVERRIDES_PROJECTS) || '{}');
 const LS_DTR_OVERRIDES = 'dtr_overrides_v1';
 const OVERNIGHT_CUTOFF_HOUR = 6;
 let dtrOverrides = loadDtrOverrides();
 
 function loadDtrOverrides() {
   try {
-    const parsed = window.cacheGet
-      ? window.cacheGet(LS_DTR_OVERRIDES, {})
-      : JSON.parse(localStorage.getItem(LS_DTR_OVERRIDES) || '{}');
+    const raw = localStorage.getItem(LS_DTR_OVERRIDES);
+    const parsed = raw ? JSON.parse(raw) : {};
     return parsed && typeof parsed === 'object' ? parsed : {};
   } catch (e) {
     console.warn('Failed to load DTR overrides', e);
@@ -16195,7 +16673,7 @@ function loadDtrOverrides() {
 }
 function saveDtrOverrides() {
   try {
-    if (window.sharedSet) window.sharedSet(LS_DTR_OVERRIDES, dtrOverrides || {}); else localStorage.setItem(LS_DTR_OVERRIDES, JSON.stringify(dtrOverrides || {}));
+    localStorage.setItem(LS_DTR_OVERRIDES, JSON.stringify(dtrOverrides || {}));
   } catch (e) {
     console.warn('Failed to save DTR overrides', e);
   }
@@ -16392,13 +16870,13 @@ function openPunchEditor(rowContext) {
 const LS_SPLITS = 'att_splits_v1';
 let splits = {};
 try {
-  splits = (window.cacheGet ? window.cacheGet(LS_SPLITS, {}) : JSON.parse(localStorage.getItem(LS_SPLITS) || '{}'));
+  splits = JSON.parse(localStorage.getItem(LS_SPLITS) || '{}');
 } catch (e) {
   splits = {};
 }
 function saveSplits() {
   try {
-    if (window.sharedSet) window.sharedSet(LS_SPLITS, splits); else localStorage.setItem(LS_SPLITS, JSON.stringify(splits));
+    localStorage.setItem(LS_SPLITS, JSON.stringify(splits));
   } catch (e) {
     console.warn('Saving splits failed', e);
   }
@@ -16483,8 +16961,8 @@ function unsplitRecord(key) {
   window.scheduleRenderResults?.('dtr-split-toggle');
 }
 function saveOverrides(){
-  if (window.sharedSet) window.sharedSet(LS_OVERRIDES_SCHEDULES, overridesSchedules); else localStorage.setItem(LS_OVERRIDES_SCHEDULES, JSON.stringify(overridesSchedules));
-  if (window.sharedSet) window.sharedSet(LS_OVERRIDES_PROJECTS, overridesProjects); else localStorage.setItem(LS_OVERRIDES_PROJECTS, JSON.stringify(overridesProjects));
+  localStorage.setItem(LS_OVERRIDES_SCHEDULES, JSON.stringify(overridesSchedules));
+  localStorage.setItem(LS_OVERRIDES_PROJECTS, JSON.stringify(overridesProjects));
   syncSplitOverrides();
 }
 
@@ -16590,9 +17068,9 @@ async function hydrateSplitOverrides(){
         });
       }
     });
-    try { if (window.sharedSet) window.sharedSet(LS_SPLITS, splits); else localStorage.setItem(LS_SPLITS, JSON.stringify(splits)); } catch(e){}
-    try { if (window.sharedSet) window.sharedSet(LS_OVERRIDES_PROJECTS, overridesProjects); else localStorage.setItem(LS_OVERRIDES_PROJECTS, JSON.stringify(overridesProjects)); } catch(e){}
-    try { if (window.sharedSet) window.sharedSet(LS_OVERRIDES_SCHEDULES, overridesSchedules); else localStorage.setItem(LS_OVERRIDES_SCHEDULES, JSON.stringify(overridesSchedules)); } catch(e){}
+    try { localStorage.setItem(LS_SPLITS, JSON.stringify(splits)); } catch(e){}
+    try { localStorage.setItem(LS_OVERRIDES_PROJECTS, JSON.stringify(overridesProjects)); } catch(e){}
+    try { localStorage.setItem(LS_OVERRIDES_SCHEDULES, JSON.stringify(overridesSchedules)); } catch(e){}
   } catch (e) {
     console.warn('hydrate split_overrides failed', e);
   }
@@ -16642,9 +17120,9 @@ function applySplitOverrideRow(row, isDelete){
   }
 
   // Persist to localStorage so reload keeps the newest state
-  try { if (window.sharedSet) window.sharedSet(LS_SPLITS, splits); else localStorage.setItem(LS_SPLITS, JSON.stringify(splits)); } catch(e){}
-  try { if (window.sharedSet) window.sharedSet(LS_OVERRIDES_PROJECTS, overridesProjects); else localStorage.setItem(LS_OVERRIDES_PROJECTS, JSON.stringify(overridesProjects)); } catch(e){}
-  try { if (window.sharedSet) window.sharedSet(LS_OVERRIDES_SCHEDULES, overridesSchedules); else localStorage.setItem(LS_OVERRIDES_SCHEDULES, JSON.stringify(overridesSchedules)); } catch(e){}
+  try { localStorage.setItem(LS_SPLITS, JSON.stringify(splits)); } catch(e){}
+  try { localStorage.setItem(LS_OVERRIDES_PROJECTS, JSON.stringify(overridesProjects)); } catch(e){}
+  try { localStorage.setItem(LS_OVERRIDES_SCHEDULES, JSON.stringify(overridesSchedules)); } catch(e){}
 }
 
 function subscribeSplitOverrides(){
@@ -16736,15 +17214,16 @@ const DEFAULT_SCHEDULE = {
 let storedRecords = (typeof window !== 'undefined' && Array.isArray(window.storedRecords))
   ? window.storedRecords
   : [];
-let storedEmployees = (window.cacheGet ? window.cacheGet(LS_EMPLOYEES, {}) : JSON.parse(localStorage.getItem(LS_EMPLOYEES) || '{}'));
-let storedSchedules = (window.cacheGet ? window.cacheGet(LS_SCHEDULES, null) : JSON.parse(localStorage.getItem(LS_SCHEDULES) || 'null'));
-let defaultScheduleId = (window.cacheGet ? window.cacheGet(LS_SCHEDULES_DEFAULT, null) : localStorage.getItem(LS_SCHEDULES_DEFAULT) || null);
-let storedProjects = (window.cacheGet ? window.cacheGet(LS_PROJECTS, {}) : JSON.parse(localStorage.getItem(LS_PROJECTS) || '{}'));
+let storedEmployees = JSON.parse(localStorage.getItem(LS_EMPLOYEES) || '{}');
+let storedSchedules = JSON.parse(localStorage.getItem(LS_SCHEDULES) || 'null');
+let defaultScheduleId = localStorage.getItem(LS_SCHEDULES_DEFAULT) || null;
+let storedProjects = JSON.parse(localStorage.getItem(LS_PROJECTS) || '{}');
 
 function safeParseStorageJSON(key, fallbackValue) {
   try {
-    const parsed = (window.cacheGet ? window.cacheGet(key, fallbackValue) : JSON.parse(localStorage.getItem(key) || 'null'));
-    if (parsed == null) return fallbackValue;
+    const raw = localStorage.getItem(key);
+    if (raw == null) return fallbackValue;
+    const parsed = JSON.parse(raw);
     return parsed == null ? fallbackValue : parsed;
   } catch (_) {
     return fallbackValue;
@@ -16835,8 +17314,8 @@ function ensureSchedules(){
   }
 }
 function saveSchedulesToLS(){
-  if (window.sharedSet) { window.sharedSet(LS_SCHEDULES, storedSchedules); window.sharedSet(LS_SCHEDULES_DEFAULT, defaultScheduleId); }
-  else { localStorage.setItem(LS_SCHEDULES, JSON.stringify(storedSchedules)); localStorage.setItem(LS_SCHEDULES_DEFAULT, defaultScheduleId); }
+  localStorage.setItem(LS_SCHEDULES, JSON.stringify(storedSchedules));
+  localStorage.setItem(LS_SCHEDULES_DEFAULT, defaultScheduleId);
 }
 
 const LS_ACTIVE_MAIN_TAB = 'bp_active_main_tab';
@@ -17178,7 +17657,7 @@ function resetRanges(){
 document.getElementById('saveRangesBtn').addEventListener('click', saveRangesFromUI);
 document.getElementById('resetRangesBtn').addEventListener('click', resetRanges);
 
-function saveEmployeesToLS(){ if (window.sharedSet) window.sharedSet(LS_EMPLOYEES, storedEmployees); else localStorage.setItem(LS_EMPLOYEES, JSON.stringify(storedEmployees)); }
+function saveEmployeesToLS(){ localStorage.setItem(LS_EMPLOYEES, JSON.stringify(storedEmployees)); }
 function renderEmpScheduleDropdowns(){
   const sel = document.getElementById('empScheduleSelect'); if(!sel) return;
   sel.innerHTML = '';
@@ -17238,7 +17717,7 @@ function syncProjectsKVAfterLocalSave(forceCloudWrite){
 }
 
 function saveProjectsToLS(options = {}){
-  if (window.sharedSet) window.sharedSet(LS_PROJECTS, storedProjects); else localStorage.setItem(LS_PROJECTS, JSON.stringify(storedProjects));
+  localStorage.setItem(LS_PROJECTS, JSON.stringify(storedProjects));
   syncProjectsKVAfterLocalSave(!!(options && options.userEdited));
   if(!(options && options.skipRender)){
     renderProjects();
@@ -17506,7 +17985,7 @@ function renderEmployees(){
     const id = e.target.dataset.id;
     const val = parseFloat(e.target.value) || 0;
     storedEmployees[id].hourlyRate = val; saveEmployeesToLS();
-    try { payrollRates[id] = val; if (window.sharedSet) window.sharedSet(LS_RATES, payrollRates); else localStorage.setItem(LS_RATES, JSON.stringify(payrollRates)); } catch(err) {}
+    try { payrollRates[id] = val; localStorage.setItem(LS_RATES, JSON.stringify(payrollRates)); } catch(err) {}
     try { if (typeof renderTable === 'function') renderTable(); } catch (err) { console.warn('renderTable failed', err); }
     window.scheduleRenderResults?.('employee-rate-change');
     window.scheduleCalculateAll?.('employee-rate-change');
@@ -17753,7 +18232,7 @@ function __inRange(d){
           }
         }
         // Persist records locally for offline use
-        try { if (window.sharedSet) window.sharedSet(LS_RECORDS, storedRecords); else localStorage.setItem(LS_RECORDS, JSON.stringify(storedRecords)); } catch(e){}
+        try { localStorage.setItem(LS_RECORDS, JSON.stringify(storedRecords)); } catch(e){}
         // Refresh the DTR grid
         window.scheduleRenderResults?.('dtr-hours-restore');
         // Persist the records to Supabase for cross-device sync
@@ -18595,108 +19074,6 @@ document.getElementById('clearProjectsBtn').addEventListener('click', ()=>{
   storedProjects = {}; saveProjectsToLS({ userEdited: true });
 });
 
-
-
-function __normalizeDtrRecord(row){
-  const base = (row && typeof row === 'object' && row.data && typeof row.data === 'object' && !Array.isArray(row.data)) ? row.data : row;
-  if (!base || typeof base !== 'object') return null;
-  const empId = (base.empId ?? base.emp_id ?? row?.emp_id ?? base.employee_id ?? '').toString().trim();
-  const date = (base.date ?? row?.date ?? '').toString().trim();
-  const time = (base.time ?? row?.time ?? '').toString().trim();
-  if (!empId || !date || !time) return null;
-  const rec = { empId, date, time };
-  const src = base.source ?? row?.source;
-  if (src != null && String(src).trim()) rec.source = String(src).trim();
-  const manualVal = (base.manual ?? row?.manual);
-  if (manualVal != null) rec.manual = !!manualVal;
-  if (!rec.manual && rec.source === 'manual') rec.manual = true;
-  return rec;
-}
-
-function __setDtrRecordsAndRender(records, reason='dtr-load'){
-  const next = Array.isArray(records) ? records.slice() : [];
-  next.sort((a,b)=> String(a.date||'').localeCompare(String(b.date||'')) || String(a.time||'').localeCompare(String(b.time||'')) || String(a.empId||'').localeCompare(String(b.empId||'')));
-  try { storedRecords = next; } catch(_) {}
-  try { window.storedRecords = next; } catch(_) {}
-  try { if (window.sharedSet) window.sharedSet(LS_RECORDS, next); else localStorage.setItem(LS_RECORDS, JSON.stringify(next)); } catch(_) {}
-  try { if (typeof window.scheduleRenderResults === 'function') window.scheduleRenderResults(reason); else if (typeof window.renderResults === 'function') window.renderResults(); } catch(_) {}
-}
-
-async function loadDtrFromSupabase(){
-  const supa = window.supabase;
-  if (!supa || typeof supa.from !== 'function') {
-    const local = (()=>{ try { return window.cacheGet ? window.cacheGet(LS_RECORDS, []) : JSON.parse(localStorage.getItem(LS_RECORDS) || '[]'); } catch(_) { return []; } })();
-    __setDtrRecordsAndRender(local, 'dtr-local-fallback-no-supa');
-    return { source:'local', count: local.length };
-  }
-
-  const queryRows = async (tableName) => {
-    const { data, error } = await supa.from(tableName).select('*').order('date', { ascending: true }).order('time', { ascending: true });
-    if (error) throw error;
-    const rows = Array.isArray(data) ? data : [];
-    if (tableName === 'dtr_records' && rows.length === 1 && rows[0] && rows[0].id === 'records' && Array.isArray(rows[0].data)) {
-      return rows[0].data.map(__normalizeDtrRecord).filter(Boolean);
-    }
-    return rows.map(__normalizeDtrRecord).filter(Boolean);
-  };
-
-  try {
-    let records = [];
-    try { records = await queryRows('pp_dtr_records'); } catch (_) {}
-    if (!records.length) {
-      try { records = await queryRows('dtr_records'); } catch (_) {}
-    }
-    if (!records.length) {
-      try { records = await queryRows('bp_punches'); } catch (_) {}
-    }
-    if (!records.length) {
-      try { records = await queryRows('pp_punches'); } catch (_) {}
-    }
-    if (records.length) {
-      __setDtrRecordsAndRender(records, 'dtr-cloud-load');
-      return { source:'cloud', count: records.length };
-    }
-  } catch (_) {}
-
-  const local = (()=>{ try { return window.cacheGet ? window.cacheGet(LS_RECORDS, []) : JSON.parse(localStorage.getItem(LS_RECORDS) || '[]'); } catch(_) { return []; } })();
-  __setDtrRecordsAndRender(local, 'dtr-local-fallback');
-  return { source:'local', count: local.length };
-}
-
-function subscribeDtrSupabaseRealtime(){
-  try {
-    const supa = window.supabase;
-    if (!supa || !supa.channel) return;
-    if (window.__ppDtrRealtimeChannel) return;
-    const ch = supa.channel('pp_dtr_records_realtime');
-    const applyEvent = (payload) => {
-      try {
-        const eventType = payload?.eventType;
-        const newRec = __normalizeDtrRecord(payload?.new);
-        const oldRec = __normalizeDtrRecord(payload?.old);
-        const cur = Array.isArray(window.storedRecords) ? window.storedRecords.slice() : (Array.isArray(storedRecords) ? storedRecords.slice() : []);
-        const recKey = (r) => `${String(r?.empId||'')}|${String(r?.date||'')}|${String(r?.time||'')}`;
-        const oldKey = recKey(oldRec);
-        const newKey = recKey(newRec);
-        const idx = cur.findIndex(r => recKey(r) === (eventType === 'DELETE' ? oldKey : (oldKey || newKey)));
-        if (eventType === 'DELETE') {
-          if (idx >= 0) cur.splice(idx, 1);
-        } else if (newRec) {
-          if (idx >= 0) cur[idx] = { ...(cur[idx]||{}), ...newRec };
-          else cur.push(newRec);
-        }
-        __setDtrRecordsAndRender(cur, 'dtr-realtime');
-      } catch(e) { console.warn('DTR realtime apply failed', e); }
-    };
-
-    ch.on('postgres_changes', { event: '*', schema: 'public', table: 'pp_dtr_records' }, applyEvent);
-    ch.on('postgres_changes', { event: '*', schema: 'public', table: 'pp_punches' }, applyEvent);
-    ch.subscribe();
-    window.__ppDtrRealtimeChannel = ch;
-  } catch (e) {
-    console.warn('subscribeDtrSupabaseRealtime failed', e);
-  }
-}
 async function initApp(){
   if (window.ENABLE_SPLIT_OVERRIDES) await hydrateSplitOverrides();
   await refreshContribFlagsFromStore();
@@ -18715,49 +19092,21 @@ async function initApp(){
 }
 
 async function bootAfterKvHydrate() {
-  console.warn('[boot] start');
-  try {
-    if (!window.supabase) {
-      await new Promise((resolve) => {
-        let done = false;
-        const finish = () => { if (done) return; done = true; resolve(); };
-        try { window.addEventListener('supabase-ready', finish, { once: true }); } catch (_) {}
-        setTimeout(finish, 1500);
-      });
-    }
-    if (window.supabase) console.warn('[boot] supabase ready');
-  } catch (_) {}
-  try {
-    if (typeof window.sharedHydrateAll === 'function') {
-      await window.sharedHydrateAll();
-      console.warn('[boot] sharedHydrateAll done');
-    }
-  } catch (_) {}
+  if (!window.__kv_hydrated) {
+    await new Promise((resolve) => {
+      const onHydrated = () => {
+        window.removeEventListener('kv-hydrated', onHydrated);
+        resolve();
+      };
+      window.addEventListener('kv-hydrated', onHydrated, { once: true });
+    });
+  }
   try {
     if (typeof window.refreshCoreStoresFromStorage === 'function') {
       window.refreshCoreStoresFromStorage();
     }
   } catch (_) {}
-  try {
-    let dtrLoaded = false;
-    if (typeof window.loadDtrFromCloud === 'function') {
-      const res = await window.loadDtrFromCloud();
-      const recs = (res && Array.isArray(res.records)) ? res.records.map(__normalizeDtrRecord).filter(Boolean) : [];
-      if (recs.length) {
-        __setDtrRecordsAndRender(recs, 'dtr-cloud-bootstrap');
-        dtrLoaded = true;
-      }
-    }
-    if (!dtrLoaded) await loadDtrFromSupabase();
-    if (!Array.isArray(window.storedRecords) || !window.storedRecords.length) {
-      const local = (()=>{ try { return window.cacheGet ? window.cacheGet(LS_RECORDS, []) : JSON.parse(localStorage.getItem(LS_RECORDS) || '[]'); } catch(_) { return []; } })();
-      if (local.length) __setDtrRecordsAndRender(local, 'dtr-local-bootstrap');
-    }
-    console.warn('[boot] DTR loaded');
-  } catch (_) {}
-  try { subscribeDtrSupabaseRealtime(); } catch (_) {}
   await initApp();
-  console.warn('[boot] initApp run');
 }
 bootAfterKvHydrate();
   </script>
@@ -19100,8 +19449,8 @@ function calculatePayrollFromRecords(){
     });
     // Persist hours to localStorage
     try {
-      if (window.cacheSet) window.cacheSet(LS_REG_HRS, regHours); else localStorage.setItem(LS_REG_HRS, JSON.stringify(regHours));
-      if (window.cacheSet) window.cacheSet(LS_OT_HRS, otHours); else localStorage.setItem(LS_OT_HRS, JSON.stringify(otHours));
+      localStorage.setItem(LS_REG_HRS, JSON.stringify(regHours));
+      localStorage.setItem(LS_OT_HRS, JSON.stringify(otHours));
     } catch (err) {
       console.warn('LS save failed', err);
     }
@@ -19116,7 +19465,7 @@ function calculatePayrollFromRecords(){
   });
   // Persist rates
   try {
-    if (window.sharedSet) window.sharedSet(LS_RATES, payrollRates); else localStorage.setItem(LS_RATES, JSON.stringify(payrollRates));
+    localStorage.setItem(LS_RATES, JSON.stringify(payrollRates));
   } catch (err) {}
   // Rebuild the payroll table with the newly computed hours
   try {
@@ -19284,8 +19633,8 @@ function calculatePayrollFromRecords(){
       });
       // Persist the hours to localStorage
       try {
-        if (window.cacheSet) window.cacheSet(LS_REG_HRS, regHours); else localStorage.setItem(LS_REG_HRS, JSON.stringify(regHours));
-        if (window.cacheSet) window.cacheSet(LS_OT_HRS, otHours); else localStorage.setItem(LS_OT_HRS, JSON.stringify(otHours));
+        localStorage.setItem(LS_REG_HRS, JSON.stringify(regHours));
+        localStorage.setItem(LS_OT_HRS, JSON.stringify(otHours));
       } catch (err) {}
       // Rebuild the payroll table using the computed hours
       if (typeof renderTable === 'function') renderTable();
@@ -22100,7 +22449,7 @@ async function saveDtrToCloudLegacyBlob(records) {
       try {
         storedRecords = remoteRecs;
         window.storedRecords = remoteRecs;
-        if (window.sharedSet) window.sharedSet(LS_RECORDS, remoteRecs); else localStorage.setItem(LS_RECORDS, JSON.stringify(remoteRecs));
+        localStorage.setItem(LS_RECORDS, JSON.stringify(remoteRecs));
       } catch(e) {}
       return;
     }
@@ -22165,7 +22514,7 @@ async function saveDtrToCloudLegacyBlob(records) {
     try {
       storedRecords = mergedRecs;
       window.storedRecords = mergedRecs;
-      if (window.sharedSet) window.sharedSet(LS_RECORDS, mergedRecs); else localStorage.setItem(LS_RECORDS, JSON.stringify(mergedRecs));
+      localStorage.setItem(LS_RECORDS, JSON.stringify(mergedRecs));
     } catch(e) {}
 
     saveJson(LS_TOMBS, mergedTombs);
@@ -23144,11 +23493,73 @@ document.addEventListener('DOMContentLoaded', async function () {
 // ===== DTR Editor Column (Total Regular & OT editable) =====
 (function(){
   const LS_OVR_HOURS = 'att_overrides_hours_v1';
-  let overridesHours = (window.cacheGet ? window.cacheGet(LS_OVR_HOURS, {}) : {});
-  async function saveOverridesHours(){
-    if (window.sharedSet) await window.sharedSet(LS_OVR_HOURS, overridesHours);
-    else { try { localStorage.setItem(LS_OVR_HOURS, JSON.stringify(overridesHours)); } catch(e){} }
+  let overridesHours = {};
+  try { overridesHours = JSON.parse(localStorage.getItem(LS_OVR_HOURS) || '{}') || {}; } catch(e){ overridesHours = {}; }
+  function saveOverridesHours(){ try { localStorage.setItem(LS_OVR_HOURS, JSON.stringify(overridesHours)); } catch(e){} }
+  // Persist overrides to Supabase (kv_store) and fetch initial remote data
+  function saveOverridesHoursRemote(){
+    try {
+      const supabaseClient = window.supabase;
+      const table = window.SUPABASE_TABLE;
+      if(!supabaseClient || !table) return;
+      // Upsert the entire overridesHours object as the value for LS_OVR_HOURS
+      supabaseClient
+        .from(table)
+        .upsert({ key: LS_OVR_HOURS, value: overridesHours }, { onConflict: 'key' })
+        .then(({ error }) => {
+          if (error) console.warn('Supabase upsert overridesHours error:', error);
+        });
+    } catch(e){ console.warn('Supabase upsert overridesHours failed', e); }
   }
+  // Load remote overridesHours from Supabase on startup, merge/replace local state and apply to table
+  (async function loadRemoteOverrides(){
+    try {
+      const supabaseClient = window.supabase;
+      const table = window.SUPABASE_TABLE;
+      if(!supabaseClient || !table) return;
+      const { data, error } = await supabaseClient
+        .from(table)
+        .select('value')
+        .eq('key', LS_OVR_HOURS)
+        .maybeSingle();
+      if(!error && data && data.value){
+        // replace overridesHours with remote value
+        if (typeof data.value === 'object') {
+          overridesHours = data.value;
+          // persist to local storage for offline use
+          saveOverridesHours();
+          // apply remote values to table after they've loaded
+          applyOverridesToTable();
+          recomputeDtrSummaryFromTable();
+        }
+      }
+    } catch(e){ console.warn('Load remote overrides failed', e); }
+  })();
+  // Subscribe to realtime updates for overridesHours in Supabase so edits on other devices reflect here
+  try {
+    const supabaseClient = window.supabase;
+    const table = window.SUPABASE_TABLE;
+    if (supabaseClient && table && supabaseClient.channel) {
+      supabaseClient
+        .channel('dtr_overrides_hours')
+        .on(
+          'postgres_changes',
+          { event: '*', schema: 'public', table: table, filter: `key=eq.${LS_OVR_HOURS}` },
+          (payload) => {
+            try {
+              const newVal = payload.new && payload.new.value;
+              if (newVal && typeof newVal === 'object') {
+                overridesHours = newVal;
+                saveOverridesHours();
+                applyOverridesToTable();
+                recomputeDtrSummaryFromTable();
+              }
+            } catch(e) { console.warn('Realtime payload handling error', e); }
+          }
+        )
+        .subscribe();
+    }
+  } catch(e){ console.warn('Realtime subscription error:', e); }
 
   function ensureEditorHeader(){
     const table = document.getElementById('resultsTable');
@@ -23551,7 +23962,7 @@ document.addEventListener('DOMContentLoaded', async function () {
           }
           if (overridesTouched){
             saveOverridesHours();
-            
+            if (typeof saveOverridesHoursRemote === 'function') saveOverridesHoursRemote();
           }
           if (timeResult.changed){
             btn.textContent = 'Edit';
