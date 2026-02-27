@@ -5,20 +5,27 @@ export function calculateGrossPay({ hourlyRate, regularHours, overtimeHours, ove
 }
 
 export function calculatePayrollRow({ employee, attendance, loanDeductions = 0, contributionDeductions = 0 }) {
+  const regularHours = Number(attendance?.regular_hours || 0);
+  const overtimeHours = Number(attendance?.overtime_hours || 0);
+  const hasWorkedTime = regularHours + overtimeHours > 0;
+
   const grossPay = calculateGrossPay({
     hourlyRate: employee.hourly_rate,
-    regularHours: attendance.regular_hours,
-    overtimeHours: attendance.overtime_hours,
+    regularHours,
+    overtimeHours,
     overtimeMultiplier: employee.overtime_multiplier || 1.25,
   });
 
-  const netPay = grossPay - Number(loanDeductions || 0) - Number(contributionDeductions || 0);
+  const effectiveLoanDeductions = hasWorkedTime ? Number(loanDeductions || 0) : 0;
+  const effectiveContributionDeductions = Number(contributionDeductions || 0);
+
+  const netPay = grossPay - effectiveLoanDeductions - effectiveContributionDeductions;
 
   return {
     employee_id: employee.id,
     gross_pay: grossPay,
-    loan_deductions: Number(loanDeductions || 0),
-    contribution_deductions: Number(contributionDeductions || 0),
+    loan_deductions: effectiveLoanDeductions,
+    contribution_deductions: effectiveContributionDeductions,
     net_pay: netPay,
   };
 }
