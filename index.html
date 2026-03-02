@@ -8642,8 +8642,30 @@ function __runCalculateAllNow(){
     }
   }
 }
+function shouldSkipCalculateAll(reason){
+  try {
+    const locked = (typeof isSelectedPeriodLocked === 'function') ? !!isSelectedPeriodLocked() : false;
+    if (!locked) return false;
+    const r = String(reason || '').toLowerCase();
+    // During lock finalization we still allow forced calculate flushes before the
+    // period is marked locked. Once locked, skip background calculate churn.
+    if (r.startsWith('lock-period-finalize')) return false;
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
 function scheduleCalculateAll(reason){
   try { window.__lastCalculateAllReason = reason || ''; } catch (_) {}
+  if (shouldSkipCalculateAll(reason)) {
+    if (__calculateAllTimer) {
+      window.clearTimeout(__calculateAllTimer);
+      __calculateAllTimer = null;
+    }
+    __calculateAllQueuedWhileRunning = false;
+    setCalculatePendingState(false);
+    return;
+  }
   if (__calculateAllTimer) window.clearTimeout(__calculateAllTimer);
   setCalculatePendingState(true);
   __calculateAllTimer = window.setTimeout(() => {
@@ -8653,6 +8675,15 @@ function scheduleCalculateAll(reason){
 }
 function flushCalculateAll(reason){
   try { window.__lastCalculateAllReason = reason || ''; } catch (_) {}
+  if (shouldSkipCalculateAll(reason)) {
+    if (__calculateAllTimer) {
+      window.clearTimeout(__calculateAllTimer);
+      __calculateAllTimer = null;
+    }
+    __calculateAllQueuedWhileRunning = false;
+    setCalculatePendingState(false);
+    return;
+  }
   if (__calculateAllTimer) {
     window.clearTimeout(__calculateAllTimer);
     __calculateAllTimer = null;
