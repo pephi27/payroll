@@ -8642,8 +8642,30 @@ function __runCalculateAllNow(){
     }
   }
 }
+function shouldSkipCalculateAll(reason){
+  try {
+    const locked = (typeof isSelectedPeriodLocked === 'function') ? !!isSelectedPeriodLocked() : false;
+    if (!locked) return false;
+    const r = String(reason || '').toLowerCase();
+    // During lock finalization we still allow forced calculate flushes before the
+    // period is marked locked. Once locked, skip background calculate churn.
+    if (r.startsWith('lock-period-finalize')) return false;
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
 function scheduleCalculateAll(reason){
   try { window.__lastCalculateAllReason = reason || ''; } catch (_) {}
+  if (shouldSkipCalculateAll(reason)) {
+    if (__calculateAllTimer) {
+      window.clearTimeout(__calculateAllTimer);
+      __calculateAllTimer = null;
+    }
+    __calculateAllQueuedWhileRunning = false;
+    setCalculatePendingState(false);
+    return;
+  }
   if (__calculateAllTimer) window.clearTimeout(__calculateAllTimer);
   setCalculatePendingState(true);
   __calculateAllTimer = window.setTimeout(() => {
@@ -8653,6 +8675,15 @@ function scheduleCalculateAll(reason){
 }
 function flushCalculateAll(reason){
   try { window.__lastCalculateAllReason = reason || ''; } catch (_) {}
+  if (shouldSkipCalculateAll(reason)) {
+    if (__calculateAllTimer) {
+      window.clearTimeout(__calculateAllTimer);
+      __calculateAllTimer = null;
+    }
+    __calculateAllQueuedWhileRunning = false;
+    setCalculatePendingState(false);
+    return;
+  }
   if (__calculateAllTimer) {
     window.clearTimeout(__calculateAllTimer);
     __calculateAllTimer = null;
@@ -10785,35 +10816,70 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   // Cloud helpers for snapshot system:
-  // - Support BOTH schemas for payroll_period_snapshots: period_key (new) OR period_id (old)
+  // - Support schema variants for payroll_period_snapshots where the period FK can be
+  //   named period_key (new), period_id (legacy), or period (older deployments).
+  function __extractUnknownColumn(err){
+    const msg = String(err?.message || err?.details || '');
+    const m1 = msg.match(/Could not find the ['"]([^'"]+)['"] column/i);
+    if (m1 && m1[1]) return m1[1];
+    const m2 = msg.match(/column ['"]?([a-zA-Z0-9_]+)['"]? does not exist/i);
+    if (m2 && m2[1]) return m2[1];
+    return '';
+  }
+
+  async function __tryInsertSnapshotRowAdaptive(seedRow){
+    let row = Object.assign({}, seedRow);
+    let attempts = 0;
+    let lastErr = null;
+
+    while (attempts < 6) {
+      attempts += 1;
+      const res = await supabase.from(PERIOD_SNAPSHOTS_TABLE).insert(row);
+      if (!res.error) return { ok: true, error: null };
+      lastErr = res.error;
+
+      const unknownCol = __extractUnknownColumn(res.error);
+      if (unknownCol && Object.prototype.hasOwnProperty.call(row, unknownCol)) {
+        delete row[unknownCol];
+        continue;
+      }
+
+      const msg = String(res.error.message || res.error.details || '');
+      if (/Could not find the .* column|column .* does not exist|null value|violates|foreign key|constraint/i.test(msg)) {
+        return { ok: false, error: res.error, retryNextShape: true };
+      }
+
+      return { ok: false, error: res.error, retryNextShape: false };
+    }
+
+    return { ok: false, error: lastErr, retryNextShape: true };
+  }
+
   async function __insertSnapshotRowCloud(snapshotRow){
     if (!window.supabase) return;
 
-    // Try: new schema (period_key), old schema (period_id), then both.
+    // Try known schema variants from most to least common to avoid lock failures.
     const tryRows = [];
 
-    // A) Prefer new schema: period_key (text) as the foreign key
+    // A) New schema: period_key (text) as the foreign key
     const rowKeyOnly = Object.assign({}, snapshotRow, { period_key: snapshotRow.period_id });
     delete rowKeyOnly.period_id;
     tryRows.push(rowKeyOnly);
 
-    // B) Old schema: period_id
+    // B) Legacy schema: period_id
     tryRows.push(snapshotRow);
 
-    // C) Both (in case the table has BOTH columns & both are required)
-    tryRows.push(Object.assign({}, snapshotRow, { period_key: snapshotRow.period_id }));
+    // C) Older schema: period
+    const rowPeriodOnly = Object.assign({}, snapshotRow, { period: snapshotRow.period_id });
+    delete rowPeriodOnly.period_id;
+    tryRows.push(rowPeriodOnly);
 
     let lastErr = null;
     for (const row of tryRows) {
-      const res = await supabase.from(PERIOD_SNAPSHOTS_TABLE).insert(row);
-      if (!res.error) return;
+      const res = await __tryInsertSnapshotRowAdaptive(row);
+      if (res.ok) return;
       lastErr = res.error;
-      const msg = String(res.error.message || res.error.details || '');
-      // If it complains about an unknown column, immediately try the next shape.
-      if (/Could not find the .* column|column .* does not exist/i.test(msg)) continue;
-      // If it's a constraint issue (NOT NULL / FK), try the next shape too.
-      if (/null value|violates|foreign key|constraint/i.test(msg)) continue;
-      // For other errors (RLS/permissions/network), don't spam inserts.
+      if (res.retryNextShape) continue;
       break;
     }
     if (lastErr) throw lastErr;
@@ -11540,6 +11606,47 @@ document.addEventListener('DOMContentLoaded', () => {
     refreshPayrollViews();
   }
 
+  function waitMs(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+  }
+
+  async function buildStableSnapshotForLock(start, end) {
+    let lastSnapshot = null;
+    let lastSignature = '';
+    const maxAttempts = 3;
+
+    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+      try {
+        if (typeof window.flushCalculateAll === 'function') {
+          await Promise.resolve(window.flushCalculateAll?.(`lock-period-finalize-${attempt + 1}`));
+        }
+      } catch (err) {}
+
+      try { if (typeof updatePayrollGrandTotals === 'function') updatePayrollGrandTotals(); } catch (err) {}
+
+      await waitMs(120);
+      const snapshot = await buildSnapshot(start, end);
+      const signature = JSON.stringify({
+        rows: Array.isArray(snapshot?.rows) ? snapshot.rows : [],
+        totals: snapshot?.totals || {},
+        divisor: snapshot?.divisor || 1,
+        settings: snapshot?.settings || {}
+      });
+
+      if (snapshot && signature === lastSignature) {
+        return snapshot;
+      }
+
+      lastSnapshot = snapshot;
+      lastSignature = signature;
+    }
+
+    if (lastSnapshot) {
+      console.warn('Lock snapshot was unstable across recalculations; using latest capture.');
+    }
+    return lastSnapshot;
+  }
+
   async function lockCurrentPeriod() {
     const { start, end } = getCurrentPeriodRange();
     if (!start || !end) {
@@ -11559,11 +11666,9 @@ document.addEventListener('DOMContentLoaded', () => {
       return;
     }
 
-    await finalizeCashAdvancesForPeriod(start, end);
-    try { if (typeof window.flushCalculateAll === 'function') await Promise.resolve(window.flushCalculateAll?.('lock-period-finalize')); } catch (err) {}
-    try { if (typeof updatePayrollGrandTotals === 'function') updatePayrollGrandTotals(); } catch (err) {}
-
-    const snapshot = await buildSnapshot(start, end);
+    // Lock should be snapshot-only: do not mutate loan/cash-advance state here.
+    // (Cash advance commits are handled by explicit tracker/deduction actions.)
+    const snapshot = await buildStableSnapshotForLock(start, end);
     if (!snapshot || !Array.isArray(snapshot.rows) || !snapshot.rows.length) {
       alert('Payroll table is missing or empty.');
       return;
