@@ -1,5 +1,6 @@
+import { getFeatureFlag } from '../config/featureFlags.js';
 import { getSupabaseClient } from '../config/supabaseClient.js';
-import { mergeRow, removeRow, setLastRealtimeEvent, setRealtimeStatus } from '../state/store.js';
+import { getState, mergeRow, removeRow, setLastRealtimeEvent, setRealtimeStatus } from '../state/store.js';
 
 const TABLE_TO_STATE_KEY = {
   payroll_periods: 'payrollPeriods',
@@ -15,6 +16,125 @@ const TABLE_TO_STATE_KEY = {
   profiles: 'profiles',
 };
 
+const PERIOD_SCOPED_TABLES = new Set([
+  'payroll_period_snapshots',
+  'pp_dtr_records',
+  'dtr_punches',
+  'employee_loans',
+  'loan_deductions',
+  'pp_contrib_flags',
+]);
+
+const DEBUG_REALTIME_FLAG = 'DEBUG_REALTIME';
+const REALTIME_FLUSH_MS = 120;
+
+const mutationQueue = [];
+let flushTimer = null;
+
+function logRealtimeDebug(message, details = undefined) {
+  if (!getFeatureFlag(DEBUG_REALTIME_FLAG, false)) return;
+  if (details === undefined) {
+    console.info(`[payroll:realtime:debug] ${message}`);
+    return;
+  }
+  console.info(`[payroll:realtime:debug] ${message}`, details);
+}
+
+function getEventPeriodInfo(payload) {
+  const currentPeriodId = getState().currentPeriodId;
+  const newPeriodId = payload?.new?.payroll_period_id ?? null;
+  const oldPeriodId = payload?.old?.payroll_period_id ?? null;
+  const hasPeriodId = newPeriodId != null || oldPeriodId != null;
+  return { currentPeriodId, newPeriodId, oldPeriodId, hasPeriodId };
+}
+
+function isEventForCurrentPeriod(table, payload) {
+  if (!PERIOD_SCOPED_TABLES.has(table)) return true;
+
+  const info = getEventPeriodInfo(payload);
+  if (!info.currentPeriodId) return true;
+
+  if (!info.hasPeriodId) {
+    logRealtimeDebug('applied legacy row without payroll_period_id', { table, eventType: payload?.eventType });
+    return true;
+  }
+
+  return info.newPeriodId === info.currentPeriodId || info.oldPeriodId === info.currentPeriodId;
+}
+
+function isQueuedEntryStillRelevant(entry) {
+  if (!PERIOD_SCOPED_TABLES.has(entry.table)) return true;
+
+  const currentPeriodId = getState().currentPeriodId;
+  if (!currentPeriodId) return true;
+  if (entry.isLegacyPeriodRow) return true;
+
+  return entry.newPeriodId === currentPeriodId || entry.oldPeriodId === currentPeriodId;
+}
+
+function getEntryDedupeKey(entry) {
+  const id = entry.id ?? entry.row?.id;
+  return id == null ? null : `${entry.stateKey}:${id}`;
+}
+
+function flushMutations() {
+  flushTimer = null;
+  const pending = mutationQueue.splice(0, mutationQueue.length);
+  if (!pending.length) return;
+
+  const deduped = [];
+  const dedupeIndex = new Map();
+  for (const entry of pending) {
+    const key = getEntryDedupeKey(entry);
+    if (!key) {
+      deduped.push(entry);
+      continue;
+    }
+    const existingIndex = dedupeIndex.get(key);
+    if (existingIndex == null) {
+      dedupeIndex.set(key, deduped.length);
+      deduped.push(entry);
+      continue;
+    }
+    deduped[existingIndex] = entry;
+  }
+
+  let applied = 0;
+  let ignoredAfterDebounce = 0;
+  for (const entry of deduped) {
+    if (!isQueuedEntryStillRelevant(entry)) {
+      ignoredAfterDebounce += 1;
+      continue;
+    }
+
+    if (entry.kind === 'delete') {
+      removeRow(entry.stateKey, entry.id);
+    } else {
+      mergeRow(entry.stateKey, entry.row);
+    }
+    applied += 1;
+  }
+
+  if (deduped.length > 1 || ignoredAfterDebounce > 0) {
+    logRealtimeDebug('batched realtime mutations flushed', {
+      queued: pending.length,
+      deduped: deduped.length,
+      applied,
+      ignoredAfterDebounce,
+    });
+  }
+}
+
+function scheduleFlush() {
+  if (flushTimer) return;
+  flushTimer = window.setTimeout(flushMutations, REALTIME_FLUSH_MS);
+}
+
+function enqueueMutation(entry) {
+  mutationQueue.push(entry);
+  scheduleFlush();
+}
+
 function handleChange(table, payload) {
   const event = {
     table,
@@ -27,12 +147,41 @@ function handleChange(table, payload) {
   const stateKey = TABLE_TO_STATE_KEY[table];
   if (!stateKey) return;
 
-  if (payload.eventType === 'DELETE') {
-    removeRow(stateKey, payload.old?.id);
+  if (!isEventForCurrentPeriod(table, payload)) {
+    const periodInfo = getEventPeriodInfo(payload);
+    logRealtimeDebug('ignored event for non-active period', {
+      table,
+      eventType: payload?.eventType,
+      currentPeriodId: periodInfo.currentPeriodId,
+      newPeriodId: periodInfo.newPeriodId,
+      oldPeriodId: periodInfo.oldPeriodId,
+    });
     return;
   }
 
-  mergeRow(stateKey, payload.new);
+  const periodInfo = getEventPeriodInfo(payload);
+  logRealtimeDebug('queued event for active period', {
+    table,
+    eventType: payload?.eventType,
+    currentPeriodId: periodInfo.currentPeriodId,
+    newPeriodId: periodInfo.newPeriodId,
+    oldPeriodId: periodInfo.oldPeriodId,
+  });
+
+  const queueEntry = {
+    table,
+    stateKey,
+    newPeriodId: periodInfo.newPeriodId,
+    oldPeriodId: periodInfo.oldPeriodId,
+    isLegacyPeriodRow: PERIOD_SCOPED_TABLES.has(table) && !periodInfo.hasPeriodId,
+  };
+
+  if (payload.eventType === 'DELETE') {
+    enqueueMutation({ ...queueEntry, kind: 'delete', id: payload.old?.id });
+    return;
+  }
+
+  enqueueMutation({ ...queueEntry, kind: 'merge', row: payload.new, id: payload.new?.id });
 }
 
 export function startRealtimeSubscriptions() {
@@ -58,6 +207,11 @@ export function startRealtimeSubscriptions() {
 
   return () => {
     setRealtimeStatus('closed');
+    if (flushTimer) {
+      window.clearTimeout(flushTimer);
+      flushTimer = null;
+    }
+    mutationQueue.splice(0, mutationQueue.length);
     channels.forEach((channel) => supabase.removeChannel(channel));
   };
 }
