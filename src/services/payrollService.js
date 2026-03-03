@@ -1,4 +1,5 @@
 import { getSupabaseClient } from '../config/supabaseClient.js';
+import { getFeatureFlag } from '../config/featureFlags.js';
 import { getState, mergeRow, reportConflict } from '../state/store.js';
 
 export class StaleWriteError extends Error {
@@ -50,6 +51,27 @@ const TABLE_LOADERS = {
 
 
 async function fetchPunchRowsByKnownShapes(periodId) {
+  const useScopedReads = getFeatureFlag('payroll_ff_scoped_reads_v1', false);
+
+  // Prefer a server-side filter when available. Fall back to full-fetch filtering
+  // for older deployments where the period column may not exist.
+  if (useScopedReads && periodId) {
+    const { data, error } = await requireSupabaseClient()
+      .from(TABLES.punches)
+      .select('*')
+      .eq('payroll_period_id', periodId)
+      .order('punch_at', { ascending: true });
+
+    if (!error) {
+      return { data: Array.isArray(data) ? data : [], error: null };
+    }
+
+    console.warn('[payroll:read:fallback] scoped punches query failed, falling back to legacy full fetch', {
+      code: error.code,
+      message: error.message,
+    });
+  }
+
   // Avoid schema-coupled filters/order clauses that can trigger PostgREST 400s
   // on older deployments. Fetch rows first, then filter/sort in memory.
   const { data, error } = await requireSupabaseClient().from(TABLES.punches).select('*');
