@@ -1,6 +1,6 @@
 import { getFeatureFlag } from '../config/featureFlags.js';
 import { getSupabaseClient } from '../config/supabaseClient.js';
-import { getState, mergeRow, removeRow, setLastRealtimeEvent, setRealtimeStatus } from '../state/store.js';
+import { batch, getState, mergeRow, removeRow, setLastRealtimeEvent, setRealtimeStatus } from '../state/store.js';
 
 const TABLE_TO_STATE_KEY = {
   payroll_periods: 'payrollPeriods',
@@ -30,6 +30,7 @@ const REALTIME_FLUSH_MS = 120;
 
 const mutationQueue = [];
 let flushTimer = null;
+let latestActiveEvent = null;
 
 function logRealtimeDebug(message, details = undefined) {
   if (!getFeatureFlag(DEBUG_REALTIME_FLAG, false)) return;
@@ -101,19 +102,28 @@ function flushMutations() {
 
   let applied = 0;
   let ignoredAfterDebounce = 0;
-  for (const entry of deduped) {
-    if (!isQueuedEntryStillRelevant(entry)) {
-      ignoredAfterDebounce += 1;
-      continue;
+
+  batch(() => {
+    for (const entry of deduped) {
+      if (!isQueuedEntryStillRelevant(entry)) {
+        ignoredAfterDebounce += 1;
+        continue;
+      }
+
+      if (entry.kind === 'delete') {
+        removeRow(entry.stateKey, entry.id);
+      } else {
+        mergeRow(entry.stateKey, entry.row);
+      }
+      applied += 1;
     }
 
-    if (entry.kind === 'delete') {
-      removeRow(entry.stateKey, entry.id);
-    } else {
-      mergeRow(entry.stateKey, entry.row);
+    if (applied > 0 && latestActiveEvent) {
+      setLastRealtimeEvent(latestActiveEvent);
     }
-    applied += 1;
-  }
+  });
+
+  latestActiveEvent = null;
 
   if (deduped.length > 1 || ignoredAfterDebounce > 0) {
     logRealtimeDebug('batched realtime mutations flushed', {
@@ -141,9 +151,6 @@ function handleChange(table, payload) {
     type: payload.eventType,
     timestamp: new Date().toISOString(),
   };
-  setLastRealtimeEvent(event);
-  console.info('[payroll:realtime:event]', event);
-
   const stateKey = TABLE_TO_STATE_KEY[table];
   if (!stateKey) return;
 
@@ -158,6 +165,8 @@ function handleChange(table, payload) {
     });
     return;
   }
+
+  latestActiveEvent = event;
 
   const periodInfo = getEventPeriodInfo(payload);
   logRealtimeDebug('queued event for active period', {
