@@ -1,10 +1,7 @@
-import { getSupabaseClient } from "../config/supabaseClient.js";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2?bundle";
 
-if (window.__kvSyncAdapterLoaded) {
-  // no-op guard against duplicate execution
-} else {
-  window.__kvSyncAdapterLoaded = true;
-
+const SUPABASE_URL = window.SUPABASE_URL || "https://qzkzugzfpegozpiqutdv.supabase.co";
+const SUPABASE_KEY = window.SUPABASE_KEY || "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InF6a3p1Z3pmcGVnb3pwaXF1dGR2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTU4MTc5MDMsImV4cCI6MjA3MTM5MzkwM30.mdFYuFjbRfsILWPkQQmVUCDR7dGqEo-mdPZ6iwolvGk";
 const TABLE = "kv_store";
 const SHARED_KEYS = ["att_employees_v2","att_schedules_v2","att_schedules_default","att_projects_v1","att_records_v2","att_overrides_hours_v1","dtr_overrides_v1","payroll_rates","payroll_ot_multiplier","payroll_week_start","payroll_week_end","settings_payroll","payroll_deduction_divisor","payroll_sss_table","payroll_pagibig_table","payroll_philhealth_table","payroll_pagibig_rate","payroll_philhealth_rate","payroll_loan_sss","payroll_loan_pagibig","payroll_loan_tracker","payroll_vale","payroll_vale_wed","payroll_hist","payroll_other_deductions_details","payroll_other_deductions_total","payroll_additional_income_details","payroll_additional_income_total","payroll_adjustment_hours","payroll_bantay","payroll_bantay_proj","payroll_contrib_flags","payroll_lock_state","incomeTypeOptions","deductionTypeOptions","payroll_print_orientation"];
 const SHARED_KEY_SET = new Set(SHARED_KEYS);
@@ -12,16 +9,16 @@ const PENDING_KEY = '__shared_pending_writes_v1';
 const META_KEY = '__shared_meta_v1';
 const DEVICE_KEY = '__device_id';
 
-const supabase = getSupabaseClient();
+const supabase = createClient(SUPABASE_URL, SUPABASE_KEY, {
+  auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false }
+});
+window.supabase = supabase;
 window.SUPABASE_TABLE = TABLE;
 window.SHARED_KEYS = SHARED_KEYS;
 window.SHARED_KEY_SET = SHARED_KEY_SET;
 window.__supabase_ready = true;
 window.__sharedSyncState = window.__sharedSyncState || { hydrated:false, offline:false, lastSyncAt:0, conflict:false };
-if (!window.__supabaseReadyDispatched) {
-  window.__supabaseReadyDispatched = true;
-  try { console.warn('[boot] supabase ready'); window.dispatchEvent(new Event('supabase-ready')); } catch (_) {}
-}
+try { console.warn('[boot] supabase ready'); window.dispatchEvent(new Event('supabase-ready')); } catch (_) {}
 
 const __origGetItem = window.localStorage.getItem.bind(window.localStorage);
 const __origSetItem = window.localStorage.setItem.bind(window.localStorage);
@@ -106,26 +103,6 @@ async function sharedGet(key, fallback = null) {
 
 async function sharedSet(key, value) {
   if (!SHARED_KEY_SET.has(key)) { cacheSet(key, value); return true; }
-
-  // PHASE 3: Don't overwrite cloud before the first hydrate finishes.
-  // Queue the write into pending, then flushPending() after hydration.
-  if (!window.__sharedSyncState?.hydrated) {
-    const meta = { updatedAt: Date.now(), deviceId: getDeviceId() };
-    const wrapped = (value === undefined)
-      ? { __deleted: true, __meta: meta }
-      : { __data: value, __meta: meta };
-
-    // Update local immediately so UI reflects the change
-    cacheSet(key, value === undefined ? undefined : value);
-    setMetaForKey(key, meta);
-
-    // Queue it so hydrate + flushPending will resolve conflicts correctly
-    const pending = getPending();
-    pending[key] = wrapped;
-    setPending(pending);
-    return false;
-  }
-
   if (value === undefined) {
     const meta = { updatedAt: Date.now(), deviceId: getDeviceId() };
     const tomb = { __deleted: true, __meta: meta };
@@ -318,13 +295,4 @@ if (!window.__sharedStorageHooked) {
     }
     return __origRemoveItem(key);
   };
-}
-
-
-// PHASE 3: Start hydration ASAP (non-blocking) so other PCs mirror faster
-if (!window.__sharedHydrateStarted) {
-  window.__sharedHydrateStarted = true;
-  try { sharedHydrateAll().catch(()=>{}); } catch (_) {}
-}
-
 }
