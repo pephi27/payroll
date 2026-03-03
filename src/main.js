@@ -100,14 +100,6 @@ async function bootstrapPayrollApp() {
     console.error('Payroll core read models load failed', error);
   }
 
-  window.payrollDebugVerify = async (periodId = currentPeriodId) => {
-    if (!periodId) {
-      console.warn('[payroll:verify] no payroll period selected');
-      return;
-    }
-    await payrollService.debugVerifyOptimizedLoad(periodId);
-  };
-
   try {
     cleanupRealtime = startRealtimeSubscriptions();
   } catch (error) {
