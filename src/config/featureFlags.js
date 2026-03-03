@@ -18,10 +18,30 @@ function readRuntimeFlags() {
   return runtime;
 }
 
+function readEnvFlag(name) {
+  const env =
+    (typeof import.meta !== 'undefined' && import.meta?.env) ||
+    (typeof process !== 'undefined' && process?.env) ||
+    null;
+
+  if (!env || !Object.prototype.hasOwnProperty.call(env, name)) return null;
+  const value = env[name];
+  if (typeof value === 'string') {
+    const normalized = value.trim().toLowerCase();
+    return normalized === '1' || normalized === 'true' || normalized === 'yes' || normalized === 'on';
+  }
+  return !!value;
+}
+
 export function getFeatureFlag(name, fallback = false) {
   const runtime = readRuntimeFlags();
   if (runtime && Object.prototype.hasOwnProperty.call(runtime, name)) {
     return !!runtime[name];
+  }
+
+  const env = readEnvFlag(name);
+  if (env != null) {
+    return env;
   }
 
   const local = readLocalFlags();
@@ -31,4 +51,3 @@ export function getFeatureFlag(name, fallback = false) {
 
   return !!fallback;
 }
-
