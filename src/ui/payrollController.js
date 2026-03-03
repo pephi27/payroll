@@ -1,5 +1,7 @@
 import { clearConflict, getState, subscribe } from '../state/store.js';
 
+const LOCKABLE_SELECTOR = 'input, select, textarea, button';
+
 function renderPeriodLockStatus(root, period) {
   const lockEl = root.querySelector('[data-payroll-lock-state]');
   if (!lockEl) return;
@@ -50,7 +52,10 @@ function applyLockedRule(el, isLocked) {
 
 function renderLockedInputState(root, period) {
   const isLocked = !!period?.is_locked;
-  root.querySelectorAll('#payrollWrapper input, #payrollWrapper select, #payrollWrapper textarea, #payrollWrapper button')
+  const wrapper = root.querySelector('#payrollWrapper');
+  if (!wrapper) return;
+
+  wrapper.querySelectorAll(LOCKABLE_SELECTOR)
     .forEach((el) => applyLockedRule(el, isLocked));
 }
 
@@ -166,11 +171,11 @@ export function mountPayrollController(root) {
         for (const node of m.addedNodes || []) {
           if (!(node instanceof Element)) continue;
 
-          if (node.matches('input, select, textarea, button')) {
+          if (node.matches(LOCKABLE_SELECTOR)) {
             applyLockedRule(node, true);
           }
 
-          node.querySelectorAll?.('input, select, textarea, button')
+          node.querySelectorAll?.(LOCKABLE_SELECTOR)
             .forEach((el) => applyLockedRule(el, true));
         }
       }
