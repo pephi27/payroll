@@ -32,23 +32,26 @@ function renderConflictBanner(root) {
   banner.hidden = false;
 }
 
+function applyLockedRule(el, isLocked) {
+  if (el.dataset.payrollHealthToggle === 'true' || el.closest('[data-payroll-health-panel]')) return;
+  if (el.dataset.allowWhenLocked === 'true') return;
+
+  if (isLocked) {
+    el.dataset.lockedDisabled = el.disabled ? 'already' : 'managed';
+    if (!el.disabled) el.disabled = true;
+    return;
+  }
+
+  if (el.dataset.lockedDisabled === 'managed') {
+    el.disabled = false;
+  }
+  delete el.dataset.lockedDisabled;
+}
+
 function renderLockedInputState(root, period) {
   const isLocked = !!period?.is_locked;
-  root.querySelectorAll('#payrollWrapper input, #payrollWrapper select, #payrollWrapper textarea, #payrollWrapper button').forEach((el) => {
-    if (el.dataset.payrollHealthToggle === 'true' || el.closest('[data-payroll-health-panel]')) return;
-    if (el.dataset.allowWhenLocked === 'true') return;
-
-    if (isLocked) {
-      el.dataset.lockedDisabled = el.disabled ? 'already' : 'managed';
-      if (!el.disabled) el.disabled = true;
-      return;
-    }
-
-    if (el.dataset.lockedDisabled === 'managed') {
-      el.disabled = false;
-    }
-    delete el.dataset.lockedDisabled;
-  });
+  root.querySelectorAll('#payrollWrapper input, #payrollWrapper select, #payrollWrapper textarea, #payrollWrapper button')
+    .forEach((el) => applyLockedRule(el, isLocked));
 }
 
 function renderDiagnostics(root) {
@@ -145,17 +148,62 @@ function ensureDiagnosticsPanel(root) {
 }
 
 export function mountPayrollController(root) {
-  const render = () => {
+  let lastLockKey = null;
+  let lockObserver = null;
+
+  function refreshLockObserver(isLocked) {
+    if (lockObserver) {
+      lockObserver.disconnect();
+      lockObserver = null;
+    }
+    if (!isLocked) return;
+
+    const wrapper = root.querySelector('#payrollWrapper');
+    if (!wrapper) return;
+
+    lockObserver = new MutationObserver((mutations) => {
+      for (const m of mutations) {
+        for (const node of m.addedNodes || []) {
+          if (!(node instanceof Element)) continue;
+
+          if (node.matches('input, select, textarea, button')) {
+            applyLockedRule(node, true);
+          }
+
+          node.querySelectorAll?.('input, select, textarea, button')
+            .forEach((el) => applyLockedRule(el, true));
+        }
+      }
+    });
+
+    lockObserver.observe(wrapper, { childList: true, subtree: true });
+  }
+
+  const render = (state, change) => {
+    void state;
+    void change;
     ensureDiagnosticsPanel(root);
-    const state = getState();
-    const period = state.currentPeriodId ? state.payrollPeriods.get(state.currentPeriodId) : null;
+    const currentState = getState();
+    const period = currentState.currentPeriodId ? currentState.payrollPeriods.get(currentState.currentPeriodId) : null;
+    const isLocked = !!period?.is_locked;
+    const lockKey = `${currentState.currentPeriodId || ''}:${isLocked ? '1' : '0'}`;
     renderPeriodLockStatus(root, period);
     renderPunchCount(root);
     renderDiagnostics(root);
-    renderLockedInputState(root, period);
     renderConflictBanner(root);
+
+    if (lockKey !== lastLockKey) {
+      renderLockedInputState(root, period);
+      refreshLockObserver(isLocked);
+      lastLockKey = lockKey;
+    }
   };
 
   render();
-  return subscribe(render);
+  const unsub = subscribe(render);
+  return () => {
+    if (lockObserver) lockObserver.disconnect();
+    lockObserver = null;
+    unsub();
+  };
 }
