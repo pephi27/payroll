@@ -299,15 +299,9 @@
       }
     }
 
-    if (rendered.length) {
-      renderAuditSubtabs(rendered);
-      setActiveAuditSubtab(rendered[0]); // show first segment by default
-      setStatus('Loaded ' + rendered.length + ' segment(s).');
-    } else {
-      resetAuditTabs();
-      cont.querySelectorAll('[data-audit-segment]').forEach(card=>{ card.style.display = ''; });
-      setStatus('No stored segments found.');
-    }
+    resetAuditTabs();
+    cont.querySelectorAll('[data-audit-segment]').forEach(card=>{ card.style.display = ''; });
+    setStatus(rendered.length ? ('Loaded ' + rendered.length + ' segment(s).') : 'No stored segments found.');
   }
 
   window.renderAuditPanel = async function(){
