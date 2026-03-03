@@ -22,6 +22,8 @@ const initialState = {
 
 const state = structuredClone(initialState);
 const listeners = new Set();
+let batchDepth = 0;
+let pendingChanges = [];
 
 export function getState() {
   return state;
@@ -33,7 +35,25 @@ export function subscribe(listener) {
 }
 
 function notify(change) {
+  if (batchDepth > 0) {
+    pendingChanges.push(change);
+    return;
+  }
   listeners.forEach((listener) => listener(state, change));
+}
+
+export function batch(fn) {
+  batchDepth += 1;
+  try {
+    return fn();
+  } finally {
+    batchDepth -= 1;
+    if (batchDepth === 0 && pendingChanges.length) {
+      const changes = pendingChanges;
+      pendingChanges = [];
+      notify({ type: 'batch', changes });
+    }
+  }
 }
 
 export function setCurrentPeriod(periodId) {
