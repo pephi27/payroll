@@ -49,48 +49,186 @@ const TABLE_LOADERS = {
 };
 
 
+const OPTIMIZED_LOAD_FLAG = 'USE_OPTIMIZED_LOAD';
+const PAGE_SIZE = 1000;
+const PERIOD_COLUMN = 'payroll_period_id';
 
-async function fetchPunchRowsByKnownShapes(periodId) {
-  const useScopedReads = getFeatureFlag('payroll_ff_scoped_reads_v1', false);
+function hasOwn(row, key) {
+  return Object.prototype.hasOwnProperty.call(row || {}, key);
+}
 
-  // Prefer a server-side filter when available. Fall back to full-fetch filtering
-  // for older deployments where the period column may not exist.
-  if (useScopedReads && periodId) {
-    const { data, error } = await requireSupabaseClient()
-      .from(TABLES.punches)
-      .select('*')
-      .eq('payroll_period_id', periodId)
-      .order('punch_at', { ascending: true });
+function sortRowsByKnownTimestamp(table, rows) {
+  if (table !== TABLES.punches) return rows;
+  rows.sort((a, b) => {
+    const aStamp = a?.punch_at || `${a?.date || ''} ${a?.time || ''}`;
+    const bStamp = b?.punch_at || `${b?.date || ''} ${b?.time || ''}`;
+    return String(aStamp).localeCompare(String(bStamp));
+  });
+  return rows;
+}
 
-    if (!error) {
-      return { data: Array.isArray(data) ? data : [], error: null };
+async function fetchTablePage({ table, from, to, periodId, optimized }) {
+  let query = requireSupabaseClient().from(table).select('*').range(from, to);
+  if (optimized && periodId) {
+    query = query.eq(PERIOD_COLUMN, periodId);
+  }
+  if (table === TABLES.punches) {
+    query = query.order('punch_at', { ascending: true });
+  }
+  return query;
+}
+
+async function fetchAllRowsPaginated({ table, periodId, optimized }) {
+  const rows = [];
+  let page = 0;
+
+  for (;;) {
+    const from = page * PAGE_SIZE;
+    const to = from + PAGE_SIZE - 1;
+    const { data, error } = await fetchTablePage({ table, from, to, periodId, optimized });
+    if (error) {
+      return { data: null, error };
     }
 
-    console.warn('[payroll:read:fallback] scoped punches query failed, falling back to legacy full fetch', {
-      code: error.code,
-      message: error.message,
-    });
+    const pageRows = Array.isArray(data) ? data : [];
+    rows.push(...pageRows);
+    if (pageRows.length < PAGE_SIZE) break;
+    page += 1;
   }
 
-  // Avoid schema-coupled filters/order clauses that can trigger PostgREST 400s
-  // on older deployments. Fetch rows first, then filter/sort in memory.
-  const { data, error } = await requireSupabaseClient().from(TABLES.punches).select('*');
-  if (error) return { data: null, error };
+  return { data: sortRowsByKnownTimestamp(table, rows), error: null };
+}
 
-  const rows = Array.isArray(data) ? data : [];
-  const hasPeriodColumn = rows.some((row) => Object.prototype.hasOwnProperty.call(row || {}, 'payroll_period_id'));
+function getPeriodCoverage(rows, periodId) {
+  const list = Array.isArray(rows) ? rows : [];
+  const withPeriodId = list.filter((row) => hasOwn(row, PERIOD_COLUMN) && row?.[PERIOD_COLUMN]);
+  const missingPeriodId = list.filter((row) => !hasOwn(row, PERIOD_COLUMN) || !row?.[PERIOD_COLUMN]);
+  const matched = withPeriodId.filter((row) => row[PERIOD_COLUMN] === periodId);
+
+  return {
+    total: list.length,
+    withPeriodId: withPeriodId.length,
+    missingPeriodId: missingPeriodId.length,
+    matched: matched.length,
+    hasLegacyRows: missingPeriodId.length > 0,
+  };
+}
+
+async function loadRowsWithOptionalOptimizedFilter(table, periodId) {
+  const useOptimized = getFeatureFlag(OPTIMIZED_LOAD_FLAG, false);
+  if (!useOptimized || !periodId) {
+    return fetchAllRowsPaginated({ table, periodId, optimized: false });
+  }
+
+  const optimizedResult = await fetchAllRowsPaginated({ table, periodId, optimized: true });
+  if (!optimizedResult.error) {
+    return optimizedResult;
+  }
+
+  console.warn('[payroll:read:fallback] optimized query failed, falling back to legacy query', {
+    table,
+    code: optimizedResult.error.code,
+    message: optimizedResult.error.message,
+  });
+
+  return fetchAllRowsPaginated({ table, periodId, optimized: false });
+}
+
+async function debugVerifyPeriodLoad(table, periodId) {
+  const useOptimized = getFeatureFlag(OPTIMIZED_LOAD_FLAG, false);
+  if (!useOptimized || !periodId) return;
+
+  try {
+    const legacy = await fetchAllRowsPaginated({ table, periodId, optimized: false });
+    const optimized = await fetchAllRowsPaginated({ table, periodId, optimized: true });
+    if (legacy.error || optimized.error) return;
+
+    const legacyCoverage = getPeriodCoverage(legacy.data, periodId);
+    const optimizedCoverage = getPeriodCoverage(optimized.data, periodId);
+
+    const shouldFallback = legacyCoverage.hasLegacyRows;
+    if (shouldFallback) {
+      console.warn('[payroll:verify] legacy rows without payroll_period_id detected; optimized filtering may omit rows', {
+        table,
+        periodId,
+        legacyCoverage,
+        optimizedCoverage,
+      });
+      return;
+    }
+
+    if (legacyCoverage.matched !== optimizedCoverage.total) {
+      console.warn('[payroll:verify] row count mismatch between legacy and optimized loads', {
+        table,
+        periodId,
+        legacyMatched: legacyCoverage.matched,
+        optimizedCount: optimizedCoverage.total,
+      });
+    }
+
+    const legacyTotal = (legacy.data || []).reduce((sum, row) => {
+      const gross = Number(row?.gross_pay || 0);
+      const net = Number(row?.net_pay || 0);
+      return sum + gross + net;
+    }, 0);
+
+    const optimizedTotal = (optimized.data || []).reduce((sum, row) => {
+      const gross = Number(row?.gross_pay || 0);
+      const net = Number(row?.net_pay || 0);
+      return sum + gross + net;
+    }, 0);
+
+    if (Math.abs(legacyTotal - optimizedTotal) > 0.0001) {
+      console.warn('[payroll:verify] totals mismatch between legacy and optimized loads', {
+        table,
+        periodId,
+        legacyTotal,
+        optimizedTotal,
+      });
+    }
+  } catch (error) {
+    console.warn('[payroll:verify] debug verify failed', { table, periodId, message: error?.message || String(error) });
+  }
+}
+
+
+async function fetchPunchRowsByKnownShapes(periodId) {
+  const useScopedReads = getFeatureFlag('payroll_ff_scoped_reads_v1', false) || getFeatureFlag(OPTIMIZED_LOAD_FLAG, false);
+
+  if (useScopedReads && periodId) {
+    const scoped = await loadRowsWithOptionalOptimizedFilter(TABLES.punches, periodId);
+    if (!scoped.error) {
+      const coverage = getPeriodCoverage(scoped.data, periodId);
+      if (!coverage.hasLegacyRows) {
+        debugVerifyPeriodLoad(TABLES.punches, periodId);
+        return scoped;
+      }
+
+      console.warn('[payroll:read:fallback] scoped punches omitted legacy rows, falling back to legacy full fetch', {
+        periodId,
+        coverage,
+      });
+    } else {
+      console.warn('[payroll:read:fallback] scoped punches query failed, falling back to legacy full fetch', {
+        code: scoped.error.code,
+        message: scoped.error.message,
+      });
+    }
+  }
+
+  const legacy = await fetchAllRowsPaginated({ table: TABLES.punches, periodId, optimized: false });
+  if (legacy.error) return legacy;
+
+  const rows = Array.isArray(legacy.data) ? legacy.data : [];
+  const hasPeriodColumn = rows.some((row) => hasOwn(row, PERIOD_COLUMN));
 
   let filtered = rows;
   if (periodId && hasPeriodColumn) {
     filtered = rows.filter((row) => row?.payroll_period_id === periodId);
   }
 
-  filtered.sort((a, b) => {
-    const aStamp = a?.punch_at || `${a?.date || ''} ${a?.time || ''}`;
-    const bStamp = b?.punch_at || `${b?.date || ''} ${b?.time || ''}`;
-    return String(aStamp).localeCompare(String(bStamp));
-  });
-
+  sortRowsByKnownTimestamp(TABLES.punches, filtered);
+  debugVerifyPeriodLoad(TABLES.punches, periodId);
   return { data: filtered, error: null };
 }
 
@@ -167,6 +305,20 @@ async function createRowWithLock({ table, row, periodId, stateKey }) {
 export const payrollService = {
   tables: TABLES,
 
+  async debugVerifyOptimizedLoad(periodId) {
+    const tables = [
+      TABLES.dtr,
+      TABLES.loans,
+      TABLES.loanDeductions,
+      TABLES.contribFlags,
+      TABLES.punches,
+    ];
+
+    for (const table of tables) {
+      await debugVerifyPeriodLoad(table, periodId);
+    }
+  },
+
   async loadPeriods() {
     const { data, error } = await requireSupabaseClient()
       .from(TABLES.periods)
@@ -188,10 +340,27 @@ export const payrollService = {
 
   async loadCoreReadModels({ periodId } = {}) {
     const loaders = Object.values(TABLE_LOADERS).map(async ({ table, stateKey }) => {
-      const { data, error } = await requireSupabaseClient().from(table).select('*');
-      if (error) throw error;
-      data.forEach((row) => mergeRow(stateKey, row));
-      return { table, count: data.length };
+      const result = await loadRowsWithOptionalOptimizedFilter(table, periodId);
+      if (result.error) throw result.error;
+
+      const rows = Array.isArray(result.data) ? result.data : [];
+      const coverage = getPeriodCoverage(rows, periodId);
+
+      let rowsToMerge = rows;
+      if (getFeatureFlag(OPTIMIZED_LOAD_FLAG, false) && periodId && coverage.hasLegacyRows) {
+        console.warn('[payroll:read:fallback] optimized filtering may omit legacy rows; using legacy in-memory filter', {
+          table,
+          periodId,
+          coverage,
+        });
+        const legacy = await fetchAllRowsPaginated({ table, periodId, optimized: false });
+        if (legacy.error) throw legacy.error;
+        rowsToMerge = Array.isArray(legacy.data) ? legacy.data : [];
+      }
+
+      rowsToMerge.forEach((row) => mergeRow(stateKey, row));
+      debugVerifyPeriodLoad(table, periodId);
+      return { table, count: rowsToMerge.length };
     });
 
     const punches = this.loadPunchesByPeriod(periodId);
