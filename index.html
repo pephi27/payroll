@@ -715,7 +715,7 @@
 /* Manual DTR indicator */
 #resultsTable .manual-indicator { color: #ef4444; margin-left: 4px; font-weight: 700; }
 
-/* DTR Punch Editor Modal */
+/* DTR Entries Modal */
 .dtr-modal-overlay {
   position: fixed;
   inset: 0;
@@ -728,42 +728,39 @@
 }
 .dtr-modal-overlay.is-open { display: flex; }
 .dtr-modal-dialog {
-  background: #fff;
+  background: var(--bp-surface);
+  color: var(--bp-text);
+  border: 1px solid var(--bp-border);
   border-radius: 10px;
   box-shadow: 0 10px 30px rgba(15, 23, 42, 0.2);
-  max-width: 520px;
+  max-width: 560px;
   width: 100%;
   padding: 18px 20px;
 }
-.dtr-modal-dialog h3 {
-  margin: 0 0 12px;
-  font-size: 18px;
-}
-.dtr-modal-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
-}
-.dtr-modal-grid label {
-  font-size: 12px;
-  color: #475569;
-}
+.dtr-modal-dialog h3 { margin: 0 0 12px; font-size: 18px; }
+.dtr-modal-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.dtr-modal-grid label { font-size: 12px; color: var(--bp-text-dim); }
+.dtr-modal-grid select { width: 100%; margin-top: 4px; }
 .dtr-modal-grid select {
-  width: 100%;
-  margin-top: 4px;
+  background: var(--bp-surface2);
+  color: var(--bp-text);
+  border: 1px solid var(--bp-border2);
 }
-.dtr-modal-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 8px;
-  margin-top: 16px;
-}
-
-/* DTR Punch Editor fields by scope */
-#dtrPunchModal[data-scope="regular"] .dtr-punch-field[data-field-group="ot"],
-#dtrPunchModal[data-scope="overtime"] .dtr-punch-field[data-field-group="regular"] {
-  display: none;
-}
+.dtr-modal-section { border: 1px solid var(--bp-border2); border-radius: 8px; padding: 10px; margin-top: 10px; }
+.dtr-modal-section h4 { margin: 0 0 8px; font-size: 13px; color: var(--bp-text); }
+.dtr-modal-actions, .dtr-modal-toggles { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
+.dtr-modal-error { color: #dc2626; font-size: 12px; margin-top: 2px; min-height: 14px; }
+.dtr-hidden { display: none; }
+.dtr-row-actions { display:flex; align-items:center; justify-content:flex-end; gap:6px; }
+.dtr-entry-btn { background:transparent; border:1px solid transparent; color:inherit; padding:4px 6px; }
+.dtr-more-btn { min-width:28px; height:28px; border:1px solid var(--bp-border2); background:transparent; border-radius:6px; color: var(--bp-text); }
+.dtr-more-menu { position:absolute; right:8px; top:34px; z-index:8; background:var(--bp-surface); border:1px solid var(--bp-border2); border-radius:6px; padding:4px; display:none; }
+.dtr-more-menu.is-open { display:block; }
+.dtr-more-menu button { display:block; width:100%; text-align:left; background:transparent; border:none; padding:6px 8px; color: var(--bp-text); }
+.dtr-badge { display:inline-block; margin-left:4px; font-size:10px; line-height:1; border:1px solid #64748b; border-radius:999px; padding:2px 6px; color:#475569; }
+.dtr-modal-actions button,
+.dtr-modal-toggles button { background: var(--bp-surface2); color: var(--bp-text); border: 1px solid var(--bp-border2); }
+.dtr-modal-actions button.primary { background: var(--bp-accent); color: #fff; border-color: var(--bp-accent); }
 
 
 /* Loan Tracker */
@@ -2634,13 +2631,6 @@ window.addEventListener('load', dashReports);
        OT Hrs
       </th>
       <th>Total Hours</th>
-      <th>
-       Split
-      </th>
-      <th class="punches-header">
-       Entrys
-      </th>
-      <!-- Added explicit Actions column to ensure consistent header structure -->
       <th class="actions-header">
        Actions
       </th>
@@ -15938,72 +15928,105 @@ function openPunchEditor(rowContext) {
   if (!modal || !rowContext) return;
   const activeEl = document.activeElement;
   modal.__lastActiveElement = activeEl && activeEl instanceof HTMLElement ? activeEl : null;
-  const { empId, date, name } = rowContext;
-  const scope = rowContext.scope || 'all';
+  const { empId, date, name, tr } = rowContext;
   const title = document.getElementById('dtrPunchModalTitle');
-  if (title) {
-    const label = scope === 'overtime' ? 'OT' : scope === 'regular' ? 'Regular' : 'DTR';
-    title.textContent = `Edit ${label} Entrys: ${name || empId} — ${date}`;
-  }
+  if (title) title.textContent = `Edit Entries: ${name || empId} — ${date}`;
   modal.dataset.empId = empId;
   modal.dataset.date = date;
-  modal.dataset.scope = scope;
-  const optionsByField = {
-    amIn: getPunchOptions(empId, date, 'amIn'),
-    amOut: getPunchOptions(empId, date, 'amOut'),
-    pmIn: getPunchOptions(empId, date, 'pmIn'),
-    pmOut: getPunchOptions(empId, date, 'pmOut'),
-    otIn: getPunchOptions(empId, date, 'otIn'),
-    otOut: getPunchOptions(empId, date, 'otOut')
-  };
   const overrideKey = `${empId}___${date}`;
-  const overrides = dtrOverrides[overrideKey] || {};
-  const selectMap = {
-    amIn: document.getElementById('dtrPunchAmIn'),
-    amOut: document.getElementById('dtrPunchAmOut'),
-    pmIn: document.getElementById('dtrPunchPmIn'),
-    pmOut: document.getElementById('dtrPunchPmOut'),
-    otIn: document.getElementById('dtrPunchOtIn'),
-    otOut: document.getElementById('dtrPunchOtOut')
+  const emp = storedEmployees && storedEmployees[empId];
+  const defaultProj = (emp && emp.projectId) ? String(emp.projectId) : '';
+  const dayProject = (overridesProjects && Object.prototype.hasOwnProperty.call(overridesProjects, overrideKey))
+    ? String(overridesProjects[overrideKey] || '')
+    : defaultProj;
+  const splitEntry = (splits && splits[overrideKey]) || null;
+  const resolveSegProject = (seg) => {
+    const segKey = `${overrideKey}___${seg}`;
+    if (overridesProjects && Object.prototype.hasOwnProperty.call(overridesProjects, segKey)) return String(overridesProjects[segKey] || '');
+    return dayProject;
   };
-  Object.keys(selectMap).forEach(key => {
-    const select = selectMap[key];
-    if (!select) return;
-    select.innerHTML = '';
-    const autoOpt = document.createElement('option');
-    autoOpt.value = '';
-    autoOpt.textContent = '(Auto)';
-    select.appendChild(autoOpt);
-    const options = optionsByField[key] || [];
-    options.forEach(opt => {
-      const optionEl = document.createElement('option');
-      optionEl.value = opt.value;
-      optionEl.textContent = opt.label;
-      select.appendChild(optionEl);
-    });
-    const stored = normalizeOverrideValue(overrides[key]);
-    if (stored) {
-      // Preserve persisted +1 values in case punches were later removed.
-      if (![...select.options].some(opt => opt.value === stored)) {
-        const storedOption = document.createElement('option');
-        storedOption.value = stored;
-        storedOption.textContent = /\+\d+$/.test(stored)
-          ? `${stripNextDaySuffix(stored)} (+${stored.split('+')[1]})`
-          : stored;
-        select.appendChild(storedOption);
-      }
-      select.value = stored;
-    } else {
-      select.value = '';
-    }
+  const projectOpts = [{ value:'', label:'(Select project)' }];
+  Object.keys(storedProjects || {}).forEach(id => {
+    const p = storedProjects[id];
+    if (p && p.active === false) return;
+    projectOpts.push({ value:String(id), label:p && p.name ? p.name : String(id) });
   });
+  ['dtrPunchProject1','dtrPunchProject2','dtrPunchOtProject'].forEach(id => {
+    const sel = document.getElementById(id);
+    if (!sel) return;
+    sel.innerHTML = '';
+    projectOpts.forEach(opt => {
+      const o = document.createElement('option');
+      o.value = opt.value;
+      o.textContent = opt.label;
+      sel.appendChild(o);
+    });
+  });
+
+  const populateTimeSelect = (id, options, currentValue) => {
+    const sel = document.getElementById(id);
+    if (!sel) return;
+    sel.innerHTML = '';
+    const empty = document.createElement('option');
+    empty.value = '';
+    empty.textContent = '(None)';
+    sel.appendChild(empty);
+    (options || []).forEach(opt => {
+      const o = document.createElement('option');
+      o.value = normalizeOverrideValue(opt.value);
+      o.textContent = opt.label;
+      sel.appendChild(o);
+    });
+    const normalizedCurrent = normalizeOverrideValue(currentValue || '');
+    if (normalizedCurrent && !Array.from(sel.options).some(o => o.value === normalizedCurrent)) {
+      const o = document.createElement('option');
+      o.value = normalizedCurrent;
+      o.textContent = /\+\d+$/.test(normalizedCurrent)
+        ? `${stripNextDaySuffix(normalizedCurrent)} (+${normalizedCurrent.split('+')[1]})`
+        : normalizedCurrent;
+      sel.appendChild(o);
+    }
+    sel.value = normalizedCurrent;
+  };
+
+  const getTime = (key) => {
+    const fromRow = tr && tr.dataset ? normalizeOverrideValue(tr.dataset[key] || '') : '';
+    if (fromRow) return fromRow;
+    const o = dtrOverrides && dtrOverrides[overrideKey] ? dtrOverrides[overrideKey] : {};
+    const map = { clockIn1:'amIn', clockOut1:'amOut', clockIn2:'pmIn', clockOut2:'pmOut', otIn:'otIn', otOut:'otOut' };
+    return o && map[key] ? normalizeOverrideValue(o[map[key]] || '') : '';
+  };
+
+  const seg2Visible = !!((splitEntry && splitEntry.PM) || getTime('clockIn2') || getTime('clockOut2'));
+  const otVisible = !!((splitEntry && splitEntry.OT) || getTime('otIn') || getTime('otOut'));
+  modal.dataset.seg2 = seg2Visible ? '1' : '0';
+  modal.dataset.ot = otVisible ? '1' : '0';
+  const seg2Section = document.getElementById('dtrSeg2Section');
+  const otSection = document.getElementById('dtrOtSection');
+  if (seg2Section) seg2Section.classList.toggle('dtr-hidden', !seg2Visible);
+  if (otSection) otSection.classList.toggle('dtr-hidden', !otVisible);
+
+  const setVal = (id, val) => { const el = document.getElementById(id); if (el) el.value = val || ''; };
+  setVal('dtrPunchProject1', resolveSegProject('AM'));
+  setVal('dtrPunchProject2', resolveSegProject('PM'));
+  setVal('dtrPunchOtProject', resolveSegProject('OT'));
+  populateTimeSelect('dtrPunchAmIn', getPunchOptions(empId, date, 'amIn'), getTime('clockIn1'));
+  populateTimeSelect('dtrPunchAmOut', getPunchOptions(empId, date, 'amOut'), getTime('clockOut1'));
+  populateTimeSelect('dtrPunchPmIn', getPunchOptions(empId, date, 'pmIn'), getTime('clockIn2'));
+  populateTimeSelect('dtrPunchPmOut', getPunchOptions(empId, date, 'pmOut'), getTime('clockOut2'));
+  populateTimeSelect('dtrPunchOtIn', getPunchOptions(empId, date, 'otIn'), getTime('otIn'));
+  populateTimeSelect('dtrPunchOtOut', getPunchOptions(empId, date, 'otOut'), getTime('otOut'));
+
+  const err = document.getElementById('dtrPunchGlobalError');
+  if (err) err.textContent = '';
+  modal.querySelectorAll('[data-error-for]').forEach(el => { el.textContent = ''; });
+
   modal.classList.add('is-open');
   modal.setAttribute('aria-hidden', 'false');
   const firstFocusable = modal.querySelector('button, select, input, [tabindex]:not([tabindex="-1"])');
-  if (firstFocusable && typeof firstFocusable.focus === 'function') {
-    firstFocusable.focus();
-  }
+  if (firstFocusable && typeof firstFocusable.focus === 'function') firstFocusable.focus();
 }
+
 // Store per-date split flags for half-day display. When true for an empId+date,
 // the DTR entry is rendered as two separate rows (AM and PM) rather than a
 // single combined row. The split state is persisted in localStorage under
@@ -16100,6 +16123,27 @@ function unsplitRecord(key) {
   saveSplits();
   saveOverrides();
   window.scheduleRenderResults?.('dtr-split-toggle');
+}
+function buildDtrActionsCellHtml(){
+  return '<div class="dtr-row-actions"><button type="button" class="dtr-entry-btn dtr-punch-btn">✏️ Entries</button><button type="button" class="dtr-more-btn" aria-label="More actions">⋯</button><div class="dtr-more-menu"><button type="button" class="dtr-del-btn">🗑 Delete</button></div></div>';
+}
+function getRowBadges(empId, date, segmentState){
+  const key = `${empId}___${date}`;
+  const emp = storedEmployees && storedEmployees[empId];
+  const base = (emp && emp.projectId) ? String(emp.projectId) : '';
+  const day = (overridesProjects && Object.prototype.hasOwnProperty.call(overridesProjects, key)) ? String(overridesProjects[key] || '') : base;
+  const segProj = seg => {
+    const k = `${key}___${seg}`;
+    if (overridesProjects && Object.prototype.hasOwnProperty.call(overridesProjects, k)) return String(overridesProjects[k] || '');
+    return day;
+  };
+  const active = segmentState || {};
+  const projects = [];
+  if (active.am !== false) projects.push(segProj('AM'));
+  if (active.pm) projects.push(segProj('PM'));
+  if (active.ot) projects.push(segProj('OT'));
+  const uniqueCount = new Set(projects.filter(Boolean)).size;
+  return { multi: uniqueCount > 1, ot: !!active.ot };
 }
 function saveOverrides(){
   if (window.sharedSet) window.sharedSet(LS_OVERRIDES_SCHEDULES, overridesSchedules); else localStorage.setItem(LS_OVERRIDES_SCHEDULES, JSON.stringify(overridesSchedules));
@@ -17967,10 +18011,7 @@ let otMins = 0;
           htmlSeg += '<td>' + formatHours(regDecSeg) + '</td>';
           htmlSeg += '<td>' + formatHours(otDecSeg) + '</td>';
           htmlSeg += '<td>' + formatHours(String((parseFloat(regDecSeg)||0)+(parseFloat(otDecSeg)||0))) + '</td>';
-          htmlSeg += '<td><button type="button" class="btn-unsplit" data-key="' + splitKey + '" onclick="unsplitRecord(this.dataset.key)">Unsplit</button></td>';
-          htmlSeg += '<td class="punches-cell"><button type="button" class="dtr-punch-btn">✏ Entrys</button></td>';
-          // Ensure Actions column always has a Delete button for split rows
-          htmlSeg += '<td class="actions-cell"><button type="button" class="dtr-del-btn">Delete</button></td>';
+          htmlSeg += '<td class="actions-cell">' + buildDtrActionsCellHtml() + '</td>';
           trSeg.innerHTML = htmlSeg;
           try {
             if (typeof manualKeys !== 'undefined' && manualKeys.has(splitKey)) {
@@ -18009,6 +18050,12 @@ let otMins = 0;
             trSeg.dataset.otOut = otOutSeg || '';
           }
           trSeg.dataset.times = JSON.stringify(timesForHalf);
+          const badgesSeg = getRowBadges(empId, date, { am: true, pm: !!splitEntry.PM, ot: !!splitEntry.OT });
+          const nameCellSeg = trSeg.cells[1];
+          if (nameCellSeg) {
+            if (badgesSeg.multi) nameCellSeg.insertAdjacentHTML('beforeend', '<span class="dtr-badge">Multi-project</span>');
+            if (badgesSeg.ot) nameCellSeg.insertAdjacentHTML('beforeend', '<span class="dtr-badge">OT</span>');
+          }
           tbody.appendChild(trSeg);
           _rowCount++;
           const _regVal=parseFloat(regDecSeg)||0; const _otVal=parseFloat(otDecSeg)||0;
@@ -18032,9 +18079,7 @@ let otMins = 0;
           (merged.otIn ? '<td>'+__fmt12Clock(merged.otIn)+'</td>' : '<td class="missing">-</td>') +
           (merged.otOut ? '<td>'+__fmt12Clock(merged.otOut)+'</td>' : '<td class="missing">-</td>') +
           '<td>'+formatHours(regDec)+'</td><td>'+formatHours(otDec)+'</td><td>'+formatHours(minsToDecimal(merged.regMins + merged.otMins))+'</td>' +
-          '<td><button type="button" class="btn-split" data-key="'+splitKey+'" onclick="splitRecord(this.dataset.key)">Split</button></td>' +
-          '<td class="punches-cell"><button type="button" class="dtr-punch-btn">✏ Entrys</button></td>' +
-          '<td class="actions-cell"><button type="button" class="dtr-del-btn">Delete</button></td>';
+          '<td class="actions-cell">'+buildDtrActionsCellHtml()+'</td>';
         if(overridesSchedules[overrideKey] || overridesProjects[overrideKeyProj] !== undefined){ tr.style.backgroundColor='#fff3cd'; }
         try{
           if (typeof manualKeys !== 'undefined' && manualKeys.has(splitKey)) {
@@ -18058,6 +18103,12 @@ let otMins = 0;
         tr.dataset.clockOut2 = merged.pmOut || '';
         tr.dataset.otIn = merged.otIn || '';
         tr.dataset.otOut = merged.otOut || '';
+        const badgesMerged = getRowBadges(empId, date, { am: true, pm: !!merged.pmIn || !!merged.pmOut, ot: !!merged.otIn || !!merged.otOut });
+        const nameCellMerged = tr.cells[1];
+        if (nameCellMerged) {
+          if (badgesMerged.multi) nameCellMerged.insertAdjacentHTML('beforeend', '<span class="dtr-badge">Multi-project</span>');
+          if (badgesMerged.ot) nameCellMerged.insertAdjacentHTML('beforeend', '<span class="dtr-badge">OT</span>');
+        }
         tbody.appendChild(tr);
         const _regVal=parseFloat(regDec)||0; const _otVal=parseFloat(otDec)||0; _dtrTotalReg+=_regVal; _dtrTotalOt+=_otVal; _dtrEmpIds.add(empId);
       }
@@ -18080,10 +18131,7 @@ let otMins = 0;
       (otOutCalc ? '<td>' + __fmt12Clock(otOutCalc) + '</td>' : '<td class=\"missing\">-</td>') +
       '<td>'+formatHours(totalRegularDecimal)+'</td><td>'+formatHours(otDecimal)+'</td><td>'+formatHours(__tot)+'</td>' +
       // Use a named handler with a data-key attribute instead of an inline IIFE.
-      '<td><button type="button" class="btn-split" data-key="' + empId + '___' + date + '" onclick="splitRecord(this.dataset.key)">Split</button></td>' +
-      '<td class="punches-cell"><button type="button" class="dtr-punch-btn">✏ Entrys</button></td>' +
-      // Ensure Actions column always has a Delete button for unsplit rows
-      '<td class="actions-cell"><button type="button" class="dtr-del-btn">Delete</button></td>';
+      '<td class="actions-cell">'+buildDtrActionsCellHtml()+'</td>';
     if(overridesSchedules[overrideKey] || overridesProjects[overrideKeyProj] !== undefined){
       tr.style.backgroundColor = '#fff3cd';
     }
@@ -18113,6 +18161,12 @@ let otMins = 0;
     tr.dataset.otIn = otInCalc || '';
     tr.dataset.otOut = otOutCalc || '';
     try { tr.dataset.times = JSON.stringify(times); } catch(_) { tr.dataset.times = '[]'; }
+    const badges = getRowBadges(empId, date, { am: true, pm: !!(pmInActual && pmOutActual), ot: !!(otInCalc && otOutCalc) });
+    const nameCell = tr.cells[1];
+    if (nameCell) {
+      if (badges.multi) nameCell.insertAdjacentHTML('beforeend', '<span class="dtr-badge">Multi-project</span>');
+      if (badges.ot) nameCell.insertAdjacentHTML('beforeend', '<span class="dtr-badge">OT</span>');
+    }
     tbody.appendChild(tr);
     _rowCount++;
     // Accumulate totals for unsplit rows
@@ -19022,34 +19076,46 @@ function restoreData(file) {
   </div>
 </div>
 
-<!-- DTR Punch Editor Modal -->
+<!-- DTR Entries Editor Modal -->
 <div id="dtrPunchModal" class="dtr-modal-overlay" role="presentation" aria-hidden="true">
   <div class="dtr-modal-dialog" role="dialog" aria-modal="true" aria-labelledby="dtrPunchModalTitle">
-    <h3 id="dtrPunchModalTitle">Entrys</h3>
-    <div class="dtr-modal-grid">
-      <label class="dtr-punch-field" data-field-group="regular">Clock In 1
-        <select id="dtrPunchAmIn"></select>
-      </label>
-      <label class="dtr-punch-field" data-field-group="regular">Clock Out 1
-        <select id="dtrPunchAmOut"></select>
-      </label>
-      <label class="dtr-punch-field" data-field-group="regular">Clock In 2
-        <select id="dtrPunchPmIn"></select>
-      </label>
-      <label class="dtr-punch-field" data-field-group="regular">Clock Out 2
-        <select id="dtrPunchPmOut"></select>
-      </label>
-      <label class="dtr-punch-field" data-field-group="ot">OT In
-        <select id="dtrPunchOtIn"></select>
-      </label>
-      <label class="dtr-punch-field" data-field-group="ot">OT Out
-        <select id="dtrPunchOtOut"></select>
-        <small class="dtr-punch-hint">If OT ends after midnight, choose the time with (+1).</small>
-      </label>
+    <h3 id="dtrPunchModalTitle">Edit Entries</h3>
+    <div class="dtr-modal-section" data-segment="seg1">
+      <h4>Segment 1 (Regular)</h4>
+      <div class="dtr-modal-grid">
+        <label>Project 1<select id="dtrPunchProject1"></select><div class="dtr-modal-error" data-error-for="project1"></div></label>
+        <div></div>
+        <label>Clock In 1<select id="dtrPunchAmIn"></select><div class="dtr-modal-error" data-error-for="amIn"></div></label>
+        <label>Clock Out 1<select id="dtrPunchAmOut"></select><div class="dtr-modal-error" data-error-for="amOut"></div></label>
+      </div>
     </div>
+    <div id="dtrSeg2Section" class="dtr-modal-section dtr-hidden" data-segment="seg2">
+      <h4>Segment 2 (Regular)</h4>
+      <div class="dtr-modal-grid">
+        <label>Project 2<select id="dtrPunchProject2"></select><div class="dtr-modal-error" data-error-for="project2"></div></label>
+        <div></div>
+        <label>Clock In 2<select id="dtrPunchPmIn"></select><div class="dtr-modal-error" data-error-for="pmIn"></div></label>
+        <label>Clock Out 2<select id="dtrPunchPmOut"></select><div class="dtr-modal-error" data-error-for="pmOut"></div></label>
+      </div>
+      <div class="dtr-modal-toggles"><button id="dtrRemoveSeg2" type="button">Remove Segment 2</button></div>
+    </div>
+    <div id="dtrOtSection" class="dtr-modal-section dtr-hidden" data-segment="ot">
+      <h4>OT Segment</h4>
+      <div class="dtr-modal-grid">
+        <label>OT Project<select id="dtrPunchOtProject"></select><div class="dtr-modal-error" data-error-for="otProject"></div></label>
+        <div></div>
+        <label>OT In<select id="dtrPunchOtIn"></select><div class="dtr-modal-error" data-error-for="otIn"></div></label>
+        <label>OT Out<select id="dtrPunchOtOut"></select><div class="dtr-modal-error" data-error-for="otOut"></div></label>
+      </div>
+      <div class="dtr-modal-toggles"><button id="dtrRemoveOt" type="button">Remove OT</button></div>
+    </div>
+    <div class="dtr-modal-toggles">
+      <button id="dtrAddSeg2" type="button">+ Add Segment</button>
+      <button id="dtrAddOt" type="button">+ Add OT</button>
+    </div>
+    <div class="dtr-modal-error" id="dtrPunchGlobalError"></div>
     <div class="dtr-modal-actions">
       <button id="dtrPunchCancel">Cancel</button>
-      <button id="dtrPunchClear">Clear Overrides</button>
       <button id="dtrPunchSave" class="primary">Save</button>
     </div>
   </div>
@@ -19148,89 +19214,120 @@ function restoreData(file) {
     modal.__wired = true;
 
     const cancelBtn = document.getElementById('dtrPunchCancel');
-    const clearBtn = document.getElementById('dtrPunchClear');
     const saveBtn = document.getElementById('dtrPunchSave');
+    const addSeg2 = document.getElementById('dtrAddSeg2');
+    const addOt = document.getElementById('dtrAddOt');
+    const removeSeg2 = document.getElementById('dtrRemoveSeg2');
+    const removeOt = document.getElementById('dtrRemoveOt');
+    const seg2Section = document.getElementById('dtrSeg2Section');
+    const otSection = document.getElementById('dtrOtSection');
+
+    const setVis = (key, show) => {
+      modal.dataset[key] = show ? '1' : '0';
+      if (key === 'seg2' && seg2Section) seg2Section.classList.toggle('dtr-hidden', !show);
+      if (key === 'ot' && otSection) otSection.classList.toggle('dtr-hidden', !show);
+    };
+    const clearErrors = () => {
+      const g = document.getElementById('dtrPunchGlobalError');
+      if (g) g.textContent = '';
+      modal.querySelectorAll('[data-error-for]').forEach(el => { el.textContent = ''; });
+    };
+    const setError = (key, msg) => {
+      const el = modal.querySelector(`[data-error-for="${key}"]`);
+      if (el) el.textContent = msg;
+    };
+    const get = (id) => (document.getElementById(id)?.value || '').trim();
+    const parseMins = (v) => toMins(v);
 
     if (cancelBtn) cancelBtn.addEventListener('click', closePunchModal);
-    if (clearBtn) clearBtn.addEventListener('click', function(){
-      const empId = modal.dataset.empId;
-      const date = modal.dataset.date;
-      const scope = modal.dataset.scope || 'regular';
-      if (!empId || !date) return closePunchModal();
-      const key = `${empId}___${date}`;
-      if (dtrOverrides && Object.prototype.hasOwnProperty.call(dtrOverrides, key)) {
-        const existing = dtrOverrides[key] || {};
-        const nextValues = {
-          amIn: scope === 'overtime' ? normalizeOverrideValue(existing.amIn) : null,
-          amOut: scope === 'overtime' ? normalizeOverrideValue(existing.amOut) : null,
-          pmIn: scope === 'overtime' ? normalizeOverrideValue(existing.pmIn) : null,
-          pmOut: scope === 'overtime' ? normalizeOverrideValue(existing.pmOut) : null,
-          otIn: scope === 'regular' ? normalizeOverrideValue(existing.otIn) : null,
-          otOut: scope === 'regular' ? normalizeOverrideValue(existing.otOut) : null
-        };
-        const hasAny = Object.values(nextValues).some(val => normalizeOverrideValue(val));
-        if (hasAny) dtrOverrides[key] = nextValues;
-        else delete dtrOverrides[key];
-        saveDtrOverrides();
-      }
-      closePunchModal();
-      syncPayrollAfterOverride();
-    });
+    if (addSeg2) addSeg2.addEventListener('click', () => setVis('seg2', true));
+    if (addOt) addOt.addEventListener('click', () => setVis('ot', true));
+    if (removeSeg2) removeSeg2.addEventListener('click', () => { setVis('seg2', false); ['dtrPunchPmIn','dtrPunchPmOut','dtrPunchProject2'].forEach(id => { const el=document.getElementById(id); if (el) el.value=''; }); });
+    if (removeOt) removeOt.addEventListener('click', () => { setVis('ot', false); ['dtrPunchOtIn','dtrPunchOtOut','dtrPunchOtProject'].forEach(id => { const el=document.getElementById(id); if (el) el.value=''; }); });
+
     if (saveBtn) saveBtn.addEventListener('click', function(){
       const empId = modal.dataset.empId;
       const date = modal.dataset.date;
-      const scope = modal.dataset.scope || 'regular';
       if (!empId || !date) return closePunchModal();
+      clearErrors();
+      const seg2On = modal.dataset.seg2 === '1';
+      const otOn = modal.dataset.ot === '1';
+      const payload = {
+        project1: get('dtrPunchProject1'), amIn: get('dtrPunchAmIn'), amOut: get('dtrPunchAmOut'),
+        project2: seg2On ? get('dtrPunchProject2') : '', pmIn: seg2On ? get('dtrPunchPmIn') : '', pmOut: seg2On ? get('dtrPunchPmOut') : '',
+        otProject: otOn ? get('dtrPunchOtProject') : '', otIn: otOn ? get('dtrPunchOtIn') : '', otOut: otOn ? get('dtrPunchOtOut') : ''
+      };
+      let invalid = false;
+      const validateSeg = (prefix, projectKey, inKey, outKey, required, allowOvernight) => {
+        const inVal = payload[inKey], outVal = payload[outKey], projVal = payload[projectKey];
+        const hasAny = !!(inVal || outVal || projVal || required);
+        if (!hasAny) return;
+        if (!projVal) { setError(projectKey, 'Project is required.'); invalid = true; }
+        if (!inVal || !outVal) { setError(inKey, 'In and Out are required.'); setError(outKey, 'In and Out are required.'); invalid = true; }
+        const inM = parseMins(inVal), outM = parseMins(outVal);
+        if (inVal && outVal && inM != null && outM != null && outM < inM && !allowOvernight) { setError(outKey, 'Out cannot be earlier than In.'); invalid = true; }
+      };
+      validateSeg('seg1', 'project1', 'amIn', 'amOut', true, false);
+      if (seg2On || payload.pmIn || payload.pmOut || payload.project2) validateSeg('seg2', 'project2', 'pmIn', 'pmOut', false, false);
+      if (otOn || payload.otIn || payload.otOut || payload.otProject) validateSeg('ot', 'otProject', 'otIn', 'otOut', false, true);
+      if (invalid) return;
+
       const key = `${empId}___${date}`;
-      const existing = dtrOverrides[key] || {};
-      const getVal = (id) => {
-        const el = document.getElementById(id);
-        return el ? normalizeOverrideValue(el.value) : null;
-      };
-      const nextValues = {
-        amIn: scope === 'overtime' ? normalizeOverrideValue(existing.amIn) : getVal('dtrPunchAmIn'),
-        amOut: scope === 'overtime' ? normalizeOverrideValue(existing.amOut) : getVal('dtrPunchAmOut'),
-        pmIn: scope === 'overtime' ? normalizeOverrideValue(existing.pmIn) : getVal('dtrPunchPmIn'),
-        pmOut: scope === 'overtime' ? normalizeOverrideValue(existing.pmOut) : getVal('dtrPunchPmOut'),
-        otIn: scope === 'regular' ? normalizeOverrideValue(existing.otIn) : getVal('dtrPunchOtIn'),
-        otOut: scope === 'regular' ? normalizeOverrideValue(existing.otOut) : getVal('dtrPunchOtOut')
-      };
+      const otOutVal = (() => {
+        const inM = parseMins(payload.otIn), outM = parseMins(payload.otOut);
+        if (payload.otIn && payload.otOut && inM != null && outM != null && outM < inM) return `${payload.otOut}+1`;
+        return payload.otOut;
+      })();
+      const nextValues = { amIn: normalizeOverrideValue(payload.amIn), amOut: normalizeOverrideValue(payload.amOut), pmIn: normalizeOverrideValue(payload.pmIn), pmOut: normalizeOverrideValue(payload.pmOut), otIn: normalizeOverrideValue(payload.otIn), otOut: normalizeOverrideValue(otOutVal) };
       const hasAny = Object.values(nextValues).some(Boolean);
-      if (hasAny) {
-        dtrOverrides[key] = nextValues;
-      } else if (dtrOverrides && Object.prototype.hasOwnProperty.call(dtrOverrides, key)) {
-        delete dtrOverrides[key];
-      }
+      if (hasAny) dtrOverrides[key] = nextValues; else delete dtrOverrides[key];
       saveDtrOverrides();
+
+      const emp = storedEmployees && storedEmployees[empId];
+      const employeeDefaultProject = (emp && emp.projectId) ? String(emp.projectId) : '';
+      const dayProjectAfter = String(payload.project1 || '');
+      const hasSeg2 = !!(seg2On && payload.pmIn && payload.pmOut);
+      const hasOt = !!(otOn && payload.otIn && payload.otOut);
+
+      if (dayProjectAfter && dayProjectAfter !== employeeDefaultProject) overridesProjects[key] = dayProjectAfter;
+      else delete overridesProjects[key];
+
+      // AM always follows Day Project after edit, so no AM segment override is needed.
+      delete overridesProjects[`${key}___AM`];
+
+      if (hasSeg2 && payload.project2 && String(payload.project2) !== dayProjectAfter) {
+        overridesProjects[`${key}___PM`] = String(payload.project2);
+      } else {
+        delete overridesProjects[`${key}___PM`];
+      }
+
+      if (hasOt && payload.otProject && String(payload.otProject) !== dayProjectAfter) {
+        overridesProjects[`${key}___OT`] = String(payload.otProject);
+      } else {
+        delete overridesProjects[`${key}___OT`];
+      }
+
+      const activeProjects = [dayProjectAfter];
+      if (hasSeg2) activeProjects.push(String(payload.project2 || dayProjectAfter));
+      if (hasOt) activeProjects.push(String(payload.otProject || dayProjectAfter));
+      const uniqueProjects = new Set(activeProjects.filter(Boolean));
+
+      if (uniqueProjects.size > 1) {
+        splits[key] = { AM: true, PM: hasSeg2, OT: hasOt };
+      } else {
+        delete splits[key];
+      }
+      saveSplits();
+      saveOverrides();
+      window.scheduleRenderResults?.('dtr-split-toggle');
       closePunchModal();
       syncPayrollAfterOverride();
     });
 
-    modal.addEventListener('click', function(ev){
-      if (ev.target === modal) closePunchModal();
-    });
-    document.addEventListener('keydown', function(ev){
-      if (ev.key === 'Escape' && modal.classList.contains('is-open')) {
-        closePunchModal();
-      }
-    });
+    modal.addEventListener('click', function(ev){ if (ev.target === modal) closePunchModal(); });
+    document.addEventListener('keydown', function(ev){ if (ev.key === 'Escape' && modal.classList.contains('is-open')) closePunchModal(); });
   }
-  function ensurePunchesHeader(){
-    const table = document.getElementById('resultsTable');
-    if(!table) return;
-    const theadRow = table.querySelector('thead tr');
-    if(theadRow && !theadRow.querySelector('.punches-header')){
-      const th = document.createElement('th');
-      th.textContent = 'Punches';
-      th.classList.add('punches-header');
-      const actionsHeader = theadRow.querySelector('.actions-header');
-      if (actionsHeader) {
-        theadRow.insertBefore(th, actionsHeader);
-      } else {
-        theadRow.appendChild(th);
-      }
-    }
-  }
+  function ensurePunchesHeader(){ return; }
   function ensureActionsHeader(){
     const table = document.getElementById('resultsTable');
     if(!table) return;
@@ -19247,6 +19344,12 @@ function restoreData(file) {
     const table = document.getElementById('resultsTable');
     if (!table || table.__dtrDelBound) return;
     table.addEventListener('click', async function(ev){
+      const moreBtn = ev.target && ev.target.closest ? ev.target.closest('.dtr-more-btn') : null;
+      if (moreBtn) {
+        const menu = moreBtn.parentElement && moreBtn.parentElement.querySelector('.dtr-more-menu');
+        if (menu) menu.classList.toggle('is-open');
+        return;
+      }
       const btn = ev.target && ev.target.closest ? ev.target.closest('.dtr-del-btn') : null;
       if (!btn) return;
       const tr = btn.closest('tr');
@@ -19305,99 +19408,24 @@ function restoreData(file) {
       if (!empId || !date) return;
       const emp = storedEmployees && storedEmployees[empId];
       const name = emp && emp.name ? emp.name : (tr.cells[1] ? tr.cells[1].textContent.trim() : '');
-      openPunchEditor({ empId, date, name, scope: 'all' });
+      openPunchEditor({ empId, date, name, tr });
     });
   }
   function addDtrDeleteButtons(){
     const table = document.getElementById('resultsTable');
     if(!table) return;
-    ensurePunchesHeader();
     ensureActionsHeader();
     const rows = table.querySelectorAll('tbody tr');
     rows.forEach(tr => {
-      const hasPunch = !!tr.querySelector('.dtr-punch-btn');
-      const hasDelete = !!tr.querySelector('.dtr-del-btn');
-      if (!hasPunch) {
-        const punchTd = document.createElement('td');
-        punchTd.className = 'punches-cell';
-        const editBtn = document.createElement('button');
-        editBtn.textContent = '✏ Entrys';
-        editBtn.className = 'dtr-punch-btn';
-        punchTd.appendChild(editBtn);
-        const actionsCell = tr.querySelector('.actions-cell');
-        if (actionsCell) {
-          tr.insertBefore(punchTd, actionsCell);
-        } else {
-          tr.appendChild(punchTd);
-        }
+      let actionTd = tr.querySelector('.actions-cell');
+      if (!actionTd) {
+        actionTd = document.createElement('td');
+        actionTd.className = 'actions-cell';
+        tr.appendChild(actionTd);
       }
-      if (hasDelete) return;
-
-      const actionTd = document.createElement('td');
-      actionTd.className = 'actions-cell';
-      const btn = document.createElement('button');
-      btn.textContent = 'Delete';
-      btn.className = 'dtr-del-btn';
-      btn.addEventListener('click', async () => {
-        // Get empId and date from row cells (empId at col 0, date at col 4)
-        const empIdCell = tr.cells[0] ? tr.cells[0].textContent.trim() : '';
-        const dateCell  = tr.cells[4] ? tr.cells[4].textContent.trim() : '';
-        if(!empIdCell || !dateCell) return;
-        // Determine if this row is part of a split (AM/PM). If so, use the attached
-        // metadata to remove only the specific half. Otherwise, remove all times.
-        const isSplitHalf = tr.dataset && tr.dataset.half;
-        const confirmMsg = isSplitHalf
-          ? `Delete this ${tr.dataset.half} DTR for ${empIdCell} on ${dateCell}?`
-          : `Delete all DTR entries for ${empIdCell} on ${dateCell}?`;
-        if(!confirm(confirmMsg)) return;
-        try {
-          if (isSplitHalf) {
-            // Parse times to remove for this half. The dataset.times stores an array
-            // of the exact time strings (e.g., "08:00", "12:00") that belong to
-            // this AM or PM half. Only records with matching empId, date and time
-            // found in this array will be removed.
-            let timesForHalf = [];
-            try {
-              timesForHalf = JSON.parse(tr.dataset.times || '[]');
-            } catch(e) { timesForHalf = []; }
-            // Remove only the specific occurrences of each time listed for this half.
-            // We iterate through the array of times and, for each, remove one matching
-            // record (empId/date/time). This avoids removing duplicates beyond the
-            // count present in timesForHalf (e.g., AM out and OT may share the same
-            // time value, so we only remove the intended PM/OT instances).
-            timesForHalf.forEach(t => {
-              for (let i = 0; i < storedRecords.length; i++) {
-                const rec = storedRecords[i];
-                if (String(rec.empId) === String(empIdCell) && rec.date === dateCell && rec.time === t) {
-                  storedRecords.splice(i, 1);
-                  break; // remove only one matching occurrence per time value
-                }
-              }
-            });
-            // After removing the half, unset the split flag for this emp/date so
-            // the remaining records render as a single row. This mirrors the
-            // behavior of the "Unsplit" button.
-            const splitKey = `${empIdCell}___${dateCell}`;
-            if (splits && splits[splitKey]) {
-              delete splits[splitKey];
-              if (typeof saveSplits === 'function') saveSplits();
-            }
-          } else {
-            // Remove all records for this employee on this date
-            for(let i = storedRecords.length - 1; i >= 0; i--){
-              const rec = storedRecords[i];
-              if(String(rec.empId) === String(empIdCell) && rec.date === dateCell){
-                storedRecords.splice(i, 1);
-              }
-            }
-          }
-          // Persist to Supabase so all devices reflect the deletion
-          await persistStoredRecords();
-          window.scheduleRenderResults?.('dtr-split-toggle');
-        } catch(e){ console.error('DTR delete failed', e); }
-      });
-      actionTd.appendChild(btn);
-      tr.appendChild(actionTd);
+      if (!actionTd.querySelector('.dtr-row-actions')) {
+        actionTd.innerHTML = buildDtrActionsCellHtml();
+      }
     });
   }
   function patchRenderResults(){
