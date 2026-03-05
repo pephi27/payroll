@@ -759,6 +759,41 @@
   margin-top: 16px;
 }
 
+.upload-overlay {
+  position: fixed;
+  inset: 0;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  background: rgba(2, 6, 23, 0.7);
+  z-index: 200000;
+}
+.upload-overlay[aria-hidden="false"] { display: flex; }
+.upload-card {
+  min-width: 260px;
+  max-width: 90vw;
+  background: #0f172a;
+  color: #f8fafc;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  border-radius: 12px;
+  padding: 18px 20px;
+  text-align: center;
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.45);
+}
+.upload-card .spinner {
+  width: 40px;
+  height: 40px;
+  margin: 0 auto 12px;
+  border: 4px solid rgba(226, 232, 240, 0.3);
+  border-top-color: #38bdf8;
+  border-radius: 999px;
+  animation: uploadSpin 0.8s linear infinite;
+}
+#dtrUploadTitle { font-weight: 700; }
+#dtrUploadSub { margin-top: 6px; color: #cbd5e1; font-size: 13px; }
+body.upload-overlay-open { overflow: hidden !important; }
+@keyframes uploadSpin { to { transform: rotate(360deg); } }
+
 /* DTR Punch Editor fields by scope */
 #dtrPunchModal[data-scope="regular"] .dtr-punch-field[data-field-group="ot"],
 #dtrPunchModal[data-scope="overtime"] .dtr-punch-field[data-field-group="regular"] {
@@ -2371,6 +2406,13 @@ window.addEventListener('load', dashReports);
   </aside>
 
   <div class="bp-overlay" id="bpOverlay" aria-hidden="true"></div>
+  <div id="dtrUploadOverlay" class="upload-overlay" aria-hidden="true">
+    <div class="upload-card">
+      <div class="spinner"></div>
+      <div id="dtrUploadTitle">Uploading…</div>
+      <div id="dtrUploadSub">Please wait</div>
+    </div>
+  </div>
 
   <div class="bp-main">
     <div class="bp-topbar">
@@ -17322,96 +17364,127 @@ function parseLine(line){
 
 
 
-document.getElementById('fileInput').addEventListener('change', (ev)=>{
-  const inputEl = ev.target;
-  const files = inputEl.files;
-  if (!files || !files.length) return;
 
-  let processed = 0, totalAdded = 0, errors = 0;
-  const total = files.length;
-  inputEl.disabled = true;
-
-  Array.from(files).forEach(file=>{
-    // Upload the raw .DAT/.TXT file to Supabase for backup/cross-device sync.
-    try {
-      if (typeof uploadDtrFileToCloud === 'function') {
-        uploadDtrFileToCloud(file);
-      }
-    } catch (err) {
-      // Ignore upload errors to avoid blocking file parsing
-    }
-    const r = new FileReader();
-    r.onload = (e)=>{
-      try {
-        const content = String(e.target.result || '');
-        const lines = content.split(/\r?\n/);
-// === MIN PATCH: Only keep records inside the current payroll period (From/To) ===
-let __from = '', __to = '';
-try {
-  const fEl = document.getElementById('weekStart');
-  const tEl = document.getElementById('weekEnd');
-  const wsKey = (typeof LS_WEEKSTART !== 'undefined') ? LS_WEEKSTART : 'ui_payroll_week_start_local';
-  const weKey = (typeof LS_WEEKEND !== 'undefined') ? LS_WEEKEND : 'ui_payroll_week_end_local';
-  __from = (fEl && fEl.value) ? fEl.value : (localStorage.getItem(wsKey) || '');
-  __to   = (tEl && tEl.value) ? tEl.value : (localStorage.getItem(weKey)   || '');
-} catch(_) {}
-function __inRange(d){
-  if (!d) return false;
-  if (__from && d < __from) return false;
-  if (__to   && d > __to)   return false;
-  return true;
+function showUploadOverlay(title, sub){
+  const overlay = document.getElementById('dtrUploadOverlay');
+  const titleEl = document.getElementById('dtrUploadTitle');
+  const subEl = document.getElementById('dtrUploadSub');
+  if (titleEl) titleEl.textContent = title || 'Uploading…';
+  if (subEl) subEl.textContent = sub || 'Please wait';
+  if (overlay) overlay.setAttribute('aria-hidden', 'false');
+  document.body.classList.add('upload-overlay-open');
 }
-// === /MIN PATCH ===
 
-        let added = 0;
-        for(const ln of lines){
-          const p = (typeof parseLine === 'function') ? parseLine(ln) : null;
-          if (p && p.empId && p.date && p.time && __inRange(p.date)){
-            storedRecords.push({ empId: String(p.empId), date: p.date, time: padHM(p.time) });
-            added++;
-          }
-        }
-        // Persist records locally for offline use
-        try { if (window.sharedSet) window.sharedSet(LS_RECORDS, storedRecords); else localStorage.setItem(LS_RECORDS, JSON.stringify(storedRecords)); } catch(e){}
-        // Refresh the DTR grid
-        window.scheduleRenderResults?.('dtr-hours-restore');
-        // Persist the records to Supabase for cross-device sync
-        try {
-          if (typeof saveDtrToCloud === 'function') saveDtrToCloud(storedRecords);
-        } catch (e) {
-          console.warn('Failed to save DTR to Supabase', e);
-        }
-        // Hide the remote alert since we now have data after upload
-        try {
-          if (typeof hideRemoteDtrAlert === 'function') hideRemoteDtrAlert();
-        } catch (e) {
-          // ignore alert errors
-        }
-        totalAdded += added;
-      } catch(err){
-        console.error('Error reading', file.name, err);
-        errors++;
-      } finally {
-        processed++;
-        if (processed === total){
-          inputEl.disabled = false; inputEl.value = '';
-          if (errors > 0){
-            alert(`Upload finished with errors: imported ${totalAdded} record${totalAdded!==1?'s':''} from ${total} file${total>1?'s':''}. (${errors} file${errors>1?'s':''} failed)`);
-          } else {
-            alert(`Upload successful: imported ${totalAdded} record${totalAdded!==1?'s':''} from ${total} file${total>1?'s':''}.`);
-          }
-        }
-      }
-    };
-    r.onerror = ()=>{
-      errors++; processed++;
-      if (processed === total){
-        inputEl.disabled = false; inputEl.value = '';
-        alert(`Upload finished with errors: imported ${totalAdded} record${totalAdded!==1?'s':''} from ${total} file${total>1?'s':''}. (${errors} file${errors>1?'s':''} failed)`);
-      }
-    };
+function setUploadOverlayProgress(current, total, filenameOrPhase){
+  const titleEl = document.getElementById('dtrUploadTitle');
+  const subEl = document.getElementById('dtrUploadSub');
+  const cur = Math.max(0, Number(current) || 0);
+  const tot = Math.max(0, Number(total) || 0);
+  if (titleEl) titleEl.textContent = `Uploading ${cur}/${tot} file(s)…`;
+  if (subEl) subEl.textContent = filenameOrPhase || 'Please wait';
+}
+
+function hideUploadOverlay(){
+  const overlay = document.getElementById('dtrUploadOverlay');
+  if (overlay) overlay.setAttribute('aria-hidden', 'true');
+  document.body.classList.remove('upload-overlay-open');
+}
+
+function readDtrFileText(file){
+  return new Promise((resolve, reject)=>{
+    const r = new FileReader();
+    r.onload = e => resolve(String((e && e.target && e.target.result) || ''));
+    r.onerror = () => reject(new Error(`Failed to read ${file && file.name ? file.name : 'file'}`));
     r.readAsText(file);
   });
+}
+
+async function importAndPersistDtrFile(file){
+  const content = await readDtrFileText(file);
+  const lines = content.split(/\r?\n/);
+
+  // === MIN PATCH: Only keep records inside the current payroll period (From/To) ===
+  let __from = '', __to = '';
+  try {
+    const fEl = document.getElementById('weekStart');
+    const tEl = document.getElementById('weekEnd');
+    const wsKey = (typeof LS_WEEKSTART !== 'undefined') ? LS_WEEKSTART : 'ui_payroll_week_start_local';
+    const weKey = (typeof LS_WEEKEND !== 'undefined') ? LS_WEEKEND : 'ui_payroll_week_end_local';
+    __from = (fEl && fEl.value) ? fEl.value : (localStorage.getItem(wsKey) || '');
+    __to   = (tEl && tEl.value) ? tEl.value : (localStorage.getItem(weKey)   || '');
+  } catch(_) {}
+  function __inRange(d){
+    if (!d) return false;
+    if (__from && d < __from) return false;
+    if (__to   && d > __to)   return false;
+    return true;
+  }
+  // === /MIN PATCH ===
+
+  let added = 0;
+  for (const ln of lines){
+    const p = (typeof parseLine === 'function') ? parseLine(ln) : null;
+    if (p && p.empId && p.date && p.time && __inRange(p.date)){
+      storedRecords.push({ empId: String(p.empId), date: p.date, time: padHM(p.time) });
+      added++;
+    }
+  }
+
+  const persistFn = (typeof persistStoredRecords === 'function')
+    ? persistStoredRecords
+    : (typeof window !== 'undefined' && typeof window.persistStoredRecords === 'function')
+      ? window.persistStoredRecords
+      : null;
+
+  if (persistFn) {
+    await persistFn();
+  } else {
+    const snapshot = Array.isArray(storedRecords) ? storedRecords.slice() : [];
+    try { window.storedRecords = snapshot; } catch (_) {}
+    try { localStorage.setItem(LS_RECORDS, JSON.stringify(snapshot)); } catch (_) {}
+    if (typeof saveDtrToCloud === 'function') {
+      await saveDtrToCloud(snapshot);
+    }
+  }
+  window.scheduleRenderResults?.('dtr-hours-restore');
+
+  try {
+    if (typeof hideRemoteDtrAlert === 'function') hideRemoteDtrAlert();
+  } catch (e) {}
+
+  return added;
+}
+
+document.getElementById('fileInput').addEventListener('change', async (ev)=>{
+  const inputEl = ev.target;
+  const files = Array.from(inputEl.files || []);
+  if (!files.length) return;
+
+  const total = files.length;
+  let totalAdded = 0;
+  inputEl.disabled = true;
+  showUploadOverlay(`Uploading ${total} file(s)…`, '');
+
+  try {
+    for (let i = 0; i < total; i++) {
+      const file = files[i];
+      setUploadOverlayProgress(i + 1, total, `Reading ${file.name}…`);
+      if (typeof uploadDtrFileToCloud === 'function') {
+        await uploadDtrFileToCloud(file);
+      }
+      totalAdded += await importAndPersistDtrFile(file);
+      setUploadOverlayProgress(i + 1, total, `Saved ${file.name}`);
+    }
+
+    alert(`Upload successful: imported ${totalAdded} record${totalAdded!==1?'s':''} from ${total} file${total>1?'s':''}.`);
+  } catch(err){
+    console.error('DTR upload failed', err);
+    alert(`Upload failed: ${err && err.message ? err.message : 'Unknown error'}`);
+  } finally {
+    inputEl.disabled = false;
+    inputEl.value = '';
+    hideUploadOverlay();
+  }
 });
 function padHM(hm){
   if(!hm) return '';
