@@ -2257,91 +2257,94 @@ window.addEventListener('load', dashReports);
 
 </style>
 
-<!-- Supabase-first boot loader -->
+<!-- Boot guard to ensure global stored data is available early -->
 <script>
+/*
+  Immediately initialize global data stores used throughout the app.
+  In addition to reading from localStorage, this version attempts to
+  fetch persisted values from Supabase.  Because the Supabase
+  client is exposed on `window.supabase` by the kv sync adapter,
+  we can asynchronously query the kv_store table for each known
+  key.  If a value exists in Supabase, it takes precedence over
+  localStorage; otherwise, the localStorage fallback is used.  This
+  ensures that data entered on one device is available on other
+  devices without relying on cached local storage.
+*/
 (function(){
-  function setSyncStatus(label, color){
-    const el = document.getElementById('syncStatusBadge');
-    if (!el) return;
-    el.textContent = label;
-    if (color) el.style.color = color;
-  }
-  window.setCloudSyncStatus = setSyncStatus;
-
-  function toObj(rows, idKey){
-    const out = {};
-    (rows || []).forEach(r => {
-      const id = r && (r[idKey] ?? r.id ?? r.emp_id);
-      if (id == null) return;
-      out[String(id)] = r;
-    });
-    return out;
-  }
-
-  async function waitForSupabase(){
-    for (let i = 0; i < 60; i++) {
-      if (window.supabase && typeof window.supabase.from === 'function') return window.supabase;
-      await new Promise(r => setTimeout(r, 100));
-    }
-    return null;
-  }
-
-  window.bootFromCloud = async function bootFromCloud(){
-    setSyncStatus('Loading from cloud...', '#1d4ed8');
-    const sb = await waitForSupabase();
-    if (!sb) {
-      setSyncStatus('Not synced', '#b91c1c');
-      return;
-    }
-    try {
-      const [employeesRes, projectsRes, schedulesRes, recordsRes, dtrOvRes, projOvRes, splitRes] = await Promise.all([
-        sb.from('employees').select('*'),
-        sb.from('projects').select('*'),
-        sb.from('schedules').select('*'),
-        sb.from('dtr_records').select('id,emp_id,work_date,time,manual,created_at'),
-        sb.from('dtr_overrides').select('*'),
-        sb.from('project_overrides').select('*'),
-        sb.from('split_state').select('*')
-      ]);
-      if ([employeesRes, projectsRes, schedulesRes, recordsRes, dtrOvRes, projOvRes, splitRes].some(r => r.error)) {
-        throw new Error('One or more Supabase reads failed.');
+  // Helper to fetch a single key from Supabase.  Returns a Promise
+  // that resolves to the parsed JSON value or undefined on error.
+  function fetchFromSupabase(key){
+    return new Promise((resolve) => {
+      try {
+        const client = window.supabase;
+        const table = window.SUPABASE_TABLE;
+        if (!client || !table) return resolve(undefined);
+        client
+          .from(table)
+          .select('value')
+          .eq('key', key)
+          .maybeSingle()
+          .then(({ data, error }) => {
+            if (error || !data) return resolve(undefined);
+            const v = data.value;
+            if (v == null) return resolve(undefined);
+            // If the stored value is a string, assume it is JSON and parse
+            if (typeof v === 'string') {
+              try { return resolve(JSON.parse(v)); } catch { return resolve(undefined); }
+            }
+            // Otherwise return the JSON value directly
+            return resolve(v);
+          })
+          .catch(() => resolve(undefined));
+      } catch (ex) {
+        resolve(undefined);
       }
-
-      window.storedEmployees = toObj(employeesRes.data, 'id');
-      window.storedProjects = toObj(projectsRes.data, 'id');
-      window.storedSchedules = toObj(schedulesRes.data, 'id');
-      window.storedRecords = (recordsRes.data || []).map(r => ({
-        id: r.id,
-        empId: String(r.emp_id),
-        date: r.work_date,
-        time: r.time,
-        manual: !!r.manual,
-        created_at: r.created_at
-      }));
-      window.dtrOverrides = {};
-      (dtrOvRes.data || []).forEach(r => {
-        const key = `${r.emp_id}___${r.work_date}`;
-        window.dtrOverrides[key] = { amIn: r.amIn, amOut: r.amOut, pmIn: r.pmIn, pmOut: r.pmOut, otIn: r.otIn, otOut: r.otOut };
-      });
-      window.overridesProjects = {};
-      (projOvRes.data || []).forEach(r => {
-        const key = r.segment ? `${r.emp_id}___${r.work_date}___${r.segment}` : `${r.emp_id}___${r.work_date}`;
-        window.overridesProjects[key] = r.project_id;
-      });
-      window.splits = {};
-      (splitRes.data || []).forEach(r => {
-        window.splits[`${r.emp_id}___${r.work_date}`] = r.segments || r.enabled || { AM: !!r.enabled, PM: !!r.enabled, OT: !!r.enabled };
-      });
-
-      document.dispatchEvent(new CustomEvent('cloud-state-loaded'));
-      setSyncStatus('Synced', '#166534');
+    });
+  }
+  (async function(){
+    try {
+      // Employees store (att_employees_v2)
+      if (typeof window.storedEmployees === 'undefined') {
+        const supaVal = await fetchFromSupabase('att_employees_v2');
+        if (supaVal !== undefined) {
+          window.storedEmployees = supaVal;
+        } else {
+          // fallback to localStorage
+          window.storedEmployees = JSON.parse(localStorage.getItem('att_employees_v2') || '{}');
+        }
+      }
+      // Attendance records store (att_records_v2)
+      if (typeof window.storedRecords === 'undefined') {
+        /*
+         * Always initialize the attendance record array as empty.  Unlike other
+         * data stores, DTR records are persisted in a dedicated Supabase table
+         * (`dtr_records`) and should not be bootstrapped from localStorage.  By
+         * starting with an empty array here, the application ensures that any
+         * locally cached data is ignored until the remote dataset is loaded.
+         */
+        window.storedRecords = window.storedRecords || []; }
+      // Projects store (att_projects_v1)
+      if (typeof window.storedProjects === 'undefined') {
+        const supaVal = await fetchFromSupabase('att_projects_v1');
+        if (supaVal !== undefined) {
+          window.storedProjects = supaVal;
+        } else {
+          window.storedProjects = JSON.parse(localStorage.getItem('att_projects_v1') || '{}');
+        }
+      }
+      // Schedules store (att_schedules_v2) – ensures schedules are available early
+      if (typeof window.storedSchedules === 'undefined') {
+        const supaVal = await fetchFromSupabase('att_schedules_v2');
+        if (supaVal !== undefined) {
+          window.storedSchedules = supaVal;
+        } else {
+          window.storedSchedules = JSON.parse(localStorage.getItem('att_schedules_v2') || '{}');
+        }
+      }
     } catch (e) {
-      console.warn('Cloud boot failed', e);
-      setSyncStatus('Not synced', '#b91c1c');
+      console.warn('Boot guard init failed', e);
     }
-  };
-
-  document.addEventListener('DOMContentLoaded', () => { window.bootFromCloud(); }, { once: true });
+  })();
 })();
 </script>
 
@@ -16024,18 +16027,14 @@ function saveSplits() {
 // functions are used by the DTR table buttons to avoid inline IIFEs.  They set
 // the split flag in the `splits` object, persist it to localStorage via
 // saveSplits(), and trigger a re-render of the results.
-async function splitRecord(key) {
+function splitRecord(key) {
   // When splitting, mark all three segments (AM, PM, OT) as split.  Use
   // an object so we can track split state per segment.
   splits[key] = { AM: true, PM: true, OT: true };
   saveSplits();
-  try {
-    const [emp_id, work_date] = String(key).split('___');
-    await commitChange('split-toggle', { row: { emp_id, work_date, segments: splits[key], updated_at: new Date().toISOString() } });
-  } catch(_) {}
   window.scheduleRenderResults?.('dtr-split-toggle');
 }
-async function unsplitRecord(key) {
+function unsplitRecord(key) {
   // Group AM/PM/OT segments by their resolved project IDs.  Each group with
   // more than one segment is recombined (segment-level overrides cleared and
   // marked as unsplit).  Groups with a single segment remain split.
@@ -16100,10 +16099,6 @@ async function unsplitRecord(key) {
 
   saveSplits();
   saveOverrides();
-  try {
-    const [emp_id, work_date] = String(key).split('___');
-    await commitChange('split-toggle', { row: { emp_id, work_date, segments: splits[key] || { AM:false, PM:false, OT:false }, updated_at: new Date().toISOString() } });
-  } catch(_) {}
   window.scheduleRenderResults?.('dtr-split-toggle');
 }
 function saveOverrides(){
@@ -16365,17 +16360,6 @@ let storedSchedules = (window.cacheGet ? window.cacheGet(LS_SCHEDULES, null) : J
 let defaultScheduleId = (window.cacheGet ? window.cacheGet(LS_SCHEDULES_DEFAULT, null) : localStorage.getItem(LS_SCHEDULES_DEFAULT) || null);
 let storedProjects = (window.cacheGet ? window.cacheGet(LS_PROJECTS, {}) : JSON.parse(localStorage.getItem(LS_PROJECTS) || '{}'));
 
-document.addEventListener('cloud-state-loaded', function(){
-  storedRecords = Array.isArray(window.storedRecords) ? window.storedRecords : [];
-  storedEmployees = window.storedEmployees || {};
-  storedSchedules = window.storedSchedules || {};
-  storedProjects = window.storedProjects || {};
-  overridesProjects = window.overridesProjects || overridesProjects;
-  dtrOverrides = window.dtrOverrides || dtrOverrides;
-  splits = window.splits || splits;
-  try { window.scheduleRenderResults?.('cloud-state-loaded'); } catch(_) {}
-});
-
 function safeParseStorageJSON(key, fallbackValue) {
   try {
     const parsed = (window.cacheGet ? window.cacheGet(key, fallbackValue) : JSON.parse(localStorage.getItem(key) || 'null'));
@@ -16413,67 +16397,6 @@ function refreshCoreStoresFromStorage() {
 }
 
 window.refreshCoreStoresFromStorage = refreshCoreStoresFromStorage;
-
-async function commitChange(type, payload){
-  const sb = window.supabase;
-  const setStatus = window.setCloudSyncStatus || function(){};
-  if (!sb) {
-    setStatus('Not synced', '#b91c1c');
-    throw new Error('Supabase client unavailable');
-  }
-  setStatus('Saving...', '#92400e');
-  try {
-    if (type === 'manual-dtr-save') {
-      const rec = payload.record || {};
-      const row = {
-        id: rec.id || __newUuid(),
-        emp_id: String(rec.empId),
-        work_date: rec.date,
-        time: rec.time,
-        manual: !!rec.manual
-      };
-      const { data, error } = await sb.from('dtr_records').upsert(row, { onConflict: 'id' }).select().single();
-      if (error) throw error;
-      const next = { id: data.id, empId: String(data.emp_id), date: data.work_date, time: data.time, manual: !!data.manual, created_at: data.created_at };
-      const idx = storedRecords.findIndex(r => String(r.id) === String(next.id));
-      if (idx >= 0) storedRecords[idx] = next; else storedRecords.push(next);
-    } else if (type === 'delete-records') {
-      const ids = (payload.ids || []).filter(Boolean);
-      if (ids.length) {
-        const { error } = await sb.from('dtr_records').delete().in('id', ids);
-        if (error) throw error;
-      }
-      storedRecords = storedRecords.filter(r => !ids.includes(r.id));
-      window.storedRecords = storedRecords;
-    } else if (type === 'dtr-overrides-save') {
-      const row = payload.row;
-      const { data, error } = await sb.from('dtr_overrides').upsert(row, { onConflict: 'emp_id,work_date' }).select().single();
-      if (error) throw error;
-      const key = `${data.emp_id}___${data.work_date}`;
-      dtrOverrides[key] = { amIn: data.amIn, amOut: data.amOut, pmIn: data.pmIn, pmOut: data.pmOut, otIn: data.otIn, otOut: data.otOut };
-    } else if (type === 'project-override-save') {
-      const { data, error } = await sb.from('project_overrides').upsert(payload.row, { onConflict: 'emp_id,work_date,segment' }).select().single();
-      if (error) throw error;
-      const key = data.segment ? `${data.emp_id}___${data.work_date}___${data.segment}` : `${data.emp_id}___${data.work_date}`;
-      overridesProjects[key] = data.project_id || '';
-    } else if (type === 'schedule-override-save') {
-      const { data, error } = await sb.from('schedule_overrides').upsert(payload.row, { onConflict: 'emp_id,work_date,segment' }).select().single();
-      if (error) throw error;
-      const key = data.segment ? `${data.emp_id}___${data.work_date}___${data.segment}` : `${data.emp_id}___${data.work_date}`;
-      overridesSchedules[key] = data.schedule_id;
-    } else if (type === 'split-toggle') {
-      const { data, error } = await sb.from('split_state').upsert(payload.row, { onConflict: 'emp_id,work_date' }).select().single();
-      if (error) throw error;
-      splits[`${data.emp_id}___${data.work_date}`] = data.segments || { AM: !!data.enabled, PM: !!data.enabled, OT: !!data.enabled };
-    }
-    setStatus('Synced', '#166534');
-  } catch (e) {
-    console.warn('commitChange failed', type, e);
-    setStatus('Not synced', '#b91c1c');
-    throw e;
-  }
-}
-window.commitChange = commitChange;
 document.getElementById('downloadEmployeesCSV').addEventListener('click', () => {
   const header = ['ID','Name','Hourly Rate','Company','Bank Account','Schedule Name','Schedule ID','Project Name','Project ID','Deduct Pag-IBIG','Deduct PhilHealth','Deduct SSS'];
   const rows = [header];
@@ -17550,10 +17473,9 @@ function buildScheduleDropdown(empId, date, currentScheduleId){
     sel.appendChild(o);
   });
   sel.addEventListener('click', (ev) => ev.stopPropagation());
-  sel.addEventListener('change', async ()=>{
+  sel.addEventListener('change', ()=>{
     overridesSchedules[empId + '___' + date] = sel.value;
     saveOverrides();
-    try { await commitChange('schedule-override-save', { row: { emp_id: String(empId), work_date: date, segment: null, schedule_id: sel.value || null, updated_at: new Date().toISOString() } }); } catch(_) {}
     queueDtrDropdownRender();
   });
   return sel;
@@ -17579,10 +17501,9 @@ function buildProjectDropdown(empId, date, currentProjectId){
     sel.appendChild(o);
   }
   sel.addEventListener('click', (ev) => ev.stopPropagation());
-  sel.addEventListener('change', async ()=>{
+  sel.addEventListener('change', ()=>{
     overridesProjects[empId + '___' + date] = sel.value;
     saveOverrides();
-    try { await commitChange('project-override-save', { row: { emp_id: String(empId), work_date: date, segment: null, project_id: sel.value || null, updated_at: new Date().toISOString() } }); } catch(_) {}
     queueDtrDropdownRender();
   });
   return sel;
@@ -17613,11 +17534,10 @@ function buildProjectDropdownHalf(empId, date, half, currentProjectId){
     sel.appendChild(o);
   }
   sel.addEventListener('click', (ev) => ev.stopPropagation());
-  sel.addEventListener('change', async () => {
+  sel.addEventListener('change', () => {
     // Persist override keyed by empId + date + half
     overridesProjects[empId + '___' + date + '___' + half] = sel.value;
     saveOverrides();
-    try { await commitChange('project-override-save', { row: { emp_id: String(empId), work_date: date, segment: half, project_id: sel.value || null, updated_at: new Date().toISOString() } }); } catch(_) {}
     // Re-render to apply changes
     queueDtrDropdownRender();
   });
@@ -17636,10 +17556,9 @@ function buildScheduleDropdownHalf(empId, date, half, currentScheduleId){
     sel.appendChild(o);
   });
   sel.addEventListener('click', (ev) => ev.stopPropagation());
-  sel.addEventListener('change', async () => {
+  sel.addEventListener('change', () => {
     overridesSchedules[empId + '___' + date + '___' + half] = sel.value;
     saveOverrides();
-    try { await commitChange('schedule-override-save', { row: { emp_id: String(empId), work_date: date, segment: half, schedule_id: sel.value || null, updated_at: new Date().toISOString() } }); } catch(_) {}
     queueDtrDropdownRender();
   });
   return sel;
@@ -19209,8 +19128,13 @@ function restoreData(file) {
         return;
       }
       try {
-        const record = { id: __newUuid(), empId: String(empId), date: dateVal, time: timeVal, manual: true };
-        await commitChange('manual-dtr-save', { record });
+        const record = { empId: String(empId), date: dateVal, time: timeVal, manual: true };
+        const exists = storedRecords.some(r =>
+          String(r.empId) === record.empId && r.date === record.date && r.time === record.time
+        );
+        if (!exists) storedRecords.push(record);
+        // Persist to Supabase (authoritative) after in-memory update
+        await persistStoredRecords();
       } catch(e) { console.error('Saving manual DTR failed', e); }
       closeManualModal();
       window.scheduleRenderResults?.('manual-dtr-save');
@@ -19228,7 +19152,7 @@ function restoreData(file) {
     const saveBtn = document.getElementById('dtrPunchSave');
 
     if (cancelBtn) cancelBtn.addEventListener('click', closePunchModal);
-    if (clearBtn) clearBtn.addEventListener('click', async function(){
+    if (clearBtn) clearBtn.addEventListener('click', function(){
       const empId = modal.dataset.empId;
       const date = modal.dataset.date;
       const scope = modal.dataset.scope || 'regular';
@@ -19248,14 +19172,11 @@ function restoreData(file) {
         if (hasAny) dtrOverrides[key] = nextValues;
         else delete dtrOverrides[key];
         saveDtrOverrides();
-        try {
-          await commitChange('dtr-overrides-save', { row: { emp_id: String(empId), work_date: date, ...nextValues, updated_at: new Date().toISOString(), updated_by: 'ui' } });
-        } catch(_) {}
       }
       closePunchModal();
       syncPayrollAfterOverride();
     });
-    if (saveBtn) saveBtn.addEventListener('click', async function(){
+    if (saveBtn) saveBtn.addEventListener('click', function(){
       const empId = modal.dataset.empId;
       const date = modal.dataset.date;
       const scope = modal.dataset.scope || 'regular';
@@ -19281,9 +19202,6 @@ function restoreData(file) {
         delete dtrOverrides[key];
       }
       saveDtrOverrides();
-      try {
-        await commitChange('dtr-overrides-save', { row: { emp_id: String(empId), work_date: date, ...nextValues, updated_at: new Date().toISOString(), updated_by: 'ui' } });
-      } catch(_) {}
       closePunchModal();
       syncPayrollAfterOverride();
     });
@@ -19342,7 +19260,6 @@ function restoreData(file) {
         : `Delete all DTR entries for ${empIdCell} on ${dateCell}?`;
       if(!confirm(confirmMsg)) return;
       try {
-        const idsToDelete = [];
         if (isSplitHalf) {
           let timesForHalf = [];
           try { timesForHalf = JSON.parse(tr.dataset.times || '[]'); } catch(e) { timesForHalf = []; }
@@ -19350,7 +19267,6 @@ function restoreData(file) {
             for (let i = 0; i < storedRecords.length; i++) {
               const rec = storedRecords[i];
               if (String(rec.empId) === String(empIdCell) && rec.date === dateCell && rec.time === t) {
-                if (rec.id) idsToDelete.push(rec.id);
                 storedRecords.splice(i, 1);
                 break;
               }
@@ -19365,12 +19281,11 @@ function restoreData(file) {
           for(let i = storedRecords.length - 1; i >= 0; i--){
             const rec = storedRecords[i];
             if(String(rec.empId) === String(empIdCell) && rec.date === dateCell){
-              if (rec.id) idsToDelete.push(rec.id);
               storedRecords.splice(i, 1);
             }
           }
         }
-        await commitChange('delete-records', { ids: idsToDelete });
+        await persistStoredRecords();
         window.scheduleRenderResults?.('dtr-split-toggle');
       } catch(e){ console.error('DTR delete failed', e); }
     });
@@ -21929,16 +21844,11 @@ async function loadDtrFromCloudLegacyBlob() {
 
 function __dtrRecId(rec){
   if (!rec) return '';
-  if (rec.id) return String(rec.id);
   const emp = rec.empId != null ? String(rec.empId).trim() : '';
   const date = rec.date ? String(rec.date) : '';
   const time = rec.time ? String(rec.time) : '';
   const src = rec.source ? String(rec.source) : (rec.manual ? 'manual' : '');
   return emp + '|' + date + '|' + time + '|' + src;
-}
-function __newUuid(){
-  try { if (window.crypto && window.crypto.randomUUID) return window.crypto.randomUUID(); } catch(_){}
-  return 'rec_' + Date.now().toString(16) + '_' + Math.random().toString(16).slice(2);
 }
 function __dtrGetDeviceId(){
   const LS_DEV = 'payroll_dtr_device_id';
@@ -21964,7 +21874,7 @@ async function __dtrFetchAllPunchRows(supa, table){
   while (true){
     const { data, error } = await supa
       .from(table)
-      .select('id,emp_id,work_date,time,manual,created_at')
+      .select('id,data')
       .range(from, from + pageSize - 1);
     if (error) throw error;
     const chunk = data || [];
@@ -21979,7 +21889,7 @@ async function migrateLegacyDtrToPunches(records){
   try {
     const supa = window.supabase || (typeof supabase !== 'undefined' ? supabase : null);
     if (!supa) return false;
-    const table = 'dtr_records';
+    const table = 'dtr_punches';
     const deviceId = __dtrGetDeviceId();
     const localRecs = Array.isArray(records) ? records : [];
     const rowsRaw = localRecs.map(r => {
@@ -21988,9 +21898,11 @@ async function migrateLegacyDtrToPunches(records){
       return {
         id,
         emp_id: (r.empId != null ? String(r.empId) : '').trim(),
-        work_date: r.date,
+        date: r.date,
         time: r.time,
-        manual: !!r.manual
+        source: r.source || (r.manual ? 'manual' : null),
+        data: r,
+        updated_by: deviceId
       };
     }).filter(Boolean);
 
@@ -22019,10 +21931,10 @@ async function loadDtrFromCloud() {
   const supa = window.supabase || (typeof supabase !== 'undefined' ? supabase : null);
   if (!supa) return { status: 'no_client', records: null, tombstones: null, meta: { storage: 'none' } };
 
-  const punchesTable = 'dtr_records';
+  const punchesTable = 'dtr_punches';
   try {
     const rows = await __dtrFetchAllPunchRows(supa, punchesTable);
-    const recs = rows.map(r => r ? ({ id:r.id, empId:String(r.emp_id), date:r.work_date, time:r.time, manual:!!r.manual, created_at:r.created_at }) : null).filter(Boolean);
+    const recs = rows.map(r => r && r.data).filter(Boolean);
     const punchIds = new Set(rows.map(r => r && r.id).filter(Boolean));
 
     // If punches already has data but a prior legacy->punches migration was partial (or failed),
@@ -22041,7 +21953,7 @@ async function loadDtrFromCloud() {
           if (missing.length) {
             await migrateLegacyDtrToPunches(missing);
             const rows2 = await __dtrFetchAllPunchRows(supa, punchesTable);
-            const recs2 = rows2.map(r => r ? ({ id:r.id, empId:String(r.emp_id), date:r.work_date, time:r.time, manual:!!r.manual, created_at:r.created_at }) : null).filter(Boolean);
+            const recs2 = rows2.map(r => r && r.data).filter(Boolean);
             // Replace arrays in-place so downstream logic sees the refreshed data.
             rows.splice(0, rows.length, ...rows2);
             recs.splice(0, recs.length, ...recs2);
@@ -22064,7 +21976,7 @@ async function loadDtrFromCloud() {
     return { status: 'ok', records: recs, tombstones: {}, meta: { storage: 'punches', rowCount: rows.length } };
   } catch (e) {
     const msg = (e && (e.message || e.details)) ? String(e.message || e.details) : String(e);
-    const isMissing = /does not exist|relation .*dtr_records|42P01/i.test(msg);
+    const isMissing = /does not exist|relation .*dtr_punches|42P01/i.test(msg);
     if (isMissing) {
       // Fallback to legacy for backwards compatibility
       try {
@@ -22094,7 +22006,7 @@ async function saveDtrToCloud(records) {
       return;
     }
 
-    const punchesTable = 'dtr_records';
+    const punchesTable = 'dtr_punches';
     const deviceId = __dtrGetDeviceId();
 
     const localRecs = Array.isArray(records) ? records : [];
@@ -22105,9 +22017,11 @@ async function saveDtrToCloud(records) {
       localMap.set(id, {
         id,
         emp_id: (r.empId != null ? String(r.empId) : '').trim(),
-        work_date: r.date,
+        date: r.date,
         time: r.time,
-        manual: !!r.manual
+        source: r.source || (r.manual ? 'manual' : null),
+        data: r,
+        updated_by: deviceId
       });
     }
 
@@ -22126,16 +22040,20 @@ async function saveDtrToCloud(records) {
         continue;
       }
 
-      const changed = String(existing.emp_id||'')!==String(row.emp_id||'') || String(existing.work_date||'')!==String(row.work_date||'') || String(existing.time||'')!==String(row.time||'') || !!existing.manual!==!!row.manual;
+      const oldPayload = existing && existing.data ? JSON.stringify(existing.data) : '';
+      const newPayload = row && row.data ? JSON.stringify(row.data) : '';
+      const changed = oldPayload !== newPayload;
       if (!changed) continue;
 
       const { error } = await supa
         .from(punchesTable)
         .update({
           emp_id: row.emp_id,
-work_date: row.work_date,
+          date: row.date,
           time: row.time,
-          manual: !!row.manual
+          source: row.source,
+          data: row.data,
+          updated_by: row.updated_by
         })
         .eq('id', id);
       if (error) throw error;
@@ -22150,9 +22068,9 @@ work_date: row.work_date,
 
   } catch (e) {
     const msg = (e && (e.message || e.details)) ? String(e.message || e.details) : String(e);
-    const isMissing = /does not exist|relation .*dtr_records|42P01/i.test(msg);
+    const isMissing = /does not exist|relation .*dtr_punches|42P01/i.test(msg);
     if (isMissing) {
-      console.warn('DTR records table missing; falling back to legacy DTR storage until you create `dtr_records`.');
+      console.warn('DTR punches table missing; falling back to legacy DTR storage until you create `dtr_punches`.');
       try { await saveDtrToCloudLegacyBlob(records); } catch(_) {}
       return;
     }
@@ -22167,7 +22085,7 @@ function setupDtrPunchesRealtime(){
     if (window.__dtrPunchesSubscribed) return;
     window.__dtrPunchesSubscribed = true;
 
-    const punchesTable = 'dtr_records';
+    const punchesTable = 'dtr_punches';
     let renderTimer = null;
     const queueRender = () => {
       if (renderTimer) clearTimeout(renderTimer);
@@ -22207,7 +22125,7 @@ function setupDtrPunchesRealtime(){
           return;
         }
 
-        const rec = newRow ? ({ id:newRow.id, empId:String(newRow.emp_id), date:newRow.work_date, time:newRow.time, manual:!!newRow.manual, created_at:newRow.created_at }) : null;
+        const rec = newRow && newRow.data ? newRow.data : null;
         if (!rec) return;
 
         if (idx >= 0) {
@@ -23095,7 +23013,7 @@ document.addEventListener('DOMContentLoaded', async function () {
     if (toAdd.size){
       Array.from(toAdd).forEach(time => {
         if (!hasStoredRecord(empId, date, time)) {
-          storedRecords.push({ id: __newUuid(), empId: String(empId), date, time, manual: true });
+          storedRecords.push({ empId: String(empId), date, time, manual: true });
         }
       });
     }
