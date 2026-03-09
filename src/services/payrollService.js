@@ -1,6 +1,6 @@
 import { getSupabaseClient } from '../config/supabaseClient.js';
 import { getFeatureFlag } from '../config/featureFlags.js';
-import { getState, mergeRow, reportConflict } from '../state/store.js';
+import { getState, mergeRow, removeRow, reportConflict } from '../state/store.js';
 
 export class StaleWriteError extends Error {
   constructor(message, context = {}) {
@@ -237,6 +237,31 @@ function requireSupabaseClient() {
   return client;
 }
 
+let hasRpcLockGuard = null;
+
+async function ensurePeriodUnlockedWithRpc(periodId) {
+  // Important: this is a precheck guard for compatibility; it is not a transactional DB-side enforcement
+  // because writes are still executed in a separate statement.
+  if (!periodId) return;
+  const client = requireSupabaseClient();
+
+  if (hasRpcLockGuard !== false) {
+    const { error } = await client.rpc('assert_payroll_period_unlocked', { p_period_id: periodId });
+    if (!error) {
+      hasRpcLockGuard = true;
+      return;
+    }
+
+    const message = String(error?.message || '');
+    const missingRpc = error.code === 'PGRST202' || /function .*assert_payroll_period_unlocked/i.test(message);
+    if (!missingRpc) throw error;
+    hasRpcLockGuard = false;
+    console.warn('[payroll:lock-guard] RPC assert_payroll_period_unlocked is unavailable; using client-side lock fallback');
+  }
+
+  await ensurePeriodUnlocked(periodId);
+}
+
 async function ensurePeriodUnlocked(periodId) {
   if (!periodId) return;
 
@@ -252,6 +277,32 @@ async function ensurePeriodUnlocked(periodId) {
   }
 }
 
+
+function sanitizeUpdatePatch(patch = {}) {
+  const cleaned = {};
+  for (const [key, value] of Object.entries(patch || {})) {
+    if (value === undefined) continue;
+    if (key === 'id') continue;
+    cleaned[key] = value;
+  }
+  return cleaned;
+}
+
+function sanitizeInsertPayload(row = {}) {
+  const cleaned = {};
+  for (const [key, value] of Object.entries(row || {})) {
+    if (value === undefined) continue;
+    cleaned[key] = value;
+  }
+  return cleaned;
+}
+
+function composeCreateRow(id, patch = {}) {
+  const cleanedPatch = sanitizeInsertPayload(patch);
+  if (id == null || id === '') return cleanedPatch;
+  return { id, ...cleanedPatch };
+}
+
 function applyExpectedUpdatedAt(query, expectedUpdatedAt) {
   if (expectedUpdatedAt == null) {
     return query.is('updated_at', null);
@@ -260,12 +311,12 @@ function applyExpectedUpdatedAt(query, expectedUpdatedAt) {
 }
 
 async function updateWithOptimisticLock({ table, id, patch, expectedUpdatedAt, periodId, stateKey }) {
-  await ensurePeriodUnlocked(periodId);
+  await ensurePeriodUnlockedWithRpc(periodId);
   logWrite('update', table, { id, ...patch, expected_updated_at: expectedUpdatedAt });
 
   let query = requireSupabaseClient()
     .from(table)
-    .update({ ...patch, updated_at: new Date().toISOString() })
+    .update({ ...sanitizeUpdatePatch(patch), updated_at: new Date().toISOString() })
     .eq('id', id);
 
   query = applyExpectedUpdatedAt(query, expectedUpdatedAt);
@@ -284,9 +335,9 @@ async function updateWithOptimisticLock({ table, id, patch, expectedUpdatedAt, p
 }
 
 async function createRowWithLock({ table, row, periodId, stateKey }) {
-  await ensurePeriodUnlocked(periodId);
+  await ensurePeriodUnlockedWithRpc(periodId);
   logWrite('insert', table, row);
-  const payload = { ...row, updated_at: new Date().toISOString() };
+  const payload = { ...sanitizeInsertPayload(row), updated_at: new Date().toISOString() };
 
   const { data, error } = await requireSupabaseClient()
     .from(table)
@@ -297,6 +348,26 @@ async function createRowWithLock({ table, row, periodId, stateKey }) {
   if (error) throw error;
   mergeRow(stateKey, data);
   return data;
+}
+
+
+async function deleteWithOptimisticLock({ table, id, expectedUpdatedAt, periodId, stateKey }) {
+  await ensurePeriodUnlockedWithRpc(periodId);
+  logWrite('delete', table, { id, expected_updated_at: expectedUpdatedAt });
+
+  let query = requireSupabaseClient().from(table).delete().eq('id', id);
+  query = applyExpectedUpdatedAt(query, expectedUpdatedAt);
+
+  const { data, error } = await query.select('id').maybeSingle();
+  if (error) throw error;
+
+  if (!data) {
+    const conflict = { table, id, expectedUpdatedAt, at: new Date().toISOString() };
+    reportConflict(conflict);
+    throw new StaleWriteError('This record was updated by another user. Reloading.', conflict);
+  }
+
+  return { id, table, stateKey };
 }
 
 export const payrollService = {
@@ -401,32 +472,26 @@ export const payrollService = {
     const existing = state.dtrPunches.get(punchId);
     if (!existing) throw new Error(`Punch ${punchId} not found in state.`);
 
-    await ensurePeriodUnlocked(existing.payroll_period_id);
-    logWrite('delete', TABLES.punches, { id: punchId });
+    await deleteWithOptimisticLock({
+      table: TABLES.punches,
+      id: punchId,
+      expectedUpdatedAt: existing.updated_at ?? null,
+      periodId: existing.payroll_period_id,
+      stateKey: 'dtrPunches',
+    });
 
-    let query = requireSupabaseClient().from(TABLES.punches).delete().eq('id', punchId);
-    query = applyExpectedUpdatedAt(query, existing.updated_at ?? null);
-
-    const { data, error } = await query.select('id').maybeSingle();
-    if (error) throw error;
-
-    if (!data) {
-      const conflict = { table: TABLES.punches, id: punchId, expectedUpdatedAt: existing.updated_at ?? null, at: new Date().toISOString() };
-      reportConflict(conflict);
-      throw new StaleWriteError('This record was updated by another user. Reloading.', conflict);
-    }
-
+    removeRow('dtrPunches', punchId);
     return { id: punchId };
   },
 
-  async upsertEmployee(employeeId, patch) {
+  async upsertEmployee(employeeId, patch = {}) {
     const state = getState();
     const existing = state.employees.get(employeeId);
     if (existing) {
       return updateWithOptimisticLock({
         table: TABLES.employees,
         id: employeeId,
-        patch,
+        patch: sanitizeUpdatePatch(patch),
         expectedUpdatedAt: existing.updated_at ?? null,
         stateKey: 'employees',
       });
@@ -434,12 +499,12 @@ export const payrollService = {
 
     return createRowWithLock({
       table: TABLES.employees,
-      row: { id: employeeId, ...patch },
+      row: composeCreateRow(employeeId, patch),
       stateKey: 'employees',
     });
   },
 
-  async upsertLoan(loanId, patch) {
+  async upsertLoan(loanId, patch = {}) {
     const state = getState();
     const existing = state.loans.get(loanId);
     const periodId = patch.payroll_period_id ?? existing?.payroll_period_id ?? getState().currentPeriodId;
@@ -448,7 +513,7 @@ export const payrollService = {
       return updateWithOptimisticLock({
         table: TABLES.loans,
         id: loanId,
-        patch,
+        patch: sanitizeUpdatePatch(patch),
         expectedUpdatedAt: existing.updated_at ?? null,
         periodId,
         stateKey: 'loans',
@@ -457,13 +522,13 @@ export const payrollService = {
 
     return createRowWithLock({
       table: TABLES.loans,
-      row: { id: loanId, ...patch },
+      row: composeCreateRow(loanId, patch),
       periodId,
       stateKey: 'loans',
     });
   },
 
-  async upsertLoanDeduction(deductionId, patch) {
+  async upsertLoanDeduction(deductionId, patch = {}) {
     const state = getState();
     const existing = state.loanDeductions.get(deductionId);
     const periodId = patch.payroll_period_id ?? existing?.payroll_period_id ?? getState().currentPeriodId;
@@ -472,7 +537,7 @@ export const payrollService = {
       return updateWithOptimisticLock({
         table: TABLES.loanDeductions,
         id: deductionId,
-        patch,
+        patch: sanitizeUpdatePatch(patch),
         expectedUpdatedAt: existing.updated_at ?? null,
         periodId,
         stateKey: 'loanDeductions',
@@ -481,10 +546,167 @@ export const payrollService = {
 
     return createRowWithLock({
       table: TABLES.loanDeductions,
-      row: { id: deductionId, ...patch },
+      row: composeCreateRow(deductionId, patch),
       periodId,
       stateKey: 'loanDeductions',
     });
+  },
+
+  async upsertDtrRecord(recordId, patch = {}) {
+    const state = getState();
+    const existing = state.dtrRecords.get(recordId);
+    const periodId = patch.payroll_period_id ?? existing?.payroll_period_id ?? getState().currentPeriodId;
+
+    if (existing) {
+      return updateWithOptimisticLock({
+        table: TABLES.dtr,
+        id: recordId,
+        patch: sanitizeUpdatePatch(patch),
+        expectedUpdatedAt: existing.updated_at ?? null,
+        periodId,
+        stateKey: 'dtrRecords',
+      });
+    }
+
+    return createRowWithLock({
+      table: TABLES.dtr,
+      row: composeCreateRow(recordId, patch),
+      periodId,
+      stateKey: 'dtrRecords',
+    });
+  },
+
+  async upsertProject(projectId, patch = {}) {
+    const state = getState();
+    const existing = state.projects.get(projectId);
+    if (existing) {
+      return updateWithOptimisticLock({
+        table: TABLES.projects,
+        id: projectId,
+        patch: sanitizeUpdatePatch(patch),
+        expectedUpdatedAt: existing.updated_at ?? null,
+        stateKey: 'projects',
+      });
+    }
+
+    return createRowWithLock({
+      table: TABLES.projects,
+      row: composeCreateRow(projectId, patch),
+      stateKey: 'projects',
+    });
+  },
+
+  async upsertSchedule(scheduleId, patch = {}) {
+    const state = getState();
+    const existing = state.schedules.get(scheduleId);
+    if (existing) {
+      return updateWithOptimisticLock({
+        table: TABLES.schedules,
+        id: scheduleId,
+        patch: sanitizeUpdatePatch(patch),
+        expectedUpdatedAt: existing.updated_at ?? null,
+        stateKey: 'schedules',
+      });
+    }
+
+    return createRowWithLock({
+      table: TABLES.schedules,
+      row: composeCreateRow(scheduleId, patch),
+      stateKey: 'schedules',
+    });
+  },
+
+  async upsertContribFlag(flagId, patch = {}) {
+    const state = getState();
+    const existing = state.contribFlags.get(flagId);
+    const periodId = patch.payroll_period_id ?? existing?.payroll_period_id ?? getState().currentPeriodId;
+
+    if (existing) {
+      return updateWithOptimisticLock({
+        table: TABLES.contribFlags,
+        id: flagId,
+        patch: sanitizeUpdatePatch(patch),
+        expectedUpdatedAt: existing.updated_at ?? null,
+        periodId,
+        stateKey: 'contribFlags',
+      });
+    }
+
+    return createRowWithLock({
+      table: TABLES.contribFlags,
+      row: composeCreateRow(flagId, patch),
+      periodId,
+      stateKey: 'contribFlags',
+    });
+  },
+
+
+  async deleteDtrRecord(recordId) {
+    const state = getState();
+    const existing = state.dtrRecords.get(recordId);
+    if (!existing) throw new Error(`DTR record ${recordId} not found in state.`);
+
+    await deleteWithOptimisticLock({
+      table: TABLES.dtr,
+      id: recordId,
+      expectedUpdatedAt: existing.updated_at ?? null,
+      periodId: existing.payroll_period_id,
+      stateKey: 'dtrRecords',
+    });
+
+    removeRow('dtrRecords', recordId);
+    return { id: recordId };
+  },
+
+  async deleteLoanDeduction(deductionId) {
+    const state = getState();
+    const existing = state.loanDeductions.get(deductionId);
+    if (!existing) throw new Error(`Loan deduction ${deductionId} not found in state.`);
+
+    await deleteWithOptimisticLock({
+      table: TABLES.loanDeductions,
+      id: deductionId,
+      expectedUpdatedAt: existing.updated_at ?? null,
+      periodId: existing.payroll_period_id,
+      stateKey: 'loanDeductions',
+    });
+
+    removeRow('loanDeductions', deductionId);
+    return { id: deductionId };
+  },
+
+  async deleteLoan(loanId) {
+    const state = getState();
+    const existing = state.loans.get(loanId);
+    if (!existing) throw new Error(`Loan ${loanId} not found in state.`);
+
+    await deleteWithOptimisticLock({
+      table: TABLES.loans,
+      id: loanId,
+      expectedUpdatedAt: existing.updated_at ?? null,
+      periodId: existing.payroll_period_id,
+      stateKey: 'loans',
+    });
+
+    removeRow('loans', loanId);
+    return { id: loanId };
+  },
+
+  async deleteContribFlag(flagId) {
+    const state = getState();
+    const existing = state.contribFlags.get(flagId);
+    if (!existing) throw new Error(`Contribution flag ${flagId} not found in state.`);
+
+    await deleteWithOptimisticLock({
+      table: TABLES.contribFlags,
+      id: flagId,
+      expectedUpdatedAt: existing.updated_at ?? null,
+      periodId: existing.payroll_period_id,
+      stateKey: 'contribFlags',
+    });
+
+    removeRow('contribFlags', flagId);
+    return { id: flagId };
   },
 
   async setPeriodLock(periodId, isLocked) {
@@ -505,13 +727,13 @@ export const payrollService = {
 
   async saveSnapshot(snapshot) {
     const { payroll_period_id: periodId } = snapshot;
-    await ensurePeriodUnlocked(periodId);
+    await ensurePeriodUnlockedWithRpc(periodId);
 
     logWrite('insert', TABLES.snapshots, snapshot);
 
     const { data, error } = await requireSupabaseClient()
       .from(TABLES.snapshots)
-      .insert({ ...snapshot, created_at: new Date().toISOString() })
+      .insert({ ...sanitizeInsertPayload(snapshot), created_at: new Date().toISOString() })
       .select('*')
       .single();
 
