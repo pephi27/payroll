@@ -10363,6 +10363,15 @@ document.addEventListener('DOMContentLoaded', () => {
     return '';
   }
 
+  function __isAuthOrPermissionError(err){
+    const code = String(err?.code || '').toUpperCase();
+    const status = Number(err?.status || err?.statusCode || 0);
+    const msg = String(err?.message || err?.details || '').toLowerCase();
+    if (status === 401 || status === 403) return true;
+    if (code === '401' || code === '403' || code === 'PGRST301' || code === 'PGRST302' || code === '42501') return true;
+    return /jwt|not authenticated|permission denied|row-level security|rls/.test(msg);
+  }
+
   async function __tryInsertSnapshotRowAdaptive(seedRow){
     let row = Object.assign({}, seedRow);
     let attempts = 0;
@@ -10373,6 +10382,10 @@ document.addEventListener('DOMContentLoaded', () => {
       const res = await supabase.from(PERIOD_SNAPSHOTS_TABLE).insert(row);
       if (!res.error) return { ok: true, error: null };
       lastErr = res.error;
+
+      if (__isAuthOrPermissionError(res.error)) {
+        return { ok: false, error: res.error, retryNextShape: false };
+      }
 
       const unknownCol = __extractUnknownColumn(res.error);
       if (unknownCol && Object.prototype.hasOwnProperty.call(row, unknownCol)) {
@@ -11149,14 +11162,16 @@ document.addEventListener('DOMContentLoaded', () => {
   async function buildStableSnapshotForLock(start, end) {
     let lastSnapshot = null;
     let lastSignature = '';
-    const maxAttempts = 3;
+    const maxAttempts = 2;
 
     for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
-      try {
-        if (typeof window.flushCalculateAll === 'function') {
-          await Promise.resolve(window.flushCalculateAll?.(`lock-period-finalize-${attempt + 1}`));
-        }
-      } catch (err) {}
+      if (attempt === 0) {
+        try {
+          if (typeof window.flushCalculateAll === 'function') {
+            await Promise.resolve(window.flushCalculateAll?.('lock-period-finalize'));
+          }
+        } catch (err) {}
+      }
 
       try { if (typeof updatePayrollGrandTotals === 'function') updatePayrollGrandTotals(); } catch (err) {}
 
