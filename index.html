@@ -10667,7 +10667,30 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
+  function logFinalizeDiagnostics(step, details = {}) {
+    try {
+      if (!window.__PAYROLL_DEBUG_FINALIZE) return;
+      if (!window.__payrollFinalizeDiag) {
+        window.__payrollFinalizeDiag = { seq: 0, counters: {} };
+      }
+      const diag = window.__payrollFinalizeDiag;
+      diag.seq += 1;
+      diag.counters[step] = (diag.counters[step] || 0) + 1;
+      console.info('[payroll:finalize:diag]', {
+        seq: diag.seq,
+        step,
+        count: diag.counters[step],
+        at: new Date().toISOString(),
+        ...details
+      });
+    } catch (err) {}
+  }
+
   function applySnapshotToPayrollTable(snapshot) {
+    logFinalizeDiagnostics('applySnapshotToPayrollTable', {
+      rowCount: Array.isArray(snapshot?.rows) ? snapshot.rows.length : 0,
+      status: snapshot?.status || ''
+    });
     if (!snapshot || !Array.isArray(snapshot.rows)) return false;
     const table = document.getElementById('payrollTable');
     if (!table) return false;
@@ -10853,6 +10876,12 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   function syncHistoryLockState(start, end, locked, meta) {
+    logFinalizeDiagnostics('syncHistoryLockState', {
+      start,
+      end,
+      locked,
+      skipViewRefresh: !!(meta && meta.skipViewRefresh)
+    });
     if (!Array.isArray(payrollHistory) || !start || !end) return;
     let snap = null;
     if (meta && Number.isFinite(meta.targetIndex)) {
@@ -10900,8 +10929,10 @@ document.addEventListener('DOMContentLoaded', () => {
       if (typeof snap.hash !== 'undefined') snap.hash = '';
     }
     if (typeof saveHistory === 'function') saveHistory();
-    if (typeof renderHistory === 'function') renderHistory();
-    if (typeof renderActivePayrolls === 'function') renderActivePayrolls();
+    if (!(meta && meta.skipViewRefresh)) {
+      if (typeof renderHistory === 'function') renderHistory();
+      if (typeof renderActivePayrolls === 'function') renderActivePayrolls();
+    }
   }
 
   function setPeriodLocked(start, end, locked, meta = {}) {
@@ -10960,6 +10991,9 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   function applyLockUI() {
+    logFinalizeDiagnostics('applyLockUI:start', {
+      period: getCurrentPeriodRange()
+    });
     const { start, end } = getCurrentPeriodRange();
     const hasRange = !!(start && end);
     if (!hasRange) {
@@ -11199,6 +11233,7 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   async function lockCurrentPeriod() {
+    logFinalizeDiagnostics('lockCurrentPeriod:start');
     const { start, end } = getCurrentPeriodRange();
     if (!start || !end) {
       alert('Please select both start and end dates.');
@@ -11294,10 +11329,7 @@ document.addEventListener('DOMContentLoaded', () => {
     existing.revision = revision;
 
     saveHistory();
-    if (typeof renderHistory === 'function') renderHistory();
-    if (typeof renderActivePayrolls === 'function') renderActivePayrolls();
-    disablePayrollInputs();
-    setSnapshotOverride(existing);
+    logFinalizeDiagnostics('lockCurrentPeriod:historySaved', { revision });
     setPeriodLocked(start, end, true, {
       periodKey: existing.periodKey,
       lockedAt,
@@ -11310,8 +11342,8 @@ document.addEventListener('DOMContentLoaded', () => {
       targetIndex: payrollHistory.indexOf(existing),
       snapshot: { rows: snapshot.rows, totals: snapshot.totals, divisor: snapshot.divisor, settings: snapshot.settings || {}, hash: hashHex }
     });
-    applySnapshotToPayrollTable(existing);
     applyLockUI();
+    logFinalizeDiagnostics('lockCurrentPeriod:complete');
   }
 
 
