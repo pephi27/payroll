@@ -3759,6 +3759,15 @@ function getOvertimePayForEmployee(empId, rateOverride) {
 
 function getNightDifferentialPayForEmployee(empId) {
   const value = Number((nightDiffByEmployee && nightDiffByEmployee[empId]) || 0);
+  const domain = (typeof window !== 'undefined' && window.payrollDomain) ? window.payrollDomain : null;
+  if (domain && typeof domain.resolveNightDifferentialPay === 'function') {
+    return domain.resolveNightDifferentialPay({
+      hourlyRate: Number(getEmployeeHourlyRate(empId)) || 0,
+      precomputedNightDiffPay: value,
+      settings: (typeof getNightDifferentialSettings === 'function') ? getNightDifferentialSettings() : null,
+      preferPrecomputed: true,
+    }).pay;
+  }
   if (!Number.isFinite(value)) return 0;
   if (typeof roundToCents === 'function') return roundToCents(value);
   return Math.round(value * 100) / 100;
@@ -5273,6 +5282,7 @@ function applyLoanTrackerToPeriod(pk, options){
   const updateMaps = opts.updateMaps === true;
   const commitCashAdvance = opts.commitCashAdvance === true;
   const canWriteMaps = createEntries || force || updateMaps;
+  const domain = (typeof window !== 'undefined' && window.payrollDomain) ? window.payrollDomain : null;
   ensureLoanTrackerShape(loanTracker);
   if (!pk) return;
   const div = Number(divisor) || 1;
@@ -5296,7 +5306,6 @@ function applyLoanTrackerToPeriod(pk, options){
 
     const principal = roundToCents(entry.principal || 0);
     const weekly = roundToCents(entry.weekly || 0);
-    const shouldRun = (entry.active === true) && (principal > 0) && (weekly > 0);
     const allowCommit = commitCashAdvance === true;
     const existingApplied = getLoanTrackerApplied(pk, empId, type);
     const existingPayment = allowCommit ? getLoanTrackerPayment(pk, empId, type) : null;
@@ -5306,17 +5315,30 @@ function applyLoanTrackerToPeriod(pk, options){
       clearLoanTrackerApplied(pk, empId, type);
     };
 
+    const paidBefore = sumLoanTrackerAppliedBefore(pk, empId, type);
+    const baseline = loanTrackerPaidBaseline(entry, type);
+    const decision = (domain && typeof domain.calculatePrincipalLoanDeductionDecision === 'function')
+      ? domain.calculatePrincipalLoanDeductionDecision({
+        active: entry.active,
+        principal,
+        periodicAmount: weekly,
+        paidBefore,
+        baseline,
+        existingApplied,
+      })
+      : null;
+
+    const shouldRun = decision ? decision.shouldRun : ((entry.active === true) && (principal > 0) && (weekly > 0));
+
     if (!shouldRun) {
       if (existingApplied != null) return roundToCents(existingApplied || 0);
       if (existingPayment) return roundToCents(Number(existingPayment.amount) || 0);
+      if (decision && decision.shouldDeactivate && entry.active) { entry.active = false; changed = true; }
       clearForThisPeriod();
       return 0;
     }
 
-    const paidBefore = sumLoanTrackerAppliedBefore(pk, empId, type);
-    const baseline = loanTrackerPaidBaseline(entry, type);
-    const effectivePaidBefore = Math.max(0, roundToCents(paidBefore - baseline));
-    const remainingBefore = roundToCents(principal - effectivePaidBefore);
+    const remainingBefore = decision ? decision.remainingBefore : roundToCents(principal - Math.max(0, roundToCents(paidBefore - baseline)));
     if (remainingBefore <= 0) {
       if (entry.active) { entry.active = false; changed = true; }
       clearForThisPeriod();
@@ -5324,7 +5346,7 @@ function applyLoanTrackerToPeriod(pk, options){
     }
 
     let scheduled = existingApplied;
-    const desired = roundToCents(Math.min(weekly, remainingBefore));
+    const desired = decision ? decision.desired : roundToCents(Math.min(weekly, remainingBefore));
 
     if (allowCommit && existingPayment && scheduled == null) {
       const paidAmount = roundToCents(Number(existingPayment.amount) || 0);
@@ -5366,7 +5388,20 @@ function applyLoanTrackerToPeriod(pk, options){
     const principal = roundToCents(entry.principal || 0);
     const monthly = roundToCents(entry.monthly || 0);
     const basePerPeriod = (div > 0) ? roundToCents(monthly / div) : roundToCents(monthly);
-    const shouldRun = (entry.active === true) && (principal > 0) && (monthly > 0) && (basePerPeriod > 0);
+    const paidBefore = sumLoanTrackerAppliedBefore(pk, empId, type);
+    const baseline = loanTrackerPaidBaseline(entry, type);
+    const existingApplied = getLoanTrackerApplied(pk, empId, type);
+    const decision = (domain && typeof domain.calculatePrincipalLoanDeductionDecision === 'function')
+      ? domain.calculatePrincipalLoanDeductionDecision({
+        active: entry.active,
+        principal,
+        periodicAmount: basePerPeriod,
+        paidBefore,
+        baseline,
+        existingApplied,
+      })
+      : null;
+    const shouldRun = decision ? decision.shouldRun : ((entry.active === true) && (principal > 0) && (monthly > 0) && (basePerPeriod > 0));
 
     const clearForThisPeriod = () => {
       if (!(createEntries || force)) return;
@@ -5378,23 +5413,20 @@ function applyLoanTrackerToPeriod(pk, options){
       return 0;
     }
 
-    const paidBefore = sumLoanTrackerAppliedBefore(pk, empId, type);
-    const baseline = loanTrackerPaidBaseline(entry, type);
-    const effectivePaidBefore = Math.max(0, roundToCents(paidBefore - baseline));
-    const remainingBefore = roundToCents(principal - effectivePaidBefore);
+    const remainingBefore = decision ? decision.remainingBefore : roundToCents(principal - Math.max(0, roundToCents(paidBefore - baseline)));
     if (remainingBefore <= 0) {
       if (entry.active) { entry.active = false; changed = true; }
       clearForThisPeriod();
       return 0;
     }
 
-    const desired = roundToCents(Math.min(basePerPeriod, remainingBefore));
+    const desired = decision ? decision.desired : roundToCents(Math.min(basePerPeriod, remainingBefore));
     if (desired <= 0) {
       clearForThisPeriod();
       return 0;
     }
 
-    let scheduled = getLoanTrackerApplied(pk, empId, type);
+    let scheduled = existingApplied;
 
     if (scheduled == null || force){
       if (!createEntries && scheduled == null && !force) {
@@ -5435,7 +5467,9 @@ function applyLoanTrackerToPeriod(pk, options){
     let piMonthly = 0;
     for (const type of LOAN_TYPES_PI){
       const entry = getLoanTrackerEntry(empId, type);
-      const monthly = roundToCents(entry && entry.active ? (entry.monthly || 0) : 0);
+      const monthly = (domain && typeof domain.calculatePagibigLoanPerPeriod === 'function')
+        ? roundToCents(domain.calculatePagibigLoanPerPeriod({ active: entry && entry.active, monthly: entry && entry.monthly, divisor: 1 }))
+        : roundToCents(entry && entry.active ? (entry.monthly || 0) : 0);
       if (monthly > 0) piMonthly += monthly;
     }
     if (canWriteMaps) setMapValue(loanPI, empId, roundToCents(piMonthly));
@@ -6093,6 +6127,10 @@ function normalizeAdditionalIncomeItems(items){
 }
 
 function computeAdditionalIncomeTotal(items){
+  const domain = (typeof window !== 'undefined' && window.payrollDomain) ? window.payrollDomain : null;
+  if (domain && typeof domain.totalAdditionalIncome === 'function') {
+    return roundToCents(domain.totalAdditionalIncome(items || []));
+  }
   if (!Array.isArray(items)) return 0;
   const total = items.reduce((sum, item) => sum + sanitizeAdditionalIncomeAmount(item && item.amount), 0);
   return roundToCents(total);
@@ -6211,6 +6249,10 @@ function normalizeOtherDeductionItems(items){
 }
 
 function computeOtherDeductionsTotal(items){
+  const domain = (typeof window !== 'undefined' && window.payrollDomain) ? window.payrollDomain : null;
+  if (domain && typeof domain.totalOtherDeductions === 'function') {
+    return roundToCents(domain.totalOtherDeductions(items || []));
+  }
   if (!Array.isArray(items)) return 0;
   const total = items.reduce((sum, item) => sum + sanitizeOtherDeductionAmount(item && item.amount), 0);
   return roundToCents(total);
@@ -6912,31 +6954,37 @@ function renderDeductionsTable(){
     const v = roundToCents(vale[emp.id] ?? 0);
     const vW = roundToCents(valeWed[emp.id] ?? 0);
     const otherDeductionsAmount = roundToCents(getOtherDeductionsTotal(emp.id));
-    const regPay = +(rH * rate).toFixed(2);
-    // Use dynamic contribution tables for Pag-IBIG and PhilHealth.  Determine the
-    // applicable rate based on monthly income and multiply by regular pay.
-    const monthly = rate * 8 * 24;
-    const piRate = pagibigRateByMonthly(monthly);
-    const phRate = philhealthRateByMonthly(monthly);
-    const flags = (typeof contribFlags !== 'undefined' && contribFlags[emp.id]) || {};
-    const div = Number(divisor) || 1;
-    const pagibig = (flags.pagibig === false) ? 0 : +((regPay * piRate).toFixed(2));
-    const philhealth = (flags.philhealth === false) ? 0 : +((regPay * phRate).toFixed(2));
-    const sssFull = (flags.sss === false) ? 0 : sssShareByMonthly(monthly);
-    const sss = (flags.sss === false) ? 0 : +((sssFull / div).toFixed(2));
-    const sssLoan = +(lSSS / div).toFixed(2);
-    const piLoan = +(lPI / div).toFixed(2);
-    const rowRaw = {
-      pagibig,
-      philhealth,
-      sss,
-      loanSSS: sssLoan,
-      loanPI: piLoan,
+    const domainComputed = computePayrollDomainRow(emp.id, {
+      regularHours: rH,
+      hourlyRate: rate,
+      loanSSS: lSSS,
+      loanPI: lPI,
+      vale: v,
+      valeWed: vW,
+      otherDeductionsTotal: otherDeductionsAmount,
+      applyLoansWithoutWorkedTime: true
+    });
+    const rowRaw = domainComputed.row ? {
+      pagibig: domainComputed.row.pagibig_deduction,
+      philhealth: domainComputed.row.philhealth_deduction,
+      sss: domainComputed.row.sss_deduction,
+      loanSSS: domainComputed.row.loan_sss_deduction,
+      loanPI: domainComputed.row.loan_pagibig_deduction,
+      vale: domainComputed.row.vale_deduction,
+      adjustments: domainComputed.row.other_deductions,
+      valeWed: domainComputed.row.vale_wed_deduction,
+      total: domainComputed.row.total_deductions
+    } : {
+      pagibig: 0,
+      philhealth: 0,
+      sss: 0,
+      loanSSS: 0,
+      loanPI: 0,
       vale: v,
       adjustments: otherDeductionsAmount,
-      valeWed: vW
+      valeWed: vW,
+      total: roundToCents(v + vW + otherDeductionsAmount)
     };
-    rowRaw.total = roundToCents(pagibig + philhealth + sss + sssLoan + piLoan + v + vW + otherDeductionsAmount);
     const rowEffective = computeEffectiveDeductionValues(rowRaw);
   const editableRawValues = {
     loanSSS: lSSS,
@@ -7235,29 +7283,37 @@ function updateDeductionRowDisplay(empId){
   const v = roundToCents(vale?.[empKey] ?? 0);
   const vW = roundToCents(valeWed?.[empKey] ?? 0);
   const otherDeductionsAmount = roundToCents(getOtherDeductionsTotal(empKey));
-  const regPay = +(rH * rate).toFixed(2);
-  const monthly = rate * 8 * 24;
-  const piRate = pagibigRateByMonthly(monthly);
-  const phRate = philhealthRateByMonthly(monthly);
-  const flags = (typeof contribFlags !== 'undefined' && contribFlags && contribFlags[empKey]) || {};
-  const div = Number(divisor) || 1;
-  const pagibig = (flags.pagibig === false) ? 0 : +((regPay * piRate).toFixed(2));
-  const philhealth = (flags.philhealth === false) ? 0 : +((regPay * phRate).toFixed(2));
-  const sssFull = (flags.sss === false) ? 0 : sssShareByMonthly(monthly);
-  const sss = (flags.sss === false) ? 0 : +((sssFull / div).toFixed(2));
-  const sssLoan = hasWorkedTime ? +(lSSS / div).toFixed(2) : 0;
-  const piLoan = hasWorkedTime ? +(lPI / div).toFixed(2) : 0;
-  const rowRaw = {
-    pagibig,
-    philhealth,
-    sss,
-    loanSSS: sssLoan,
-    loanPI: piLoan,
+  const domainComputed = computePayrollDomainRow(empKey, {
+    regularHours: rH,
+    hourlyRate: rate,
+    loanSSS: lSSS,
+    loanPI: lPI,
+    vale: v,
+    valeWed: vW,
+    otherDeductionsTotal: otherDeductionsAmount,
+    applyLoansWithoutWorkedTime: false
+  });
+  const rowRaw = domainComputed.row ? {
+    pagibig: domainComputed.row.pagibig_deduction,
+    philhealth: domainComputed.row.philhealth_deduction,
+    sss: domainComputed.row.sss_deduction,
+    loanSSS: domainComputed.row.loan_sss_deduction,
+    loanPI: domainComputed.row.loan_pagibig_deduction,
+    vale: domainComputed.row.vale_deduction,
+    adjustments: domainComputed.row.other_deductions,
+    valeWed: domainComputed.row.vale_wed_deduction,
+    total: domainComputed.row.total_deductions
+  } : {
+    pagibig: 0,
+    philhealth: 0,
+    sss: 0,
+    loanSSS: hasWorkedTime ? lSSS : 0,
+    loanPI: hasWorkedTime ? lPI : 0,
     vale: v,
     adjustments: otherDeductionsAmount,
-    valeWed: vW
+    valeWed: vW,
+    total: roundToCents(v + vW + otherDeductionsAmount)
   };
-  rowRaw.total = roundToCents(pagibig + philhealth + sss + sssLoan + piLoan + v + vW + otherDeductionsAmount);
   const rowEffective = computeEffectiveDeductionValues(rowRaw);
   const editableRawValues = {
     loanSSS: lSSS,
@@ -7463,11 +7519,11 @@ function updateOvertimeGrandTotals() {
   if (!tbody) return;
   const totalRow = tbody.querySelector('tr.grand-total-row');
   if (!totalRow) return;
+  const domain = (typeof window !== 'undefined' && window.payrollDomain) ? window.payrollDomain : null;
   let totalOtHours = 0;
   let totalAdjHours = 0;
   let totalFinalHours = 0;
-  let totalNightDiff = 0;
-  let totalOtPay = 0;
+  const overtimeRows = [];
   getEmployeeList().forEach(emp => {
     const baseRate = getEmployeeHourlyRate(emp.id);
     const otTotal = getOvertimeHoursTotal(emp.id);
@@ -7478,9 +7534,15 @@ function updateOvertimeGrandTotals() {
     totalOtHours = roundToCents(totalOtHours + otTotal);
     totalAdjHours = roundToCents(totalAdjHours + adj);
     totalFinalHours = roundToCents(totalFinalHours + otFinal);
-    totalNightDiff = roundToCents(totalNightDiff + nightDiffPay);
-    totalOtPay = roundToCents(totalOtPay + otPay);
+    overtimeRows.push({ overtime_hours: otFinal, night_diff_pay: nightDiffPay, overtime_pay: otPay });
   });
+  const reduced = (domain && typeof domain.reduceOvertimeTotals === 'function')
+    ? domain.reduceOvertimeTotals(overtimeRows)
+    : overtimeRows.reduce((acc, row) => ({
+      overtime_hours: roundToCents((acc.overtime_hours || 0) + Number(row.overtime_hours || 0)),
+      night_diff_pay: roundToCents((acc.night_diff_pay || 0) + Number(row.night_diff_pay || 0)),
+      overtime_pay: roundToCents((acc.overtime_pay || 0) + Number(row.overtime_pay || 0)),
+    }), { overtime_hours: 0, night_diff_pay: 0, overtime_pay: 0 });
   const formatZeroDisplay = (value) => {
     const num = Number(value);
     if (!Number.isFinite(num) || Math.abs(num) < 0.005) return '-';
@@ -7493,8 +7555,8 @@ function updateOvertimeGrandTotals() {
   setCell('totalOtHours', totalOtHours);
   setCell('adjOtHours', totalAdjHours);
   setCell('finalOtHours', totalFinalHours);
-  setCell('nightDiff', totalNightDiff);
-  setCell('otPay', totalOtPay);
+  setCell('nightDiff', reduced.night_diff_pay || 0);
+  setCell('otPay', reduced.overtime_pay || 0);
 }
 
 function updateOvertimeRowForEmployee(empId){
@@ -8031,6 +8093,58 @@ function philhealthRateByMonthly(monthly){
   return Number(rows[rows.length-1].rate)||0;
 }
 
+function computePayrollDomainRow(empId, overrides = {}) {
+  const domain = (typeof window !== 'undefined' && window.payrollDomain) ? window.payrollDomain : null;
+  const rate = Number(overrides.hourlyRate ?? getEmployeeHourlyRate(empId)) || 0;
+  const regularHours = Number(overrides.regularHours ?? regHours?.[empId] ?? 0) || 0;
+  const overtimeHours = Number(overrides.overtimeHours ?? getOvertimeHoursTotal(empId)) || 0;
+  const overtimeAdjustmentHours = Number(overrides.overtimeAdjustmentHours ?? getOvertimeAdjustmentHours(empId)) || 0;
+  const regularAdjustmentHours = Number(overrides.regularAdjustmentHours ?? getRegularAdjustmentHours(empId)) || 0;
+  const otherDeductionsAmount = Number(overrides.otherDeductionsTotal ?? roundToCents(getOtherDeductionsTotal(empId))) || 0;
+  const additionalIncomeTotal = Number(overrides.additionalIncomeTotal ?? getAdditionalIncomeTotal(empId)) || 0;
+  const bantayAmount = Number(overrides.bantayAmount ?? 0) || 0;
+  const flags = (typeof contribFlags !== 'undefined' && contribFlags && contribFlags[empId]) || {};
+  const div = Number(divisor) || 1;
+  const lSSS = roundToCents(Number(overrides.loanSSS ?? loanSSS?.[empId] ?? 0) || 0);
+  const lPI = roundToCents(Number(overrides.loanPI ?? loanPI?.[empId] ?? 0) || 0);
+  const v = roundToCents(Number(overrides.vale ?? vale?.[empId] ?? 0) || 0);
+  const vW = roundToCents(Number(overrides.valeWed ?? valeWed?.[empId] ?? 0) || 0);
+  const additionalIncomeShown = roundToCents(additionalIncomeTotal + bantayAmount);
+
+  const sssTable = (typeof getSssTable === 'function') ? getSssTable() : [];
+  const pagibigTable = (typeof getPagibigTable === 'function') ? getPagibigTable() : [];
+  const philhealthTable = (typeof getPhilhealthTable === 'function') ? getPhilhealthTable() : [];
+
+  if (domain && typeof domain.buildPayrollRow === 'function') {
+    const row = domain.buildPayrollRow({
+      employeeId: empId,
+      regularHours,
+      overtimeHours,
+      overtimeAdjustmentHours,
+      regularAdjustmentHours,
+      hourlyRate: rate,
+      overtimeMultiplier: (typeof getOvertimeMultiplier === 'function') ? getOvertimeMultiplier() : 1.25,
+      nightDiffPay: Number(overrides.nightDiffPay ?? getNightDifferentialPayForEmployee(empId)) || 0,
+      nightDifferentialSettings: (typeof getNightDifferentialSettings === 'function') ? getNightDifferentialSettings() : null,
+      additionalIncomeTotal: additionalIncomeShown,
+      otherDeductionsTotal: otherDeductionsAmount,
+      loanSSS: lSSS,
+      loanPI: lPI,
+      vale: v,
+      valeWed: vW,
+      divisor: div,
+      contributionFlags: flags,
+      sssTable,
+      pagibigTable,
+      philhealthTable,
+      applyLoansWithoutWorkedTime: !!overrides.applyLoansWithoutWorkedTime
+    });
+    return { row, rate, regularHours, additionalIncomeShown, otherDeductionsAmount, lSSS, lPI, v, vW };
+  }
+
+  return { row: null, rate, regularHours, additionalIncomeShown, otherDeductionsAmount, lSSS, lPI, v, vW };
+}
+
 function calculateRow(tr){  const readNum = sel => { const el = tr.querySelector(sel); if (!el) return 0; const v = (typeof el.value !== 'undefined' ? el.value : el.textContent); const n = parseFloat(String(v).replace(/,/g,'')); return isNaN(n)?0:n; };
   const w = (sel, val) => { const el = tr.querySelector(sel); if (!el) return; el.textContent = (val===0 ? '-' : (+val).toFixed(2)); };
 
@@ -8079,46 +8193,55 @@ function calculateRow(tr){  const readNum = sel => { const el = tr.querySelector
   const bVal = parseFloat((tr.querySelector('.bantay')?.value || '').trim()) || 0;
   const additionalIncomeShown = roundToCents(additionalIncome + bVal);
 
-  const regPay = roundToCents(reg * rate);
-  const adjPay = roundToCents(regAdjHours * rate);
-  const effectiveOtRate = getEffectiveOvertimeRateForEmployee(id, rate);
-  const baseOtPay = roundToCents(otTotal * effectiveOtRate);
-  const nightDiffPay = getNightDifferentialPayForEmployee(id);
-  const otPay = roundToCents(baseOtPay + nightDiffPay);
-  const gross = roundToCents(regPay + adjPay + additionalIncomeShown + otPay);
-  // Compute contributions using dynamic tables (employee share).  Determine the
-  // appropriate rate based on the monthly income and multiply by regular pay.
-  const monthly = rate * 8 * 24;
-  const piRate = pagibigRateByMonthly(monthly);
-  const phRate = philhealthRateByMonthly(monthly);
-  // Check per-employee contribution deduction flags; default to true if not set
-  const flags = contribFlags[id] || {};
-  const div = Number(divisor) || 1;
-  const hasWorkedTime = (reg > 0) || (otTotal > 0) || (regAdjHours > 0);
-  const hasCompensation = hasWorkedTime || (additionalIncomeShown > 0);
-  const pagibig = (hasCompensation && flags.pagibig !== false ? +((regPay * piRate)).toFixed(2) : 0);
-  const philhealth = (hasCompensation && flags.philhealth !== false ? +((regPay * phRate)).toFixed(2) : 0);
-  const sssFull = hasCompensation ? sssShareByMonthly(monthly) : 0;
-  const sss = (hasCompensation && flags.sss !== false ? +(sssFull / div).toFixed(2) : 0);
-  const sssLoan = hasWorkedTime ? +(lSSS / div).toFixed(2) : 0;
-  const piLoan = hasWorkedTime ? +(lPI / div).toFixed(2) : 0;
-  const valeAmt = v;
-  const wedValeAmt = vW;
+  const domainComputed = computePayrollDomainRow(id, {
+    regularHours: reg,
+    overtimeHours: otBase,
+    overtimeAdjustmentHours: adjOtHours,
+    regularAdjustmentHours: regAdjHours,
+    loanSSS: lSSS,
+    loanPI: lPI,
+    vale: v,
+    valeWed: vW,
+    otherDeductionsTotal: otherDeductionsAmount,
+    additionalIncomeTotal: additionalIncome,
+    bantayAmount: bVal,
+    applyLoansWithoutWorkedTime: false
+  });
 
-  const deductionRaw = {
-    pagibig,
-    philhealth,
-    sss,
-    loanSSS: sssLoan,
-    loanPI: piLoan,
-    vale: valeAmt,
+  const rowModel = domainComputed.row;
+  const regPay = rowModel ? rowModel.regular_pay : roundToCents(reg * rate);
+  const adjPay = rowModel ? rowModel.adjustment_pay : roundToCents(regAdjHours * rate);
+  const otPay = rowModel ? rowModel.overtime_pay : roundToCents((otTotal * getEffectiveOvertimeRateForEmployee(id, rate)) + getNightDifferentialPayForEmployee(id));
+  const gross = rowModel ? rowModel.gross_pay : roundToCents(regPay + adjPay + additionalIncomeShown + otPay);
+
+  const deductionRaw = rowModel ? {
+    pagibig: rowModel.pagibig_deduction,
+    philhealth: rowModel.philhealth_deduction,
+    sss: rowModel.sss_deduction,
+    loanSSS: rowModel.loan_sss_deduction,
+    loanPI: rowModel.loan_pagibig_deduction,
+    vale: rowModel.vale_deduction,
+    adjustments: rowModel.other_deductions,
+    valeWed: rowModel.vale_wed_deduction,
+    total: rowModel.total_deductions
+  } : {
+    pagibig: 0,
+    philhealth: 0,
+    sss: 0,
+    loanSSS: 0,
+    loanPI: 0,
+    vale: v,
     adjustments: otherDeductionsAmount,
-    valeWed: wedValeAmt
+    valeWed: vW,
+    total: 0
   };
-  deductionRaw.total = roundToCents(pagibig + philhealth + sss + sssLoan + piLoan + valeAmt + wedValeAmt + otherDeductionsAmount);
+
+  if (!rowModel) {
+    deductionRaw.total = roundToCents(deductionRaw.pagibig + deductionRaw.philhealth + deductionRaw.sss + deductionRaw.loanSSS + deductionRaw.loanPI + deductionRaw.vale + deductionRaw.valeWed + deductionRaw.adjustments);
+  }
   const deductionEffective = computeEffectiveDeductionValues(deductionRaw);
   const total = deductionEffective.total;
-  const net = roundToCents(gross - total);
+  const net = rowModel ? roundToCents(rowModel.gross_pay - total) : roundToCents(gross - total);
 
   w('.regPay', regPay);
   w('.otPay', otPay);
@@ -18849,9 +18972,18 @@ function computeHoursForDateRange(startDate, endDate) {
     }
     const ndMins = overlapMinsWithNightWindow(dayOtStartMins, dayOtEndMins);
     const hourlyRate = Number(getEmployeeHourlyRate(empId)) || 0;
-    const ndPay = (ndMins > 0 && hourlyRate > 0 && ndPremiumFactor > 0)
-      ? roundToCents(minsToDec(ndMins) * hourlyRate * ndPremiumFactor)
-      : 0;
+    const ndDomain = (typeof window !== 'undefined' && window.payrollDomain) ? window.payrollDomain : null;
+    const ndPay = (ndDomain && typeof ndDomain.resolveNightDifferentialPay === 'function')
+      ? ndDomain.resolveNightDifferentialPay({
+        hourlyRate,
+        nightDiffMinutes: ndMins,
+        precomputedNightDiffPay: null,
+        settings: ndSettings,
+        preferPrecomputed: false,
+      }).pay
+      : ((ndMins > 0 && hourlyRate > 0 && ndPremiumFactor > 0)
+        ? roundToCents(minsToDec(ndMins) * hourlyRate * ndPremiumFactor)
+        : 0);
     totalsND[empId] = roundToCents((totalsND[empId] || 0) + ndPay);
   }
   return { totalsReg, totalsOT, totalsND };
@@ -20372,44 +20504,74 @@ document.addEventListener('DOMContentLoaded', function(){
     try { return v.toLocaleString(undefined,{minimumFractionDigits:2, maximumFractionDigits:2}); }
     catch(e){ return v.toFixed(2); }
   }
+  function _domain(){
+    return (typeof window !== 'undefined' && window.payrollDomain) ? window.payrollDomain : null;
+  }
 
   // === Payroll ===
   function updatePayrollGrandTotals(){
     var tb = document.querySelector('#payrollTable tbody');
     var foot = document.querySelector('#payrollTotalsFoot');
     if (!tb || !foot) return;
-      var t = {regHrs:0, rate:0, regPay:0, adjHours:0, adjPay:0, otPay:0, adjAmt:0, grossPay:0, pagibig:0, philhealth:0, sss:0, loanSSS:0, loanPI:0, vale:0, valeWed:0, totalDed:0, netPay:0};
-    var div = Number(divisor) || 1;
+    var rows = [];
+    var t = {regHrs:0, rate:0, adjHours:0};
     tb.querySelectorAll('tr').forEach(function(tr){
-      t.regHrs   += _parse(_val(tr.querySelector('.regHrs')));
-      t.rate     += _parse(_val(tr.querySelector('.rate')));
-        t.regPay   += _parse(tr.querySelector('.regPay')?.textContent);
-        t.adjHours += _parse(tr.querySelector('.adjHours')?.textContent);
-        t.adjPay   += _parse(tr.querySelector('.adjPay')?.textContent);
-        t.otPay    += _parse(tr.querySelector('.otPay')?.textContent);
-        t.adjAmt   += _parse(tr.querySelector('.adjAmt')?.textContent);
-        t.grossPay += _parse(tr.querySelector('.grossPay')?.textContent);
-        const dedPagibig = readRowDeductionDataset(tr, 'pagibig', 'effective');
-        const dedPhilhealth = readRowDeductionDataset(tr, 'philhealth', 'effective');
-        const dedSss = readRowDeductionDataset(tr, 'sss', 'effective');
-        const dedLoanSss = readRowDeductionDataset(tr, 'loanSSS', 'effective');
-        const dedLoanPi = readRowDeductionDataset(tr, 'loanPI', 'effective');
-        const dedVale = readRowDeductionDataset(tr, 'vale', 'effective');
-        const dedValeWed = readRowDeductionDataset(tr, 'valeWed', 'effective');
-        const dedTotal = readRowDeductionDataset(tr, 'total', 'effective');
-        t.pagibig  += dedPagibig != null ? _parse(dedPagibig) : _parse(tr.querySelector('.pagibig')?.textContent);
-        t.philhealth += dedPhilhealth != null ? _parse(dedPhilhealth) : _parse(tr.querySelector('.philhealth')?.textContent);
-        t.sss      += dedSss != null ? _parse(dedSss) : _parse(tr.querySelector('.sss')?.textContent);
-        t.loanSSS  += dedLoanSss != null ? _parse(dedLoanSss) : (_parse(_val(tr.querySelector('.loanSSS'))) / div);
-        t.loanPI   += dedLoanPi != null ? _parse(dedLoanPi) : (_parse(_val(tr.querySelector('.loanPI'))) / div);
-        t.vale     += dedVale != null ? _parse(dedVale) : _parse(_val(tr.querySelector('.vale')));
-        t.valeWed  += dedValeWed != null ? _parse(dedValeWed) : _parse(_val(tr.querySelector('.valeWed')));
-        t.totalDed += dedTotal != null ? _parse(dedTotal) : _parse(tr.querySelector('.totalDed')?.textContent);
-        t.netPay   += _parse(tr.querySelector('.netPay')?.textContent);
+      t.regHrs += _parse(_val(tr.querySelector('.regHrs')));
+      t.rate += _parse(_val(tr.querySelector('.rate')));
+      t.adjHours += _parse(tr.querySelector('.adjHours')?.textContent);
+      rows.push({
+        regular_pay: _parse(tr.querySelector('.regPay')?.textContent),
+        overtime_pay: _parse(tr.querySelector('.otPay')?.textContent),
+        adjustment_pay: _parse(tr.querySelector('.adjPay')?.textContent),
+        additional_income_total: _parse(tr.querySelector('.adjAmt')?.textContent),
+        gross_pay: _parse(tr.querySelector('.grossPay')?.textContent),
+        total_deductions: _parse(tr.querySelector('.totalDed')?.textContent),
+        net_pay: _parse(tr.querySelector('.netPay')?.textContent),
+        pagibig_deduction: _parse(readRowDeductionDataset(tr, 'pagibig', 'effective')),
+        philhealth_deduction: _parse(readRowDeductionDataset(tr, 'philhealth', 'effective')),
+        sss_deduction: _parse(readRowDeductionDataset(tr, 'sss', 'effective')),
+        loan_sss_deduction: _parse(readRowDeductionDataset(tr, 'loanSSS', 'effective')),
+        loan_pagibig_deduction: _parse(readRowDeductionDataset(tr, 'loanPI', 'effective')),
+        other_deductions: _parse(readRowDeductionDataset(tr, 'adjustments', 'effective')),
+      });
     });
-    Object.keys(t).forEach(function(k){
+    var domain = _domain();
+    var totals = (domain && typeof domain.reducePayrollTotals === 'function')
+      ? domain.reducePayrollTotals(rows)
+      : rows.reduce(function(acc, row){
+        acc.gross_pay += _parse(row.gross_pay);
+        acc.total_deductions += _parse(row.total_deductions);
+        acc.net_pay += _parse(row.net_pay);
+        acc.regular_pay += _parse(row.regular_pay);
+        acc.overtime_pay += _parse(row.overtime_pay);
+        acc.adjustment_pay += _parse(row.adjustment_pay);
+        acc.additional_income_total += _parse(row.additional_income_total);
+        return acc;
+      }, {gross_pay:0,total_deductions:0,net_pay:0,regular_pay:0,overtime_pay:0,adjustment_pay:0,additional_income_total:0});
+    var dedTotals = (domain && typeof domain.reduceDeductionTotals === 'function')
+      ? domain.reduceDeductionTotals(rows)
+      : { pagibig:0, philhealth:0, sss:0, loanSSS:0, loanPI:0, other:0, total:totals.total_deductions };
+
+    var mapped = {
+      regHrs: t.regHrs,
+      rate: t.rate,
+      regPay: totals.regular_pay,
+      adjHours: t.adjHours,
+      adjPay: totals.adjustment_pay,
+      otPay: totals.overtime_pay,
+      adjAmt: totals.additional_income_total,
+      grossPay: totals.gross_pay,
+      pagibig: dedTotals.pagibig,
+      philhealth: dedTotals.philhealth,
+      sss: dedTotals.sss,
+      loanSSS: dedTotals.loanSSS,
+      loanPI: dedTotals.loanPI,
+      totalDed: totals.total_deductions,
+      netPay: totals.net_pay
+    };
+    Object.keys(mapped).forEach(function(k){
       var cell = foot.querySelector('[data-col="'+k+'"]');
-      if (cell) cell.textContent = _fmt(t[k]);
+      if (cell) cell.textContent = _fmt(mapped[k]);
     });
   }
   window.updatePayrollGrandTotals = updatePayrollGrandTotals;
@@ -20419,22 +20581,56 @@ document.addEventListener('DOMContentLoaded', function(){
     var tb = document.querySelector('#deductionsTable tbody');
     var foot = document.querySelector('#deductionsTable_foot');
     if (!tb || !foot) return;
-    var totalsRaw = {pagibig:0, philhealth:0, sss:0, loanSSS:0, loanPI:0, vale:0, adjustments:0, valeWed:0};
+    var rows = [];
     tb.querySelectorAll('tr').forEach(function(tr){
-      DEDUCTION_COLUMN_KEYS.forEach(function(key){
-        if (key === 'total') return;
-        var cell = tr.querySelector('[data-col="'+key+'"]');
-        if (!cell) return;
-        var rawAttr = cell.getAttribute('data-raw');
-        var rawVal = rawAttr != null ? parseFloat(rawAttr) : NaN;
-        if (!Number.isFinite(rawVal)) {
-          rawVal = _parse(cell.textContent || '');
-        }
-        if (!Number.isFinite(rawVal)) rawVal = 0;
-        totalsRaw[key] += rawVal;
+      rows.push({
+        pagibig_deduction: _parse(tr.querySelector('[data-col="pagibig"]')?.getAttribute('data-raw')),
+        philhealth_deduction: _parse(tr.querySelector('[data-col="philhealth"]')?.getAttribute('data-raw')),
+        sss_deduction: _parse(tr.querySelector('[data-col="sss"]')?.getAttribute('data-raw')),
+        loan_sss_deduction: _parse(tr.querySelector('[data-col="loanSSS"]')?.getAttribute('data-raw')),
+        loan_pagibig_deduction: _parse(tr.querySelector('[data-col="loanPI"]')?.getAttribute('data-raw')),
+        vale_deduction: _parse(tr.querySelector('[data-col="vale"]')?.getAttribute('data-raw')),
+        vale_wed_deduction: _parse(tr.querySelector('[data-col="valeWed"]')?.getAttribute('data-raw')),
+        other_deductions: _parse(tr.querySelector('[data-col="adjustments"]')?.getAttribute('data-raw')),
+        total_deductions: _parse(tr.querySelector('[data-col="total"]')?.getAttribute('data-raw')),
       });
     });
-    totalsRaw.total = roundToCents(Object.keys(totalsRaw).reduce(function(sum, key){ return sum + (key === 'total' ? 0 : totalsRaw[key]); }, 0));
+    var domain = _domain();
+    var reduced = (domain && typeof domain.reduceDeductionTotals === 'function')
+      ? domain.reduceDeductionTotals(rows)
+      : rows.reduce(function(acc, row){
+          acc.pagibig = roundToCents((acc.pagibig || 0) + _parse(row.pagibig_deduction));
+          acc.philhealth = roundToCents((acc.philhealth || 0) + _parse(row.philhealth_deduction));
+          acc.sss = roundToCents((acc.sss || 0) + _parse(row.sss_deduction));
+          acc.loanSSS = roundToCents((acc.loanSSS || 0) + _parse(row.loan_sss_deduction));
+          acc.loanPI = roundToCents((acc.loanPI || 0) + _parse(row.loan_pagibig_deduction));
+          acc.vale = roundToCents((acc.vale || 0) + _parse(row.vale_deduction));
+          acc.valeWed = roundToCents((acc.valeWed || 0) + _parse(row.vale_wed_deduction));
+          acc.other = roundToCents((acc.other || 0) + _parse(row.other_deductions));
+          acc.total = roundToCents((acc.total || 0) + _parse(row.total_deductions));
+          return acc;
+        }, {
+          pagibig: 0,
+          philhealth: 0,
+          sss: 0,
+          loanSSS: 0,
+          loanPI: 0,
+          vale: 0,
+          valeWed: 0,
+          other: 0,
+          total: 0
+        });
+    var totalsRaw = {
+      pagibig: roundToCents(reduced.pagibig || 0),
+      philhealth: roundToCents(reduced.philhealth || 0),
+      sss: roundToCents(reduced.sss || 0),
+      loanSSS: roundToCents(reduced.loanSSS || 0),
+      loanPI: roundToCents(reduced.loanPI || 0),
+      vale: roundToCents(reduced.vale || 0),
+      adjustments: roundToCents(reduced.other || 0),
+      valeWed: roundToCents(reduced.valeWed || 0),
+      total: roundToCents(reduced.total || 0)
+    };
     var effectiveTotals = computeEffectiveDeductionValues(totalsRaw);
     Object.keys(effectiveTotals).forEach(function(key){
       var cell = foot.querySelector('[data-col="'+key+'"]');
