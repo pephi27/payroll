@@ -20,6 +20,34 @@
     function clearLog(){ try{ logEl.innerHTML=''; logEl.style.display='none'; }catch(e){} }
     function tryJSON(v){ try{ return JSON.parse(v); }catch{ return v; } }
 
+    const FALLBACK_CRITICAL_KEYS = new Set([
+      'att_employees_v2',
+      'att_projects_v1',
+      'att_schedules_v2',
+      'att_schedules_default',
+      'att_records_v2',
+      'payroll_loan_tracker',
+      'payroll_loan_sss',
+      'payroll_loan_pagibig',
+      'payroll_vale',
+      'payroll_vale_wed',
+      'payroll_contrib_flags',
+      'payroll_lock_state',
+      'payroll_rates',
+      'payroll_hist',
+      'payroll_other_deductions_details',
+      'payroll_other_deductions_total',
+      'payroll_additional_income_details',
+      'payroll_additional_income_total',
+    ]);
+
+    function getCriticalKeySet(){
+      const shared = window.__PAYROLL_CRITICAL_KEYS;
+      if (shared && typeof shared.has === 'function') return shared;
+      return FALLBACK_CRITICAL_KEYS;
+    }
+
+
     async function fetchKVAll(){
       const supa = getSupa();
       if(!supa) return { rows:[], error:'No Supabase client' };
@@ -117,8 +145,29 @@
 
     // Cloud listing removed
 
-    function applyLocalStorage(ls){
-      try{ Object.keys(ls||{}).forEach(k=>{ try{ localStorage.setItem(k, JSON.stringify(ls[k])); }catch(_){} }); }catch(e){}
+    async function applyLocalStorage(ls){
+      const criticalKeys = getCriticalKeySet();
+      try {
+        for (const k of Object.keys(ls || {})) {
+          const value = ls[k];
+          if (criticalKeys.has(k)) {
+            try {
+              if (typeof window.writeKV === 'function') {
+                await window.writeKV(k, value);
+              } else if (typeof window.sharedSet === 'function') {
+                await window.sharedSet(k, value);
+              } else {
+                log('Skipped critical key restore without cloud writer: ' + k);
+              }
+            } catch (_) {
+              log('Failed critical key restore via cloud writer: ' + k);
+            }
+            continue;
+          }
+
+          try { localStorage.setItem(k, JSON.stringify(value)); } catch (_) {}
+        }
+      } catch (e) {}
     }
     async function applyKV(kv){
       const supa = getSupa();
@@ -136,7 +185,7 @@
       try{
         await supa.from(DTR_TABLE).upsert({ id:'records', data: Array.isArray(rows)?rows:[] }, { onConflict:'id' });
         window.storedRecords = Array.isArray(rows)?rows:[];
-        try{ if (window.sharedSet) window.sharedSet('att_records_v2', window.storedRecords); else localStorage.setItem('att_records_v2', JSON.stringify(window.storedRecords)); }catch(_){ }
+        try{ if (typeof window.writeKV === 'function') window.writeKV('att_records_v2', window.storedRecords); else if (window.sharedSet) window.sharedSet('att_records_v2', window.storedRecords); }catch(_){ }
       }catch(e){ log('DTR upsert error: ' + String(e)); }
     }
 
@@ -164,7 +213,7 @@
       try{
         const text = await f.text(); const bundle = JSON.parse(text||'{}');
         if(!bundle || bundle.schema !== 'payrollhub.full.v1') throw new Error('Invalid bundle schema');
-        applyLocalStorage(bundle.localStorage || {}); log('Applied localStorage');
+        await applyLocalStorage(bundle.localStorage || {}); log('Applied localStorage (critical keys routed to cloud writers)');
         await applyKV(bundle.kv || []); log('Applied KV table');
         await applyDTR(bundle.dtr || []); log('Applied DTR rows');
         setStatus('Restore complete', false); alert('Restore complete.');
