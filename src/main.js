@@ -3,7 +3,6 @@ import { setCurrentPeriod, setSupabaseConnected } from './state/store.js';
 import { startRealtimeSubscriptions } from './realtime/subscriptions.js';
 import { mountPayrollController } from './ui/payrollController.js';
 import { waitForSupabaseClient } from './config/supabaseClient.js';
-import * as payrollDomain from './domain/payrollCalculations.js';
 
 let cleanupUi = null;
 let cleanupRealtime = null;
@@ -186,12 +185,6 @@ try {
   installDevLocalStorageDetector();
 } catch (error) {
   console.warn('initial localStorage diagnostic hook failed', error);
-}
-
-try {
-  window.payrollDomain = payrollDomain;
-} catch (error) {
-  console.warn('failed to expose payrollDomain', error);
 }
 
 if (document.readyState === 'loading') {
