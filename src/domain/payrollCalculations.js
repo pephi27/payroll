@@ -106,6 +106,14 @@ export function resolveNightDifferentialPay({
   preferPrecomputed = true,
 } = {}) {
   const ndSettings = normalizeNightDifferentialSettings(settings || {});
+  if (!ndSettings.enabled) {
+    return {
+      pay: 0,
+      source: 'disabled',
+      multiplier: ndSettings.multiplier,
+    };
+  }
+
   if (preferPrecomputed && precomputedNightDiffPay != null) {
     return {
       pay: roundToCents(precomputedNightDiffPay),
@@ -375,6 +383,8 @@ export function reduceDeductionTotals(rows = []) {
     totals.sss = roundToCents(totals.sss + toNumber(row?.sss_deduction, 0));
     totals.loanSSS = roundToCents(totals.loanSSS + toNumber(row?.loan_sss_deduction, 0));
     totals.loanPI = roundToCents(totals.loanPI + toNumber(row?.loan_pagibig_deduction, 0));
+    totals.vale = roundToCents(totals.vale + toNumber(row?.vale_deduction, 0));
+    totals.valeWed = roundToCents(totals.valeWed + toNumber(row?.vale_wed_deduction, 0));
     totals.other = roundToCents(totals.other + toNumber(row?.other_deductions, 0));
     totals.total = roundToCents(totals.total + toNumber(row?.total_deductions, 0));
     return totals;
@@ -384,6 +394,8 @@ export function reduceDeductionTotals(rows = []) {
     sss: 0,
     loanSSS: 0,
     loanPI: 0,
+    vale: 0,
+    valeWed: 0,
     other: 0,
     total: 0,
   });

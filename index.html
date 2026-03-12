@@ -20589,6 +20589,8 @@ document.addEventListener('DOMContentLoaded', function(){
         sss_deduction: _parse(tr.querySelector('[data-col="sss"]')?.getAttribute('data-raw')),
         loan_sss_deduction: _parse(tr.querySelector('[data-col="loanSSS"]')?.getAttribute('data-raw')),
         loan_pagibig_deduction: _parse(tr.querySelector('[data-col="loanPI"]')?.getAttribute('data-raw')),
+        vale_deduction: _parse(tr.querySelector('[data-col="vale"]')?.getAttribute('data-raw')),
+        vale_wed_deduction: _parse(tr.querySelector('[data-col="valeWed"]')?.getAttribute('data-raw')),
         other_deductions: _parse(tr.querySelector('[data-col="adjustments"]')?.getAttribute('data-raw')),
         total_deductions: _parse(tr.querySelector('[data-col="total"]')?.getAttribute('data-raw')),
       });
@@ -20603,9 +20605,9 @@ document.addEventListener('DOMContentLoaded', function(){
       sss: roundToCents(reduced.sss || 0),
       loanSSS: roundToCents(reduced.loanSSS || 0),
       loanPI: roundToCents(reduced.loanPI || 0),
-      vale: 0,
+      vale: roundToCents(reduced.vale || 0),
       adjustments: roundToCents(reduced.other || 0),
-      valeWed: 0,
+      valeWed: roundToCents(reduced.valeWed || 0),
       total: roundToCents(reduced.total || 0)
     };
     var effectiveTotals = computeEffectiveDeductionValues(totalsRaw);

@@ -43,6 +43,16 @@ const ndFromMinutes = resolveNightDifferentialPay({
 assert.equal(ndFromMinutes.pay, 20);
 assert.equal(ndFromMinutes.source, 'minutes');
 
+const ndDisabled = resolveNightDifferentialPay({
+  hourlyRate: 100,
+  nightDiffMinutes: 120,
+  settings: { enabled: false, multiplier: 1.5 },
+  precomputedNightDiffPay: 999,
+  preferPrecomputed: true,
+});
+assert.equal(ndDisabled.pay, 0);
+assert.equal(ndDisabled.source, 'disabled');
+
 // additional income and other deductions
 const incomeItemsTotal = totalAdditionalIncome([{ amount: '100' }, { amount: -20 }, { amount: 50 }]);
 const otherDedTotal = totalOtherDeductions([{ amount: '40' }, { amount: -5 }]);
@@ -132,5 +142,27 @@ const dedTotals = reduceDeductionTotals([regularOnly, withOt]);
 assert.equal(dedTotals.total, regularOnly.total_deductions + withOt.total_deductions);
 const otTotals = reduceOvertimeTotals([regularOnly, withOt]);
 assert.equal(otTotals.overtime_pay, regularOnly.overtime_pay + withOt.overtime_pay);
+
+const deductionRows = [
+  { vale_deduction: 100, vale_wed_deduction: 50, total_deductions: 150 },
+  { vale_deduction: 20, vale_wed_deduction: 30, total_deductions: 50 },
+];
+const withValeTotals = reduceDeductionTotals(deductionRows);
+assert.equal(withValeTotals.vale, 120);
+assert.equal(withValeTotals.valeWed, 80);
+
+const rowWithVale = buildPayrollRow({
+  employeeId: 'E9',
+  regularHours: 40,
+  hourlyRate: 100,
+  vale: 100,
+  valeWed: 25,
+  sssTable,
+  pagibigTable,
+  philhealthTable,
+});
+const combinedTotals = reduceDeductionTotals([rowWithVale]);
+assert.equal(combinedTotals.vale, rowWithVale.vale_deduction);
+assert.equal(combinedTotals.valeWed, rowWithVale.vale_wed_deduction);
 
 console.log('payrollDomain tests passed');
