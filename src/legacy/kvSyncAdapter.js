@@ -5,6 +5,25 @@ const SUPABASE_KEY = window.SUPABASE_KEY || "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ
 const TABLE = "kv_store";
 const SHARED_KEYS = ["att_employees_v2","att_schedules_v2","att_schedules_default","att_projects_v1","att_records_v2","att_overrides_hours_v1","dtr_overrides_v1","payroll_rates","payroll_ot_multiplier","payroll_week_start","payroll_week_end","settings_payroll","payroll_deduction_divisor","payroll_sss_table","payroll_pagibig_table","payroll_philhealth_table","payroll_pagibig_rate","payroll_philhealth_rate","payroll_loan_sss","payroll_loan_pagibig","payroll_loan_tracker","payroll_vale","payroll_vale_wed","payroll_hist","payroll_other_deductions_details","payroll_other_deductions_total","payroll_additional_income_details","payroll_additional_income_total","payroll_adjustment_hours","payroll_bantay","payroll_bantay_proj","payroll_contrib_flags","payroll_lock_state","incomeTypeOptions","deductionTypeOptions","payroll_print_orientation"];
 const SHARED_KEY_SET = new Set(SHARED_KEYS);
+const CRITICAL_BUSINESS_KEYS = new Set([
+  "att_employees_v2",
+  "att_projects_v1",
+  "att_schedules_v2",
+  "att_schedules_default",
+  "payroll_hist",
+  "payroll_lock_state",
+  "payroll_adjustment_hours",
+  "payroll_bantay",
+  "payroll_bantay_proj",
+  "payroll_rates",
+  "payroll_other_deductions_details",
+  "payroll_other_deductions_total",
+  "payroll_additional_income_details",
+  "payroll_additional_income_total",
+  "payroll_contrib_flags",
+  "payroll_loan_tracker"
+]);
+const OBJECT_STORE_KEYS = new Set(["att_employees_v2", "att_projects_v1", "att_schedules_v2"]);
 const PENDING_KEY = '__shared_pending_writes_v1';
 const META_KEY = '__shared_meta_v1';
 const DEVICE_KEY = '__device_id';
@@ -38,6 +57,40 @@ function cacheSet(key, value) {
     if (value === undefined) { __origRemoveItem(key); return; }
     __origSetItem(key, JSON.stringify(value));
   } catch (_) {}
+}
+
+function normalizeObjectStore(value) {
+  if (value && typeof value === 'object' && !Array.isArray(value)) return value;
+  return {};
+}
+
+function hasMeaningfulData(value) {
+  if (value == null) return false;
+  if (Array.isArray(value)) return value.length > 0;
+  if (typeof value === 'object') return Object.keys(value).length > 0;
+  if (typeof value === 'string') return value.trim().length > 0;
+  if (typeof value === 'number') return Number.isFinite(value);
+  if (typeof value === 'boolean') return true;
+  return false;
+}
+
+function normalizeValueForKey(key, value) {
+  if (!OBJECT_STORE_KEYS.has(key)) return value;
+  return normalizeObjectStore(value);
+}
+
+function chooseCriticalValue(key, cloudValue, localValue) {
+  const normalizedCloud = normalizeValueForKey(key, cloudValue);
+  const normalizedLocal = normalizeValueForKey(key, localValue);
+  if (!CRITICAL_BUSINESS_KEYS.has(key)) {
+    return normalizedCloud;
+  }
+  if (hasMeaningfulData(normalizedCloud)) return normalizedCloud;
+  if (hasMeaningfulData(normalizedLocal)) {
+    console.warn('[shared-kv] preserve local critical data during hydrate', { key });
+    return normalizedLocal;
+  }
+  return normalizedCloud;
 }
 window.cacheGet = cacheGet;
 window.cacheSet = cacheSet;
@@ -103,6 +156,13 @@ async function sharedGet(key, fallback = null) {
 
 async function sharedSet(key, value) {
   if (!SHARED_KEY_SET.has(key)) { cacheSet(key, value); return true; }
+  const nextValue = normalizeValueForKey(key, value);
+  const currentLocal = cacheGet(key, null);
+  const bootHydrating = !(window && window.__sharedSyncState && window.__sharedSyncState.hydrated === true);
+  if (bootHydrating && CRITICAL_BUSINESS_KEYS.has(key) && !hasMeaningfulData(nextValue) && hasMeaningfulData(currentLocal)) {
+    console.warn('[shared-kv] blocked destructive empty overwrite for critical key', { key });
+    return true;
+  }
   if (value === undefined) {
     const meta = { updatedAt: Date.now(), deviceId: getDeviceId() };
     const tomb = { __deleted: true, __meta: meta };
@@ -121,8 +181,8 @@ async function sharedSet(key, value) {
       return false;
     }
   }
-  const wrapped = wrapForStore(value);
-  cacheSet(key, value);
+  const wrapped = wrapForStore(nextValue);
+  cacheSet(key, nextValue);
   setMetaForKey(key, wrapped.__meta);
   try {
     await kvWriteCloud(key, wrapped);
@@ -207,6 +267,10 @@ async function flushPending() {
 
 async function sharedHydrateAll() {
   try {
+    const localBeforeHydrate = {};
+    for (const key of SHARED_KEYS) {
+      localBeforeHydrate[key] = cacheGet(key, null);
+    }
     const { data, error } = await supabase.from(TABLE).select('key,value,updated_at').in('key', SHARED_KEYS);
     if (error) throw error;
     for (const row of (data || [])) {
@@ -214,12 +278,17 @@ async function sharedHydrateAll() {
       if (!key || !SHARED_KEY_SET.has(key)) continue;
       const m = metaFromStore(row.value);
       const unwrapped = unwrapFromStore(row.value);
+      const chosen = chooseCriticalValue(key, unwrapped, localBeforeHydrate[key]);
       if (unwrapped === undefined) {
+        if (CRITICAL_BUSINESS_KEYS.has(key) && hasMeaningfulData(localBeforeHydrate[key])) {
+          console.warn('[shared-kv] ignored cloud tombstone for local critical data during hydrate', { key });
+          continue;
+        }
         cacheSet(key, undefined);
         delete metaMap[key];
         saveMetaMap();
       } else {
-        cacheSet(key, unwrapped);
+        cacheSet(key, chosen);
         setMetaForKey(key, m);
       }
     }

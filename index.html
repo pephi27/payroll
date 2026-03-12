@@ -2323,12 +2323,17 @@ window.addEventListener('load', dashReports);
             if (error || !data) return resolve(undefined);
             const v = data.value;
             if (v == null) return resolve(undefined);
-            // If the stored value is a string, assume it is JSON and parse
-            if (typeof v === 'string') {
-              try { return resolve(JSON.parse(v)); } catch { return resolve(undefined); }
+            let parsed = v;
+            if (typeof parsed === 'string') {
+              try { parsed = JSON.parse(parsed); } catch { return resolve(undefined); }
             }
-            // Otherwise return the JSON value directly
-            return resolve(v);
+            if (parsed && typeof parsed === 'object' && Object.prototype.hasOwnProperty.call(parsed, '__deleted') && parsed.__deleted) {
+              return resolve(undefined);
+            }
+            if (parsed && typeof parsed === 'object' && Object.prototype.hasOwnProperty.call(parsed, '__data')) {
+              return resolve(parsed.__data);
+            }
+            return resolve(parsed);
           })
           .catch(() => resolve(undefined));
       } catch (ex) {
@@ -2340,13 +2345,11 @@ window.addEventListener('load', dashReports);
     try {
       // Employees store (att_employees_v2)
       if (typeof window.storedEmployees === 'undefined') {
+        const localVal = JSON.parse(localStorage.getItem('att_employees_v2') || '{}');
         const supaVal = await fetchFromSupabase('att_employees_v2');
-        if (supaVal !== undefined) {
-          window.storedEmployees = supaVal;
-        } else {
-          // fallback to localStorage
-          window.storedEmployees = JSON.parse(localStorage.getItem('att_employees_v2') || '{}');
-        }
+        const cloudOk = !!(supaVal && typeof supaVal === 'object' && !Array.isArray(supaVal) && Object.keys(supaVal).length);
+        const localOk = !!(localVal && typeof localVal === 'object' && !Array.isArray(localVal) && Object.keys(localVal).length);
+        window.storedEmployees = cloudOk ? supaVal : (localOk ? localVal : {});
       }
       // Attendance records store (att_records_v2)
       if (typeof window.storedRecords === 'undefined') {
@@ -2360,21 +2363,19 @@ window.addEventListener('load', dashReports);
         window.storedRecords = window.storedRecords || []; }
       // Projects store (att_projects_v1)
       if (typeof window.storedProjects === 'undefined') {
+        const localVal = JSON.parse(localStorage.getItem('att_projects_v1') || '{}');
         const supaVal = await fetchFromSupabase('att_projects_v1');
-        if (supaVal !== undefined) {
-          window.storedProjects = supaVal;
-        } else {
-          window.storedProjects = JSON.parse(localStorage.getItem('att_projects_v1') || '{}');
-        }
+        const cloudOk = !!(supaVal && typeof supaVal === 'object' && !Array.isArray(supaVal) && Object.keys(supaVal).length);
+        const localOk = !!(localVal && typeof localVal === 'object' && !Array.isArray(localVal) && Object.keys(localVal).length);
+        window.storedProjects = cloudOk ? supaVal : (localOk ? localVal : {});
       }
       // Schedules store (att_schedules_v2) – ensures schedules are available early
       if (typeof window.storedSchedules === 'undefined') {
+        const localVal = JSON.parse(localStorage.getItem('att_schedules_v2') || '{}');
         const supaVal = await fetchFromSupabase('att_schedules_v2');
-        if (supaVal !== undefined) {
-          window.storedSchedules = supaVal;
-        } else {
-          window.storedSchedules = JSON.parse(localStorage.getItem('att_schedules_v2') || '{}');
-        }
+        const cloudOk = !!(supaVal && typeof supaVal === 'object' && !Array.isArray(supaVal) && Object.keys(supaVal).length);
+        const localOk = !!(localVal && typeof localVal === 'object' && !Array.isArray(localVal) && Object.keys(localVal).length);
+        window.storedSchedules = cloudOk ? supaVal : (localOk ? localVal : {});
       }
     } catch (e) {
       console.warn('Boot guard init failed', e);
@@ -10320,6 +10321,18 @@ document.addEventListener('DOMContentLoaded', () => {
   // localStorage and would not appear in the current session until a full page reload.
   window.payrollHistory = payrollHistory;
 
+  function refreshPayrollHistoryFromStorage() {
+    try {
+      const next = (window.cacheGet ? window.cacheGet(PAYROLL_HIST_KEY, []) : JSON.parse(localStorage.getItem(PAYROLL_HIST_KEY) || '[]'));
+      payrollHistory = Array.isArray(next) ? next : [];
+    } catch (_) {
+      payrollHistory = [];
+    }
+    window.payrollHistory = payrollHistory;
+    return payrollHistory;
+  }
+  window.refreshPayrollHistoryFromStorage = refreshPayrollHistoryFromStorage;
+
   const PERIOD_META_KEY = 'payroll_period_meta_v1';
   const PERIOD_SEGMENTS_KEY = 'payroll_period_segments_local_v1';
   const PERIOD_SNAPSHOTS_KEY = 'payroll_period_snapshots_v1';
@@ -10530,16 +10543,30 @@ document.addEventListener('DOMContentLoaded', () => {
   let payrollLocks = loadLockMap();
   try { window.payrollLocks = payrollLocks; } catch (err) {}
 
-  function persistLocks(changed) {
+  async function persistLocks(changed) {
     try {
       if (!payrollLocks || typeof payrollLocks !== 'object') payrollLocks = { __meta: {} };
       if (!payrollLocks.__meta) payrollLocks.__meta = {};
       if (changed) payrollLocks.__meta.lastUpdatedAt = Date.now();
-      localStorage.setItem(PAYROLL_LOCKS_KEY, JSON.stringify(payrollLocks));
+      if (typeof persistCriticalBusinessKey === 'function') {
+        const ok = await persistCriticalBusinessKey(PAYROLL_LOCKS_KEY, payrollLocks, { allowLocalOnlyFallback: true });
+        if (!ok) return false;
+      } else {
+        localStorage.setItem(PAYROLL_LOCKS_KEY, JSON.stringify(payrollLocks));
+      }
+      return true;
     } catch (err) {
       console.warn('Unable to persist payroll lock state', err);
+      return false;
     }
   }
+
+  function refreshPayrollLocksFromStorage() {
+    payrollLocks = loadLockMap();
+    try { window.payrollLocks = payrollLocks; } catch (err) {}
+    return payrollLocks;
+  }
+  window.refreshPayrollLocksFromStorage = refreshPayrollLocksFromStorage;
 
   function periodKey(start, end) {
     return `${start || ''}__${end || ''}`;
@@ -10935,7 +10962,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
-  function setPeriodLocked(start, end, locked, meta = {}) {
+  async function setPeriodLocked(start, end, locked, meta = {}) {
     if (!start || !end) return;
     if (!payrollLocks || typeof payrollLocks !== 'object') payrollLocks = { __meta: {} };
     const key = periodKey(start, end);
@@ -10953,20 +10980,22 @@ document.addEventListener('DOMContentLoaded', () => {
       delete payrollLocks[key];
     }
     const changed = locked ? !hadEntry : hadEntry;
-    persistLocks(changed);
+    const lockSaved = await persistLocks(changed);
     syncHistoryLockState(start, end, locked, meta);
     try { window.payrollLocks = payrollLocks; } catch (err) {}
+    return lockSaved;
   }
 
-  function clearPeriodLockEntry(start, end) {
+  async function clearPeriodLockEntry(start, end) {
     if (!start || !end) return;
     if (!payrollLocks || typeof payrollLocks !== 'object') payrollLocks = { __meta: {} };
     const key = periodKey(start, end);
     const hadEntry = !!(payrollLocks && payrollLocks[key]);
     if (!hadEntry) return;
     delete payrollLocks[key];
-    persistLocks(true);
+    const lockSaved = await persistLocks(true);
     try { window.payrollLocks = payrollLocks; } catch (err) {}
+    return lockSaved;
   }
 
   function updateLockStatusDisplay(entry) {
@@ -11013,7 +11042,7 @@ document.addEventListener('DOMContentLoaded', () => {
       updateLockStatusDisplay(entry);
       const snap = findHistorySnapshot(start, end) || fallbackSnap;
       if (!snap) {
-        clearPeriodLockEntry(start, end);
+        void clearPeriodLockEntry(start, end);
         locked = false;
         clearSnapshotOverride();
         enablePayrollInputs();
@@ -11129,8 +11158,9 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
-  function refreshPayrollViews() {
-    saveHistory();
+  async function refreshPayrollViews() {
+    const historySaved = await saveHistory();
+    if (!historySaved) showSyncFailedBanner('Sync failed');
     if (typeof renderHistory === 'function') renderHistory();
     if (typeof renderActivePayrolls === 'function') renderActivePayrolls();
     try { if (typeof window.populatePayrollDropdowns === 'function') window.populatePayrollDropdowns(); } catch (err) {}
@@ -11162,7 +11192,7 @@ document.addEventListener('DOMContentLoaded', () => {
     snap.voidReason = reason || '';
     snap.locked = false;
     snap.finalized = false;
-    clearPeriodLockEntry(snap.startDate, snap.endDate);
+    await clearPeriodLockEntry(snap.startDate, snap.endDate);
 
     const snapData = { startDate: snap.startDate, endDate: snap.endDate, rows: snap.rows || [], totals: snap.totals || {}, reason };
     const revision = nextRevision(periodId);
@@ -11186,7 +11216,7 @@ document.addEventListener('DOMContentLoaded', () => {
       syncErrorMessage: 'unlock snapshot sync failed'
     });
 
-    refreshPayrollViews();
+    await refreshPayrollViews();
   }
 
   function waitMs(ms) {
@@ -11328,9 +11358,10 @@ document.addEventListener('DOMContentLoaded', () => {
     existing.status = 'finalized';
     existing.revision = revision;
 
-    saveHistory();
+    const historySaved = await saveHistory();
+    if (!historySaved) showSyncFailedBanner('Sync failed');
     logFinalizeDiagnostics('lockCurrentPeriod:historySaved', { revision });
-    setPeriodLocked(start, end, true, {
+    const lockSaved = await setPeriodLocked(start, end, true, {
       periodKey: existing.periodKey,
       lockedAt,
       finalized: true,
@@ -11342,6 +11373,7 @@ document.addEventListener('DOMContentLoaded', () => {
       targetIndex: payrollHistory.indexOf(existing),
       snapshot: { rows: snapshot.rows, totals: snapshot.totals, divisor: snapshot.divisor, settings: snapshot.settings || {}, hash: hashHex }
     });
+    if (!lockSaved) showSyncFailedBanner('Sync failed');
     applyLockUI();
     logFinalizeDiagnostics('lockCurrentPeriod:complete');
   }
@@ -11475,7 +11507,8 @@ document.addEventListener('DOMContentLoaded', () => {
       const ok = confirm('Are you sure you want to delete this payroll snapshot? This action cannot be undone.');
       if (!ok) return;
       payrollHistory.splice(idx, 1);
-      saveHistory();
+      const activeDeletedSaved = await saveHistory();
+      if (!activeDeletedSaved) showSyncFailedBanner('Sync failed');
       renderHistory();
       renderActivePayrolls();
     }
@@ -12013,7 +12046,12 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     try {
-      localStorage.setItem(key, JSON.stringify(value));
+      if (typeof persistCriticalBusinessKey === 'function' && isCriticalBusinessStoreKey(key)) {
+        const ok = await persistCriticalBusinessKey(key, value, { allowLocalOnlyFallback: true });
+        if (!ok) throw new Error('persistCriticalBusinessKey returned false');
+      } else {
+        localStorage.setItem(key, JSON.stringify(value));
+      }
       return true;
     } catch (error) {
       console.warn('Payroll History local save failed', { key, error });
@@ -12023,7 +12061,7 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   // Persist payrollHistory through the kv_store sync path (with local fallback).
-  function saveHistory() {
+  async function saveHistory() {
     return persistKV(PAYROLL_HIST_KEY, payrollHistory);
   }
   // Expose saveHistory globally so it can be called from other scripts
@@ -12069,7 +12107,8 @@ document.addEventListener('DOMContentLoaded', () => {
       const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
       const now = new Date().toISOString();
       payrollHistory.push({ startDate: start, endDate: end, rows: snap.rows, totals: snap.totals, hash: hashHex, lockedAt: now, locked: false, status: 'draft', createdAt: now });
-      saveHistory();
+      const generatedSaved = await saveHistory();
+      if (!generatedSaved) showSyncFailedBanner('Sync failed');
       // Update both history and active payroll tables after creating a new snapshot
       renderHistory();
       if (typeof renderActivePayrolls === 'function') renderActivePayrolls();
@@ -12762,9 +12801,10 @@ return { rootHash, manifestHash, segmentCount: Object.keys(segments).length, ver
       }
       const confirmDel = confirm('Are you sure you want to delete this payroll record? This cannot be undone.');
       if (!confirmDel) return;
-      if (isLockedSnapshot) clearPeriodLockEntry(snap.startDate, snap.endDate);
+      if (isLockedSnapshot) await clearPeriodLockEntry(snap.startDate, snap.endDate);
       payrollHistory.splice(idx, 1);
-      saveHistory();
+      const deletedSaved = await saveHistory();
+      if (!deletedSaved) showSyncFailedBanner('Sync failed');
       renderHistory();
       renderActivePayrolls();
       return;
@@ -16459,14 +16499,110 @@ function safeParseStorageJSON(key, fallbackValue) {
   }
 }
 
+function normalizeObjectStore(value) {
+  if (value && typeof value === 'object' && !Array.isArray(value)) return value;
+  return {};
+}
+
+function hasStoreData(value) {
+  if (value == null) return false;
+  if (Array.isArray(value)) return value.length > 0;
+  if (typeof value === 'object') return Object.keys(value).length > 0;
+  if (typeof value === 'string') return value.trim().length > 0;
+  return !!value;
+}
+
+function isCriticalBusinessStoreKey(key) {
+  return [
+    LS_EMPLOYEES,
+    LS_PROJECTS,
+    LS_SCHEDULES,
+    LS_SCHEDULES_DEFAULT,
+    'payroll_hist',
+    'payroll_lock_state',
+    LS_ADJ_HRS,
+    LS_BANTAY,
+    LS_BANTAY_PROJ,
+    LS_RATES,
+    LS_OTHER_DEDUCTIONS_DETAILS,
+    LS_OTHER_DEDUCTIONS_TOTAL,
+    LS_ADDITIONAL_INCOME_DETAILS,
+    LS_ADDITIONAL_INCOME_TOTAL,
+    LS_CONTRIB_FLAGS,
+    LS_LOAN_TRACKER
+  ].includes(key);
+}
+
+async function persistCriticalBusinessKey(key, value, options = {}) {
+  const isObjectStore = key === LS_EMPLOYEES || key === LS_PROJECTS || key === LS_SCHEDULES;
+  const nextValue = isObjectStore ? normalizeObjectStore(value) : value;
+  const skipEmptyOverwriteGuard = !!options.allowEmptyOverwrite;
+  const allowLocalOnlyFallback = options.allowLocalOnlyFallback !== false;
+  const bootHydrating = !(window && window.__kv_hydrated === true);
+  const fallback = (nextValue === null || typeof nextValue === 'undefined') ? null : (Array.isArray(nextValue) ? [] : (typeof nextValue === 'object' ? {} : null));
+  const currentPersisted = safeParseStorageJSON(key, fallback);
+  if (
+    !skipEmptyOverwriteGuard
+    && bootHydrating
+    && isCriticalBusinessStoreKey(key)
+    && !hasStoreData(nextValue)
+    && hasStoreData(currentPersisted)
+  ) {
+    console.warn('[storage-safety] blocked empty overwrite for critical key', key);
+    return false;
+  }
+
+  try {
+    if (window.cacheSet) window.cacheSet(key, nextValue);
+    else if (typeof nextValue === 'undefined') localStorage.removeItem(key);
+    else localStorage.setItem(key, JSON.stringify(nextValue));
+  } catch (err) {
+    console.warn('[storage-safety] local persist failed', { key, err });
+  }
+
+  if (typeof window.sharedSet === 'function') {
+    try {
+      const ok = await window.sharedSet(key, nextValue);
+      if (ok === false) {
+        console.warn('[storage-safety] cloud sync failed', { key });
+        return false;
+      }
+      return true;
+    } catch (err) {
+      console.warn('[storage-safety] cloud sync threw', { key, err });
+      return false;
+    }
+  }
+
+  if (!allowLocalOnlyFallback && isCriticalBusinessStoreKey(key)) {
+    return false;
+  }
+  return true;
+}
+
+function persistCriticalBusinessKeySoon(key, value, options = {}) {
+  const delay = Math.max(0, Number(options.delayMs) || 0);
+  const run = () => {
+    persistCriticalBusinessKey(key, value, options).catch((err) => {
+      console.warn('[storage-safety] deferred persist failed', { key, err });
+    });
+  };
+  if (delay === 0) {
+    run();
+    return;
+  }
+  setTimeout(run, delay);
+}
+
 function refreshCoreStoresFromStorage() {
   overridesSchedules = safeParseStorageJSON(LS_OVERRIDES_SCHEDULES, {});
   overridesProjects = safeParseStorageJSON(LS_OVERRIDES_PROJECTS, {});
   splits = safeParseStorageJSON(LS_SPLITS, {});
   dtrOverrides = safeParseStorageJSON(LS_DTR_OVERRIDES, {});
-  storedEmployees = safeParseStorageJSON(LS_EMPLOYEES, {});
-  storedSchedules = safeParseStorageJSON(LS_SCHEDULES, null);
-  storedProjects = safeParseStorageJSON(LS_PROJECTS, {});
+  storedEmployees = normalizeObjectStore(safeParseStorageJSON(LS_EMPLOYEES, {}));
+  storedSchedules = normalizeObjectStore(safeParseStorageJSON(LS_SCHEDULES, {}));
+  defaultScheduleId = safeParseStorageJSON(LS_SCHEDULES_DEFAULT, null) || null;
+  storedProjects = normalizeObjectStore(safeParseStorageJSON(LS_PROJECTS, {}));
   payrollRates = safeParseStorageJSON(LS_RATES, {});
   regHours = safeParseStorageJSON(LS_REG_HRS, {});
   otHours = safeParseStorageJSON(LS_OT_HRS, {});
@@ -16474,6 +16610,7 @@ function refreshCoreStoresFromStorage() {
   try {
     window.storedEmployees = storedEmployees;
     window.storedSchedules = storedSchedules;
+    window.defaultScheduleId = defaultScheduleId;
     window.storedProjects = storedProjects;
     window.overridesSchedules = overridesSchedules;
     window.overridesProjects = overridesProjects;
@@ -16543,8 +16680,8 @@ function ensureSchedules(){
   }
 }
 function saveSchedulesToLS(){
-  if (window.sharedSet) { window.sharedSet(LS_SCHEDULES, storedSchedules); window.sharedSet(LS_SCHEDULES_DEFAULT, defaultScheduleId); }
-  else { localStorage.setItem(LS_SCHEDULES, JSON.stringify(storedSchedules)); localStorage.setItem(LS_SCHEDULES_DEFAULT, defaultScheduleId); }
+  persistCriticalBusinessKey(LS_SCHEDULES, normalizeObjectStore(storedSchedules));
+  persistCriticalBusinessKeySoon(LS_SCHEDULES_DEFAULT, defaultScheduleId, { delayMs: 0 });
 }
 
 const LS_ACTIVE_MAIN_TAB = 'bp_active_main_tab';
@@ -16886,7 +17023,7 @@ function resetRanges(){
 document.getElementById('saveRangesBtn').addEventListener('click', saveRangesFromUI);
 document.getElementById('resetRangesBtn').addEventListener('click', resetRanges);
 
-function saveEmployeesToLS(){ if (window.sharedSet) window.sharedSet(LS_EMPLOYEES, storedEmployees); else localStorage.setItem(LS_EMPLOYEES, JSON.stringify(storedEmployees)); }
+function saveEmployeesToLS(){ persistCriticalBusinessKey(LS_EMPLOYEES, normalizeObjectStore(storedEmployees)); }
 function renderEmpScheduleDropdowns(){
   const sel = document.getElementById('empScheduleSelect'); if(!sel) return;
   sel.innerHTML = '';
@@ -16946,7 +17083,7 @@ function syncProjectsKVAfterLocalSave(forceCloudWrite){
 }
 
 function saveProjectsToLS(options = {}){
-  if (window.sharedSet) window.sharedSet(LS_PROJECTS, storedProjects); else localStorage.setItem(LS_PROJECTS, JSON.stringify(storedProjects));
+  persistCriticalBusinessKey(LS_PROJECTS, normalizeObjectStore(storedProjects));
   syncProjectsKVAfterLocalSave(!!(options && options.userEdited));
   if(!(options && options.skipRender)){
     renderProjects();
@@ -18502,6 +18639,37 @@ async function bootAfterKvHydrate() {
       window.refreshCoreStoresFromStorage();
     }
   } catch (_) {}
+  try {
+    if (typeof window.refreshPayrollHistoryFromStorage === 'function') {
+      window.refreshPayrollHistoryFromStorage();
+    } else {
+      const hist = safeParseStorageJSON('payroll_hist', []);
+      window.payrollHistory = Array.isArray(hist) ? hist : [];
+    }
+    if (typeof window.refreshPayrollLocksFromStorage === 'function') {
+      window.refreshPayrollLocksFromStorage();
+    } else {
+      const locks = safeParseStorageJSON('payroll_lock_state', { __meta: { lastUpdatedAt: 0 } });
+      window.payrollLocks = (locks && typeof locks === 'object') ? locks : { __meta: { lastUpdatedAt: 0 } };
+    }
+  } catch (_) {}
+  try {
+    renderProjects();
+    renderEmployees();
+    renderProjectDropdowns();
+    renderEmpScheduleDropdowns();
+    renderEmpScheduleDropdownsInTable();
+    renderScheduleSelector();
+    renderScheduleEditor();
+    renderProjectFilterOptions();
+    if (typeof renderAdjustmentHoursTable === 'function') renderAdjustmentHoursTable();
+    if (typeof renderOtherDeductionsTable === 'function') renderOtherDeductionsTable();
+    if (typeof renderHistory === 'function') renderHistory();
+    if (typeof renderActivePayrolls === 'function') renderActivePayrolls();
+    if (typeof applyLockUI === 'function') applyLockUI();
+  } catch (e) {
+    console.warn('hydrate re-render pass failed', e);
+  }
   try {
     let dtrLoaded = false;
     if (typeof window.loadDtrFromCloud === 'function') {
@@ -21540,7 +21708,10 @@ function updateWeekInputs(snap) {
     const newSnap = { startDate: s, endDate: e, rows: snap.rows, totals: snap.totals, hash: hashHex, lockedAt: now, locked: false, status: 'draft', createdAt: now };
     if (Array.isArray(window.payrollHistory)) {
       window.payrollHistory.push(newSnap);
-      if (typeof saveHistory === 'function') saveHistory();
+      if (typeof saveHistory === 'function') {
+        const createdSaved = await saveHistory();
+        if (!createdSaved && typeof window.showSyncFailedBanner === 'function') window.showSyncFailedBanner('Sync failed');
+      }
     } else {
       const localHist = loadHistory();
       localHist.push(newSnap);
@@ -21552,7 +21723,11 @@ function updateWeekInputs(snap) {
           } catch (_) {}
         });
       } else {
-        localStorage.setItem(PAYROLL_HIST_KEY, JSON.stringify(localHist));
+        if (typeof persistCriticalBusinessKey === 'function') {
+          persistCriticalBusinessKey(PAYROLL_HIST_KEY, localHist);
+        } else {
+          localStorage.setItem(PAYROLL_HIST_KEY, JSON.stringify(localHist));
+        }
       }
     }
     // Refresh UI pieces
