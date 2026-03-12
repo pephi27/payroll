@@ -5,6 +5,28 @@ const SUPABASE_KEY = window.SUPABASE_KEY || "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ
 const TABLE = "kv_store";
 const SHARED_KEYS = ["att_employees_v2","att_schedules_v2","att_schedules_default","att_projects_v1","att_records_v2","att_overrides_hours_v1","dtr_overrides_v1","payroll_rates","payroll_ot_multiplier","payroll_week_start","payroll_week_end","settings_payroll","payroll_deduction_divisor","payroll_sss_table","payroll_pagibig_table","payroll_philhealth_table","payroll_pagibig_rate","payroll_philhealth_rate","payroll_loan_sss","payroll_loan_pagibig","payroll_loan_tracker","payroll_vale","payroll_vale_wed","payroll_hist","payroll_other_deductions_details","payroll_other_deductions_total","payroll_additional_income_details","payroll_additional_income_total","payroll_adjustment_hours","payroll_bantay","payroll_bantay_proj","payroll_contrib_flags","payroll_lock_state","incomeTypeOptions","deductionTypeOptions","payroll_print_orientation"];
 const SHARED_KEY_SET = new Set(SHARED_KEYS);
+const CRITICAL_REMOTE_ONLY_KEYS = new Set([
+  'att_employees_v2',
+  'att_projects_v1',
+  'att_schedules_v2',
+  'att_schedules_default',
+  'att_records_v2',
+  'payroll_loan_tracker',
+  'payroll_loan_sss',
+  'payroll_loan_pagibig',
+  'payroll_vale',
+  'payroll_vale_wed',
+  'payroll_contrib_flags',
+  'payroll_lock_state',
+  'payroll_rates',
+  'payroll_hist',
+  'payroll_other_deductions_details',
+  'payroll_other_deductions_total',
+  'payroll_additional_income_details',
+  'payroll_additional_income_total',
+]);
+window.__PAYROLL_CRITICAL_KEYS = window.__PAYROLL_CRITICAL_KEYS || new Set(CRITICAL_REMOTE_ONLY_KEYS);
+const CRITICAL_MIGRATION_ACK_KEY = '__payroll_critical_ls_seed_ack_v1';
 const PENDING_KEY = '__shared_pending_writes_v1';
 const META_KEY = '__shared_meta_v1';
 const DEVICE_KEY = '__device_id';
@@ -17,7 +39,7 @@ window.SUPABASE_TABLE = TABLE;
 window.SHARED_KEYS = SHARED_KEYS;
 window.SHARED_KEY_SET = SHARED_KEY_SET;
 window.__supabase_ready = true;
-window.__sharedSyncState = window.__sharedSyncState || { hydrated:false, offline:false, lastSyncAt:0, conflict:false };
+window.__sharedSyncState = window.__sharedSyncState || { hydrated:false, hydrateAttempted:false, hydrateSucceeded:false, offline:false, lastSyncAt:0, conflict:false };
 try { console.warn('[boot] supabase ready'); window.dispatchEvent(new Event('supabase-ready')); } catch (_) {}
 
 const __origGetItem = window.localStorage.getItem.bind(window.localStorage);
@@ -25,6 +47,9 @@ const __origSetItem = window.localStorage.setItem.bind(window.localStorage);
 const __origRemoveItem = window.localStorage.removeItem.bind(window.localStorage);
 
 function cacheGet(key, fallback = null) {
+  if (CRITICAL_REMOTE_ONLY_KEYS.has(key) && !canUseCriticalLocalFallback()) {
+    return fallback;
+  }
   try {
     const raw = __origGetItem ? __origGetItem(key) : localStorage.getItem(key);
     if (raw == null) return fallback;
@@ -41,6 +66,15 @@ function cacheSet(key, value) {
 }
 window.cacheGet = cacheGet;
 window.cacheSet = cacheSet;
+
+function canUseCriticalLocalFallback() {
+  const state = window.__sharedSyncState || {};
+  if (!state.hydrated) return false;
+  if (state.hydrateSucceeded) return true;
+  const allowDegradedFallback = window.__PAYROLL_ALLOW_CRITICAL_LS_DEGRADED_READ !== false;
+  return !!state.offline && allowDegradedFallback;
+}
+
 
 function getDeviceId() {
   let id = localStorage.getItem(DEVICE_KEY) || '';
@@ -91,14 +125,44 @@ async function sharedGet(key, fallback = null) {
   if (window.__sharedSyncState.hydrated) return cacheGet(key, fallback);
   try {
     const row = await kvReadCloud(key);
-    if (!row || row.value === undefined) return cacheGet(key, fallback);
+    if (!row || row.value === undefined) return CRITICAL_REMOTE_ONLY_KEYS.has(key) ? fallback : cacheGet(key, fallback);
     const unwrapped = unwrapFromStore(row.value);
     cacheSet(key, unwrapped);
     setMetaForKey(key, metaFromStore(row.value));
     return unwrapped === undefined ? fallback : unwrapped;
   } catch (_) {
-    return cacheGet(key, fallback);
+    return CRITICAL_REMOTE_ONLY_KEYS.has(key) ? fallback : cacheGet(key, fallback);
   }
+}
+
+function clearCriticalLegacyLocalCache() {
+  try {
+    for (const key of CRITICAL_REMOTE_ONLY_KEYS) {
+      __origRemoveItem(key);
+    }
+  } catch (_) {}
+}
+
+async function maybeSeedCriticalKeysFromLegacyLocal() {
+  const shouldSeed = window.__PAYROLL_ENABLE_CRITICAL_LS_SEED === true;
+  if (!shouldSeed) return;
+  if (cacheGet(CRITICAL_MIGRATION_ACK_KEY, false)) return;
+
+  for (const key of CRITICAL_REMOTE_ONLY_KEYS) {
+    try {
+      const cloud = await kvReadCloud(key);
+      if (cloud && cloud.value !== undefined) continue;
+      const raw = __origGetItem(key);
+      if (!raw) continue;
+      let parsed = raw;
+      try { parsed = JSON.parse(raw); } catch (_) {}
+      await sharedSet(key, parsed);
+    } catch (error) {
+      console.warn('[payroll:migration] failed to seed critical key', key, error?.message || error);
+    }
+  }
+
+  cacheSet(CRITICAL_MIGRATION_ACK_KEY, true);
 }
 
 async function sharedSet(key, value) {
@@ -206,6 +270,7 @@ async function flushPending() {
 }
 
 async function sharedHydrateAll() {
+  window.__sharedSyncState.hydrateAttempted = true;
   try {
     const { data, error } = await supabase.from(TABLE).select('key,value,updated_at').in('key', SHARED_KEYS);
     if (error) throw error;
@@ -225,7 +290,10 @@ async function sharedHydrateAll() {
     }
     await flushPending();
     window.__sharedSyncState.offline = false;
+    window.__sharedSyncState.hydrateSucceeded = true;
   } catch (e) {
+    window.__sharedSyncState.hydrateSucceeded = false;
+    window.__sharedSyncState.offline = true;
     console.warn('sharedHydrateAll offline/failed:', e?.message || e);
   } finally {
     window.__sharedSyncState.hydrated = true;
@@ -276,6 +344,11 @@ kvChannel.subscribe();
 window.__sharedKvChannel = kvChannel;
 
 window.addEventListener('online', () => { flushPending().catch(() => {}); });
+
+maybeSeedCriticalKeysFromLegacyLocal().catch(() => {});
+sharedHydrateAll().then(() => {
+  if (window.__sharedSyncState.hydrateSucceeded) clearCriticalLegacyLocalCache();
+}).catch(() => {});
 
 if (!window.__sharedStorageHooked) {
   window.__sharedStorageHooked = true;
