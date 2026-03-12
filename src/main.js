@@ -8,6 +8,26 @@ import * as payrollDomain from './domain/payrollCalculations.js';
 let cleanupUi = null;
 let cleanupRealtime = null;
 let bootstrapped = false;
+let runtimeErrorListenersInstalled = false;
+
+function installRuntimeErrorLogging() {
+  if (runtimeErrorListenersInstalled) return;
+  runtimeErrorListenersInstalled = true;
+
+  window.addEventListener('error', (event) => {
+    console.error('Payroll runtime error', {
+      message: event?.message,
+      source: event?.filename,
+      line: event?.lineno,
+      column: event?.colno,
+      error: event?.error,
+    });
+  });
+
+  window.addEventListener('unhandledrejection', (event) => {
+    console.error('Payroll unhandled promise rejection', event?.reason);
+  });
+}
 
 function installDevLocalStorageDetector() {
   if (window.__payrollLocalDetectorInstalled) return;
@@ -148,7 +168,19 @@ async function bootstrapPayrollApp() {
   });
 }
 
+function runBootstrap() {
+  bootstrapPayrollApp().catch((error) => {
+    console.error('Payroll bootstrap failed', error);
+  });
+}
 
+
+
+try {
+  installRuntimeErrorLogging();
+} catch (error) {
+  console.warn('runtime error listeners failed to install', error);
+}
 
 try {
   installDevLocalStorageDetector();
@@ -163,9 +195,7 @@ try {
 }
 
 if (document.readyState === 'loading') {
-  document.addEventListener('DOMContentLoaded', bootstrapPayrollApp);
+  document.addEventListener('DOMContentLoaded', runBootstrap);
 } else {
-  bootstrapPayrollApp().catch((error) => {
-    console.error('Payroll bootstrap failed', error);
-  });
+  runBootstrap();
 }
