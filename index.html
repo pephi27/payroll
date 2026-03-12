@@ -3392,6 +3392,7 @@ window.addEventListener('load', dashReports);
        <tr>
         <th>Employee</th>
         <th>Description</th>
+        <th>Project</th>
         <th>Amount</th>
         <th>Actions</th>
        </tr>
@@ -5966,7 +5967,7 @@ function roundToCents(value){
 }
 
 function getProjectEntriesSorted(projectMapOverride){
-  const projectMap = projectMapOverride || ((typeof storedProjects !== 'undefined' && storedProjects) || {});
+  const projectMap = normalizeProjectMap(projectMapOverride || ((typeof storedProjects !== 'undefined' && storedProjects) || {}));
   return Object.entries(projectMap || {}).sort((a,b)=>{
     const A = String(a[1]?.name || a[0] || '').toUpperCase();
     const B = String(b[1]?.name || b[0] || '').toUpperCase();
@@ -5974,8 +5975,33 @@ function getProjectEntriesSorted(projectMapOverride){
   });
 }
 
+function normalizeProjectMap(rawProjectStore){
+  if (!rawProjectStore) return {};
+  if (rawProjectStore instanceof Map) {
+    const mapped = {};
+    rawProjectStore.forEach((proj, key) => {
+      const pid = String(key || '').trim();
+      if (!pid) return;
+      mapped[pid] = proj || { name: pid };
+    });
+    return mapped;
+  }
+  if (Array.isArray(rawProjectStore)) {
+    const mapped = {};
+    rawProjectStore.forEach((proj) => {
+      if (!proj || typeof proj !== 'object') return;
+      const pid = String(proj.id || proj.project_id || '').trim();
+      if (!pid) return;
+      mapped[pid] = proj;
+    });
+    return mapped;
+  }
+  if (typeof rawProjectStore === 'object') return rawProjectStore;
+  return {};
+}
+
 function resolveProjectIdValue(rawValue, projectMapOverride){
-  const projectMap = projectMapOverride || ((typeof storedProjects !== 'undefined' && storedProjects) || {});
+  const projectMap = normalizeProjectMap(projectMapOverride || ((typeof storedProjects !== 'undefined' && storedProjects) || {}));
   const value = String(rawValue || '').trim();
   if (!value) return '';
   if (Object.prototype.hasOwnProperty.call(projectMap, value)) return value;
@@ -5987,7 +6013,7 @@ function resolveProjectIdValue(rawValue, projectMapOverride){
 
 function populateProjectSelectWithActiveOptions(selectEl, currentValue, options = {}){
   if (!selectEl) return '';
-  const projectMap = options.projectMap || ((typeof storedProjects !== 'undefined' && storedProjects) || {});
+  const projectMap = normalizeProjectMap(options.projectMap || ((typeof storedProjects !== 'undefined' && storedProjects) || {}));
   const noneLabel = options.noneLabel || '(none)';
   const includeNone = options.includeNone !== false;
   const resolvedCurrent = resolveProjectIdValue(currentValue, projectMap);
@@ -6188,9 +6214,12 @@ function normalizeOtherDeductionItem(item){
     type = labelMatch || CUSTOM_DEDUCTION_TYPE_VALUE;
   }
   const label = resolveOtherDeductionLabel(type, rawLabel);
+  const project = resolveProjectIdValue(item && (item.projectId != null ? item.projectId : item && item.project));
   return {
     type: type || CUSTOM_DEDUCTION_TYPE_VALUE,
     label,
+    project,
+    projectId: project,
     amount: sanitizeOtherDeductionAmount(item && item.amount)
   };
 }
@@ -8986,6 +9015,7 @@ function renderOtherDeductionsTable(){
   if (!tbody) return;
   const deductionOptions = getDeductionTypeOptions();
   const defaultType = deductionOptions[0] || CUSTOM_DEDUCTION_TYPE_VALUE;
+  const projectMap = normalizeProjectMap((typeof storedProjects !== 'undefined' && storedProjects) || {});
   const handleBlur = () => {
     otherDeductionsFocusCount = Math.max(0, otherDeductionsFocusCount - 1);
     setTimeout(() => {
@@ -9012,6 +9042,7 @@ function renderOtherDeductionsTable(){
       tr.innerHTML = `
         <td class="wrap"></td>
         <td class="otherDeductionTypeCell"></td>
+        <td class="otherDeductionProjectCell"></td>
         <td><input type="number" min="0" step="0.01" class="otherDeductionAmount" data-emp="${empId}" data-index="${idx}"></td>
         <td><button type="button" class="removeOtherDeductionBtn" data-emp="${empId}" data-index="${idx}">Remove</button></td>
       `;
@@ -9034,6 +9065,7 @@ function renderOtherDeductionsTable(){
           otherDeductionsDetails[empId].push({
             type: defaultType,
             label: resolveOtherDeductionLabel(defaultType, ''),
+            project: '',
             amount: 0
           });
           updateOtherDeductionsTotalForEmployee(empId);
@@ -9049,12 +9081,13 @@ function renderOtherDeductionsTable(){
         empCell.innerHTML = '&nbsp;';
       }
       const typeCell = tr.querySelector('.otherDeductionTypeCell');
+      const projectCell = tr.querySelector('.otherDeductionProjectCell');
       const amountInput = tr.querySelector('.otherDeductionAmount');
       const removeBtn = tr.querySelector('.removeOtherDeductionBtn');
       const isPlaceholder = !!item.__placeholder;
       const enableRemove = () => { try { if (removeBtn) removeBtn.disabled = false; } catch(_){} };
       const normalizedItem = isPlaceholder
-        ? { type: defaultType, label: '', amount: '', __placeholder: true }
+        ? { type: defaultType, label: '', project: '', amount: '', __placeholder: true }
         : normalizeOtherDeductionItem(item);
       const typeMatch = matchDeductionTypeOption(normalizedItem.type);
       const labelMatch = matchDeductionTypeOption(normalizedItem.label);
@@ -9063,6 +9096,7 @@ function renderOtherDeductionsTable(){
       const amountValue = isPlaceholder ? '' : sanitizeOtherDeductionAmount(normalizedItem.amount);
       let typeSelect = null;
       let customInput = null;
+      let projectSelect = null;
       if (typeCell) {
         const field = document.createElement('div');
         field.className = 'otherDeductionTypeField';
@@ -9090,6 +9124,26 @@ function renderOtherDeductionsTable(){
         field.appendChild(customInput);
         typeCell.appendChild(field);
       }
+      if (projectCell) {
+        projectSelect = document.createElement('select');
+        projectSelect.className = 'otherDeductionProjectSelect';
+        projectSelect.dataset.emp = empId;
+        projectSelect.dataset.index = String(idx);
+        const currentRaw = isPlaceholder ? '' : String((normalizedItem && (normalizedItem.project || normalizedItem.projectId)) || '').trim();
+        const currentResolved = populateProjectSelectWithActiveOptions(projectSelect, currentRaw, {
+          projectMap,
+          noneLabel: 'Select project'
+        });
+        if (!isPlaceholder && currentResolved !== currentRaw) {
+          if (!Array.isArray(otherDeductionsDetails[empId])) otherDeductionsDetails[empId] = [];
+          if (!otherDeductionsDetails[empId][idx]) otherDeductionsDetails[empId][idx] = {};
+          otherDeductionsDetails[empId][idx].project = currentResolved;
+          otherDeductionsDetails[empId][idx].projectId = currentResolved;
+          otherDeductionsPersist.schedule();
+          otherDeductionsRefresh.schedule();
+        }
+        projectCell.appendChild(projectSelect);
+      }
       const setCustomVisibility = (show) => {
         if (!customInput) return;
         customInput.style.display = show ? '' : 'none';
@@ -9116,6 +9170,7 @@ function renderOtherDeductionsTable(){
             otherDeductionsDetails[empId][idx] = {
               type: defaultType,
               label: resolveOtherDeductionLabel(defaultType, ''),
+              project: projectSelect ? String(projectSelect.value || '').trim() : '',
               amount: 0
             };
           }
@@ -9147,7 +9202,7 @@ function renderOtherDeductionsTable(){
           enableRemove();
           if (!Array.isArray(otherDeductionsDetails[empId])) otherDeductionsDetails[empId] = [];
           if (!otherDeductionsDetails[empId][idx]) {
-            otherDeductionsDetails[empId][idx] = { type: CUSTOM_DEDUCTION_TYPE_VALUE, label: '', amount: 0 };
+            otherDeductionsDetails[empId][idx] = { type: CUSTOM_DEDUCTION_TYPE_VALUE, label: '', project: projectSelect ? String(projectSelect.value || '').trim() : '', amount: 0 };
           }
           otherDeductionsDetails[empId][idx].type = CUSTOM_DEDUCTION_TYPE_VALUE;
           otherDeductionsDetails[empId][idx].label = customInput.value;
@@ -9158,7 +9213,7 @@ function renderOtherDeductionsTable(){
         customInput.addEventListener('blur', () => {
           if (!Array.isArray(otherDeductionsDetails[empId])) otherDeductionsDetails[empId] = [];
           if (!otherDeductionsDetails[empId][idx]) {
-            otherDeductionsDetails[empId][idx] = { type: CUSTOM_DEDUCTION_TYPE_VALUE, label: '', amount: 0 };
+            otherDeductionsDetails[empId][idx] = { type: CUSTOM_DEDUCTION_TYPE_VALUE, label: '', project: projectSelect ? String(projectSelect.value || '').trim() : '', amount: 0 };
           }
           const label = resolveOtherDeductionLabel(CUSTOM_DEDUCTION_TYPE_VALUE, customInput.value);
           otherDeductionsDetails[empId][idx].type = CUSTOM_DEDUCTION_TYPE_VALUE;
@@ -9179,6 +9234,7 @@ function renderOtherDeductionsTable(){
             otherDeductionsDetails[empId][idx] = {
               type: defaultType,
               label: resolveOtherDeductionLabel(defaultType, ''),
+              project: projectSelect ? String(projectSelect.value || '').trim() : '',
               amount: 0
             };
           }
@@ -9196,6 +9252,7 @@ function renderOtherDeductionsTable(){
             otherDeductionsDetails[empId][idx] = {
               type: defaultType,
               label: resolveOtherDeductionLabel(defaultType, ''),
+              project: projectSelect ? String(projectSelect.value || '').trim() : '',
               amount: 0
             };
           }
@@ -9222,6 +9279,28 @@ function renderOtherDeductionsTable(){
           updatePayrollRowForEmployee(empId);
         });
       }
+      if (projectSelect) {
+        projectSelect.addEventListener('focus', () => { otherDeductionsFocusCount += 1; });
+        projectSelect.addEventListener('change', () => {
+          enableRemove();
+          if (!Array.isArray(otherDeductionsDetails[empId])) otherDeductionsDetails[empId] = [];
+          if (!otherDeductionsDetails[empId][idx]) {
+            otherDeductionsDetails[empId][idx] = {
+              type: defaultType,
+              label: resolveOtherDeductionLabel(defaultType, ''),
+              project: '',
+              amount: 0
+            };
+          }
+          const value = String(projectSelect.value || '').trim();
+          otherDeductionsDetails[empId][idx].project = value;
+          otherDeductionsDetails[empId][idx].projectId = value;
+          otherDeductionsPersist.schedule();
+          otherDeductionsRefresh.schedule();
+          updatePayrollRowForEmployee(empId);
+        });
+        projectSelect.addEventListener('blur', handleBlur);
+      }
       tbody.appendChild(tr);
     });
   });
@@ -9229,6 +9308,7 @@ function renderOtherDeductionsTable(){
   totalRow.className = 'grand-total-row';
   totalRow.innerHTML = `
     <td class="wrap">Grand Total</td>
+    <td></td>
     <td></td>
     <td class="num" data-col="amount">${formatDeductionDisplay(grandTotal)}</td>
     <td></td>
