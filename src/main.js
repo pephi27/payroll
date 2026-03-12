@@ -8,87 +8,102 @@ let cleanupUi = null;
 let cleanupRealtime = null;
 let bootstrapped = false;
 
-function installDevLocalStorageDetector() {
-  if (window.__payrollLocalDetectorInstalled) return;
-  window.__payrollLocalDetectorInstalled = true;
+const CRITICAL_LOCAL_KEYS = new Set([
+  'att_employees_v2',
+  'att_projects_v1',
+  'att_schedules_v2',
+  'att_schedules_default',
+  'att_records_v2',
+  'payroll_loan_tracker',
+  'payroll_loan_sss',
+  'payroll_loan_pagibig',
+  'payroll_vale',
+  'payroll_vale_wed',
+  'payroll_contrib_flags',
+  'payroll_lock_state',
+  'payroll_rates',
+  'payroll_hist',
+  'payroll_other_deductions_details',
+  'payroll_other_deductions_total',
+  'payroll_additional_income_details',
+  'payroll_additional_income_total',
+]);
 
+function deprecateCriticalLocalAuthority() {
+  if (window.__payrollLocalAuthorityDeprecated) return;
+  window.__payrollLocalAuthorityDeprecated = true;
+
+  const warnedKeys = new Set();
   const debugDeprecation = !!window.__PAYROLL_DEBUG_DEPRECATION;
-  const strict = !!window.__PAYROLL_STRICT_LOCAL_DEPRECATION;
-  if (!debugDeprecation && !strict) return;
-
-  const CRITICAL_KEYS = new Set([
-    'att_employees_v2',
-    'att_projects_v1',
-    'att_schedules_v2',
-    'att_schedules_default',
-    'att_records_v2',
-    'payroll_loan_tracker',
-    'payroll_loan_sss',
-    'payroll_loan_pagibig',
-    'payroll_vale',
-    'payroll_vale_wed',
-    'payroll_contrib_flags',
-    'payroll_lock_state',
-    'payroll_rates',
-    'payroll_hist',
-    'payroll_other_deductions_details',
-    'payroll_other_deductions_total',
-    'payroll_additional_income_details',
-    'payroll_additional_income_total',
-  ]);
-
-  const report = (kind, key) => {
-    if (!CRITICAL_KEYS.has(key)) return;
-    const msg = `[payroll:diagnostic] ${kind} critical key: ${key}`;
-    if (debugDeprecation) console.warn(msg);
-    if (strict) throw new Error(msg);
+  const requestedStrictDeprecation = !!window.__PAYROLL_STRICT_LOCAL_DEPRECATION;
+  const isLocalDev = ['localhost', '127.0.0.1'].includes(window.location?.hostname || '');
+  const strictDeprecation = requestedStrictDeprecation && isLocalDev;
+  if (requestedStrictDeprecation && !isLocalDev) {
+    console.warn('[payroll:deprecation] strict local authority blocking is ignored outside local dev hosts');
+  }
+  const warnOnce = (kind, key) => {
+    if (!debugDeprecation) return;
+    const marker = `${kind}:${key}`;
+    if (warnedKeys.has(marker)) return;
+    warnedKeys.add(marker);
+    console.warn(`[payroll:deprecation] ${kind} for critical key`, key);
   };
 
-  try {
-    const originalGetItem = window.localStorage.getItem.bind(window.localStorage);
-    const originalSetItem = window.localStorage.setItem.bind(window.localStorage);
-    const originalRemoveItem = window.localStorage.removeItem.bind(window.localStorage);
 
+  const originalReadKv = window.readKV;
+  if (typeof originalReadKv === 'function') {
+    window.readKV = async (key, fallback) => {
+      if (CRITICAL_LOCAL_KEYS.has(key)) {
+        warnOnce('KV read observed (legacy fallback candidate)', key);
+      }
+      return originalReadKv(key, fallback);
+    };
+  }
+
+  const originalWriteKv = window.writeKV;
+  if (typeof originalWriteKv === 'function') {
+    window.writeKV = async (key, value) => {
+      if (CRITICAL_LOCAL_KEYS.has(key)) {
+        warnOnce('KV write observed (allowed for compatibility)', key);
+        if (strictDeprecation) {
+          throw new Error(`[payroll:deprecation] blocked critical KV write for ${key}`);
+        }
+      }
+      return originalWriteKv(key, value);
+    };
+  }
+
+  try {
+
+    const originalGetItem = window.localStorage.getItem.bind(window.localStorage);
     window.localStorage.getItem = (key) => {
-      report('localStorage.getItem', key);
+      if (CRITICAL_LOCAL_KEYS.has(key)) {
+        warnOnce('localStorage read observed (legacy fallback candidate)', key);
+      }
       return originalGetItem(key);
     };
 
+    const originalSetItem = window.localStorage.setItem.bind(window.localStorage);
     window.localStorage.setItem = (key, value) => {
-      report('localStorage.setItem', key);
+      if (CRITICAL_LOCAL_KEYS.has(key)) {
+        warnOnce('localStorage write observed', key);
+        if (strictDeprecation) {
+          throw new Error(`[payroll:deprecation] blocked critical localStorage write for ${key}`);
+        }
+      }
       return originalSetItem(key, value);
     };
-
-    window.localStorage.removeItem = (key) => {
-      report('localStorage.removeItem', key);
-      return originalRemoveItem(key);
-    };
-
-    if (typeof window.readKV === 'function') {
-      const originalReadKv = window.readKV;
-      window.readKV = async (key, fallback) => {
-        report('readKV', key);
-        return originalReadKv(key, fallback);
-      };
-    }
-
-    if (typeof window.writeKV === 'function') {
-      const originalWriteKv = window.writeKV;
-      window.writeKV = async (key, value) => {
-        report('writeKV', key);
-        return originalWriteKv(key, value);
-      };
-    }
   } catch (error) {
-    console.warn('localStorage diagnostic hook failed', error);
+    console.warn('localStorage interception failed', error);
   }
 }
+
 
 async function bootstrapPayrollApp() {
   if (bootstrapped) return;
   bootstrapped = true;
 
-  installDevLocalStorageDetector();
+  deprecateCriticalLocalAuthority();
 
   const root = document.getElementById('panelPayroll') || document.body;
   cleanupUi = mountPayrollController(root);
@@ -150,9 +165,9 @@ async function bootstrapPayrollApp() {
 
 
 try {
-  installDevLocalStorageDetector();
+  deprecateCriticalLocalAuthority();
 } catch (error) {
-  console.warn('initial localStorage diagnostic hook failed', error);
+  console.warn('initial localStorage deprecation hook failed', error);
 }
 
 if (document.readyState === 'loading') {
