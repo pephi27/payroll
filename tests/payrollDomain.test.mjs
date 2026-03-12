@@ -53,6 +53,15 @@ const ndDisabled = resolveNightDifferentialPay({
 assert.equal(ndDisabled.pay, 0);
 assert.equal(ndDisabled.source, 'disabled');
 
+const ndMissingSettingsStillUsesPrecomputed = resolveNightDifferentialPay({
+  hourlyRate: 100,
+  precomputedNightDiffPay: 55,
+  settings: null,
+  preferPrecomputed: true,
+});
+assert.equal(ndMissingSettingsStillUsesPrecomputed.pay, 55);
+assert.equal(ndMissingSettingsStillUsesPrecomputed.source, 'precomputed');
+
 // additional income and other deductions
 const incomeItemsTotal = totalAdditionalIncome([{ amount: '100' }, { amount: -20 }, { amount: 50 }]);
 const otherDedTotal = totalOtherDeductions([{ amount: '40' }, { amount: -5 }]);

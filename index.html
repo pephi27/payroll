@@ -20598,7 +20598,28 @@ document.addEventListener('DOMContentLoaded', function(){
     var domain = _domain();
     var reduced = (domain && typeof domain.reduceDeductionTotals === 'function')
       ? domain.reduceDeductionTotals(rows)
-      : { pagibig:0, philhealth:0, sss:0, loanSSS:0, loanPI:0, other:0, total:0 };
+      : rows.reduce(function(acc, row){
+          acc.pagibig = roundToCents((acc.pagibig || 0) + _parse(row.pagibig_deduction));
+          acc.philhealth = roundToCents((acc.philhealth || 0) + _parse(row.philhealth_deduction));
+          acc.sss = roundToCents((acc.sss || 0) + _parse(row.sss_deduction));
+          acc.loanSSS = roundToCents((acc.loanSSS || 0) + _parse(row.loan_sss_deduction));
+          acc.loanPI = roundToCents((acc.loanPI || 0) + _parse(row.loan_pagibig_deduction));
+          acc.vale = roundToCents((acc.vale || 0) + _parse(row.vale_deduction));
+          acc.valeWed = roundToCents((acc.valeWed || 0) + _parse(row.vale_wed_deduction));
+          acc.other = roundToCents((acc.other || 0) + _parse(row.other_deductions));
+          acc.total = roundToCents((acc.total || 0) + _parse(row.total_deductions));
+          return acc;
+        }, {
+          pagibig: 0,
+          philhealth: 0,
+          sss: 0,
+          loanSSS: 0,
+          loanPI: 0,
+          vale: 0,
+          valeWed: 0,
+          other: 0,
+          total: 0
+        });
     var totalsRaw = {
       pagibig: roundToCents(reduced.pagibig || 0),
       philhealth: roundToCents(reduced.philhealth || 0),

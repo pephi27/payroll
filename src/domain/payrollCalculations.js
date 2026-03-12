@@ -80,11 +80,14 @@ export function calculateNightDifferentialPay({ hourlyRate, nightDiffHours = 0, 
 }
 
 export function normalizeNightDifferentialSettings(settings = {}) {
+  const raw = (settings && typeof settings === 'object') ? settings : {};
   return {
-    enabled: !!settings?.enabled,
-    start: settings?.start || '22:00',
-    end: settings?.end || '06:00',
-    multiplier: Math.max(0, toNumber(settings?.multiplier, DEFAULT_ND_MULTIPLIER)),
+    // Default to enabled unless explicitly disabled.
+    // This prevents missing/null settings from silently zeroing valid ND pay.
+    enabled: raw.enabled !== false,
+    start: raw.start || '22:00',
+    end: raw.end || '06:00',
+    multiplier: Math.max(0, toNumber(raw.multiplier, DEFAULT_ND_MULTIPLIER)),
   };
 }
 
