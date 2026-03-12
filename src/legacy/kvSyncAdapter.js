@@ -161,7 +161,7 @@ async function sharedSet(key, value) {
   const bootHydrating = !(window && window.__sharedSyncState && window.__sharedSyncState.hydrated === true);
   if (bootHydrating && CRITICAL_BUSINESS_KEYS.has(key) && !hasMeaningfulData(nextValue) && hasMeaningfulData(currentLocal)) {
     console.warn('[shared-kv] blocked destructive empty overwrite for critical key', { key });
-    return true;
+    return false;
   }
   if (value === undefined) {
     const meta = { updatedAt: Date.now(), deviceId: getDeviceId() };

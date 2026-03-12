@@ -10528,15 +10528,22 @@ document.addEventListener('DOMContentLoaded', () => {
   const PAYROLL_LOCKS_KEY = 'payroll_lock_state';
 
   function loadLockMap() {
+    const normalize = (value) => {
+      if (!value || typeof value !== 'object' || Array.isArray(value)) return { __meta: { lastUpdatedAt: 0 } };
+      if (!value.__meta || typeof value.__meta !== 'object') value.__meta = {};
+      if (!Number.isFinite(Number(value.__meta.lastUpdatedAt))) value.__meta.lastUpdatedAt = Number(value.__meta.lastUpdatedAt) || 0;
+      return value;
+    };
     try {
+      if (typeof window.cacheGet === 'function') {
+        return normalize(window.cacheGet(PAYROLL_LOCKS_KEY, { __meta: { lastUpdatedAt: 0 } }));
+      }
       const raw = localStorage.getItem(PAYROLL_LOCKS_KEY);
-      if (!raw) return { __meta: { lastUpdatedAt: 0 } };
+      if (!raw) return normalize(null);
       const parsed = JSON.parse(raw);
-      if (!parsed || typeof parsed !== 'object') return { __meta: { lastUpdatedAt: 0 } };
-      if (!parsed.__meta) parsed.__meta = {};
-      return parsed;
+      return normalize(parsed);
     } catch (err) {
-      return { __meta: {} };
+      return normalize(null);
     }
   }
 
@@ -10955,7 +10962,11 @@ document.addEventListener('DOMContentLoaded', () => {
       snap.totals = {};
       if (typeof snap.hash !== 'undefined') snap.hash = '';
     }
-    if (typeof saveHistory === 'function') saveHistory();
+    if (typeof saveHistory === 'function') {
+      Promise.resolve(saveHistory())
+        .then((ok) => { if (!ok && typeof showSyncFailedBanner === 'function') showSyncFailedBanner('Sync failed'); })
+        .catch(() => { if (typeof showSyncFailedBanner === 'function') showSyncFailedBanner('Sync failed'); });
+    }
     if (!(meta && meta.skipViewRefresh)) {
       if (typeof renderHistory === 'function') renderHistory();
       if (typeof renderActivePayrolls === 'function') renderActivePayrolls();
@@ -18653,23 +18664,22 @@ async function bootAfterKvHydrate() {
       window.payrollLocks = (locks && typeof locks === 'object') ? locks : { __meta: { lastUpdatedAt: 0 } };
     }
   } catch (_) {}
-  try {
-    renderProjects();
-    renderEmployees();
-    renderProjectDropdowns();
-    renderEmpScheduleDropdowns();
-    renderEmpScheduleDropdownsInTable();
-    renderScheduleSelector();
-    renderScheduleEditor();
-    renderProjectFilterOptions();
-    if (typeof renderAdjustmentHoursTable === 'function') renderAdjustmentHoursTable();
-    if (typeof renderOtherDeductionsTable === 'function') renderOtherDeductionsTable();
-    if (typeof renderHistory === 'function') renderHistory();
-    if (typeof renderActivePayrolls === 'function') renderActivePayrolls();
-    if (typeof applyLockUI === 'function') applyLockUI();
-  } catch (e) {
-    console.warn('hydrate re-render pass failed', e);
-  }
+  const safeHydrateRender = (label, fn) => {
+    try { if (typeof fn === 'function') fn(); } catch (e) { console.warn(`hydrate re-render failed: ${label}`, e); }
+  };
+  safeHydrateRender('renderProjects', renderProjects);
+  safeHydrateRender('renderEmployees', renderEmployees);
+  safeHydrateRender('renderProjectDropdowns', renderProjectDropdowns);
+  safeHydrateRender('renderEmpScheduleDropdowns', renderEmpScheduleDropdowns);
+  safeHydrateRender('renderEmpScheduleDropdownsInTable', renderEmpScheduleDropdownsInTable);
+  safeHydrateRender('renderScheduleSelector', renderScheduleSelector);
+  safeHydrateRender('renderScheduleEditor', renderScheduleEditor);
+  safeHydrateRender('renderProjectFilterOptions', renderProjectFilterOptions);
+  safeHydrateRender('renderAdjustmentHoursTable', (typeof renderAdjustmentHoursTable === 'function') ? renderAdjustmentHoursTable : null);
+  safeHydrateRender('renderOtherDeductionsTable', (typeof renderOtherDeductionsTable === 'function') ? renderOtherDeductionsTable : null);
+  safeHydrateRender('renderHistory', (typeof renderHistory === 'function') ? renderHistory : null);
+  safeHydrateRender('renderActivePayrolls', (typeof renderActivePayrolls === 'function') ? renderActivePayrolls : null);
+  safeHydrateRender('applyLockUI', (typeof applyLockUI === 'function') ? applyLockUI : null);
   try {
     let dtrLoaded = false;
     if (typeof window.loadDtrFromCloud === 'function') {
