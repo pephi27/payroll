@@ -4,6 +4,9 @@ import {
   reducePayrollTotals,
   reduceDeductionTotals,
   reduceOvertimeTotals,
+  resolveNightDifferentialPay,
+  calculatePrincipalLoanDeductionDecision,
+  calculatePagibigLoanPerPeriod,
   totalAdditionalIncome,
   totalOtherDeductions,
 } from '../src/domain/payrollCalculations.js';
@@ -29,6 +32,16 @@ const withOt = buildPayrollRow({
 assert.equal(withOt.overtime_pay_base, 625);
 assert.equal(withOt.night_diff_pay, 50);
 assert.equal(withOt.overtime_pay, 675);
+
+// ND computation can be centralized from minute overlap input
+const ndFromMinutes = resolveNightDifferentialPay({
+  hourlyRate: 100,
+  nightDiffMinutes: 120,
+  settings: { enabled: true, multiplier: 1.1 },
+  preferPrecomputed: false,
+});
+assert.equal(ndFromMinutes.pay, 20);
+assert.equal(ndFromMinutes.source, 'minutes');
 
 // additional income and other deductions
 const incomeItemsTotal = totalAdditionalIncome([{ amount: '100' }, { amount: -20 }, { amount: 50 }]);
@@ -70,6 +83,31 @@ const noWorkButApplyLoans = buildPayrollRow({
 });
 assert.equal(noWorkButApplyLoans.loan_sss_deduction, 100);
 assert.equal(noWorkButApplyLoans.loan_pagibig_deduction, 50);
+
+// tracker-style principal decisioning handles remaining balance and stop-at-zero
+const loanDecision = calculatePrincipalLoanDeductionDecision({
+  active: true,
+  principal: 1000,
+  periodicAmount: 300,
+  paidBefore: 900,
+  baseline: 0,
+  existingApplied: null,
+});
+assert.equal(loanDecision.desired, 100);
+assert.equal(loanDecision.shouldDeactivate, false);
+
+const loanDoneDecision = calculatePrincipalLoanDeductionDecision({
+  active: true,
+  principal: 1000,
+  periodicAmount: 300,
+  paidBefore: 1000,
+  baseline: 0,
+  existingApplied: null,
+});
+assert.equal(loanDoneDecision.shouldRun, false);
+assert.equal(loanDoneDecision.shouldDeactivate, true);
+
+assert.equal(calculatePagibigLoanPerPeriod({ active: true, monthly: 500, divisor: 2 }), 250);
 
 // adjustment hours affect result
 const withAdjustment = buildPayrollRow({

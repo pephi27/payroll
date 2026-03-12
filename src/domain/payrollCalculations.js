@@ -79,6 +79,115 @@ export function calculateNightDifferentialPay({ hourlyRate, nightDiffHours = 0, 
   return roundToCents(toNumber(hourlyRate, 0) * toNumber(nightDiffHours, 0) * premiumFactor);
 }
 
+export function normalizeNightDifferentialSettings(settings = {}) {
+  return {
+    enabled: !!settings?.enabled,
+    start: settings?.start || '22:00',
+    end: settings?.end || '06:00',
+    multiplier: Math.max(0, toNumber(settings?.multiplier, DEFAULT_ND_MULTIPLIER)),
+  };
+}
+
+export function calculateNightDifferentialPayFromMinutes({ hourlyRate, nightDiffMinutes = 0, nightDifferentialMultiplier = DEFAULT_ND_MULTIPLIER }) {
+  const hours = toNumber(nightDiffMinutes, 0) / 60;
+  return calculateNightDifferentialPay({
+    hourlyRate,
+    nightDiffHours: hours,
+    nightDifferentialMultiplier,
+  });
+}
+
+export function resolveNightDifferentialPay({
+  hourlyRate,
+  nightDiffHours = 0,
+  nightDiffMinutes = 0,
+  precomputedNightDiffPay = null,
+  settings = null,
+  preferPrecomputed = true,
+} = {}) {
+  const ndSettings = normalizeNightDifferentialSettings(settings || {});
+  if (preferPrecomputed && precomputedNightDiffPay != null) {
+    return {
+      pay: roundToCents(precomputedNightDiffPay),
+      source: 'precomputed',
+      multiplier: ndSettings.multiplier,
+    };
+  }
+
+  const pay = nightDiffMinutes > 0
+    ? calculateNightDifferentialPayFromMinutes({
+      hourlyRate,
+      nightDiffMinutes,
+      nightDifferentialMultiplier: ndSettings.multiplier,
+    })
+    : calculateNightDifferentialPay({
+      hourlyRate,
+      nightDiffHours,
+      nightDifferentialMultiplier: ndSettings.multiplier,
+      precomputedNightDiffPay: null,
+    });
+
+  return {
+    pay,
+    source: nightDiffMinutes > 0 ? 'minutes' : 'hours',
+    multiplier: ndSettings.multiplier,
+  };
+}
+
+export function calculatePrincipalLoanDeductionDecision({
+  active,
+  principal,
+  periodicAmount,
+  paidBefore = 0,
+  baseline = 0,
+  existingApplied = null,
+}) {
+  const isActive = active === true;
+  const principalAmount = roundToCents(Math.max(0, toNumber(principal, 0)));
+  const duePerPeriod = roundToCents(Math.max(0, toNumber(periodicAmount, 0)));
+  const paidBeforeAmount = roundToCents(Math.max(0, toNumber(paidBefore, 0)));
+  const baselineAmount = roundToCents(Math.max(0, toNumber(baseline, 0)));
+  const effectivePaidBefore = Math.max(0, roundToCents(paidBeforeAmount - baselineAmount));
+  const remainingBefore = roundToCents(principalAmount - effectivePaidBefore);
+
+  if (!isActive || principalAmount <= 0 || duePerPeriod <= 0) {
+    return {
+      shouldRun: false,
+      shouldDeactivate: false,
+      shouldClear: true,
+      desired: 0,
+      scheduled: existingApplied == null ? null : roundToCents(existingApplied),
+      remainingBefore,
+    };
+  }
+
+  if (remainingBefore <= 0) {
+    return {
+      shouldRun: false,
+      shouldDeactivate: true,
+      shouldClear: true,
+      desired: 0,
+      scheduled: 0,
+      remainingBefore: 0,
+    };
+  }
+
+  const desired = roundToCents(Math.min(duePerPeriod, remainingBefore));
+  return {
+    shouldRun: true,
+    shouldDeactivate: false,
+    shouldClear: desired <= 0,
+    desired,
+    scheduled: existingApplied == null ? null : roundToCents(existingApplied),
+    remainingBefore,
+  };
+}
+
+export function calculatePagibigLoanPerPeriod({ active, monthly, divisor = 2 }) {
+  if (active !== true) return 0;
+  return roundToCents(Math.max(0, toNumber(monthly, 0)) / Math.max(1, toNumber(divisor, 1)));
+}
+
 export function calculateContributionDeductions({ regularPay = 0, hourlyRate = 0, divisor = 2, flags = {}, hasCompensation = true, sssTable = [], pagibigTable = [], philhealthTable = [] }) {
   const monthly = toNumber(hourlyRate, 0) * 8 * 24;
   const safeDivisor = Math.max(1, toNumber(divisor, 1));
@@ -120,8 +229,10 @@ export function buildPayrollRow(input = {}) {
     hourlyRate = 0,
     overtimeMultiplier = DEFAULT_OT_MULTIPLIER,
     nightDiffHours = 0,
+    nightDiffMinutes = 0,
     nightDiffPay = 0,
     nightDifferentialMultiplier = DEFAULT_ND_MULTIPLIER,
+    nightDifferentialSettings = null,
     additionalIncomeTotal = 0,
     otherDeductionsTotal = 0,
     loanSSS = 0,
@@ -144,12 +255,15 @@ export function buildPayrollRow(input = {}) {
   const regularPay = roundToCents(regHours * rate);
   const adjustmentPay = roundToCents(regAdjHours * rate);
   const overtimePayBase = calculateOvertimePay({ hourlyRate: rate, overtimeHours: otHours, overtimeMultiplier });
-  const nightDiffComputed = calculateNightDifferentialPay({
+  const ndResolution = resolveNightDifferentialPay({
     hourlyRate: rate,
     nightDiffHours,
+    nightDiffMinutes,
     precomputedNightDiffPay: nightDiffPay,
-    nightDifferentialMultiplier,
+    settings: nightDifferentialSettings || { multiplier: nightDifferentialMultiplier, enabled: true },
+    preferPrecomputed: true,
   });
+  const nightDiffComputed = ndResolution.pay;
   const overtimePay = roundToCents(overtimePayBase + nightDiffComputed);
 
   const normalizedAdditionalIncome = roundToCents(normalizePositiveNumber(additionalIncomeTotal));
