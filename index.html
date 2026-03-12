@@ -6912,31 +6912,37 @@ function renderDeductionsTable(){
     const v = roundToCents(vale[emp.id] ?? 0);
     const vW = roundToCents(valeWed[emp.id] ?? 0);
     const otherDeductionsAmount = roundToCents(getOtherDeductionsTotal(emp.id));
-    const regPay = +(rH * rate).toFixed(2);
-    // Use dynamic contribution tables for Pag-IBIG and PhilHealth.  Determine the
-    // applicable rate based on monthly income and multiply by regular pay.
-    const monthly = rate * 8 * 24;
-    const piRate = pagibigRateByMonthly(monthly);
-    const phRate = philhealthRateByMonthly(monthly);
-    const flags = (typeof contribFlags !== 'undefined' && contribFlags[emp.id]) || {};
-    const div = Number(divisor) || 1;
-    const pagibig = (flags.pagibig === false) ? 0 : +((regPay * piRate).toFixed(2));
-    const philhealth = (flags.philhealth === false) ? 0 : +((regPay * phRate).toFixed(2));
-    const sssFull = (flags.sss === false) ? 0 : sssShareByMonthly(monthly);
-    const sss = (flags.sss === false) ? 0 : +((sssFull / div).toFixed(2));
-    const sssLoan = +(lSSS / div).toFixed(2);
-    const piLoan = +(lPI / div).toFixed(2);
-    const rowRaw = {
-      pagibig,
-      philhealth,
-      sss,
-      loanSSS: sssLoan,
-      loanPI: piLoan,
+    const domainComputed = computePayrollDomainRow(emp.id, {
+      regularHours: rH,
+      hourlyRate: rate,
+      loanSSS: lSSS,
+      loanPI: lPI,
+      vale: v,
+      valeWed: vW,
+      otherDeductionsTotal: otherDeductionsAmount,
+      applyLoansWithoutWorkedTime: true
+    });
+    const rowRaw = domainComputed.row ? {
+      pagibig: domainComputed.row.pagibig_deduction,
+      philhealth: domainComputed.row.philhealth_deduction,
+      sss: domainComputed.row.sss_deduction,
+      loanSSS: domainComputed.row.loan_sss_deduction,
+      loanPI: domainComputed.row.loan_pagibig_deduction,
+      vale: domainComputed.row.vale_deduction,
+      adjustments: domainComputed.row.other_deductions,
+      valeWed: domainComputed.row.vale_wed_deduction,
+      total: domainComputed.row.total_deductions
+    } : {
+      pagibig: 0,
+      philhealth: 0,
+      sss: 0,
+      loanSSS: 0,
+      loanPI: 0,
       vale: v,
       adjustments: otherDeductionsAmount,
-      valeWed: vW
+      valeWed: vW,
+      total: roundToCents(v + vW + otherDeductionsAmount)
     };
-    rowRaw.total = roundToCents(pagibig + philhealth + sss + sssLoan + piLoan + v + vW + otherDeductionsAmount);
     const rowEffective = computeEffectiveDeductionValues(rowRaw);
   const editableRawValues = {
     loanSSS: lSSS,
@@ -7235,29 +7241,37 @@ function updateDeductionRowDisplay(empId){
   const v = roundToCents(vale?.[empKey] ?? 0);
   const vW = roundToCents(valeWed?.[empKey] ?? 0);
   const otherDeductionsAmount = roundToCents(getOtherDeductionsTotal(empKey));
-  const regPay = +(rH * rate).toFixed(2);
-  const monthly = rate * 8 * 24;
-  const piRate = pagibigRateByMonthly(monthly);
-  const phRate = philhealthRateByMonthly(monthly);
-  const flags = (typeof contribFlags !== 'undefined' && contribFlags && contribFlags[empKey]) || {};
-  const div = Number(divisor) || 1;
-  const pagibig = (flags.pagibig === false) ? 0 : +((regPay * piRate).toFixed(2));
-  const philhealth = (flags.philhealth === false) ? 0 : +((regPay * phRate).toFixed(2));
-  const sssFull = (flags.sss === false) ? 0 : sssShareByMonthly(monthly);
-  const sss = (flags.sss === false) ? 0 : +((sssFull / div).toFixed(2));
-  const sssLoan = hasWorkedTime ? +(lSSS / div).toFixed(2) : 0;
-  const piLoan = hasWorkedTime ? +(lPI / div).toFixed(2) : 0;
-  const rowRaw = {
-    pagibig,
-    philhealth,
-    sss,
-    loanSSS: sssLoan,
-    loanPI: piLoan,
+  const domainComputed = computePayrollDomainRow(empKey, {
+    regularHours: rH,
+    hourlyRate: rate,
+    loanSSS: lSSS,
+    loanPI: lPI,
+    vale: v,
+    valeWed: vW,
+    otherDeductionsTotal: otherDeductionsAmount,
+    applyLoansWithoutWorkedTime: false
+  });
+  const rowRaw = domainComputed.row ? {
+    pagibig: domainComputed.row.pagibig_deduction,
+    philhealth: domainComputed.row.philhealth_deduction,
+    sss: domainComputed.row.sss_deduction,
+    loanSSS: domainComputed.row.loan_sss_deduction,
+    loanPI: domainComputed.row.loan_pagibig_deduction,
+    vale: domainComputed.row.vale_deduction,
+    adjustments: domainComputed.row.other_deductions,
+    valeWed: domainComputed.row.vale_wed_deduction,
+    total: domainComputed.row.total_deductions
+  } : {
+    pagibig: 0,
+    philhealth: 0,
+    sss: 0,
+    loanSSS: hasWorkedTime ? lSSS : 0,
+    loanPI: hasWorkedTime ? lPI : 0,
     vale: v,
     adjustments: otherDeductionsAmount,
-    valeWed: vW
+    valeWed: vW,
+    total: roundToCents(v + vW + otherDeductionsAmount)
   };
-  rowRaw.total = roundToCents(pagibig + philhealth + sss + sssLoan + piLoan + v + vW + otherDeductionsAmount);
   const rowEffective = computeEffectiveDeductionValues(rowRaw);
   const editableRawValues = {
     loanSSS: lSSS,
@@ -8031,6 +8045,57 @@ function philhealthRateByMonthly(monthly){
   return Number(rows[rows.length-1].rate)||0;
 }
 
+function computePayrollDomainRow(empId, overrides = {}) {
+  const domain = (typeof window !== 'undefined' && window.payrollDomain) ? window.payrollDomain : null;
+  const rate = Number(overrides.hourlyRate ?? getEmployeeHourlyRate(empId)) || 0;
+  const regularHours = Number(overrides.regularHours ?? regHours?.[empId] ?? 0) || 0;
+  const overtimeHours = Number(overrides.overtimeHours ?? getOvertimeHoursTotal(empId)) || 0;
+  const overtimeAdjustmentHours = Number(overrides.overtimeAdjustmentHours ?? getOvertimeAdjustmentHours(empId)) || 0;
+  const regularAdjustmentHours = Number(overrides.regularAdjustmentHours ?? getRegularAdjustmentHours(empId)) || 0;
+  const otherDeductionsAmount = Number(overrides.otherDeductionsTotal ?? roundToCents(getOtherDeductionsTotal(empId))) || 0;
+  const additionalIncomeTotal = Number(overrides.additionalIncomeTotal ?? getAdditionalIncomeTotal(empId)) || 0;
+  const bantayAmount = Number(overrides.bantayAmount ?? 0) || 0;
+  const flags = (typeof contribFlags !== 'undefined' && contribFlags && contribFlags[empId]) || {};
+  const div = Number(divisor) || 1;
+  const lSSS = roundToCents(Number(overrides.loanSSS ?? loanSSS?.[empId] ?? 0) || 0);
+  const lPI = roundToCents(Number(overrides.loanPI ?? loanPI?.[empId] ?? 0) || 0);
+  const v = roundToCents(Number(overrides.vale ?? vale?.[empId] ?? 0) || 0);
+  const vW = roundToCents(Number(overrides.valeWed ?? valeWed?.[empId] ?? 0) || 0);
+  const additionalIncomeShown = roundToCents(additionalIncomeTotal + bantayAmount);
+
+  const sssTable = (typeof getSssTable === 'function') ? getSssTable() : [];
+  const pagibigTable = (typeof getPagibigTable === 'function') ? getPagibigTable() : [];
+  const philhealthTable = (typeof getPhilhealthTable === 'function') ? getPhilhealthTable() : [];
+
+  if (domain && typeof domain.buildPayrollRow === 'function') {
+    const row = domain.buildPayrollRow({
+      employeeId: empId,
+      regularHours,
+      overtimeHours,
+      overtimeAdjustmentHours,
+      regularAdjustmentHours,
+      hourlyRate: rate,
+      overtimeMultiplier: (typeof getOvertimeMultiplier === 'function') ? getOvertimeMultiplier() : 1.25,
+      nightDiffPay: Number(overrides.nightDiffPay ?? getNightDifferentialPayForEmployee(empId)) || 0,
+      additionalIncomeTotal: additionalIncomeShown,
+      otherDeductionsTotal: otherDeductionsAmount,
+      loanSSS: lSSS,
+      loanPI: lPI,
+      vale: v,
+      valeWed: vW,
+      divisor: div,
+      contributionFlags: flags,
+      sssTable,
+      pagibigTable,
+      philhealthTable,
+      applyLoansWithoutWorkedTime: !!overrides.applyLoansWithoutWorkedTime
+    });
+    return { row, rate, regularHours, additionalIncomeShown, otherDeductionsAmount, lSSS, lPI, v, vW };
+  }
+
+  return { row: null, rate, regularHours, additionalIncomeShown, otherDeductionsAmount, lSSS, lPI, v, vW };
+}
+
 function calculateRow(tr){  const readNum = sel => { const el = tr.querySelector(sel); if (!el) return 0; const v = (typeof el.value !== 'undefined' ? el.value : el.textContent); const n = parseFloat(String(v).replace(/,/g,'')); return isNaN(n)?0:n; };
   const w = (sel, val) => { const el = tr.querySelector(sel); if (!el) return; el.textContent = (val===0 ? '-' : (+val).toFixed(2)); };
 
@@ -8079,46 +8144,55 @@ function calculateRow(tr){  const readNum = sel => { const el = tr.querySelector
   const bVal = parseFloat((tr.querySelector('.bantay')?.value || '').trim()) || 0;
   const additionalIncomeShown = roundToCents(additionalIncome + bVal);
 
-  const regPay = roundToCents(reg * rate);
-  const adjPay = roundToCents(regAdjHours * rate);
-  const effectiveOtRate = getEffectiveOvertimeRateForEmployee(id, rate);
-  const baseOtPay = roundToCents(otTotal * effectiveOtRate);
-  const nightDiffPay = getNightDifferentialPayForEmployee(id);
-  const otPay = roundToCents(baseOtPay + nightDiffPay);
-  const gross = roundToCents(regPay + adjPay + additionalIncomeShown + otPay);
-  // Compute contributions using dynamic tables (employee share).  Determine the
-  // appropriate rate based on the monthly income and multiply by regular pay.
-  const monthly = rate * 8 * 24;
-  const piRate = pagibigRateByMonthly(monthly);
-  const phRate = philhealthRateByMonthly(monthly);
-  // Check per-employee contribution deduction flags; default to true if not set
-  const flags = contribFlags[id] || {};
-  const div = Number(divisor) || 1;
-  const hasWorkedTime = (reg > 0) || (otTotal > 0) || (regAdjHours > 0);
-  const hasCompensation = hasWorkedTime || (additionalIncomeShown > 0);
-  const pagibig = (hasCompensation && flags.pagibig !== false ? +((regPay * piRate)).toFixed(2) : 0);
-  const philhealth = (hasCompensation && flags.philhealth !== false ? +((regPay * phRate)).toFixed(2) : 0);
-  const sssFull = hasCompensation ? sssShareByMonthly(monthly) : 0;
-  const sss = (hasCompensation && flags.sss !== false ? +(sssFull / div).toFixed(2) : 0);
-  const sssLoan = hasWorkedTime ? +(lSSS / div).toFixed(2) : 0;
-  const piLoan = hasWorkedTime ? +(lPI / div).toFixed(2) : 0;
-  const valeAmt = v;
-  const wedValeAmt = vW;
+  const domainComputed = computePayrollDomainRow(id, {
+    regularHours: reg,
+    overtimeHours: otBase,
+    overtimeAdjustmentHours: adjOtHours,
+    regularAdjustmentHours: regAdjHours,
+    loanSSS: lSSS,
+    loanPI: lPI,
+    vale: v,
+    valeWed: vW,
+    otherDeductionsTotal: otherDeductionsAmount,
+    additionalIncomeTotal: additionalIncome,
+    bantayAmount: bVal,
+    applyLoansWithoutWorkedTime: false
+  });
 
-  const deductionRaw = {
-    pagibig,
-    philhealth,
-    sss,
-    loanSSS: sssLoan,
-    loanPI: piLoan,
-    vale: valeAmt,
+  const rowModel = domainComputed.row;
+  const regPay = rowModel ? rowModel.regular_pay : roundToCents(reg * rate);
+  const adjPay = rowModel ? rowModel.adjustment_pay : roundToCents(regAdjHours * rate);
+  const otPay = rowModel ? rowModel.overtime_pay : roundToCents((otTotal * getEffectiveOvertimeRateForEmployee(id, rate)) + getNightDifferentialPayForEmployee(id));
+  const gross = rowModel ? rowModel.gross_pay : roundToCents(regPay + adjPay + additionalIncomeShown + otPay);
+
+  const deductionRaw = rowModel ? {
+    pagibig: rowModel.pagibig_deduction,
+    philhealth: rowModel.philhealth_deduction,
+    sss: rowModel.sss_deduction,
+    loanSSS: rowModel.loan_sss_deduction,
+    loanPI: rowModel.loan_pagibig_deduction,
+    vale: rowModel.vale_deduction,
+    adjustments: rowModel.other_deductions,
+    valeWed: rowModel.vale_wed_deduction,
+    total: rowModel.total_deductions
+  } : {
+    pagibig: 0,
+    philhealth: 0,
+    sss: 0,
+    loanSSS: 0,
+    loanPI: 0,
+    vale: v,
     adjustments: otherDeductionsAmount,
-    valeWed: wedValeAmt
+    valeWed: vW,
+    total: 0
   };
-  deductionRaw.total = roundToCents(pagibig + philhealth + sss + sssLoan + piLoan + valeAmt + wedValeAmt + otherDeductionsAmount);
+
+  if (!rowModel) {
+    deductionRaw.total = roundToCents(deductionRaw.pagibig + deductionRaw.philhealth + deductionRaw.sss + deductionRaw.loanSSS + deductionRaw.loanPI + deductionRaw.vale + deductionRaw.valeWed + deductionRaw.adjustments);
+  }
   const deductionEffective = computeEffectiveDeductionValues(deductionRaw);
   const total = deductionEffective.total;
-  const net = roundToCents(gross - total);
+  const net = rowModel ? roundToCents(rowModel.gross_pay - total) : roundToCents(gross - total);
 
   w('.regPay', regPay);
   w('.otPay', otPay);
