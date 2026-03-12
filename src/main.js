@@ -7,26 +7,6 @@ import { waitForSupabaseClient } from './config/supabaseClient.js';
 let cleanupUi = null;
 let cleanupRealtime = null;
 let bootstrapped = false;
-let runtimeErrorListenersInstalled = false;
-
-function installRuntimeErrorLogging() {
-  if (runtimeErrorListenersInstalled) return;
-  runtimeErrorListenersInstalled = true;
-
-  window.addEventListener('error', (event) => {
-    console.error('Payroll runtime error', {
-      message: event?.message,
-      source: event?.filename,
-      line: event?.lineno,
-      column: event?.colno,
-      error: event?.error,
-    });
-  });
-
-  window.addEventListener('unhandledrejection', (event) => {
-    console.error('Payroll unhandled promise rejection', event?.reason);
-  });
-}
 
 const CRITICAL_LOCAL_KEYS = new Set([
   'att_employees_v2',
@@ -182,19 +162,7 @@ async function bootstrapPayrollApp() {
   });
 }
 
-function runBootstrap() {
-  bootstrapPayrollApp().catch((error) => {
-    console.error('Payroll bootstrap failed', error);
-  });
-}
 
-
-
-try {
-  installRuntimeErrorLogging();
-} catch (error) {
-  console.warn('runtime error listeners failed to install', error);
-}
 
 try {
   deprecateCriticalLocalAuthority();
@@ -203,7 +171,9 @@ try {
 }
 
 if (document.readyState === 'loading') {
-  document.addEventListener('DOMContentLoaded', runBootstrap);
+  document.addEventListener('DOMContentLoaded', bootstrapPayrollApp);
 } else {
-  runBootstrap();
+  bootstrapPayrollApp().catch((error) => {
+    console.error('Payroll bootstrap failed', error);
+  });
 }
