@@ -15996,20 +15996,108 @@ function isPunchClaimedByPreviousDayOt(empId, dateStr, timeValue) {
   const prevOtOut = normalizeOverrideValue(prevOverride.otOut);
   return prevOtIn === tagged || prevOtOut === tagged;
 }
-function getNextDayOtTaggedTimes(empId, dateStr) {
+function isCarryoverOnlyRecord(record) {
+  return !!(record && record.carryoverOnly === true);
+}
+function buildPunchLookupIndex(records) {
+  const index = new Map();
+  (records || []).forEach((r) => {
+    if (!r || r.empId == null || !r.date || !r.time) return;
+    const key = `${String(r.empId)}___${r.date}`;
+    if (!index.has(key)) index.set(key, []);
+    index.get(key).push({
+      time: padHM(r.time),
+      carryoverOnly: isCarryoverOnlyRecord(r),
+      carryoverForDate: r.carryoverForDate ? String(r.carryoverForDate) : ''
+    });
+  });
+  index.forEach((entries, key) => {
+    const dedup = new Map();
+    (entries || []).forEach((entry) => {
+      if (!entry || !entry.time) return;
+      const dedupKey = `${entry.time}|${entry.carryoverOnly ? '1' : '0'}|${entry.carryoverForDate || ''}`;
+      if (!dedup.has(dedupKey)) dedup.set(dedupKey, entry);
+    });
+    const normalized = Array.from(dedup.values()).sort((a, b) => {
+      const byTime = (toMins(a.time) || 0) - (toMins(b.time) || 0);
+      if (byTime !== 0) return byTime;
+      if (!!a.carryoverOnly === !!b.carryoverOnly) return String(a.carryoverForDate || '').localeCompare(String(b.carryoverForDate || ''));
+      return a.carryoverOnly ? 1 : -1;
+    });
+    index.set(key, normalized);
+  });
+  return index;
+}
+function getLookupEntriesForDate(empId, dateStr, punchLookupIndex) {
+  const key = `${String(empId)}___${dateStr}`;
+  if (!(punchLookupIndex instanceof Map)) return [];
+  const entries = punchLookupIndex.get(key);
+  return Array.isArray(entries) ? entries : [];
+}
+const __missingCarryoverWarned = new Set();
+function maybeWarnMissingCarryoverSource(empId, dateStr, punchLookupIndex) {
+  let periodEnd = '';
+  try {
+    periodEnd = (typeof weekEndEl !== 'undefined' && weekEndEl && weekEndEl.value)
+      ? weekEndEl.value
+      : (localStorage.getItem(LS_WEEKEND) || '');
+  } catch (_) {
+    periodEnd = '';
+  }
+  if (!periodEnd || dateStr !== periodEnd) return;
+  const nextDate = shiftYmdDate(dateStr, 1);
+  if (!nextDate) return;
+
+  const nextTimes = getLookupTimesForDate(empId, nextDate, punchLookupIndex, { carryoverForDate: dateStr }).filter((timeValue) => {
+    const mins = toMins(padHM(timeValue));
+    return mins !== null && mins <= OVERNIGHT_CUTOFF_HOUR * 60;
+  });
+  if (nextTimes.length) return;
+
+  const sameDayTimes = getLookupTimesForDate(empId, dateStr, punchLookupIndex, { includeCarryoverOnly: false });
+  const otStartHint = toMins((typeof DEFAULT_RANGES !== 'undefined' && DEFAULT_RANGES && DEFAULT_RANGES.rng_ot_in_start) ? DEFAULT_RANGES.rng_ot_in_start : '19:00');
+  const hasLatePunch = sameDayTimes.some((timeValue) => {
+    const mins = toMins(padHM(timeValue));
+    return mins !== null && mins >= (otStartHint || (19 * 60));
+  });
+  if (!hasLatePunch) return;
+
+  const warnKey = `${String(empId)}___${dateStr}`;
+  if (__missingCarryoverWarned.has(warnKey)) return;
+  __missingCarryoverWarned.add(warnKey);
+  console.warn('[dtr:ot-carryover] Missing D+1 overnight punches for payroll-end OT lookup; if this period was imported before carry-over support, re-import DTR files to include bounded next-day punches.', {
+    empId,
+    date: dateStr,
+    nextDate,
+    cutoffHour: OVERNIGHT_CUTOFF_HOUR,
+  });
+}
+function getLookupTimesForDate(empId, dateStr, punchLookupIndex, options = {}) {
+  const entries = getLookupEntriesForDate(empId, dateStr, punchLookupIndex);
+  const includeCarryoverOnly = options.includeCarryoverOnly !== false;
+  const carryoverForDate = options.carryoverForDate ? String(options.carryoverForDate) : '';
+  return entries
+    .filter((entry) => {
+      if (!entry || !entry.time) return false;
+      if (!entry.carryoverOnly) return true;
+      if (!includeCarryoverOnly) return false;
+      if (!carryoverForDate) return true;
+      return String(entry.carryoverForDate || '') === carryoverForDate;
+    })
+    .map((entry) => entry.time);
+}
+function getNextDayOtTaggedTimes(empId, dateStr, punchLookupIndex) {
   const out = [];
   const nextDate = shiftYmdDate(dateStr, 1);
   if (!nextDate) return out;
-  (storedRecords || [])
-    .filter(r => String(r.empId) === String(empId) && r.date === nextDate)
-    .forEach(r => {
-      const base = padHM(r.time);
-      const mins = toMins(base);
-      if (mins !== null && mins <= OVERNIGHT_CUTOFF_HOUR * 60) out.push(`${base}+1`);
-    });
+  getLookupTimesForDate(empId, nextDate, punchLookupIndex, { carryoverForDate: dateStr }).forEach((timeValue) => {
+    const base = padHM(timeValue);
+    const mins = toMins(base);
+    if (mins !== null && mins <= OVERNIGHT_CUTOFF_HOUR * 60) out.push(`${base}+1`);
+  });
   return out;
 }
-function getOtCandidateTimes(empId, dateStr, dayTimes) {
+function getOtCandidateTimes(empId, dateStr, dayTimes, punchLookupIndex) {
   const seen = new Set();
   const out = [];
   (dayTimes || []).forEach(t => {
@@ -16020,7 +16108,7 @@ function getOtCandidateTimes(empId, dateStr, dayTimes) {
   });
   // Include real next-day punches as +1 so OT Out auto-detection can attach
   // overnight work to the previous date row.
-  getNextDayOtTaggedTimes(empId, dateStr).forEach(t => {
+  getNextDayOtTaggedTimes(empId, dateStr, punchLookupIndex).forEach(t => {
     if (seen.has(t)) return;
     seen.add(t);
     out.push(t);
@@ -16037,10 +16125,13 @@ function isInOtWindowWithOvernight(mins, startMins, endMins) {
   }
   return false;
 }
-function getPunchOptions(empId, dateStr, fieldKey) {
+function getPunchOptions(empId, dateStr, fieldKey, punchLookupIndex) {
   const options = [];
   const seen = new Set();
   const allowNextDay = fieldKey === 'otIn' || fieldKey === 'otOut';
+  const lookup = punchLookupIndex instanceof Map
+    ? punchLookupIndex
+    : buildPunchLookupIndex(storedRecords || []);
   const addOption = (timeValue, isNextDay) => {
     if (!timeValue) return;
     const baseTime = padHM(stripNextDaySuffix(timeValue));
@@ -16053,21 +16144,16 @@ function getPunchOptions(empId, dateStr, fieldKey) {
     });
   };
 
-  const matches = (storedRecords || []).filter(r => String(r.empId) === String(empId) && r.date === dateStr);
-  matches.forEach(r => addOption(r.time, false));
+  getLookupTimesForDate(empId, dateStr, lookup, { includeCarryoverOnly: false }).forEach(timeValue => {
+    addOption(timeValue, false);
+  });
 
-  const nextDate = shiftYmdDate(dateStr, 1);
-  if (allowNextDay && nextDate) {
+  if (allowNextDay) {
     // (+1) generation for OT selectors: include only real punches from the
     // next calendar day, and only up to the configured overnight cutoff hour.
-    (storedRecords || [])
-      .filter(r => String(r.empId) === String(empId) && r.date === nextDate)
-      .forEach(r => {
-        const mins = toMins(padHM(r.time));
-        if (mins !== null && mins <= OVERNIGHT_CUTOFF_HOUR * 60) {
-          addOption(r.time, true);
-        }
-      });
+    getNextDayOtTaggedTimes(empId, dateStr, lookup).forEach(taggedTime => {
+      addOption(taggedTime, true);
+    });
   }
 
   options.sort((a, b) => (toMins(a.value) || 0) - (toMins(b.value) || 0));
@@ -16088,14 +16174,16 @@ function openPunchEditor(rowContext) {
   modal.dataset.empId = empId;
   modal.dataset.date = date;
   modal.dataset.scope = scope;
+  const punchLookupIndex = buildPunchLookupIndex(storedRecords || []);
   const optionsByField = {
-    amIn: getPunchOptions(empId, date, 'amIn'),
-    amOut: getPunchOptions(empId, date, 'amOut'),
-    pmIn: getPunchOptions(empId, date, 'pmIn'),
-    pmOut: getPunchOptions(empId, date, 'pmOut'),
-    otIn: getPunchOptions(empId, date, 'otIn'),
-    otOut: getPunchOptions(empId, date, 'otOut')
+    amIn: getPunchOptions(empId, date, 'amIn', punchLookupIndex),
+    amOut: getPunchOptions(empId, date, 'amOut', punchLookupIndex),
+    pmIn: getPunchOptions(empId, date, 'pmIn', punchLookupIndex),
+    pmOut: getPunchOptions(empId, date, 'pmOut', punchLookupIndex),
+    otIn: getPunchOptions(empId, date, 'otIn', punchLookupIndex),
+    otOut: getPunchOptions(empId, date, 'otOut', punchLookupIndex)
   };
+  maybeWarnMissingCarryoverSource(empId, date, punchLookupIndex);
   const overrideKey = `${empId}___${date}`;
   const overrides = dtrOverrides[overrideKey] || {};
   const selectMap = {
@@ -17616,7 +17704,7 @@ async function importAndPersistDtrFile(file, options = {}){
   const content = await readDtrFileText(file);
   const lines = content.split(/\r?\n/);
 
-  // === MIN PATCH: Only keep records inside the current payroll period (From/To) ===
+  // Keep records in the selected period plus bounded D+1 carry-over punches for OT close-out.
   let __from = '', __to = '';
   try {
     const fEl = document.getElementById('weekStart');
@@ -17626,20 +17714,48 @@ async function importAndPersistDtrFile(file, options = {}){
     __from = (fEl && fEl.value) ? fEl.value : (localStorage.getItem(wsKey) || '');
     __to   = (tEl && tEl.value) ? tEl.value : (localStorage.getItem(weKey)   || '');
   } catch(_) {}
-  function __inRange(d){
+  function __inRange(d, t){
     if (!d) return false;
     if (__from && d < __from) return false;
-    if (__to   && d > __to)   return false;
+    if (__to && d > __to) {
+      // Keep a bounded carry-over window so payroll-period end can still
+      // resolve OT Out punches after midnight (D+1 up to overnight cutoff).
+      const nextDate = shiftYmdDate(__to, 1);
+      if (!nextDate || d !== nextDate) return false;
+      const mins = toMins(padHM(t));
+      if (mins === null) return false;
+      return mins <= (OVERNIGHT_CUTOFF_HOUR * 60);
+    }
     return true;
   }
-  // === /MIN PATCH ===
+  // End period/carry-over filter.
 
   let added = 0;
   for (const ln of lines){
     const p = (typeof parseLine === 'function') ? parseLine(ln) : null;
-    if (p && p.empId && p.date && p.time && __inRange(p.date)){
-      storedRecords.push({ empId: String(p.empId), date: p.date, time: padHM(p.time) });
-      added++;
+    if (p && p.empId && p.date && p.time && __inRange(p.date, p.time)){
+      const normalizedTime = padHM(p.time);
+      const isCarryover = !!(__to && p.date > __to);
+      const carryoverForDate = isCarryover ? __to : '';
+      const exists = (storedRecords || []).some((rec) => {
+        if (!rec) return false;
+        return String(rec.empId) === String(p.empId)
+          && String(rec.date) === String(p.date)
+          && padHM(rec.time) === normalizedTime
+          && (!!rec.carryoverOnly) === isCarryover
+          && String(rec.carryoverForDate || '') === String(carryoverForDate || '');
+      });
+      if (!exists) {
+        const nextRecord = { empId: String(p.empId), date: p.date, time: normalizedTime };
+        if (isCarryover) {
+          // Carry-over records are only for previous-day OT close-out and should
+          // not act as normal next-day punches in row grouping.
+          nextRecord.carryoverOnly = true;
+          nextRecord.carryoverForDate = carryoverForDate;
+        }
+        storedRecords.push(nextRecord);
+        added++;
+      }
     }
   }
 
@@ -17896,10 +18012,12 @@ function __fmt12Clock(hhmm){
   
   const nameQuery = (document.getElementById('dtrSearchName') ? document.getElementById('dtrSearchName').value.trim().toLowerCase() : '');
 const groups = {};
+  const otLookupIndex = buildPunchLookupIndex(storedRecords || []);
   const manualKeys = new Set();
   for(const r of storedRecords){
     if(startDate && r.date < startDate) continue;
     if(endDate && r.date > endDate) continue;
+    if (isCarryoverOnlyRecord(r)) continue;
     if (isPunchClaimedByPreviousDayOt(r.empId, r.date, r.time)) continue;
     const key = r.date + '___' + r.empId;
     if(!groups[key]) groups[key]=[];
@@ -17947,7 +18065,7 @@ if(!_passes && typeof splits !== 'undefined' && splits && splits[empId + '___' +
 if(!_passes) continue;
 
     const times = Array.from(new Set(groups[key])).sort();
-    const otTimes = getOtCandidateTimes(empId, date, times);
+    const otTimes = getOtCandidateTimes(empId, date, times, otLookupIndex);
 
     const pickEarliest = (win) => times.find(t => t >= win.start && t <= win.end) || null;
     const pickLatest = (win) => { const arr = times.filter(t => t >= win.start && t <= win.end); return arr.length ? arr[arr.length-1] : null; };
@@ -18517,6 +18635,10 @@ function __normalizeDtrRecord(row){
   const time = (base.time ?? row?.time ?? '').toString().trim();
   if (!empId || !date || !time) return null;
   const rec = { empId, date, time };
+  const carryoverOnlyVal = (base.carryoverOnly ?? row?.carryoverOnly);
+  if (carryoverOnlyVal === true) rec.carryoverOnly = true;
+  const carryoverForDateVal = (base.carryoverForDate ?? row?.carryoverForDate);
+  if (carryoverForDateVal != null && String(carryoverForDateVal).trim()) rec.carryoverForDate = String(carryoverForDateVal).trim();
   const src = base.source ?? row?.source;
   if (src != null && String(src).trim()) rec.source = String(src).trim();
   const manualVal = (base.manual ?? row?.manual);
@@ -18587,7 +18709,7 @@ function subscribeDtrSupabaseRealtime(){
         const newRec = __normalizeDtrRecord(payload?.new);
         const oldRec = __normalizeDtrRecord(payload?.old);
         const cur = Array.isArray(window.storedRecords) ? window.storedRecords.slice() : (Array.isArray(storedRecords) ? storedRecords.slice() : []);
-        const recKey = (r) => `${String(r?.empId||'')}|${String(r?.date||'')}|${String(r?.time||'')}`;
+        const recKey = (r) => __dtrRecId(r);
         const oldKey = recKey(oldRec);
         const newKey = recKey(newRec);
         const idx = cur.findIndex(r => recKey(r) === (eventType === 'DELETE' ? oldKey : (oldKey || newKey)));
@@ -18716,12 +18838,14 @@ function computeHoursForDateRange(startDate, endDate) {
 
   const keys = Object.keys(storedSchedules).length ? storedSchedules : {default: DEFAULT_SCHEDULE};
   const grouped = {};
+  const otLookupIndex = buildPunchLookupIndex(storedRecords || []);
 
   for (const r of storedRecords) {
     if (startDate && r.date < startDate) continue;
     if (endDate && r.date > endDate) continue;
     const emp = storedEmployees[r.empId];
     if (!emp) continue;
+    if (isCarryoverOnlyRecord(r)) continue;
     if (isPunchClaimedByPreviousDayOt(r.empId, r.date, r.time)) continue;
     const dayKey = r.date + '___' + r.empId;
     if (!grouped[dayKey]) grouped[dayKey] = [];
@@ -18777,7 +18901,7 @@ function computeHoursForDateRange(startDate, endDate) {
     const schedule = keys[scheduleIdForEmp] || Object.assign({}, DEFAULT_SCHEDULE);
 
     const times = [...new Set(grouped[key])].sort();
-    const otTimes = getOtCandidateTimes(empId, date, times);
+    const otTimes = getOtCandidateTimes(empId, date, times, otLookupIndex);
 
     const pickEarliest = (win) => times.find(t => t >= win.start && t <= win.end) || null;
     const pickLatest = (win) => { const arr = times.filter(t => t >= win.start && t <= win.end); return arr.length ? arr[arr.length-1] : null; };
@@ -19870,11 +19994,13 @@ function restoreData(file) {
     var DEF     = (typeof DEFAULT_SCHEDULE!=='undefined' && DEFAULT_SCHEDULE) || {};
 
     var dayGroups = {};
+    var otLookupIndex = buildPunchLookupIndex(records || []);
     for (var i=0;i<records.length;i++){
       var r = records[i];
       if (startDate && r.date < startDate) continue;
       if (endDate && r.date > endDate) continue;
       if (!empMap[r.empId]) continue;
+      if (isCarryoverOnlyRecord(r)) continue;
       if (isPunchClaimedByPreviousDayOt(r.empId, r.date, r.time)) continue;
       var key = r.date + '___' + r.empId;
       if (!dayGroups[key]) dayGroups[key] = [];
@@ -19898,7 +20024,7 @@ function restoreData(file) {
       var S = (schedId && schedMap[schedId]) ? schedMap[schedId] : DEF;
 
       var times = uniqSort(dayGroups[key]);
-      var otTimes = getOtCandidateTimes(empId, date, times);
+      var otTimes = getOtCandidateTimes(empId, date, times, otLookupIndex);
 
       var win = {
         amIn:  {start:S.rng_am_in_start||'05:00', end:S.rng_am_in_end||'09:00'},
@@ -21955,14 +22081,7 @@ async function saveDtrToCloudLegacyBlob(records) {
       return id;
     };
 
-    const recKey = (rec) => {
-      if (!rec) return '';
-      const emp = rec.empId != null ? String(rec.empId).trim() : '';
-      const date = rec.date ? String(rec.date) : '';
-      const time = rec.time ? String(rec.time) : '';
-      const src = rec.source ? String(rec.source) : (rec.manual ? 'manual' : '');
-      return emp + '|' + date + '|' + time + '|' + src;
-    };
+    const recKey = (rec) => __dtrRecId(rec);
 
     const loadJson = (k, fb) => {
       try { return JSON.parse(localStorage.getItem(k) || '') || fb; } catch(e) { return fb; }
@@ -22178,7 +22297,9 @@ function __dtrRecId(rec){
   const date = rec.date ? String(rec.date) : '';
   const time = rec.time ? String(rec.time) : '';
   const src = rec.source ? String(rec.source) : (rec.manual ? 'manual' : '');
-  return emp + '|' + date + '|' + time + '|' + src;
+  const carryoverOnly = rec.carryoverOnly === true ? '1' : '0';
+  const carryoverForDate = rec.carryoverForDate ? String(rec.carryoverForDate) : '';
+  return emp + '|' + date + '|' + time + '|' + src + '|' + carryoverOnly + '|' + carryoverForDate;
 }
 function __dtrGetDeviceId(){
   const LS_DEV = 'payroll_dtr_device_id';
