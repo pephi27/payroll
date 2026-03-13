@@ -16054,10 +16054,13 @@ function isInOtWindowWithOvernight(mins, startMins, endMins) {
   }
   return false;
 }
-function getPunchOptions(empId, dateStr, fieldKey) {
+function getPunchOptions(empId, dateStr, fieldKey, punchLookupIndex) {
   const options = [];
   const seen = new Set();
   const allowNextDay = fieldKey === 'otIn' || fieldKey === 'otOut';
+  const lookup = punchLookupIndex instanceof Map
+    ? punchLookupIndex
+    : buildPunchLookupIndex(storedRecords || []);
   const addOption = (timeValue, isNextDay) => {
     if (!timeValue) return;
     const baseTime = padHM(stripNextDaySuffix(timeValue));
@@ -16070,21 +16073,16 @@ function getPunchOptions(empId, dateStr, fieldKey) {
     });
   };
 
-  const matches = (storedRecords || []).filter(r => String(r.empId) === String(empId) && r.date === dateStr);
-  matches.forEach(r => addOption(r.time, false));
+  getLookupTimesForDate(empId, dateStr, lookup).forEach(timeValue => {
+    addOption(timeValue, false);
+  });
 
-  const nextDate = shiftYmdDate(dateStr, 1);
-  if (allowNextDay && nextDate) {
+  if (allowNextDay) {
     // (+1) generation for OT selectors: include only real punches from the
     // next calendar day, and only up to the configured overnight cutoff hour.
-    (storedRecords || [])
-      .filter(r => String(r.empId) === String(empId) && r.date === nextDate)
-      .forEach(r => {
-        const mins = toMins(padHM(r.time));
-        if (mins !== null && mins <= OVERNIGHT_CUTOFF_HOUR * 60) {
-          addOption(r.time, true);
-        }
-      });
+    getNextDayOtTaggedTimes(empId, dateStr, lookup).forEach(taggedTime => {
+      addOption(taggedTime, true);
+    });
   }
 
   options.sort((a, b) => (toMins(a.value) || 0) - (toMins(b.value) || 0));
@@ -16105,13 +16103,14 @@ function openPunchEditor(rowContext) {
   modal.dataset.empId = empId;
   modal.dataset.date = date;
   modal.dataset.scope = scope;
+  const punchLookupIndex = buildPunchLookupIndex(storedRecords || []);
   const optionsByField = {
-    amIn: getPunchOptions(empId, date, 'amIn'),
-    amOut: getPunchOptions(empId, date, 'amOut'),
-    pmIn: getPunchOptions(empId, date, 'pmIn'),
-    pmOut: getPunchOptions(empId, date, 'pmOut'),
-    otIn: getPunchOptions(empId, date, 'otIn'),
-    otOut: getPunchOptions(empId, date, 'otOut')
+    amIn: getPunchOptions(empId, date, 'amIn', punchLookupIndex),
+    amOut: getPunchOptions(empId, date, 'amOut', punchLookupIndex),
+    pmIn: getPunchOptions(empId, date, 'pmIn', punchLookupIndex),
+    pmOut: getPunchOptions(empId, date, 'pmOut', punchLookupIndex),
+    otIn: getPunchOptions(empId, date, 'otIn', punchLookupIndex),
+    otOut: getPunchOptions(empId, date, 'otOut', punchLookupIndex)
   };
   const overrideKey = `${empId}___${date}`;
   const overrides = dtrOverrides[overrideKey] || {};
