@@ -15482,10 +15482,7 @@ rows += `<tr class="allowance">
     }, {regTotal:0, otTotal:0, adjPay:0, additionalIncome:0, t:0});
     const payrollGrandOtPay = readPayrollGrandTotalValue('otPay');
     if (payrollGrandOtPay != null) {
-      // Keep OT total aligned with payroll grand total, then recompute
-      // master grand total so the displayed GRAND TOTAL remains consistent.
       g.otTotal = payrollGrandOtPay;
-      g.t = g.regTotal + g.otTotal + g.adjPay + g.additionalIncome;
     }
     let html = '';
     html += '<h2>PAYROLL REPORT</h2>';
