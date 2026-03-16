@@ -16261,67 +16261,22 @@ function splitRecord(key) {
   window.scheduleRenderResults?.('dtr-split-toggle');
 }
 function unsplitRecord(key) {
-  // Group AM/PM/OT segments by their resolved project IDs.  Each group with
-  // more than one segment is recombined (segment-level overrides cleared and
-  // marked as unsplit).  Groups with a single segment remain split.
-  const [empId] = key.split('___');
-  const emp = (typeof storedEmployees !== 'undefined' && storedEmployees) ? storedEmployees[empId] : null;
-  const defaultProj = emp && emp.projectId ? emp.projectId : '';
-  let dayProj = overridesProjects && Object.prototype.hasOwnProperty.call(overridesProjects, key)
-    ? overridesProjects[key]
-    : defaultProj;
-
+  // Always collapse the row back to one combined entry. Clearing all half-level
+  // overrides avoids stale split state where one segment remains split and keeps
+  // showing separate rows/segment computations.
   const segments = ['AM', 'PM', 'OT'];
-  const groups = {};
+
   segments.forEach(seg => {
     const segKey = key + '___' + seg;
-    const pid = (overridesProjects && Object.prototype.hasOwnProperty.call(overridesProjects, segKey))
-      ? overridesProjects[segKey]
-      : dayProj;
-    const p = String(pid || '');
-    if (!groups[p]) groups[p] = [];
-    groups[p].push(seg);
-  });
-
-  let splitEntry = splits[key];
-  if (!splitEntry || typeof splitEntry !== 'object') {
-    splitEntry = { AM: true, PM: true, OT: true };
-  }
-
-  Object.keys(groups).forEach(proj => {
-    const segs = groups[proj];
-    if (segs.length > 1) {
-      // Multiple segments share this project → clear per-segment overrides and
-      // mark them unsplit. Also set day-level override if needed.
-      segs.forEach(seg => {
-        const segKey = key + '___' + seg;
-        if (overridesProjects && Object.prototype.hasOwnProperty.call(overridesProjects, segKey)) {
-          delete overridesProjects[segKey];
-        }
-        if (overridesSchedules && Object.prototype.hasOwnProperty.call(overridesSchedules, segKey)) {
-          delete overridesSchedules[segKey];
-        }
-        splitEntry[seg] = false;
-      });
-      const unifiedProj = proj;
-      if (String(unifiedProj || '') !== String(defaultProj || '')) {
-        overridesProjects[key] = unifiedProj;
-      } else {
-        delete overridesProjects[key];
-      }
-    } else {
-      // Single segment → keep its split flag
-      segs.forEach(seg => { splitEntry[seg] = true; });
+    if (overridesProjects && Object.prototype.hasOwnProperty.call(overridesProjects, segKey)) {
+      delete overridesProjects[segKey];
+    }
+    if (overridesSchedules && Object.prototype.hasOwnProperty.call(overridesSchedules, segKey)) {
+      delete overridesSchedules[segKey];
     }
   });
 
-  // Remove split entry if no segments remain split
-  const anySplit = segments.some(seg => splitEntry[seg]);
-  if (anySplit) {
-    splits[key] = splitEntry;
-  } else {
-    delete splits[key];
-  }
+  delete splits[key];
 
   saveSplits();
   saveOverrides();
@@ -18256,7 +18211,8 @@ let otMins = 0;
 
     const splitKey = empId + '___' + date;
     let splitEntry = splits && splits[splitKey];
-    if (splitEntry) {
+    const hasActiveSplit = splitEntry === true || (!!splitEntry && typeof splitEntry === 'object' && ['AM', 'PM', 'OT'].some(seg => !!splitEntry[seg]));
+    if (hasActiveSplit) {
       if (splitEntry === true) splitEntry = { AM: true, PM: true, OT: true };
       const name = emp ? emp.name : '';
       const merged = { regMins:0, otMins:0, amIn:null, amOut:null, pmIn:null, pmOut:null, otIn:null, otOut:null, count:0 };
