@@ -3406,6 +3406,11 @@ window.addEventListener('load', dashReports);
      <div class="section note">
       Adjustment hours for correcting previous payroll. REG adjustments appear in payroll, ADJ OT adjustments feed the overtime table.
      </div>
+     <div class="toolbar" id="adjustmentsControls">
+      <div class="toolbar-left">
+       <button type="button" id="printAdjustmentsBtn">Print Report</button>
+      </div>
+     </div>
      <table id="adjustmentHoursTable">
       <thead>
        <tr>
@@ -9440,6 +9445,66 @@ function updateAdjustmentHoursGrandTotalRow() {
   const otCell = row.querySelector('[data-col="otHours"]');
   if (otCell) otCell.textContent = formatZeroDisplay(grandOtTotal);
 }
+
+function printAdjustmentHoursReport(orientation) {
+  const rows = getEmployeeList().map(emp => {
+    const totals = getAdjustmentTotalsForEmployee(emp.id);
+    return {
+      id: emp.id || '',
+      name: emp.name || '',
+      type: getAdjustmentProjectType(emp.id) || '-',
+      reg: Number(totals.reg) || 0,
+      ot: Number(totals.ot) || 0
+    };
+  });
+
+  const formatZeroDisplay = (value) => {
+    const num = Number(value);
+    if (!Number.isFinite(num) || Math.abs(num) < 0.005) return '-';
+    return num.toFixed(2);
+  };
+
+  let grandRegTotal = 0;
+  let grandOtTotal = 0;
+  rows.forEach(row => {
+    grandRegTotal = roundToCents(grandRegTotal + row.reg);
+    grandOtTotal = roundToCents(grandOtTotal + row.ot);
+  });
+
+  const ws = document.getElementById('weekStart');
+  const we = document.getElementById('weekEnd');
+  const startDate = ws && ws.value ? ws.value : '';
+  const endDate = we && we.value ? we.value : '';
+  const title = (startDate && endDate)
+    ? `Adjustments Report (${startDate} to ${endDate})`
+    : 'Adjustments Report';
+
+  let html = '<table><thead><tr><th>ID</th><th>Name</th><th>Type</th><th class="num">REG Adj Hrs</th><th class="num">ADJ OT Hrs</th></tr></thead><tbody>';
+  rows.forEach(row => {
+    html += `<tr><td>${row.id}</td><td>${row.name}</td><td>${row.type}</td><td class="num">${formatZeroDisplay(row.reg)}</td><td class="num">${formatZeroDisplay(row.ot)}</td></tr>`;
+  });
+  html += `</tbody><tfoot><tr><td></td><td><strong>Grand Total</strong></td><td></td><td class="num">${formatZeroDisplay(grandRegTotal)}</td><td class="num">${formatZeroDisplay(grandOtTotal)}</td></tr></tfoot></table>`;
+
+  const doc = '<html><head><meta charset="utf-8"><title>Adjustments Report</title>' +
+    '<style>@page{size:letter portrait;margin:8mm} body{font-family:Arial,Helvetica,sans-serif;margin:0} h2{margin:0 0 6px;font-size:13px} table{border-collapse:collapse;width:100%;table-layout:fixed} th,td{border:1pt solid #000;padding:4px;font-size:10px;white-space:nowrap} th{background:#f1f5f9} td.num, th.num{text-align:right} thead{display:table-header-group} tfoot{display:table-footer-group} tfoot td{font-weight:700;background:#fff7ed;border-top:2pt solid #000} @media print{button,input,select,textarea,nav{display:none !important}} </style>' +
+    '</head><body>' +
+    `<h2>${title}</h2>` +
+    html +
+    '</body></html>';
+
+  printReport(doc, { orientation: orientation, features: 'width=900,height=700' });
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  const printBtn = document.getElementById('printAdjustmentsBtn');
+  if (!printBtn) return;
+  printBtn.addEventListener('click', () => {
+    try { if (typeof window.flushCalculateAll === 'function') window.flushCalculateAll?.('print-adjustments'); } catch (_) {}
+    withPrintOrientation(function(orientation){
+      printAdjustmentHoursReport(orientation);
+    });
+  });
+});
 
 function otherDeductionsBackupPayload(){
   return {
