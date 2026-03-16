@@ -16301,10 +16301,7 @@ function collectOverridesForKey(src, key){
   });
   return Object.keys(obj).length ? obj : null;
 }
-let __splitSyncInFlight = false;
-let __splitSyncQueued = false;
-
-async function __syncSplitOverridesOnce(){
+async function syncSplitOverrides(){
   if (!window.supabase) return;
   if (!(window.ENABLE_SPLIT_OVERRIDES || __splitOverridesAvailable)) {
     const ok = await ensureSplitOverridesAvailable();
@@ -16363,23 +16360,6 @@ async function __syncSplitOverridesOnce(){
     console.warn('syncSplitOverrides failed', e);
   }
 }
-async function syncSplitOverrides(){
-  if (__splitSyncInFlight) {
-    __splitSyncQueued = true;
-    return;
-  }
-
-  __splitSyncInFlight = true;
-  try {
-    do {
-      __splitSyncQueued = false;
-      await __syncSplitOverridesOnce();
-    } while (__splitSyncQueued);
-  } finally {
-    __splitSyncInFlight = false;
-  }
-}
-
 async function hydrateSplitOverrides(){
   if (!window.supabase) return;
   if (!(window.ENABLE_SPLIT_OVERRIDES || __splitOverridesAvailable)) {
