@@ -5874,13 +5874,12 @@ divisorEl.addEventListener('change', () => {
   try { saveCurrentPeriodDeductions(); } catch(_){ }
   window.scheduleCalculateAll?.('payroll-divisor-change');
 });
+function normalizeObjectStore(value) {
+  if (value && typeof value === 'object' && !Array.isArray(value)) return value;
+  return {};
+}
 function loadEmployees() {
-  const normalizeStore = (typeof normalizeObjectStore === 'function')
-    ? normalizeObjectStore
-    : function(value) {
-      return (value && typeof value === 'object' && !Array.isArray(value)) ? value : {};
-    };
-  const stored = normalizeStore((typeof window !== 'undefined' && window.storedEmployees) ? window.storedEmployees : storedEmployees);
+  const stored = normalizeObjectStore((typeof window !== 'undefined' && window.storedEmployees) ? window.storedEmployees : storedEmployees);
   let list = Object.keys(stored).filter(id => !(stored[id] && stored[id].active === false)).map(id=>({id, name: stored[id]?.name || ''}));
   if (list.length === 0) list = [{id:'001', name:'Sample Employee'}];
   list.sort((a,b)=> (a.name||'').localeCompare(b.name||''));
@@ -16629,11 +16628,6 @@ function safeParseStorageJSON(key, fallbackValue) {
   } catch (_) {
     return fallbackValue;
   }
-}
-
-function normalizeObjectStore(value) {
-  if (value && typeof value === 'object' && !Array.isArray(value)) return value;
-  return {};
 }
 
 function hasStoreData(value) {
