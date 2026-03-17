@@ -330,7 +330,12 @@ function getRowMetaPeriodId(rowLike = {}) {
 
 function rowBelongsToPeriod(row, periodId, period) {
   const metaPeriodId = getRowMetaPeriodId(row);
-  if (metaPeriodId) return metaPeriodId === String(periodId);
+  // Never trust metadata period id blindly; it must match target period and period date window.
+  if (metaPeriodId) {
+    if (metaPeriodId !== String(periodId)) return false;
+    if (!period) return true;
+    return periodIncludesDate(period, getLegacyPunchWorkDate(row));
+  }
   return periodIncludesDate(period, getLegacyPunchWorkDate(row));
 }
 
