@@ -4,6 +4,7 @@ const initialState = {
   payrollSnapshots: new Map(),
   dtrRecords: new Map(),
   dtrPunches: new Map(),
+  dtrApprovals: new Map(),
   employees: new Map(),
   projects: new Map(),
   schedules: new Map(),

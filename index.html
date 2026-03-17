@@ -19742,6 +19742,33 @@ function restoreData(file) {
       return [];
     }
   }
+  function getStoreDtrApprovals(){
+    try {
+      const state = (typeof window.getPayrollStoreState === 'function') ? window.getPayrollStoreState() : null;
+      if (!state || !(state.dtrApprovals instanceof Map)) return [];
+      const rows = [];
+      state.dtrApprovals.forEach((row) => rows.push(row));
+      return rows;
+    } catch (_) {
+      return [];
+    }
+  }
+  function isRowLockedOrApproved(empId, date){
+    const employeeId = String(empId || '').trim();
+    const workDate = String(date || '').trim();
+    const periodId = getActivePayrollPeriodId();
+    const periodLocked = (typeof window.isSelectedPeriodLocked === 'function') ? !!window.isSelectedPeriodLocked() : false;
+    if (periodLocked) return { blocked: true, approved: false, reason: 'Payroll period is locked.' };
+    const approved = getStoreDtrApprovals().some((row) => (
+      row
+      && String(row.payroll_period_id || '') === String(periodId || '')
+      && String(row.employee_id || '') === employeeId
+      && String(row.work_date || '').slice(0, 10) === workDate
+      && row.is_approved === true
+    ));
+    if (approved) return { blocked: true, approved: true, reason: `DTR row for ${employeeId} on ${workDate} is approved.` };
+    return { blocked: false, approved: false, reason: '' };
+  }
   function toRecordFromPunchRow(row){
     if (!row) return null;
     const empId = row.employee_id ?? row.emp_id ?? row.empId;
@@ -19753,48 +19780,38 @@ function restoreData(file) {
   function findPunchRowsForEmpDate(empId, date){
     const id = String(empId || '').trim();
     const ymd = String(date || '').trim();
-    if (!id || !ymd) return [];
+    const activePeriodId = getActivePayrollPeriodId();
+    if (!id || !ymd || !activePeriodId) return [];
     return getStorePunchRows().filter((row) => {
+      if (!row || !row.payroll_period_id) return false;
+      if (String(row.payroll_period_id) !== String(activePeriodId)) return false;
       const rec = toRecordFromPunchRow(row);
       return rec && rec.empId === id && rec.date === ymd;
     });
   }
   async function replaceDtrTimesForEmpDate(empId, date, nextTimes){
     const svc = getPayrollServiceOrThrow();
-    const existingRows = findPunchRowsForEmpDate(empId, date);
-    const requestedTimes = (Array.isArray(nextTimes) ? nextTimes : [])
-      .map((t) => normalizeDtrTime(t))
-      .filter(Boolean);
-
-    const existingQueueForDelete = existingRows.slice();
-    for (const time of requestedTimes) {
-      const idx = existingQueueForDelete.findIndex((row) => normalizeDtrTime(toRecordFromPunchRow(row)?.time) === time);
-      if (idx >= 0) {
-        existingQueueForDelete.splice(idx, 1);
-      }
-    }
-    for (const row of existingQueueForDelete) await svc.deletePunch(row.id);
-
     const periodId = getActivePayrollPeriodId();
     if (!periodId) throw new Error('No active payroll period selected.');
 
-    const existingQueueForAdd = existingRows.slice();
-    for (const time of requestedTimes) {
-      const idx = existingQueueForAdd.findIndex((row) => normalizeDtrTime(toRecordFromPunchRow(row)?.time) === time);
-      if (idx >= 0) {
-        existingQueueForAdd.splice(idx, 1);
-        continue;
-      }
-      await svc.createPunch({
-        periodId,
-        employeeId: String(empId),
-        projectId: null,
-        punchAt: `${date}T${time}:00`,
-        meta: { source: 'manual', manual: true, reconcile: 'replaceDtrTimesForEmpDate' },
-      });
-    }
+    const lockOrApproval = isRowLockedOrApproved(empId, date);
+    if (lockOrApproval.blocked) throw new Error(lockOrApproval.reason);
+
+    const requestedTimes = (Array.isArray(nextTimes) ? nextTimes : [])
+      .map((t) => normalizeDtrTime(t))
+      .filter(Boolean);
+    await svc.replacePunchesForEmployeeDate({
+      periodId,
+      employeeId: String(empId),
+      workDate: String(date),
+      requestedTimes,
+      meta: { source: 'manual', manual: true, reconcile: 'replaceDtrTimesForEmpDate' },
+      projectId: null,
+    });
   }
   async function deleteDtrRowByContext({ empId, date, times = [] }){
+    const lockOrApproval = isRowLockedOrApproved(empId, date);
+    if (lockOrApproval.blocked) throw new Error(lockOrApproval.reason);
     const svc = getPayrollServiceOrThrow();
     const existingRows = findPunchRowsForEmpDate(empId, date);
     const normalizedTimes = (Array.isArray(times) ? times : []).map((t) => normalizeDtrTime(t)).filter(Boolean);
@@ -19990,6 +20007,22 @@ function restoreData(file) {
       }
     }
   }
+  function ensureApprovalHeader(){
+    const table = document.getElementById('resultsTable');
+    if(!table) return;
+    const theadRow = table.querySelector('thead tr');
+    if(theadRow && !theadRow.querySelector('.approval-header')){
+      const th = document.createElement('th');
+      th.textContent = 'Approval';
+      th.classList.add('approval-header');
+      const actionsHeader = theadRow.querySelector('.actions-header');
+      if (actionsHeader) {
+        theadRow.insertBefore(th, actionsHeader);
+      } else {
+        theadRow.appendChild(th);
+      }
+    }
+  }
   function ensureActionsHeader(){
     const table = document.getElementById('resultsTable');
     if(!table) return;
@@ -20036,6 +20069,33 @@ function restoreData(file) {
     });
     table.__dtrDelBound = true;
   }
+  function setupDtrApprovalDelegation(){
+    const table = document.getElementById('resultsTable');
+    if (!table || table.__dtrApprovalBound) return;
+    table.__dtrApprovalBound = true;
+    table.addEventListener('click', async function(ev){
+      const btn = ev.target && ev.target.closest ? ev.target.closest('.dtr-approve-btn') : null;
+      if (!btn) return;
+      const tr = btn.closest('tr');
+      if (!tr) return;
+      const empId = tr.dataset.empId || (tr.cells[0] ? tr.cells[0].textContent.trim() : '');
+      const date = tr.dataset.date || (tr.cells[4] ? tr.cells[4].textContent.trim() : '');
+      const periodId = getActivePayrollPeriodId();
+      if (!periodId || !empId || !date) return;
+
+      try {
+        const svc = getPayrollServiceOrThrow();
+        if (btn.dataset.mode === 'unapprove') {
+          await svc.unapproveDtrRow({ periodId, employeeId: String(empId), workDate: String(date) });
+        } else {
+          await svc.approveDtrRow({ periodId, employeeId: String(empId), workDate: String(date) });
+        }
+        window.scheduleRenderResults?.('dtr-approval-toggle');
+      } catch (error) {
+        alert(`DTR approval update failed: ${String(error?.message || error)}`);
+      }
+    });
+  }
   function setupDtrPunchDelegation(){
     const table = document.getElementById('resultsTable');
     if (!table || table.__dtrPunchBound) return;
@@ -20057,11 +20117,13 @@ function restoreData(file) {
     const table = document.getElementById('resultsTable');
     if(!table) return;
     ensurePunchesHeader();
+    ensureApprovalHeader();
     ensureActionsHeader();
     const rows = table.querySelectorAll('tbody tr');
     rows.forEach(tr => {
       const hasPunch = !!tr.querySelector('.dtr-punch-btn');
       const hasDelete = !!tr.querySelector('.dtr-del-btn');
+      const hasApproval = !!tr.querySelector('.dtr-approve-btn');
       if (!hasPunch) {
         const punchTd = document.createElement('td');
         punchTd.className = 'punches-cell';
@@ -20076,6 +20138,36 @@ function restoreData(file) {
           tr.appendChild(punchTd);
         }
       }
+      if (!hasApproval) {
+        const approvalTd = document.createElement('td');
+        approvalTd.className = 'approval-cell';
+        const approvalBtn = document.createElement('button');
+        approvalBtn.className = 'dtr-approve-btn';
+        approvalTd.appendChild(approvalBtn);
+        const actionsCell = tr.querySelector('.actions-cell');
+        if (actionsCell) tr.insertBefore(approvalTd, actionsCell);
+        else tr.appendChild(approvalTd);
+      }
+
+      const empIdCell = tr.cells[0] ? tr.cells[0].textContent.trim() : '';
+      const dateCell = tr.cells[4] ? tr.cells[4].textContent.trim() : '';
+      const lockOrApproval = isRowLockedOrApproved(empIdCell, dateCell);
+      const approvalBtn = tr.querySelector('.dtr-approve-btn');
+      if (approvalBtn) {
+        approvalBtn.textContent = lockOrApproval.approved ? 'Approved · Unapprove' : 'Approve';
+        approvalBtn.dataset.mode = lockOrApproval.approved ? 'unapprove' : 'approve';
+        approvalBtn.disabled = (typeof window.isSelectedPeriodLocked === 'function') ? !!window.isSelectedPeriodLocked() : false;
+      }
+      const existingEditBtn = tr.querySelector('.dtr-punch-btn');
+      if (existingEditBtn) {
+        existingEditBtn.disabled = lockOrApproval.blocked;
+        existingEditBtn.title = lockOrApproval.blocked ? lockOrApproval.reason : '';
+      }
+      const existingDeleteBtn = tr.querySelector('.dtr-del-btn');
+      if (existingDeleteBtn) {
+        existingDeleteBtn.disabled = lockOrApproval.blocked;
+        existingDeleteBtn.title = lockOrApproval.blocked ? lockOrApproval.reason : '';
+      }
       if (hasDelete) return;
 
       const actionTd = document.createElement('td');
@@ -20083,6 +20175,8 @@ function restoreData(file) {
       const btn = document.createElement('button');
       btn.textContent = 'Delete';
       btn.className = 'dtr-del-btn';
+      btn.disabled = lockOrApproval.blocked;
+      btn.title = lockOrApproval.blocked ? lockOrApproval.reason : '';
       btn.addEventListener('click', async () => {
         // Get empId and date from row cells (empId at col 0, date at col 4)
         const empIdCell = tr.cells[0] ? tr.cells[0].textContent.trim() : '';
@@ -20137,6 +20231,7 @@ function restoreData(file) {
       const res = original.apply(this, arguments);
       try { addDtrDeleteButtons(); } catch(e){}
       try { setupDtrDeleteDelegation(); } catch(e){}
+      try { setupDtrApprovalDelegation(); } catch(e){}
       try { setupDtrPunchDelegation(); } catch(e){}
       try { wirePunchEditor(); } catch(e){}
       // After rendering results, always check whether the selected payroll period is
@@ -20156,6 +20251,7 @@ function restoreData(file) {
     wireManualDTR();
     wirePunchEditor();
     setupDtrDeleteDelegation();
+    setupDtrApprovalDelegation();
     setupDtrPunchDelegation();
     if(!patchRenderResults()){
       const iv = setInterval(() => {
@@ -23658,6 +23754,7 @@ document.addEventListener('DOMContentLoaded', async function () {
     try { window.storedRecords = next; } catch (_) {}
     try { window.scheduleRenderResults?.('dtr-store-bridge'); } catch (_) {}
   };
+
 
   function normalizeEditableTimeValue(value){
     const raw = String(value || '').trim();
