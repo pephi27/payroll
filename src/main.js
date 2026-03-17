@@ -197,6 +197,26 @@ function bridgeDtrPunchesToLegacyRuntime() {
   });
 }
 
+function bridgeDtrApprovalsToLegacyRuntime() {
+  if (window.__payrollDtrApprovalsBridgeReady) return;
+  window.__payrollDtrApprovalsBridgeReady = true;
+
+  // Approval toggles only live in modular store state; legacy row actions still render from
+  // index.html. Force a render whenever approvals change so lock/approval button states stay accurate.
+  const scheduleRefresh = () => {
+    try { window.scheduleRenderResults?.('dtr-approvals-store-bridge'); } catch (_) {}
+  };
+
+  subscribe((_state, change) => {
+    const isApprovalChange = change?.tableKey === 'dtrApprovals'
+      || (change?.type === 'batch'
+        && Array.isArray(change?.changes)
+        && change.changes.some((entry) => entry?.tableKey === 'dtrApprovals'));
+    if (!isApprovalChange) return;
+    scheduleRefresh();
+  });
+}
+
 
 
 
@@ -207,6 +227,7 @@ async function bootstrapPayrollApp() {
   deprecateCriticalLocalAuthority();
   bridgeMigratedMasterDataToLegacyGlobals();
   bridgeDtrPunchesToLegacyRuntime();
+  bridgeDtrApprovalsToLegacyRuntime();
   window.payrollService = payrollService;
   window.getPayrollStoreState = getState;
 
