@@ -5875,7 +5875,7 @@ divisorEl.addEventListener('change', () => {
   window.scheduleCalculateAll?.('payroll-divisor-change');
 });
 function loadEmployees() {
-  const stored = (window.cacheGet ? window.cacheGet('att_employees_v2', {}) : JSON.parse(localStorage.getItem('att_employees_v2') || '{}'));
+  const stored = normalizeObjectStore((typeof window !== 'undefined' && window.storedEmployees) ? window.storedEmployees : storedEmployees);
   let list = Object.keys(stored).filter(id => !(stored[id] && stored[id].active === false)).map(id=>({id, name: stored[id]?.name || ''}));
   if (list.length === 0) list = [{id:'001', name:'Sample Employee'}];
   list.sort((a,b)=> (a.name||'').localeCompare(b.name||''));
@@ -16783,6 +16783,37 @@ document.getElementById('downloadEmployeesCSV').addEventListener('click', () => 
 
 let currentProjectFilter = localStorage.getItem(LS_FILTER_PROJECT) || 'all';
 
+
+window.applyMasterDataSnapshotFromStore = function applyMasterDataSnapshotFromStore(snapshot = {}) {
+  const hasEmployees = Object.prototype.hasOwnProperty.call(snapshot, 'employees');
+  const hasProjects = Object.prototype.hasOwnProperty.call(snapshot, 'projects');
+  const hasSchedules = Object.prototype.hasOwnProperty.call(snapshot, 'schedules');
+
+  if (hasEmployees) storedEmployees = normalizeObjectStore(snapshot.employees);
+  if (hasProjects) storedProjects = normalizeObjectStore(snapshot.projects);
+  if (hasSchedules) storedSchedules = normalizeObjectStore(snapshot.schedules);
+
+  try {
+    if (hasEmployees) window.storedEmployees = storedEmployees;
+    if (hasProjects) window.storedProjects = storedProjects;
+    if (hasSchedules) window.storedSchedules = storedSchedules;
+  } catch (_) {}
+
+  if (hasProjects) {
+    try { renderProjects(); } catch (_) {}
+    try { renderProjectDropdowns(); } catch (_) {}
+    try { renderProjectFilterOptions(); } catch (_) {}
+  }
+  if (hasSchedules) {
+    try { renderScheduleSelector(); } catch (_) {}
+    try { renderScheduleEditor(); } catch (_) {}
+    try { renderEmpScheduleDropdowns(); } catch (_) {}
+  }
+  if (hasEmployees || hasProjects || hasSchedules) {
+    try { renderEmployees(); } catch (_) {}
+  }
+};
+
 function ensureSchedules(){
   if(!storedSchedules || typeof storedSchedules !== 'object'){
     const id = 'sched_' + Date.now();
@@ -16790,7 +16821,6 @@ function ensureSchedules(){
     storedSchedules[id] = Object.assign({}, DEFAULT_SCHEDULE);
     storedSchedules[id].name = DEFAULT_SCHEDULE.name;
     defaultScheduleId = id;
-    saveSchedulesToLS();
   } else {
     Object.keys(storedSchedules).forEach(id=>{
       storedSchedules[id] = { ...DEFAULT_RANGES, ...storedSchedules[id] };
@@ -16804,12 +16834,11 @@ function ensureSchedules(){
     if(!defaultScheduleId || !storedSchedules[defaultScheduleId]){
       const keys = Object.keys(storedSchedules);
       if(keys.length) defaultScheduleId = keys[0];
-      saveSchedulesToLS();
     }
   }
 }
 function saveSchedulesToLS(){
-  persistCriticalBusinessKey(LS_SCHEDULES, normalizeObjectStore(storedSchedules));
+  // TODO(step-2): att_schedules_default remains in legacy KV/localStorage until default-schedule ownership is modeled in modular state.
   persistCriticalBusinessKeySoon(LS_SCHEDULES_DEFAULT, defaultScheduleId, { delayMs: 0 });
 }
 
@@ -17099,60 +17128,117 @@ sch_grace: Number(document.querySelector('[data-key="sch_grace"]').value || DEFA
   };
 }
 
-document.getElementById('addScheduleBtn').addEventListener('click', ()=>{
+async function upsertScheduleWithFeedback(scheduleId, patch, failureMessage){
+  const svc = window.payrollService;
+  if (!svc || typeof svc.upsertSchedule !== 'function') {
+    alert('Schedule service is not ready yet. Please try again.');
+    return false;
+  }
+  try {
+    await svc.upsertSchedule(scheduleId, patch || {});
+    return true;
+  } catch (error) {
+    console.error('[schedule] upsert failed', { scheduleId, error });
+    alert(failureMessage || 'Failed to save schedule changes.');
+    return false;
+  }
+}
+
+document.getElementById('addScheduleBtn').addEventListener('click', async ()=>{
   const id = 'sched_' + Date.now();
-  storedSchedules[id] = Object.assign({}, DEFAULT_SCHEDULE); storedSchedules[id].name = 'New schedule';
-  saveSchedulesToLS(); renderScheduleSelector(); scheduleSelect.value = id; renderScheduleEditor();
+  const patch = { ...DEFAULT_SCHEDULE, name: 'New schedule' };
+  const ok = await upsertScheduleWithFeedback(id, patch, 'Failed to add schedule.');
+  if (!ok) return;
+  storedSchedules[id] = patch;
+  renderScheduleSelector();
+  scheduleSelect.value = id;
+  renderScheduleEditor();
 });
-document.getElementById('deleteScheduleBtn').addEventListener('click', ()=>{
+document.getElementById('deleteScheduleBtn').addEventListener('click', async ()=>{
   const sel = scheduleSelect.value; if(!sel) return;
   if(Object.keys(storedSchedules).length === 1){ alert('Cannot delete the only schedule.'); return; }
   if(!confirm('Delete schedule "' + storedSchedules[sel].name + '"?')) return;
+
+  const nextDefaultScheduleId = (!storedSchedules[defaultScheduleId] || defaultScheduleId === sel)
+    ? Object.keys(storedSchedules).find((id) => id !== sel)
+    : defaultScheduleId;
+  const affectedEmployeeIds = Object.keys(storedEmployees).filter((eid) => storedEmployees[eid].scheduleId === sel);
+
+  const svc = window.payrollService;
+  if (!svc || typeof svc.deleteSchedule !== 'function' || typeof svc.upsertEmployee !== 'function') {
+    alert('Payroll service is not ready yet. Please try again.');
+    return;
+  }
+
+  try {
+    for (const eid of affectedEmployeeIds) {
+      await svc.upsertEmployee(eid, { ...storedEmployees[eid], scheduleId: nextDefaultScheduleId || null });
+    }
+    await svc.deleteSchedule(sel);
+  } catch (error) {
+    console.error('[schedule] delete failed', { sel, error });
+    alert('Failed to delete schedule. Please try again.');
+    return;
+  }
+
   delete storedSchedules[sel];
-  if(!storedSchedules[defaultScheduleId]) defaultScheduleId = Object.keys(storedSchedules)[0];
-  Object.keys(storedEmployees).forEach(eid=>{
-    if(storedEmployees[eid].scheduleId === sel) storedEmployees[eid].scheduleId = defaultScheduleId;
+  if(!storedSchedules[defaultScheduleId]) defaultScheduleId = nextDefaultScheduleId || Object.keys(storedSchedules)[0] || null;
+  affectedEmployeeIds.forEach((eid) => {
+    storedEmployees[eid].scheduleId = defaultScheduleId || null;
   });
-  saveSchedulesToLS(); saveEmployeesToLS(); renderScheduleSelector(); renderEmployees(); renderResults();
+
+  saveSchedulesToLS();
+  renderScheduleSelector(); renderEmployees(); renderResults();
 });
 document.getElementById('setDefaultScheduleBtn').addEventListener('click', ()=>{
   const sel = scheduleSelect.value; if(!sel) return; defaultScheduleId = sel; saveSchedulesToLS(); renderScheduleSelector();
 });
-document.getElementById('saveScheduleBtn').addEventListener('click', ()=>{
-  const sel = scheduleSelect.value; if(!sel) return;
-  const oldRanges = {};
-  Object.keys(DEFAULT_RANGES).forEach(k=> oldRanges[k] = (storedSchedules[sel] && storedSchedules[sel][k]) || DEFAULT_RANGES[k]);
-  storedSchedules[sel] = { ...gatherScheduleFromEditor(), ...oldRanges, name: document.getElementById('scheduleName').value.trim() || storedSchedules[sel].name || 'Schedule' };
-  document.querySelectorAll('#rangesTable input[data-key]').forEach(i=>{
-    storedSchedules[sel][i.dataset.key] = i.value || DEFAULT_RANGES[i.dataset.key] || "";
-  });
-  saveSchedulesToLS(); renderScheduleSelector(); renderEmpScheduleDropdowns(); renderResults();
+document.getElementById('saveScheduleBtn').addEventListener('click', async ()=>{
+  const sel = scheduleSelect.value; if(!sel || !storedSchedules[sel]) return;
+  const patch = {
+    ...storedSchedules[sel],
+    ...gatherScheduleFromEditor(),
+    name: document.getElementById('scheduleName').value.trim() || storedSchedules[sel].name || 'Schedule',
+  };
+  const ok = await upsertScheduleWithFeedback(sel, patch, 'Failed to save schedule details.');
+  if (!ok) return;
+
+  storedSchedules[sel] = patch;
+  renderScheduleSelector(); renderEmpScheduleDropdowns(); renderResults();
 });
 scheduleSelect.addEventListener('change', ()=>{ renderScheduleEditor(); });
 
-function saveRangesFromUI(){
+async function saveRangesFromUI(){
   const sel = scheduleSelect && scheduleSelect.value;
   if(!sel || !storedSchedules[sel]) return;
+  const next = { ...storedSchedules[sel] };
   document.querySelectorAll('#rangesTable input[data-key]').forEach(i=>{
-    storedSchedules[sel][i.dataset.key] = i.value || "";
+    next[i.dataset.key] = i.value || "";
   });
-  saveSchedulesToLS();
+  const ok = await upsertScheduleWithFeedback(sel, next, 'Failed to save schedule ranges.');
+  if (!ok) return;
+
+  storedSchedules[sel] = next;
   window.scheduleRenderResults?.('dtr-split-toggle');
 }
-function resetRanges(){
+async function resetRanges(){
   const sel = scheduleSelect && scheduleSelect.value;
   if(!sel || !storedSchedules[sel]) return;
+  const next = { ...storedSchedules[sel] };
   Object.keys(DEFAULT_RANGES).forEach(k=>{
-    storedSchedules[sel][k] = DEFAULT_RANGES[k];
+    next[k] = DEFAULT_RANGES[k];
   });
-  saveSchedulesToLS();
+  const ok = await upsertScheduleWithFeedback(sel, next, 'Failed to reset schedule ranges.');
+  if (!ok) return;
+
+  storedSchedules[sel] = next;
   renderScheduleEditor();
   window.scheduleRenderResults?.('dtr-split-toggle');
 }
 document.getElementById('saveRangesBtn').addEventListener('click', saveRangesFromUI);
 document.getElementById('resetRangesBtn').addEventListener('click', resetRanges);
 
-function saveEmployeesToLS(){ persistCriticalBusinessKey(LS_EMPLOYEES, normalizeObjectStore(storedEmployees)); }
+function saveEmployeesToLS(){ console.warn('[payroll:migrated] saveEmployeesToLS is legacy-only; use payrollService row-level methods for writes'); }
 function renderEmpScheduleDropdowns(){
   const sel = document.getElementById('empScheduleSelect'); if(!sel) return;
   sel.innerHTML = '';
@@ -17177,69 +17263,102 @@ function renderEmpScheduleDropdownsInTable(){
 }
 
 function syncProjectsKVAfterLocalSave(forceCloudWrite){
-  if (!forceCloudWrite) return;
-  try {
-    const writeLatest = () => {
-      try {
-        if (typeof window.writeKV !== 'function') return;
-        const snapshot = (typeof storedProjects === 'object' && storedProjects) ? storedProjects : {};
-        const p = window.writeKV(LS_PROJECTS, snapshot);
-        if (p && typeof p.catch === 'function') p.catch(err => console.warn('writeKV projects failed', err));
-      } catch (err) {
-        console.warn('writeKV projects threw', err);
-      }
-    };
-
-    if (window && window.__kv_cloud_ready === true) {
-      writeLatest();
-      return;
-    }
-
-    // If the user edited projects before kv hydrate completes, flush once cloud is ready
-    // so boot hydration cannot later revert local edits.
-    window.__projectsKVPending = true;
-    if (!window.__projectsKVPendingHooked) {
-      window.__projectsKVPendingHooked = true;
-      window.addEventListener('kv-cloud-ready', () => {
-        try {
-          if (!window.__projectsKVPending) return;
-          window.__projectsKVPending = false;
-          writeLatest();
-        } catch (_) {}
-      });
-    }
-  } catch (_) {}
+  void forceCloudWrite;
+  // migrated: projects no longer write through KV/localStorage.
 }
 
 function saveProjectsToLS(options = {}){
-  persistCriticalBusinessKey(LS_PROJECTS, normalizeObjectStore(storedProjects));
-  syncProjectsKVAfterLocalSave(!!(options && options.userEdited));
-  if(!(options && options.skipRender)){
-    renderProjects();
-  }
+  void options;
+  console.warn('[payroll:migrated] saveProjectsToLS is legacy-only; use payrollService row-level methods for writes');
+}
+
+
+function rerenderProjectViews(){
+  renderProjects();
   renderProjectDropdowns();
   renderProjectFilterOptions();
   try { if (typeof renderAdditionalIncomeTable === 'function') renderAdditionalIncomeTable(); } catch (_) {}
   try { if (typeof renderAdjustmentHoursTable === 'function') renderAdjustmentHoursTable(); } catch (_) {}
   window.scheduleRenderResults?.('dtr-split-toggle');
 }
+
+async function upsertProjectWithFeedback(projectId, patch, failureMessage){
+  const svc = window.payrollService;
+  if (!svc || typeof svc.upsertProject !== 'function') {
+    alert('Project service is not ready yet. Please try again.');
+    return false;
+  }
+  try {
+    await svc.upsertProject(projectId, patch || {});
+    return true;
+  } catch (error) {
+    console.error('[project] upsert failed', { projectId, error });
+    alert(failureMessage || 'Failed to save project changes.');
+    return false;
+  }
+}
+
+async function deleteProjectWithFeedback(projectId, failureMessage){
+  const svc = window.payrollService;
+  if (!svc || typeof svc.deleteProject !== 'function') {
+    alert('Project service is not ready yet. Please try again.');
+    return false;
+  }
+  try {
+    await svc.deleteProject(projectId);
+    return true;
+  } catch (error) {
+    console.error('[project] delete failed', { projectId, error });
+    alert(failureMessage || 'Failed to delete project.');
+    return false;
+  }
+}
+
+async function upsertEmployeeWithFeedback(employeeId, patch, failureMessage){
+  const svc = window.payrollService;
+  if (!svc || typeof svc.upsertEmployee !== 'function') {
+    alert('Employee service is not ready yet. Please try again.');
+    return false;
+  }
+  try {
+    await svc.upsertEmployee(employeeId, patch || {});
+    return true;
+  } catch (error) {
+    console.error('[employee] upsert failed', { employeeId, error });
+    alert(failureMessage || 'Failed to save employee changes.');
+    return false;
+  }
+}
+
+async function deleteEmployeeWithFeedback(employeeId, failureMessage){
+  const svc = window.payrollService;
+  if (!svc || typeof svc.deleteEmployee !== 'function') {
+    alert('Employee service is not ready yet. Please try again.');
+    return false;
+  }
+  try {
+    await svc.deleteEmployee(employeeId);
+    return true;
+  } catch (error) {
+    console.error('[employee] delete failed', { employeeId, error });
+    alert(failureMessage || 'Failed to delete employee.');
+    return false;
+  }
+}
+
 function renderProjects(){
   const tbody = document.querySelector('#projectsTable tbody'); tbody.innerHTML = '';
   const projectCompanySel = document.getElementById('projectCompanySelect');
   const prevCompany = projectCompanySel ? projectCompanySel.value : '';
   populateCompanySelect(projectCompanySel, prevCompany);
-  let needsSave = false;
   Object.keys(storedProjects).forEach(pid=>{
     const project = storedProjects[pid];
-    // Backward-compatible migration: add active/deactivatedAt if missing
-    if (project && typeof project.active === 'undefined') { project.active = true; project.deactivatedAt = null; needsSave = true; }
     const isProjActive = !(project && project.active === false);
     const projBtnLabel = isProjActive ? 'Deactivate' : 'Reactivate';
     let company = project.company;
     if (!COMPANY_OPTIONS.includes(company)) {
       company = COMPANY_OPTIONS[0] || '';
       project.company = company;
-      needsSave = true;
     }
     const companyOptionsHtml = buildCompanyOptionsHtml(company);
     const tr = document.createElement('tr');
@@ -17250,58 +17369,80 @@ function renderProjects(){
       <td><button class="del-proj" data-id="${pid}">${projBtnLabel}</button></td>`;
     tbody.appendChild(tr);
   });
-  if (needsSave) saveProjectsToLS({ skipRender: true });
 
   document.querySelectorAll('.proj-active').forEach(cb=>{
-    cb.addEventListener('change', e=>{
+    cb.addEventListener('change', async (e)=>{
       const id = e.target.dataset.id;
-      if(!storedProjects[id]) return;
+      const prev = storedProjects[id];
+      if(!prev) return;
       const isActive = !!e.target.checked;
-      storedProjects[id].active = isActive;
-      storedProjects[id].deactivatedAt = isActive ? null : new Date().toISOString();
-      saveProjectsToLS({ userEdited: true });
+      const next = { ...prev, active: isActive, deactivatedAt: isActive ? null : new Date().toISOString() };
+      const ok = await upsertProjectWithFeedback(id, next, 'Failed to update project status.');
+      if (!ok) {
+        e.target.checked = !(prev.active === false);
+        return;
+      }
+      storedProjects[id] = next;
+      rerenderProjectViews();
       renderEmployees();
     });
   });
 
   document.querySelectorAll('.del-proj').forEach(btn=>{
-    btn.addEventListener('click', e=>{
+    btn.addEventListener('click', async (e)=>{
       const id = e.target.dataset.id;
       const proj = storedProjects[id];
       if(!proj) return;
       const isActive = !(proj.active === false);
       const action = isActive ? 'Deactivate' : 'Reactivate';
-      if(confirm(`${action} project "${proj.name}"?`)){
-        proj.active = !isActive;
-        proj.deactivatedAt = proj.active ? null : new Date().toISOString();
-        saveProjectsToLS({ userEdited: true });
-        renderEmployees();
-      }
+      if(!confirm(`${action} project "${proj.name}"?`)) return;
+      const next = { ...proj, active: !isActive, deactivatedAt: isActive ? new Date().toISOString() : null };
+      const ok = await upsertProjectWithFeedback(id, next, `Failed to ${action.toLowerCase()} project.`);
+      if (!ok) return;
+      storedProjects[id] = next;
+      rerenderProjectViews();
+      renderEmployees();
     });
   });
 
   document.querySelectorAll('.proj-name-input').forEach(inp => {
-    inp.addEventListener('change', e => {
+    inp.addEventListener('change', async (e) => {
       const id = e.target.dataset.id;
-      storedProjects[id].name = e.target.value;
-      saveProjectsToLS({ userEdited: true });
+      const prev = storedProjects[id];
+      if (!prev) return;
+      const next = { ...prev, name: e.target.value };
+      const ok = await upsertProjectWithFeedback(id, next, 'Failed to update project name.');
+      if (!ok) {
+        e.target.value = prev.name || '';
+        return;
+      }
+      storedProjects[id] = next;
+      rerenderProjectViews();
     });
   });
 
   document.querySelectorAll('.proj-company-select').forEach(sel => {
-    sel.addEventListener('change', e => {
+    sel.addEventListener('change', async (e) => {
       const id = e.target.dataset.id;
-      if (!storedProjects[id]) return;
+      const prev = storedProjects[id];
+      if (!prev) return;
       let value = e.target.value;
       if (!COMPANY_OPTIONS.includes(value)) {
         value = COMPANY_OPTIONS[0] || '';
         e.target.value = value;
       }
-      storedProjects[id].company = value;
-      saveProjectsToLS({ userEdited: true });
+      const next = { ...prev, company: value };
+      const ok = await upsertProjectWithFeedback(id, next, 'Failed to update project company.');
+      if (!ok) {
+        e.target.value = prev.company || (COMPANY_OPTIONS[0] || '');
+        return;
+      }
+      storedProjects[id] = next;
+      rerenderProjectViews();
     });
   });
 }
+
 
 
 function renderProjectDropdowns(){
@@ -17382,6 +17523,7 @@ function populateCompanySelect(selectEl, selectedValue){
   }
 }
 
+
 function renderEmployees(){
   renderEmpScheduleDropdowns();
   renderProjectDropdowns();
@@ -17394,17 +17536,14 @@ function renderEmployees(){
     if (na && nb) return Number(a) - Number(b);
     return String(a).localeCompare(String(b));
   });
-  let needsSave = false;
   ids.forEach(id => {
     const emp = storedEmployees[id];
-    // Backward-compatible migration: add active/deactivatedAt if missing
-    if (emp && typeof emp.active === 'undefined') { emp.active = true; emp.deactivatedAt = null; needsSave = true; }
+    if (emp && typeof emp.active === 'undefined') { emp.active = true; emp.deactivatedAt = null; }
     let company = emp.company;
     if (!COMPANY_OPTIONS.includes(company)) {
       company = COMPANY_OPTIONS[0] || '';
       if (company !== undefined) {
         emp.company = company;
-        needsSave = true;
       }
     }
     let scheduleOptionsHtml = '';
@@ -17438,10 +17577,9 @@ function renderEmployees(){
       <td><input type="checkbox" class="emp-pagibig" data-id="${id}" ${ (contribFlags[id] && contribFlags[id].pagibig === false) ? '' : 'checked'}></td>
       <td><input type="checkbox" class="emp-philhealth" data-id="${id}" ${ (contribFlags[id] && contribFlags[id].philhealth === false) ? '' : 'checked'}></td>
       <td><input type="checkbox" class="emp-sss" data-id="${id}" ${ (contribFlags[id] && contribFlags[id].sss === false) ? '' : 'checked'}></td>
-      <td><input type=\"checkbox\" class=\"emp-active\" data-id=\"${id}\" ${isEmpActive ? 'checked' : ''}></td>
-      <td><button class=\"del-emp\" data-id=\"${id}\">${empBtnLabel}</button></td>`;
+      <td><input type="checkbox" class="emp-active" data-id="${id}" ${isEmpActive ? 'checked' : ''}></td>
+      <td><button class="del-emp" data-id="${id}">${empBtnLabel}</button></td>`;
     tbody.appendChild(tr);
-    // Attach event listeners for contribution checkboxes for this employee
     const cbPagibig = tr.querySelector('.emp-pagibig');
     const cbPhilhealth = tr.querySelector('.emp-philhealth');
     const cbSss = tr.querySelector('.emp-sss');
@@ -17471,70 +17609,101 @@ function renderEmployees(){
     }
   });
 
-  if (needsSave) saveEmployeesToLS();
-
-  document.querySelectorAll('.emp-name-input').forEach(inp=> inp.addEventListener('change', (e)=>{
-    storedEmployees[e.target.dataset.id].name = e.target.value; saveEmployeesToLS(); window.scheduleRenderResults?.('employee-name-change');
-  }));
-  document.querySelectorAll('.emp-rate-input').forEach(inp=> inp.addEventListener('change', (e)=>{
+  document.querySelectorAll('.emp-name-input').forEach(inp=> inp.addEventListener('change', async (e)=>{
     const id = e.target.dataset.id;
+    const prev = storedEmployees[id];
+    if (!prev) return;
+    const next = { ...prev, name: e.target.value };
+    const ok = await upsertEmployeeWithFeedback(id, next, 'Failed to update employee name.');
+    if (!ok) { e.target.value = prev.name || ''; return; }
+    storedEmployees[id] = next;
+    window.scheduleRenderResults?.('employee-name-change');
+  }));
+  document.querySelectorAll('.emp-rate-input').forEach(inp=> inp.addEventListener('change', async (e)=>{
+    const id = e.target.dataset.id;
+    const prev = storedEmployees[id];
+    if (!prev) return;
     const val = parseFloat(e.target.value) || 0;
-    storedEmployees[id].hourlyRate = val; saveEmployeesToLS();
+    const next = { ...prev, hourlyRate: val };
+    const ok = await upsertEmployeeWithFeedback(id, next, 'Failed to update employee rate.');
+    if (!ok) { e.target.value = String(prev.hourlyRate ?? ''); return; }
+    storedEmployees[id] = next;
     try { payrollRates[id] = val; if (window.sharedSet) window.sharedSet(LS_RATES, payrollRates); else localStorage.setItem(LS_RATES, JSON.stringify(payrollRates)); } catch(err) {}
     try { if (typeof renderTable === 'function') renderTable(); } catch (err) { console.warn('renderTable failed', err); }
     window.scheduleRenderResults?.('employee-rate-change');
     window.scheduleCalculateAll?.('employee-rate-change');
   }));
-document.querySelectorAll('.emp-sel-schedule').forEach(sel=> sel.addEventListener('change', (e)=>{
-    storedEmployees[e.target.dataset.id].scheduleId = e.target.value; saveEmployeesToLS(); window.scheduleRenderResults?.('employee-schedule-change');
+  document.querySelectorAll('.emp-sel-schedule').forEach(sel=> sel.addEventListener('change', async (e)=>{
+    const id = e.target.dataset.id;
+    const prev = storedEmployees[id];
+    if (!prev) return;
+    const next = { ...prev, scheduleId: e.target.value };
+    const ok = await upsertEmployeeWithFeedback(id, next, 'Failed to update employee schedule.');
+    if (!ok) { e.target.value = prev.scheduleId || ''; return; }
+    storedEmployees[id] = next;
+    window.scheduleRenderResults?.('employee-schedule-change');
     window.scheduleCalculateAll?.('employee-schedule-change');
   }));
-  document.querySelectorAll('.emp-sel-project').forEach(sel=> sel.addEventListener('change', (e)=>{
-    storedEmployees[e.target.dataset.id].projectId = e.target.value || null; saveEmployeesToLS(); window.scheduleRenderResults?.('employee-project-change');
+  document.querySelectorAll('.emp-sel-project').forEach(sel=> sel.addEventListener('change', async (e)=>{
+    const id = e.target.dataset.id;
+    const prev = storedEmployees[id];
+    if (!prev) return;
+    const next = { ...prev, projectId: e.target.value || null };
+    const ok = await upsertEmployeeWithFeedback(id, next, 'Failed to update employee project.');
+    if (!ok) { e.target.value = prev.projectId || ''; return; }
+    storedEmployees[id] = next;
+    window.scheduleRenderResults?.('employee-project-change');
     window.scheduleCalculateAll?.('employee-project-change');
   }));
-  document.querySelectorAll('.emp-company-select').forEach(sel=> sel.addEventListener('change', (e)=>{
+  document.querySelectorAll('.emp-company-select').forEach(sel=> sel.addEventListener('change', async (e)=>{
     const id = e.target.dataset.id;
-    if (!storedEmployees[id]) return;
+    const prev = storedEmployees[id];
+    if (!prev) return;
     let value = e.target.value;
     if (!COMPANY_OPTIONS.includes(value)) {
       value = COMPANY_OPTIONS[0] || '';
       e.target.value = value;
     }
-    storedEmployees[id].company = value;
-    saveEmployeesToLS();
+    const next = { ...prev, company: value };
+    const ok = await upsertEmployeeWithFeedback(id, next, 'Failed to update employee company.');
+    if (!ok) { e.target.value = prev.company || (COMPANY_OPTIONS[0] || ''); return; }
+    storedEmployees[id] = next;
     window.scheduleRenderResults?.('employee-company-change');
   }));
-  document.querySelectorAll('.emp-active').forEach(cb=> cb.addEventListener('change', (e)=>{
+  document.querySelectorAll('.emp-active').forEach(cb=> cb.addEventListener('change', async (e)=>{
     const id = e.target.dataset.id;
-    if (!storedEmployees[id]) return;
+    const prev = storedEmployees[id];
+    if (!prev) return;
     const isActive = !!e.target.checked;
-    storedEmployees[id].active = isActive;
-    storedEmployees[id].deactivatedAt = isActive ? null : new Date().toISOString();
-    saveEmployeesToLS();
+    const next = { ...prev, active: isActive, deactivatedAt: isActive ? null : new Date().toISOString() };
+    const ok = await upsertEmployeeWithFeedback(id, next, 'Failed to update employee status.');
+    if (!ok) {
+      e.target.checked = !(prev.active === false);
+      return;
+    }
+    storedEmployees[id] = next;
     renderEmployees();
     window.scheduleRenderResults?.('employee-active-toggle');
   }));
-  document.querySelectorAll('.del-emp').forEach(btn=> btn.addEventListener('click', (e)=>{
+  document.querySelectorAll('.del-emp').forEach(btn=> btn.addEventListener('click', async (e)=>{
     const id=e.target.dataset.id;
-    {
-      const emp = storedEmployees[id];
-      if (!emp) return;
-      const isActive = !(emp.active === false);
-      const action = isActive ? 'Deactivate' : 'Reactivate';
-      const msg = `${action} employee ${id} - ${emp.name}?`;
-      if (confirm(msg)) {
-        emp.active = !isActive;
-        emp.deactivatedAt = emp.active ? null : new Date().toISOString();
-        saveEmployeesToLS();
-        renderEmployees();
-        window.scheduleRenderResults?.('employee-activate-toggle');
-      }
-    }
+    const emp = storedEmployees[id];
+    if (!emp) return;
+    const isActive = !(emp.active === false);
+    const action = isActive ? 'Deactivate' : 'Reactivate';
+    const msg = `${action} employee ${id} - ${emp.name}?`;
+    if (!confirm(msg)) return;
+    const next = { ...emp, active: !isActive, deactivatedAt: isActive ? new Date().toISOString() : null };
+    const ok = await upsertEmployeeWithFeedback(id, next, `Failed to ${action.toLowerCase()} employee.`);
+    if (!ok) return;
+    storedEmployees[id] = next;
+    renderEmployees();
+    window.scheduleRenderResults?.('employee-activate-toggle');
   }));
 }
 
-document.getElementById('addEmployeeBtn').addEventListener('click', ()=>{
+
+document.getElementById('addEmployeeBtn').addEventListener('click', async ()=>{
   const id = document.getElementById('empIdInput').value.trim();
   const name = document.getElementById('empNameInput').value.trim();
   const rate = parseFloat(document.getElementById('empRateInput').value) || 0;
@@ -17545,26 +17714,35 @@ document.getElementById('addEmployeeBtn').addEventListener('click', ()=>{
   if (!COMPANY_OPTIONS.includes(company)) company = COMPANY_OPTIONS[0] || '';
   const bank = document.getElementById('empBankInput').value.trim();
   if(!id){ alert('Enter ID'); return; } if(!name){ alert('Enter Name'); return; }
-  storedEmployees[id] = { name: name, hourlyRate: rate, bankAccount: bank, scheduleId: scheduleId, projectId: projectId, company: company, active: true, deactivatedAt: null };
+  const next = { name: name, hourlyRate: rate, bankAccount: bank, scheduleId: scheduleId, projectId: projectId, company: company, active: true, deactivatedAt: null };
+  const ok = await upsertEmployeeWithFeedback(id, next, 'Failed to add employee.');
+  if (!ok) return;
+  storedEmployees[id] = next;
   // Initialize default contribution deduction flags for new employee if not already set
   if (!contribFlags[id]) {
     contribFlags[id] = { pagibig: true, philhealth: true, sss: true };
     persistContribFlags();
   }
-  saveEmployeesToLS();
   document.getElementById('empIdInput').value=''; document.getElementById('empNameInput').value=''; document.getElementById('empRateInput').value=''; document.getElementById('empBankInput').value='';
   if (companySelect) companySelect.value = COMPANY_OPTIONS[0] || '';
   renderEmployees(); renderResults();
 });
-document.getElementById('clearEmployeesBtn').addEventListener('click', ()=>{
+document.getElementById('clearEmployeesBtn').addEventListener('click', async ()=>{
   if(!confirm('Clear all employees?')) return;
-  storedEmployees = {}; saveEmployeesToLS(); renderEmployees(); renderResults();
+  const ids = Object.keys(storedEmployees);
+  for (const id of ids) {
+    const ok = await deleteEmployeeWithFeedback(id, 'Failed to clear all employees.');
+    if (!ok) return;
+  }
+  storedEmployees = {};
+  renderEmployees();
+  renderResults();
 });
 
 document.getElementById('empFileInput').addEventListener('change', (evt) => {
   const file = evt.target.files && evt.target.files[0]; if (!file) return;
   const reader = new FileReader();
-  reader.onload = function(e) {
+  reader.onload = async function(e) {
     try {
       const data = new Uint8Array(e.target.result);
       const workbook = XLSX.read(data, { type: 'array' });
@@ -17649,7 +17827,11 @@ dataRows.forEach(row => {
 
   storedEmployees[id] = { name: name, hourlyRate: rate, bankAccount: bank, scheduleId: scheduleId, projectId: projectId, company: company };
 });
-saveEmployeesToLS();
+const idsToWrite = Object.keys(storedEmployees);
+for (const id of idsToWrite) {
+  const ok = await upsertEmployeeWithFeedback(id, storedEmployees[id], 'Failed to import employees.');
+  if (!ok) return;
+}
 renderEmployees();
 renderResults();
 if (added || updated) alert(`Imported: ${added}, Updated: ${updated}`);
@@ -18610,21 +18792,30 @@ let otMins = 0;
 })();
 }
 
-document.getElementById('addProjectBtn').addEventListener('click', ()=>{
+document.getElementById('addProjectBtn').addEventListener('click', async ()=>{
   const name = document.getElementById('projectNameInput').value.trim();
   if(!name) return alert('Enter project name');
   const id = 'proj_' + Date.now();
   const companySelect = document.getElementById('projectCompanySelect');
   let company = companySelect ? companySelect.value : '';
   if (!COMPANY_OPTIONS.includes(company)) company = COMPANY_OPTIONS[0] || '';
-  storedProjects[id] = { name, company, active: true, deactivatedAt: null };
+  const next = { name, company, active: true, deactivatedAt: null };
+  const ok = await upsertProjectWithFeedback(id, next, 'Failed to add project.');
+  if (!ok) return;
+  storedProjects[id] = next;
   document.getElementById('projectNameInput').value='';
   if (companySelect) companySelect.value = COMPANY_OPTIONS[0] || '';
-  saveProjectsToLS({ userEdited: true });
+  rerenderProjectViews();
 });
-document.getElementById('clearProjectsBtn').addEventListener('click', ()=>{
+document.getElementById('clearProjectsBtn').addEventListener('click', async ()=>{
   if(!confirm('Clear all projects?')) return;
-  storedProjects = {}; saveProjectsToLS({ userEdited: true });
+  const ids = Object.keys(storedProjects);
+  for (const id of ids) {
+    const ok = await deleteProjectWithFeedback(id, 'Failed to clear all projects.');
+    if (!ok) return;
+  }
+  storedProjects = {};
+  rerenderProjectViews();
 });
 
 
@@ -19524,6 +19715,107 @@ function restoreData(file) {
     } catch (e) {}
     try { if (typeof window.scheduleCalculateAll === 'function') window.scheduleCalculateAll?.('dtr-override-sync'); } catch (e) {}
   }
+  function normalizeDtrTime(value){
+    const raw = String(value || '').trim();
+    const m = raw.match(/^(\d{2}:\d{2})/);
+    return m ? m[1] : '';
+  }
+  function getPayrollServiceOrThrow(){
+    if (window.payrollService) return window.payrollService;
+    throw new Error('Payroll service is not ready yet.');
+  }
+  function getActivePayrollPeriodId(){
+    try {
+      const state = (typeof window.getPayrollStoreState === 'function') ? window.getPayrollStoreState() : null;
+      return state && state.currentPeriodId ? state.currentPeriodId : null;
+    } catch (_) {
+      return null;
+    }
+  }
+  function getStorePunchRows(){
+    try {
+      const state = (typeof window.getPayrollStoreState === 'function') ? window.getPayrollStoreState() : null;
+      if (!state || !(state.dtrPunches instanceof Map)) return [];
+      const rows = [];
+      state.dtrPunches.forEach((row) => rows.push(row));
+      return rows;
+    } catch (_) {
+      return [];
+    }
+  }
+  function toRecordFromPunchRow(row){
+    if (!row) return null;
+    const empId = row.employee_id ?? row.emp_id ?? row.empId;
+    const stamp = String(row.punch_at || `${row.date || ''} ${row.time || ''}`).trim();
+    const m = stamp.match(/^(\d{4}-\d{2}-\d{2})[T\s](\d{2}:\d{2})/);
+    if (!empId || !m) return null;
+    return { id: row.id, empId: String(empId), date: m[1], time: m[2] };
+  }
+  function findPunchRowsForEmpDate(empId, date){
+    const id = String(empId || '').trim();
+    const ymd = String(date || '').trim();
+    if (!id || !ymd) return [];
+    return getStorePunchRows().filter((row) => {
+      const rec = toRecordFromPunchRow(row);
+      return rec && rec.empId === id && rec.date === ymd;
+    });
+  }
+  async function replaceDtrTimesForEmpDate(empId, date, nextTimes){
+    const svc = getPayrollServiceOrThrow();
+    const existingRows = findPunchRowsForEmpDate(empId, date);
+    const requestedTimes = (Array.isArray(nextTimes) ? nextTimes : [])
+      .map((t) => normalizeDtrTime(t))
+      .filter(Boolean);
+
+    const existingQueueForDelete = existingRows.slice();
+    for (const time of requestedTimes) {
+      const idx = existingQueueForDelete.findIndex((row) => normalizeDtrTime(toRecordFromPunchRow(row)?.time) === time);
+      if (idx >= 0) {
+        existingQueueForDelete.splice(idx, 1);
+      }
+    }
+    for (const row of existingQueueForDelete) await svc.deletePunch(row.id);
+
+    const periodId = getActivePayrollPeriodId();
+    if (!periodId) throw new Error('No active payroll period selected.');
+
+    const existingQueueForAdd = existingRows.slice();
+    for (const time of requestedTimes) {
+      const idx = existingQueueForAdd.findIndex((row) => normalizeDtrTime(toRecordFromPunchRow(row)?.time) === time);
+      if (idx >= 0) {
+        existingQueueForAdd.splice(idx, 1);
+        continue;
+      }
+      await svc.createPunch({
+        periodId,
+        employeeId: String(empId),
+        projectId: null,
+        punchAt: `${date}T${time}:00`,
+        meta: { source: 'manual', manual: true, reconcile: 'replaceDtrTimesForEmpDate' },
+      });
+    }
+  }
+  async function deleteDtrRowByContext({ empId, date, times = [] }){
+    const svc = getPayrollServiceOrThrow();
+    const existingRows = findPunchRowsForEmpDate(empId, date);
+    const normalizedTimes = (Array.isArray(times) ? times : []).map((t) => normalizeDtrTime(t)).filter(Boolean);
+
+    if (normalizedTimes.length) {
+      const queue = existingRows.slice();
+      for (const time of normalizedTimes) {
+        // remove one matching occurrence per requested time (supports duplicates)
+        const idx = queue.findIndex((row) => normalizeDtrTime(toRecordFromPunchRow(row)?.time) === time);
+        if (idx < 0) continue;
+        const [row] = queue.splice(idx, 1);
+        await svc.deletePunch(row.id);
+      }
+      return;
+    }
+
+    for (const row of existingRows) {
+      await svc.deletePunch(row.id);
+    }
+  }
   function openManualModal(){
     const modal = document.getElementById('manualDtrModal');
     const empSelect = document.getElementById('manualEmpSelect');
@@ -19572,17 +19864,18 @@ function restoreData(file) {
         return;
       }
       try {
-        const record = { empId: String(empId), date: dateVal, time: timeVal, manual: true };
-        const exists = storedRecords.some(r =>
-          String(r.empId) === record.empId && r.date === record.date && r.time === record.time
-        );
-        if (!exists) storedRecords.push(record);
-        // Persist to Supabase (authoritative) after in-memory update
-        await persistStoredRecords();
-      } catch(e) { console.error('Saving manual DTR failed', e); }
-      closeManualModal();
-      window.scheduleRenderResults?.('manual-dtr-save');
-      setTimeout(function(){ saveBtn.__savingManual = false; }, 150);
+        const normalized = normalizeDtrTime(timeVal);
+        if (!normalized) throw new Error('Invalid time format.');
+        await replaceDtrTimesForEmpDate(String(empId), dateVal, [normalized].concat(
+          findPunchRowsForEmpDate(String(empId), dateVal).map((row) => normalizeDtrTime(toRecordFromPunchRow(row)?.time))
+        ));
+        closeManualModal();
+        window.scheduleRenderResults?.('manual-dtr-save');
+      } catch(e) {
+        alert(`Saving manual DTR failed: ${String(e?.message || e)}`);
+      } finally {
+        setTimeout(function(){ saveBtn.__savingManual = false; }, 150);
+      }
     });
     if (saveBtn) saveBtn.__wiredManualSave = true;
   }
@@ -19596,7 +19889,18 @@ function restoreData(file) {
     const saveBtn = document.getElementById('dtrPunchSave');
 
     if (cancelBtn) cancelBtn.addEventListener('click', closePunchModal);
-    if (clearBtn) clearBtn.addEventListener('click', function(){
+    const getModalTimes = () => {
+      const ids = ['dtrPunchAmIn','dtrPunchAmOut','dtrPunchPmIn','dtrPunchPmOut','dtrPunchOtIn','dtrPunchOtOut'];
+      return ids
+        .map((id) => {
+          const el = document.getElementById(id);
+          return normalizeDtrTime(el && el.value ? el.value : '');
+        })
+        .filter(Boolean)
+        .sort();
+    };
+
+    if (clearBtn) clearBtn.addEventListener('click', async function(){
       const empId = modal.dataset.empId;
       const date = modal.dataset.date;
       const scope = modal.dataset.scope || 'regular';
@@ -19617,10 +19921,16 @@ function restoreData(file) {
         else delete dtrOverrides[key];
         saveDtrOverrides();
       }
-      closePunchModal();
-      syncPayrollAfterOverride();
+      try {
+        const currentTimes = getModalTimes();
+        await replaceDtrTimesForEmpDate(empId, date, currentTimes);
+        closePunchModal();
+        syncPayrollAfterOverride();
+      } catch (error) {
+        alert(`Failed to clear DTR entries: ${String(error?.message || error)}`);
+      }
     });
-    if (saveBtn) saveBtn.addEventListener('click', function(){
+    if (saveBtn) saveBtn.addEventListener('click', async function(){
       const empId = modal.dataset.empId;
       const date = modal.dataset.date;
       const scope = modal.dataset.scope || 'regular';
@@ -19646,8 +19956,14 @@ function restoreData(file) {
         delete dtrOverrides[key];
       }
       saveDtrOverrides();
-      closePunchModal();
-      syncPayrollAfterOverride();
+      try {
+        const nextTimes = getModalTimes();
+        await replaceDtrTimesForEmpDate(empId, date, nextTimes);
+        closePunchModal();
+        syncPayrollAfterOverride();
+      } catch (error) {
+        alert(`Failed to save DTR entries: ${String(error?.message || error)}`);
+      }
     });
 
     modal.addEventListener('click', function(ev){
@@ -19707,31 +20023,17 @@ function restoreData(file) {
         if (isSplitHalf) {
           let timesForHalf = [];
           try { timesForHalf = JSON.parse(tr.dataset.times || '[]'); } catch(e) { timesForHalf = []; }
-          timesForHalf.forEach(t => {
-            for (let i = 0; i < storedRecords.length; i++) {
-              const rec = storedRecords[i];
-              if (String(rec.empId) === String(empIdCell) && rec.date === dateCell && rec.time === t) {
-                storedRecords.splice(i, 1);
-                break;
-              }
-            }
-          });
+          await deleteDtrRowByContext({ empId: empIdCell, date: dateCell, times: timesForHalf });
           const splitKey = `${empIdCell}___${dateCell}`;
           if (splits && splits[splitKey]) {
             delete splits[splitKey];
             if (typeof saveSplits === 'function') saveSplits();
           }
         } else {
-          for(let i = storedRecords.length - 1; i >= 0; i--){
-            const rec = storedRecords[i];
-            if(String(rec.empId) === String(empIdCell) && rec.date === dateCell){
-              storedRecords.splice(i, 1);
-            }
-          }
+          await deleteDtrRowByContext({ empId: empIdCell, date: dateCell });
         }
-        await persistStoredRecords();
         window.scheduleRenderResults?.('dtr-split-toggle');
-      } catch(e){ console.error('DTR delete failed', e); }
+      } catch(e){ alert(`DTR delete failed: ${String(e?.message || e)}`); }
     });
     table.__dtrDelBound = true;
   }
@@ -19809,15 +20111,7 @@ function restoreData(file) {
             // record (empId/date/time). This avoids removing duplicates beyond the
             // count present in timesForHalf (e.g., AM out and OT may share the same
             // time value, so we only remove the intended PM/OT instances).
-            timesForHalf.forEach(t => {
-              for (let i = 0; i < storedRecords.length; i++) {
-                const rec = storedRecords[i];
-                if (String(rec.empId) === String(empIdCell) && rec.date === dateCell && rec.time === t) {
-                  storedRecords.splice(i, 1);
-                  break; // remove only one matching occurrence per time value
-                }
-              }
-            });
+            await deleteDtrRowByContext({ empId: empIdCell, date: dateCell, times: timesForHalf });
             // After removing the half, unset the split flag for this emp/date so
             // the remaining records render as a single row. This mirrors the
             // behavior of the "Unsplit" button.
@@ -19828,17 +20122,10 @@ function restoreData(file) {
             }
           } else {
             // Remove all records for this employee on this date
-            for(let i = storedRecords.length - 1; i >= 0; i--){
-              const rec = storedRecords[i];
-              if(String(rec.empId) === String(empIdCell) && rec.date === dateCell){
-                storedRecords.splice(i, 1);
-              }
-            }
+            await deleteDtrRowByContext({ empId: empIdCell, date: dateCell });
           }
-          // Persist to Supabase so all devices reflect the deletion
-          await persistStoredRecords();
           window.scheduleRenderResults?.('dtr-split-toggle');
-        } catch(e){ console.error('DTR delete failed', e); }
+        } catch(e){ alert(`DTR delete failed: ${String(e?.message || e)}`); }
       });
       actionTd.appendChild(btn);
       tr.appendChild(actionTd);
@@ -23365,6 +23652,14 @@ document.addEventListener('DOMContentLoaded', async function () {
   }
   try { window.persistStoredRecords = persistStoredRecords; } catch (_) {}
 
+  window.applyDtrRecordsSnapshotFromStore = function applyDtrRecordsSnapshotFromStore(records = []) {
+    const next = Array.isArray(records) ? records.slice() : [];
+    next.sort((a, b) => String(a.date || '').localeCompare(String(b.date || '')) || String(a.time || '').localeCompare(String(b.time || '')) || String(a.empId || '').localeCompare(String(b.empId || '')));
+    try { storedRecords = next; } catch (_) {}
+    try { window.storedRecords = next; } catch (_) {}
+    try { window.scheduleRenderResults?.('dtr-store-bridge'); } catch (_) {}
+  };
+
   function normalizeEditableTimeValue(value){
     const raw = String(value || '').trim();
     if (!raw) return '';
@@ -23443,31 +23738,13 @@ document.addEventListener('DOMContentLoaded', async function () {
       revertTimeCellsToDisplay(tr, fields, idxMap);
       return { changed: false };
     }
-    const toRemove = new Set();
-    const toAdd = new Set();
-    fields.forEach(field => {
-      const before = prevValues[field] || '';
-      const after = values[field] || '';
-      if (before && before !== after){
-        toRemove.add(before);
-      }
-      if (!after && before){
-        toRemove.add(before);
-      }
-      if (after && before !== after){
-        toAdd.add(after);
-      }
-    });
-    if (toRemove.size){
-      removeRecordsForTimes(empId, date, Array.from(toRemove));
-    }
-    if (toAdd.size){
-      Array.from(toAdd).forEach(time => {
-        if (!hasStoredRecord(empId, date, time)) {
-          storedRecords.push({ empId: String(empId), date, time, manual: true });
-        }
-      });
-    }
+    const nextTimes = fields
+      .map((field) => values[field] || '')
+      .filter(Boolean)
+      .sort();
+
+    await replaceDtrTimesForEmpDate(empId, date, nextTimes);
+
     fields.forEach(field => {
       const nextVal = values[field] || '';
       tr.dataset[field] = normalizeEditableTimeValue(nextVal);
@@ -23481,7 +23758,6 @@ document.addEventListener('DOMContentLoaded', async function () {
     } catch(_) {
       tr.dataset.times = '[]';
     }
-    await persistStoredRecords();
     return { changed: true };
   }
 
