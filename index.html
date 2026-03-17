@@ -19993,49 +19993,76 @@ function restoreData(file) {
       }
     });
   }
-  function ensurePunchesHeader(){
+  function normalizeDtrDynamicColumns(){
     const table = document.getElementById('resultsTable');
-    if(!table) return;
+    if(!table) return null;
     const theadRow = table.querySelector('thead tr');
-    if(theadRow && !theadRow.querySelector('.punches-header')){
-      const th = document.createElement('th');
-      th.textContent = 'Punches';
-      th.classList.add('punches-header');
-      const actionsHeader = theadRow.querySelector('.actions-header');
-      if (actionsHeader) {
-        theadRow.insertBefore(th, actionsHeader);
-      } else {
-        theadRow.appendChild(th);
+    if(!theadRow) return table;
+
+    const removeAll = (selector) => {
+      theadRow.querySelectorAll(selector).forEach(el => el.remove());
+      table.querySelectorAll('tbody tr, tfoot tr').forEach(tr => {
+        tr.querySelectorAll(selector.replace('th', 'td')).forEach(el => el.remove());
+      });
+    };
+
+    removeAll('.editor-header');
+    table.querySelectorAll('tbody tr td.editor-cell, tfoot tr td.editor-cell').forEach(td => td.remove());
+
+    const ensureHeader = (cls, label) => {
+      const existing = Array.from(theadRow.querySelectorAll(`th.${cls}`));
+      const th = existing.shift() || document.createElement('th');
+      th.className = cls;
+      th.textContent = label;
+      existing.forEach(el => el.remove());
+      return th;
+    };
+
+    const punchesTh = ensureHeader('punches-header', 'Punches');
+    const approvalTh = ensureHeader('approval-header', 'Approval');
+    const actionsTh = ensureHeader('actions-header', 'Actions');
+    [punchesTh, approvalTh, actionsTh].forEach(th => theadRow.appendChild(th));
+
+    const totalCols = theadRow.children.length;
+    const dynamicClasses = ['punches-cell', 'approval-cell', 'actions-cell'];
+
+    const normalizeRow = (tr, isBody) => {
+      if (!tr) return;
+      if (tr.querySelector('td[colspan]') && tr.cells.length === 1) {
+        tr.cells[0].colSpan = totalCols;
+        return;
       }
-    }
-  }
-  function ensureApprovalHeader(){
-    const table = document.getElementById('resultsTable');
-    if(!table) return;
-    const theadRow = table.querySelector('thead tr');
-    if(theadRow && !theadRow.querySelector('.approval-header')){
-      const th = document.createElement('th');
-      th.textContent = 'Approval';
-      th.classList.add('approval-header');
-      const actionsHeader = theadRow.querySelector('.actions-header');
-      if (actionsHeader) {
-        theadRow.insertBefore(th, actionsHeader);
-      } else {
-        theadRow.appendChild(th);
+
+      const bucket = {};
+      dynamicClasses.forEach(cls => {
+        const matches = Array.from(tr.querySelectorAll(`td.${cls}`));
+        bucket[cls] = matches.shift() || (isBody ? document.createElement('td') : null);
+        if (bucket[cls]) bucket[cls].className = cls;
+        matches.forEach(el => el.remove());
+      });
+
+      dynamicClasses.forEach(cls => {
+        const td = bucket[cls];
+        if (!td) return;
+        td.className = cls;
+        tr.appendChild(td);
+      });
+
+      while (tr.cells.length < totalCols) {
+        tr.appendChild(document.createElement('td'));
       }
-    }
+      while (tr.cells.length > totalCols) {
+        tr.deleteCell(tr.cells.length - 1);
+      }
+    };
+
+    table.querySelectorAll('tbody tr').forEach(tr => normalizeRow(tr, true));
+    table.querySelectorAll('tfoot tr').forEach(tr => normalizeRow(tr, false));
+    return table;
   }
-  function ensureActionsHeader(){
-    const table = document.getElementById('resultsTable');
-    if(!table) return;
-    const theadRow = table.querySelector('thead tr');
-    if(theadRow && !theadRow.querySelector('.actions-header')){
-      const th = document.createElement('th');
-      th.textContent = 'Actions';
-      th.classList.add('actions-header');
-      theadRow.appendChild(th);
-    }
-  }
+  function ensurePunchesHeader(){ normalizeDtrDynamicColumns(); }
+  function ensureApprovalHeader(){ normalizeDtrDynamicColumns(); }
+  function ensureActionsHeader(){ normalizeDtrDynamicColumns(); }
   // Robust event delegation so Delete works even if rows insert buttons directly
   function setupDtrDeleteDelegation(){
     const table = document.getElementById('resultsTable');
@@ -20116,116 +20143,57 @@ function restoreData(file) {
     });
   }
   function addDtrDeleteButtons(){
-    const table = document.getElementById('resultsTable');
+    const table = normalizeDtrDynamicColumns();
     if(!table) return;
-    ensurePunchesHeader();
-    ensureApprovalHeader();
-    ensureActionsHeader();
     const rows = table.querySelectorAll('tbody tr');
     rows.forEach(tr => {
-      const hasPunch = !!tr.querySelector('.dtr-punch-btn');
-      const hasDelete = !!tr.querySelector('.dtr-del-btn');
-      const hasApproval = !!tr.querySelector('.dtr-approve-btn');
-      if (!hasPunch) {
-        const punchTd = document.createElement('td');
-        punchTd.className = 'punches-cell';
-        const editBtn = document.createElement('button');
+      const punchTd = tr.querySelector('.punches-cell');
+      const approvalTd = tr.querySelector('.approval-cell');
+      const actionsTd = tr.querySelector('.actions-cell');
+      if (!punchTd || !approvalTd || !actionsTd) return;
+
+      let editBtn = punchTd.querySelector('.dtr-punch-btn');
+      if (!editBtn) {
+        editBtn = document.createElement('button');
         editBtn.textContent = '✏ Entrys';
         editBtn.className = 'dtr-punch-btn';
+        punchTd.innerHTML = '';
         punchTd.appendChild(editBtn);
-        const actionsCell = tr.querySelector('.actions-cell');
-        if (actionsCell) {
-          tr.insertBefore(punchTd, actionsCell);
-        } else {
-          tr.appendChild(punchTd);
-        }
       }
-      if (!hasApproval) {
-        const approvalTd = document.createElement('td');
-        approvalTd.className = 'approval-cell';
-        const approvalBtn = document.createElement('button');
+
+      let approvalBtn = approvalTd.querySelector('.dtr-approve-btn');
+      if (!approvalBtn) {
+        approvalBtn = document.createElement('button');
         approvalBtn.className = 'dtr-approve-btn';
+        approvalTd.innerHTML = '';
         approvalTd.appendChild(approvalBtn);
-        const actionsCell = tr.querySelector('.actions-cell');
-        if (actionsCell) tr.insertBefore(approvalTd, actionsCell);
-        else tr.appendChild(approvalTd);
+      }
+
+      let deleteBtn = actionsTd.querySelector('.dtr-del-btn');
+      if (!deleteBtn) {
+        deleteBtn = document.createElement('button');
+        deleteBtn.textContent = 'Delete';
+        deleteBtn.className = 'dtr-del-btn';
+        actionsTd.innerHTML = '';
+        actionsTd.appendChild(deleteBtn);
       }
 
       const empIdCell = tr.cells[0] ? tr.cells[0].textContent.trim() : '';
       const dateCell = tr.cells[4] ? tr.cells[4].textContent.trim() : '';
       const lockOrApproval = isRowLockedOrApproved(empIdCell, dateCell);
-      const approvalBtn = tr.querySelector('.dtr-approve-btn');
-      if (approvalBtn) {
-        approvalBtn.textContent = lockOrApproval.approved ? 'Approved · Unapprove' : 'Approve';
-        approvalBtn.dataset.mode = lockOrApproval.approved ? 'unapprove' : 'approve';
-        approvalBtn.disabled = (typeof window.isSelectedPeriodLocked === 'function') ? !!window.isSelectedPeriodLocked() : false;
-      }
-      const existingEditBtn = tr.querySelector('.dtr-punch-btn');
-      if (existingEditBtn) {
-        existingEditBtn.disabled = lockOrApproval.blocked;
-        existingEditBtn.title = lockOrApproval.blocked ? lockOrApproval.reason : '';
-      }
-      const existingDeleteBtn = tr.querySelector('.dtr-del-btn');
-      if (existingDeleteBtn) {
-        existingDeleteBtn.disabled = lockOrApproval.blocked;
-        existingDeleteBtn.title = lockOrApproval.blocked ? lockOrApproval.reason : '';
-      }
-      if (hasDelete) return;
 
-      const actionTd = document.createElement('td');
-      actionTd.className = 'actions-cell';
-      const btn = document.createElement('button');
-      btn.textContent = 'Delete';
-      btn.className = 'dtr-del-btn';
-      btn.disabled = lockOrApproval.blocked;
-      btn.title = lockOrApproval.blocked ? lockOrApproval.reason : '';
-      btn.addEventListener('click', async () => {
-        // Get empId and date from row cells (empId at col 0, date at col 4)
-        const empIdCell = tr.cells[0] ? tr.cells[0].textContent.trim() : '';
-        const dateCell  = tr.cells[4] ? tr.cells[4].textContent.trim() : '';
-        if(!empIdCell || !dateCell) return;
-        // Determine if this row is part of a split (AM/PM). If so, use the attached
-        // metadata to remove only the specific half. Otherwise, remove all times.
-        const isSplitHalf = tr.dataset && tr.dataset.half;
-        const confirmMsg = isSplitHalf
-          ? `Delete this ${tr.dataset.half} DTR for ${empIdCell} on ${dateCell}?`
-          : `Delete all DTR entries for ${empIdCell} on ${dateCell}?`;
-        if(!confirm(confirmMsg)) return;
-        try {
-          if (isSplitHalf) {
-            // Parse times to remove for this half. The dataset.times stores an array
-            // of the exact time strings (e.g., "08:00", "12:00") that belong to
-            // this AM or PM half. Only records with matching empId, date and time
-            // found in this array will be removed.
-            let timesForHalf = [];
-            try {
-              timesForHalf = JSON.parse(tr.dataset.times || '[]');
-            } catch(e) { timesForHalf = []; }
-            // Remove only the specific occurrences of each time listed for this half.
-            // We iterate through the array of times and, for each, remove one matching
-            // record (empId/date/time). This avoids removing duplicates beyond the
-            // count present in timesForHalf (e.g., AM out and OT may share the same
-            // time value, so we only remove the intended PM/OT instances).
-            await deleteDtrRowByContext({ empId: empIdCell, date: dateCell, times: timesForHalf });
-            // After removing the half, unset the split flag for this emp/date so
-            // the remaining records render as a single row. This mirrors the
-            // behavior of the "Unsplit" button.
-            const splitKey = `${empIdCell}___${dateCell}`;
-            if (splits && splits[splitKey]) {
-              delete splits[splitKey];
-              if (typeof saveSplits === 'function') saveSplits();
-            }
-          } else {
-            // Remove all records for this employee on this date
-            await deleteDtrRowByContext({ empId: empIdCell, date: dateCell });
-          }
-          window.scheduleRenderResults?.('dtr-split-toggle');
-        } catch(e){ alert(`DTR delete failed: ${String(e?.message || e)}`); }
-      });
-      actionTd.appendChild(btn);
-      tr.appendChild(actionTd);
+      approvalBtn.textContent = lockOrApproval.approved ? 'Approved · Unapprove' : 'Approve';
+      approvalBtn.dataset.mode = lockOrApproval.approved ? 'unapprove' : 'approve';
+      approvalBtn.disabled = (typeof window.isSelectedPeriodLocked === 'function') ? !!window.isSelectedPeriodLocked() : false;
+
+      editBtn.disabled = lockOrApproval.blocked;
+      editBtn.title = lockOrApproval.blocked ? lockOrApproval.reason : '';
+
+      deleteBtn.disabled = lockOrApproval.blocked;
+      deleteBtn.title = lockOrApproval.blocked ? lockOrApproval.reason : '';
     });
   }
+
   function patchRenderResults(){
     if(typeof renderResults !== 'function') return false;
     const original = renderResults;
@@ -23574,16 +23542,7 @@ document.addEventListener('DOMContentLoaded', async function () {
   }
 
   function ensureEditorHeader(){
-    const table = document.getElementById('resultsTable');
-    if(!table) return;
-    const theadRow = table.querySelector('thead tr');
-    if(!theadRow) return;
-    if(!theadRow.querySelector('.editor-header')){
-      const th = document.createElement('th');
-      th.textContent = 'Editor';
-      th.className = 'editor-header';
-      theadRow.appendChild(th);
-    }
+    // Editor column injection is obsolete; kept as a no-op for compatibility.
   }
 
   function getColIndexes(table){
@@ -23860,6 +23819,8 @@ document.addEventListener('DOMContentLoaded', async function () {
   }
 
   function addDtrEditorButtons(){
+    // Old editor-column flow is obsolete; keep existing override logic without adding cells.
+    return;
     const table = document.getElementById('resultsTable');
     if(!table) return;
     ensureEditorHeader();
@@ -23995,7 +23956,6 @@ document.addEventListener('DOMContentLoaded', async function () {
   function afterRender(){
     reloadOverridesHoursFromCache();
     applyOverridesToTable();
-    addDtrEditorButtons();
     recomputeDtrSummaryFromTable();
   }
 

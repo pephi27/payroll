@@ -59,6 +59,13 @@ function hasOwn(row, key) {
   return Object.prototype.hasOwnProperty.call(row || {}, key);
 }
 
+function isMissingTableError(error) {
+  const code = String(error?.code || '').toUpperCase();
+  const message = String(error?.message || '').toLowerCase();
+  if (code === 'PGRST205' || code === '42P01') return true;
+  return message.includes('could not find the table') || message.includes('relation') && message.includes('does not exist');
+}
+
 function sortRowsByKnownTimestamp(table, rows) {
   if (table !== TABLES.punches) return rows;
   rows.sort((a, b) => {
@@ -601,9 +608,20 @@ export const payrollService = {
   },
 
   async loadCoreReadModels({ periodId } = {}) {
-    const loaders = Object.values(TABLE_LOADERS).map(async ({ table, stateKey }) => {
+    const loaders = Object.entries(TABLE_LOADERS).map(async ([loaderKey, { table, stateKey }]) => {
       const result = await loadRowsWithOptionalOptimizedFilter(table, periodId);
-      if (result.error) throw result.error;
+      if (result.error) {
+        const isOptionalApprovals = loaderKey === 'dtrApprovals';
+        if (isOptionalApprovals && isMissingTableError(result.error)) {
+          console.warn('[payroll:read] dtr approvals table not found; continuing without approval rows', {
+            table,
+            code: result.error.code,
+            message: result.error.message,
+          });
+          return { table, count: 0, skipped: true };
+        }
+        throw result.error;
+      }
 
       const rows = Array.isArray(result.data) ? result.data : [];
       const coverage = getPeriodCoverage(rows, periodId);
