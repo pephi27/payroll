@@ -19784,9 +19784,23 @@ function restoreData(file) {
     const ymd = String(date || '').trim();
     const activePeriodId = getActivePayrollPeriodId();
     if (!id || !ymd || !activePeriodId) return [];
+    const state = (typeof window.getPayrollStoreState === 'function') ? window.getPayrollStoreState() : null;
+    const activePeriod = state && state.payrollPeriods instanceof Map ? state.payrollPeriods.get(activePeriodId) : null;
+    const periodStart = String(activePeriod?.period_start || '').slice(0, 10);
+    const periodEnd = String(activePeriod?.period_end || '').slice(0, 10);
+
     return getStorePunchRows().filter((row) => {
-      if (!row || !row.payroll_period_id) return false;
-      if (String(row.payroll_period_id) !== String(activePeriodId)) return false;
+      if (!row) return false;
+      const rowPeriodId = String(row?.data?.payroll_period_id || '').trim();
+      const rowDate = String(row.date || '').slice(0, 10);
+      if (rowPeriodId) {
+        // Metadata period id is only trusted when it matches active period and row date still sits
+        // inside that period boundary.
+        if (rowPeriodId !== String(activePeriodId)) return false;
+        if (periodStart && periodEnd && (!rowDate || rowDate < periodStart || rowDate > periodEnd)) return false;
+      } else if (periodStart && periodEnd) {
+        if (!rowDate || rowDate < periodStart || rowDate > periodEnd) return false;
+      }
       const rec = toRecordFromPunchRow(row);
       return rec && rec.empId === id && rec.date === ymd;
     });
@@ -23732,6 +23746,29 @@ document.addEventListener('DOMContentLoaded', async function () {
     return String(hNum).padStart(2, '0') + ':' + String(mNum).padStart(2, '0');
   }
 
+  function getEditorRowLockOrApproval(tr){
+    const empId = String((tr?.dataset?.empId || (tr?.cells?.[0]?.textContent || '') || '')).trim();
+    const workDate = String((tr?.dataset?.date || (tr?.cells?.[4]?.textContent || '') || '')).trim();
+    const state = (typeof window.getPayrollStoreState === 'function') ? window.getPayrollStoreState() : null;
+    const periodId = state && state.currentPeriodId ? state.currentPeriodId : null;
+    const periodLocked = (typeof window.isSelectedPeriodLocked === 'function') ? !!window.isSelectedPeriodLocked() : false;
+    if (periodLocked) {
+      return { blocked: true, reason: 'Payroll period is locked.' };
+    }
+    const approvalRows = state && state.dtrApprovals instanceof Map ? Array.from(state.dtrApprovals.values()) : [];
+    const approved = approvalRows.some((row) => (
+      row
+      && String(row.payroll_period_id || '') === String(periodId || '')
+      && String(row.employee_id || '') === empId
+      && String(row.work_date || '').slice(0, 10) === workDate
+      && row.is_approved === true
+    ));
+    if (approved) {
+      return { blocked: true, reason: `DTR row for ${empId} on ${workDate} is approved.` };
+    }
+    return { blocked: false, reason: '' };
+  }
+
   function hasTimeInputChanges(tr, fields, idxMap){
     if (!tr || !Array.isArray(fields) || !fields.length) return false;
     for (const field of fields){
@@ -23834,7 +23871,17 @@ document.addEventListener('DOMContentLoaded', async function () {
       const btn = document.createElement('button');
       btn.textContent = 'Edit';
       btn.className = 'dtr-edit-btn';
+      const lockOrApproval = getEditorRowLockOrApproval(tr);
+      btn.disabled = !!lockOrApproval.blocked;
+      btn.title = lockOrApproval.blocked ? lockOrApproval.reason : '';
       btn.addEventListener('click', async () => {
+        const gate = getEditorRowLockOrApproval(tr);
+        if (gate.blocked) {
+          btn.disabled = true;
+          btn.title = gate.reason;
+          alert(gate.reason);
+          return;
+        }
         const regCell = (regIdx >= 0) ? tr.cells[regIdx] : null;
         const otCell  = (otIdx >= 0) ? tr.cells[otIdx] : null;
         const timeFields = getTimeFieldsForRow(tr);
