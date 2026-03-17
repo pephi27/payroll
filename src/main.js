@@ -6,6 +6,7 @@ import { waitForSupabaseClient } from './config/supabaseClient.js';
 
 let cleanupUi = null;
 let cleanupRealtime = null;
+let cleanupPeriodSync = null;
 let bootstrapped = false;
 
 const CRITICAL_LOCAL_KEYS = new Set([
@@ -221,6 +222,30 @@ function bridgeDtrApprovalsToLegacyRuntime() {
   });
 }
 
+function bridgePeriodSwitchReadModels() {
+  if (window.__payrollPeriodReadModelsBridgeReady) return;
+  window.__payrollPeriodReadModelsBridgeReady = true;
+
+  let inflightToken = 0;
+  cleanupPeriodSync = subscribe(async (_state, change) => {
+    if (change?.type !== 'set_current_period') return;
+    const periodId = getState().currentPeriodId;
+    if (!periodId) return;
+    const token = ++inflightToken;
+    try {
+      await payrollService.loadPunchesByPeriod(periodId);
+      await payrollService.loadDtrApprovalsByPeriod(periodId);
+      if (token !== inflightToken) return;
+      try { window.scheduleRenderResults?.('dtr-period-switch'); } catch (error) {
+        console.warn('[payroll:bridge] failed to schedule DTR render after period switch', error);
+      }
+    } catch (error) {
+      if (token !== inflightToken) return;
+      console.warn('[payroll:bridge] failed to refresh DTR read models on period switch', error);
+    }
+  });
+}
+
 
 
 
@@ -232,6 +257,7 @@ async function bootstrapPayrollApp() {
   bridgeMigratedMasterDataToLegacyGlobals();
   bridgeDtrPunchesToLegacyRuntime();
   bridgeDtrApprovalsToLegacyRuntime();
+  bridgePeriodSwitchReadModels();
   window.payrollService = payrollService;
   window.getPayrollStoreState = getState;
 
@@ -289,6 +315,7 @@ async function bootstrapPayrollApp() {
   window.addEventListener('beforeunload', () => {
     if (typeof cleanupUi === 'function') cleanupUi();
     if (typeof cleanupRealtime === 'function') cleanupRealtime();
+    if (typeof cleanupPeriodSync === 'function') cleanupPeriodSync();
   });
 }
 
