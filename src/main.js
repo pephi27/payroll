@@ -1,5 +1,5 @@
 import { payrollService } from './services/payrollService.js';
-import { setCurrentPeriod, setSupabaseConnected } from './state/store.js';
+import { getState, setCurrentPeriod, setSupabaseConnected, subscribe } from './state/store.js';
 import { startRealtimeSubscriptions } from './realtime/subscriptions.js';
 import { mountPayrollController } from './ui/payrollController.js';
 import { waitForSupabaseClient } from './config/supabaseClient.js';
@@ -98,12 +98,115 @@ function deprecateCriticalLocalAuthority() {
   }
 }
 
+function mapToObject(mapLike) {
+  const out = {};
+  if (!(mapLike instanceof Map)) return out;
+  mapLike.forEach((value, key) => {
+    if (key == null) return;
+    out[key] = { ...value };
+  });
+  return out;
+}
+
+function bridgeMigratedMasterDataToLegacyGlobals() {
+  if (window.__payrollMasterDataBridgeReady) return;
+  window.__payrollMasterDataBridgeReady = true;
+
+  const apply = () => {
+    try {
+      const state = getState();
+      const snapshot = {
+        employees: mapToObject(state.employees),
+        projects: mapToObject(state.projects),
+        schedules: mapToObject(state.schedules),
+      };
+      if (typeof window.applyMasterDataSnapshotFromStore === 'function') {
+        window.applyMasterDataSnapshotFromStore(snapshot);
+      } else {
+        window.storedEmployees = snapshot.employees;
+        window.storedProjects = snapshot.projects;
+        window.storedSchedules = snapshot.schedules;
+      }
+    } catch (error) {
+      console.warn('[payroll:bridge] failed to sync master data globals', error);
+    }
+  };
+
+  if (getState().employees.size || getState().projects.size || getState().schedules.size) {
+    apply();
+  }
+
+  subscribe((_state, change) => {
+    const isMasterDataChange = change?.tableKey === 'employees'
+      || change?.tableKey === 'projects'
+      || change?.tableKey === 'schedules'
+      || (change?.type === 'batch'
+        && Array.isArray(change?.changes)
+        && change.changes.some((entry) => ['employees', 'projects', 'schedules'].includes(entry?.tableKey)));
+    if (!isMasterDataChange) return;
+    apply();
+  });
+}
+
+function toLegacyDtrRecord(row) {
+  if (!row) return null;
+  const employeeId = row.employee_id ?? row.emp_id ?? row.empId;
+  const stamp = row.punch_at || `${row.date || ''} ${row.time || ''}`;
+  const str = String(stamp || '').trim();
+  const match = str.match(/^(\d{4}-\d{2}-\d{2})[T\s](\d{2}:\d{2})/);
+  if (!employeeId || !match) return null;
+  return {
+    id: row.id,
+    empId: String(employeeId),
+    date: match[1],
+    time: match[2],
+    source: row.meta?.source || row.source || null,
+    manual: row.meta?.manual === true || row.manual === true,
+  };
+}
+
+function bridgeDtrPunchesToLegacyRuntime() {
+  if (window.__payrollDtrBridgeReady) return;
+  window.__payrollDtrBridgeReady = true;
+
+  const apply = () => {
+    try {
+      const rows = [];
+      getState().dtrPunches.forEach((row) => {
+        const normalized = toLegacyDtrRecord(row);
+        if (normalized) rows.push(normalized);
+      });
+      rows.sort((a, b) => String(a.date).localeCompare(String(b.date)) || String(a.time).localeCompare(String(b.time)) || String(a.empId).localeCompare(String(b.empId)));
+
+      if (typeof window.applyDtrRecordsSnapshotFromStore === 'function') {
+        window.applyDtrRecordsSnapshotFromStore(rows);
+      } else {
+        window.storedRecords = rows;
+      }
+    } catch (error) {
+      console.warn('[payroll:bridge] failed to sync dtr punch snapshot', error);
+    }
+  };
+
+  if (getState().dtrPunches.size) apply();
+
+  subscribe((_state, change) => {
+    const isDtrChange = change?.tableKey === 'dtrPunches' || (change?.type === 'batch' && Array.isArray(change?.changes) && change.changes.some((entry) => entry?.tableKey === 'dtrPunches'));
+    if (!isDtrChange) return;
+    apply();
+  });
+}
+
 
 async function bootstrapPayrollApp() {
   if (bootstrapped) return;
   bootstrapped = true;
 
   deprecateCriticalLocalAuthority();
+  bridgeMigratedMasterDataToLegacyGlobals();
+  bridgeDtrPunchesToLegacyRuntime();
+  window.payrollService = payrollService;
+  window.getPayrollStoreState = getState;
 
   const root = document.getElementById('panelPayroll') || document.body;
   cleanupUi = mountPayrollController(root);

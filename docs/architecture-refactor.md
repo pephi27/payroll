@@ -105,3 +105,10 @@ src/
 3. **Resilient bootstrap**
    - `src/main.js` waits briefly for `window.supabase` before service/realtime calls.
    - UI can still mount while auth/data errors are logged without crashing the whole app.
+
+## Migration status notes (in progress)
+
+- Step 1 and Step 2 cutovers are still being hardened.
+- Compatibility bridges are used to keep legacy runtime surfaces rendering while modular store/service ownership expands.
+- `att_schedules_default` remains intentionally deferred until a dedicated modular owner is introduced.
+- DTR active edit flows are being moved to row-level punch methods with compatibility paths retained for non-migrated legacy surfaces.

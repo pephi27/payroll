@@ -709,6 +709,54 @@ export const payrollService = {
     return { id: flagId };
   },
 
+  async deleteEmployee(employeeId) {
+    const state = getState();
+    const existing = state.employees.get(employeeId);
+    if (!existing) throw new Error(`Employee ${employeeId} not found in state.`);
+
+    await deleteWithOptimisticLock({
+      table: TABLES.employees,
+      id: employeeId,
+      expectedUpdatedAt: existing.updated_at ?? null,
+      stateKey: 'employees',
+    });
+
+    removeRow('employees', employeeId);
+    return { id: employeeId };
+  },
+
+  async deleteProject(projectId) {
+    const state = getState();
+    const existing = state.projects.get(projectId);
+    if (!existing) throw new Error(`Project ${projectId} not found in state.`);
+
+    await deleteWithOptimisticLock({
+      table: TABLES.projects,
+      id: projectId,
+      expectedUpdatedAt: existing.updated_at ?? null,
+      stateKey: 'projects',
+    });
+
+    removeRow('projects', projectId);
+    return { id: projectId };
+  },
+
+  async deleteSchedule(scheduleId) {
+    const state = getState();
+    const existing = state.schedules.get(scheduleId);
+    if (!existing) throw new Error(`Schedule ${scheduleId} not found in state.`);
+
+    await deleteWithOptimisticLock({
+      table: TABLES.schedules,
+      id: scheduleId,
+      expectedUpdatedAt: existing.updated_at ?? null,
+      stateKey: 'schedules',
+    });
+
+    removeRow('schedules', scheduleId);
+    return { id: scheduleId };
+  },
+
   async setPeriodLock(periodId, isLocked) {
     const patch = { is_locked: !!isLocked, updated_at: new Date().toISOString() };
     logWrite('update', TABLES.periods, { id: periodId, ...patch });
