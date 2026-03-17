@@ -28,6 +28,7 @@ const TABLES = {
   snapshots: 'payroll_period_snapshots',
   dtr: 'pp_dtr_records',
   punches: 'dtr_punches',
+  dtrApprovals: 'pp_dtr_approvals',
   employees: 'pp_employees',
   projects: 'pp_projects',
   schedules: 'pp_schedules',
@@ -45,6 +46,7 @@ const TABLE_LOADERS = {
   loans: { table: TABLES.loans, stateKey: 'loans' },
   loanDeductions: { table: TABLES.loanDeductions, stateKey: 'loanDeductions' },
   contribFlags: { table: TABLES.contribFlags, stateKey: 'contribFlags' },
+  dtrApprovals: { table: TABLES.dtrApprovals, stateKey: 'dtrApprovals' },
   profiles: { table: TABLES.profiles, stateKey: 'profiles' },
 };
 
@@ -238,6 +240,55 @@ function requireSupabaseClient() {
 }
 
 let hasRpcLockGuard = null;
+let hasRpcDtrEditableGuard = null;
+
+function normalizeWorkDate(workDate) {
+  const raw = String(workDate || '').trim();
+  const match = raw.match(/^(\d{4}-\d{2}-\d{2})/);
+  return match ? match[1] : '';
+}
+
+function deriveWorkDateFromPunchAt(punchAt) {
+  const value = String(punchAt || '').trim();
+  const match = value.match(/^(\d{4}-\d{2}-\d{2})[T\s]/) || value.match(/^(\d{4}-\d{2}-\d{2})$/);
+  return match ? match[1] : '';
+}
+
+function deriveTimeFromPunchAt(punchAt, fallbackTime = '') {
+  const value = String(punchAt || '').trim();
+  const match = value.match(/^\d{4}-\d{2}-\d{2}[T\s](\d{2}:\d{2})/);
+  if (match) return match[1];
+  const fallback = String(fallbackTime || '').trim();
+  const fallbackMatch = fallback.match(/^(\d{2}:\d{2})/);
+  return fallbackMatch ? fallbackMatch[1] : '';
+}
+
+function assertDtrContext({ periodId, employeeId, workDate }) {
+  const normalizedWorkDate = normalizeWorkDate(workDate);
+  if (!periodId || !employeeId || !normalizedWorkDate) {
+    throw new Error('Missing DTR row context. Expected periodId, employeeId, and workDate.');
+  }
+  return {
+    periodId: String(periodId),
+    employeeId: String(employeeId),
+    workDate: normalizedWorkDate,
+  };
+}
+
+function findApprovalRowInState({ periodId, employeeId, workDate }) {
+  const state = getState();
+  const targetPeriodId = String(periodId);
+  const targetEmployeeId = String(employeeId);
+  const targetWorkDate = normalizeWorkDate(workDate);
+  for (const row of state.dtrApprovals.values()) {
+    if (!row) continue;
+    if (String(row.payroll_period_id) !== targetPeriodId) continue;
+    if (String(row.employee_id) !== targetEmployeeId) continue;
+    if (normalizeWorkDate(row.work_date) !== targetWorkDate) continue;
+    return row;
+  }
+  return null;
+}
 
 async function ensurePeriodUnlockedWithRpc(periodId) {
   // Important: this is a precheck guard for compatibility; it is not a transactional DB-side enforcement
@@ -275,6 +326,37 @@ async function ensurePeriodUnlocked(periodId) {
   if (data.is_locked) {
     throw new Error(`Payroll period ${periodId} is locked. Update denied.`);
   }
+}
+
+async function ensureDtrRowEditableWithFallback({ periodId, employeeId, workDate }) {
+  const context = assertDtrContext({ periodId, employeeId, workDate });
+  await ensurePeriodUnlocked(context.periodId);
+
+  const { data, error } = await requireSupabaseClient()
+    .from(TABLES.dtrApprovals)
+    .select('id,is_approved')
+    .eq('payroll_period_id', context.periodId)
+    .eq('employee_id', context.employeeId)
+    .eq('work_date', context.workDate)
+    .maybeSingle();
+
+  if (error) throw error;
+  if (data?.is_approved === true) {
+    throw new Error(`DTR row ${context.employeeId} on ${context.workDate} is approved. Update denied.`);
+  }
+}
+
+async function loadExistingDtrApprovalByContext({ periodId, employeeId, workDate }) {
+  const context = assertDtrContext({ periodId, employeeId, workDate });
+  const { data, error } = await requireSupabaseClient()
+    .from(TABLES.dtrApprovals)
+    .select('*')
+    .eq('payroll_period_id', context.periodId)
+    .eq('employee_id', context.employeeId)
+    .eq('work_date', context.workDate)
+    .maybeSingle();
+  if (error) throw error;
+  return data;
 }
 
 
@@ -370,6 +452,14 @@ async function deleteWithOptimisticLock({ table, id, expectedUpdatedAt, periodId
   return { id, table, stateKey };
 }
 
+function getPunchRowContext({ periodId, employeeId, punchAt }) {
+  return assertDtrContext({
+    periodId,
+    employeeId,
+    workDate: deriveWorkDateFromPunchAt(punchAt),
+  });
+}
+
 export const payrollService = {
   tables: TABLES,
 
@@ -406,6 +496,110 @@ export const payrollService = {
     return data;
   },
 
+  async loadDtrApprovalsByPeriod(periodId) {
+    if (!periodId) return [];
+    const { data, error } = await requireSupabaseClient()
+      .from(TABLES.dtrApprovals)
+      .select('*')
+      .eq('payroll_period_id', periodId);
+    if (error) throw error;
+    data.forEach((row) => mergeRow('dtrApprovals', row));
+    return data;
+  },
+
+  getDtrApprovalKey({ periodId, employeeId, workDate }) {
+    const context = assertDtrContext({ periodId, employeeId, workDate });
+    return `${context.periodId}__${context.employeeId}__${context.workDate}`;
+  },
+
+  async ensureDtrRowEditableWithRpcOrFallback({ periodId, employeeId, workDate }) {
+    const context = assertDtrContext({ periodId, employeeId, workDate });
+    const client = requireSupabaseClient();
+
+    if (hasRpcDtrEditableGuard !== false) {
+      const { error } = await client.rpc('assert_dtr_row_editable', {
+        p_period_id: context.periodId,
+        p_employee_id: context.employeeId,
+        p_work_date: context.workDate,
+      });
+      if (!error) {
+        hasRpcDtrEditableGuard = true;
+        return;
+      }
+
+      const message = String(error?.message || '');
+      const missingRpc = error.code === 'PGRST202' || /function .*assert_dtr_row_editable/i.test(message);
+      if (!missingRpc) throw error;
+      hasRpcDtrEditableGuard = false;
+      console.warn('[payroll:dtr-guard] RPC assert_dtr_row_editable is unavailable; using fallback checks');
+    }
+
+    await ensureDtrRowEditableWithFallback(context);
+  },
+
+  async approveDtrRow({ periodId, employeeId, workDate, note = null, approvedBy = null }) {
+    const context = assertDtrContext({ periodId, employeeId, workDate });
+    await ensurePeriodUnlockedWithRpc(context.periodId);
+
+    const id = this.getDtrApprovalKey(context);
+    const existing = getState().dtrApprovals.get(id)
+      || findApprovalRowInState(context)
+      || await loadExistingDtrApprovalByContext(context);
+    const now = new Date().toISOString();
+    const patch = {
+      id,
+      payroll_period_id: context.periodId,
+      employee_id: context.employeeId,
+      work_date: context.workDate,
+      is_approved: true,
+      approved_at: now,
+      approved_by: approvedBy,
+      note,
+      updated_at: now,
+    };
+
+    if (existing) {
+      return updateWithOptimisticLock({
+        table: TABLES.dtrApprovals,
+        id,
+        patch,
+        expectedUpdatedAt: existing.updated_at ?? null,
+        periodId: context.periodId,
+        stateKey: 'dtrApprovals',
+      });
+    }
+
+    return createRowWithLock({
+      table: TABLES.dtrApprovals,
+      row: patch,
+      periodId: context.periodId,
+      stateKey: 'dtrApprovals',
+    });
+  },
+
+  async unapproveDtrRow({ periodId, employeeId, workDate }) {
+    const context = assertDtrContext({ periodId, employeeId, workDate });
+    await ensurePeriodUnlockedWithRpc(context.periodId);
+    const id = this.getDtrApprovalKey(context);
+    const existing = getState().dtrApprovals.get(id)
+      || findApprovalRowInState(context)
+      || await loadExistingDtrApprovalByContext(context);
+    if (!existing) return null;
+
+    return updateWithOptimisticLock({
+      table: TABLES.dtrApprovals,
+      id,
+      patch: {
+        is_approved: false,
+        approved_at: null,
+        approved_by: null,
+      },
+      expectedUpdatedAt: existing.updated_at ?? null,
+      periodId: context.periodId,
+      stateKey: 'dtrApprovals',
+    });
+  },
+
   async loadCoreReadModels({ periodId } = {}) {
     const loaders = Object.values(TABLE_LOADERS).map(async ({ table, stateKey }) => {
       const result = await loadRowsWithOptionalOptimizedFilter(table, periodId);
@@ -435,7 +629,10 @@ export const payrollService = {
     return Promise.all([...loaders, punches]);
   },
 
-  async createPunch({ periodId, employeeId, projectId, punchAt, meta = {} }) {
+  async createPunch({ periodId, employeeId, projectId, punchAt, meta = {}, skipEditableCheck = false }) {
+    if (!skipEditableCheck) {
+      await this.ensureDtrRowEditableWithRpcOrFallback(getPunchRowContext({ periodId, employeeId, punchAt }));
+    }
     const row = {
       payroll_period_id: periodId,
       employee_id: employeeId,
@@ -452,10 +649,31 @@ export const payrollService = {
     });
   },
 
-  async updatePunch(punchId, patch) {
+  async updatePunch(punchId, patch, options = {}) {
     const state = getState();
     const existing = state.dtrPunches.get(punchId);
     if (!existing) throw new Error(`Punch ${punchId} not found in state.`);
+    if (!options.skipEditableCheck) {
+      const sourceContext = getPunchRowContext({
+        periodId: existing.payroll_period_id,
+        employeeId: existing.employee_id,
+        punchAt: existing.punch_at || `${existing.date || ''} ${existing.time || ''}`,
+      });
+      const destinationContext = getPunchRowContext({
+        periodId: patch?.payroll_period_id ?? existing.payroll_period_id,
+        employeeId: patch?.employee_id ?? existing.employee_id,
+        punchAt: patch?.punch_at ?? existing.punch_at ?? `${existing.date || ''} ${existing.time || ''}`,
+      });
+
+      await this.ensureDtrRowEditableWithRpcOrFallback(sourceContext);
+
+      const destinationDiffers = sourceContext.periodId !== destinationContext.periodId
+        || sourceContext.employeeId !== destinationContext.employeeId
+        || sourceContext.workDate !== destinationContext.workDate;
+      if (destinationDiffers) {
+        await this.ensureDtrRowEditableWithRpcOrFallback(destinationContext);
+      }
+    }
 
     return updateWithOptimisticLock({
       table: TABLES.punches,
@@ -467,10 +685,17 @@ export const payrollService = {
     });
   },
 
-  async deletePunch(punchId) {
+  async deletePunch(punchId, options = {}) {
     const state = getState();
     const existing = state.dtrPunches.get(punchId);
     if (!existing) throw new Error(`Punch ${punchId} not found in state.`);
+    if (!options.skipEditableCheck) {
+      await this.ensureDtrRowEditableWithRpcOrFallback(getPunchRowContext({
+        periodId: existing.payroll_period_id,
+        employeeId: existing.employee_id,
+        punchAt: existing.punch_at || `${existing.date || ''} ${existing.time || ''}`,
+      }));
+    }
 
     await deleteWithOptimisticLock({
       table: TABLES.punches,
@@ -482,6 +707,52 @@ export const payrollService = {
 
     removeRow('dtrPunches', punchId);
     return { id: punchId };
+  },
+
+  async replacePunchesForEmployeeDate({ periodId, employeeId, workDate, requestedTimes, meta = {}, projectId = null }) {
+    const context = assertDtrContext({ periodId, employeeId, workDate });
+    await this.ensureDtrRowEditableWithRpcOrFallback(context);
+
+    const wantedTimes = (Array.isArray(requestedTimes) ? requestedTimes : [])
+      .map((time) => String(time || '').trim())
+      .filter(Boolean);
+
+    const existingRows = Array.from(getState().dtrPunches.values()).filter((row) => {
+      if (!row) return false;
+      if (String(row.payroll_period_id) !== context.periodId) return false;
+      if (String(row.employee_id) !== context.employeeId) return false;
+      return deriveWorkDateFromPunchAt(row.punch_at || `${row.date || ''} ${row.time || ''}`) === context.workDate;
+    });
+
+    const existingQueue = existingRows.map((row) => ({
+      row,
+      time: deriveTimeFromPunchAt(row.punch_at, row.time),
+    }));
+
+    const toCreate = [];
+    wantedTimes.forEach((time) => {
+      const idx = existingQueue.findIndex((entry) => entry.time === time);
+      if (idx >= 0) {
+        existingQueue.splice(idx, 1);
+        return;
+      }
+      toCreate.push(time);
+    });
+
+    for (const entry of existingQueue) {
+      await this.deletePunch(entry.row.id, { skipEditableCheck: true });
+    }
+
+    for (const time of toCreate) {
+      await this.createPunch({
+        periodId: context.periodId,
+        employeeId: context.employeeId,
+        projectId,
+        punchAt: `${context.workDate}T${time}:00`,
+        meta,
+        skipEditableCheck: true,
+      });
+    }
   },
 
   async upsertEmployee(employeeId, patch = {}) {
