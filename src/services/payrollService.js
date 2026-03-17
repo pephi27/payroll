@@ -71,7 +71,7 @@ function sortRowsByKnownTimestamp(table, rows) {
 
 async function fetchTablePage({ table, from, to, periodId, optimized }) {
   let query = requireSupabaseClient().from(table).select('*').range(from, to);
-  if (optimized && periodId && table !== TABLES.punches) {
+  if (optimized && periodId) {
     query = query.eq(PERIOD_COLUMN, periodId);
   }
   return query;
@@ -192,39 +192,42 @@ async function debugVerifyPeriodLoad(table, periodId) {
 
 
 async function fetchPunchRowsByKnownShapes(periodId) {
-  if (!periodId) return { data: [], error: null };
-  const period = await getPeriodById(periodId);
-  if (!period) {
-    return { data: null, error: new Error(`Payroll period ${periodId} not found.`) };
+  const useScopedReads = getFeatureFlag('payroll_ff_scoped_reads_v1', false) || getFeatureFlag(OPTIMIZED_LOAD_FLAG, false);
+
+  if (useScopedReads && periodId) {
+    const scoped = await loadRowsWithOptionalOptimizedFilter(TABLES.punches, periodId);
+    if (!scoped.error) {
+      const coverage = getPeriodCoverage(scoped.data, periodId);
+      if (!coverage.hasLegacyRows) {
+        debugVerifyPeriodLoad(TABLES.punches, periodId);
+        return scoped;
+      }
+
+      console.warn('[payroll:read:fallback] scoped punches omitted legacy rows, falling back to legacy full fetch', {
+        periodId,
+        coverage,
+      });
+    } else {
+      console.warn('[payroll:read:fallback] scoped punches query failed, falling back to legacy full fetch', {
+        code: scoped.error.code,
+        message: scoped.error.message,
+      });
+    }
   }
 
-  const periodStart = normalizeDateString(period.period_start);
-  const periodEnd = normalizeDateString(period.period_end);
-  if (!periodStart || !periodEnd) {
-    return { data: null, error: new Error(`Payroll period ${periodId} has invalid date boundaries.`) };
+  const legacy = await fetchAllRowsPaginated({ table: TABLES.punches, periodId, optimized: false });
+  if (legacy.error) return legacy;
+
+  const rows = Array.isArray(legacy.data) ? legacy.data : [];
+  const hasPeriodColumn = rows.some((row) => hasOwn(row, PERIOD_COLUMN));
+
+  let filtered = rows;
+  if (periodId && hasPeriodColumn) {
+    filtered = rows.filter((row) => row?.payroll_period_id === periodId);
   }
 
-  const rows = [];
-  let page = 0;
-  for (;;) {
-    const from = page * PAGE_SIZE;
-    const to = from + PAGE_SIZE - 1;
-    const { data, error } = await requireSupabaseClient()
-      .from(TABLES.punches)
-      .select('*')
-      .gte('date', periodStart)
-      .lte('date', periodEnd)
-      .range(from, to);
-    if (error) return { data: null, error };
-
-    const pageRows = Array.isArray(data) ? data : [];
-    rows.push(...pageRows);
-    if (pageRows.length < PAGE_SIZE) break;
-    page += 1;
-  }
-
-  const filtered = rows.filter((row) => rowBelongsToPeriod(row, periodId, period));
   sortRowsByKnownTimestamp(TABLES.punches, filtered);
+  debugVerifyPeriodLoad(TABLES.punches, periodId);
   return { data: filtered, error: null };
 }
 
@@ -251,130 +254,13 @@ function deriveWorkDateFromPunchAt(punchAt) {
   return match ? match[1] : '';
 }
 
-function normalizeDateString(value) {
-  const raw = String(value || '').trim();
-  const match = raw.match(/^(\d{4}-\d{2}-\d{2})/);
-  return match ? match[1] : '';
-}
-
-function normalizeTimeString(value) {
-  const raw = String(value || '').trim();
-  const match = raw.match(/^(\d{2}:\d{2})/);
-  return match ? match[1] : '';
-}
-
-function parseLegacyPunchStamp(punchAt) {
+function deriveTimeFromPunchAt(punchAt, fallbackTime = '') {
   const value = String(punchAt || '').trim();
-  const match = value.match(/^(\d{4}-\d{2}-\d{2})[T\s](\d{2}:\d{2})/);
-  if (!match) return { workDate: '', time: '' };
-  return { workDate: match[1], time: match[2] };
-}
-
-function periodIncludesDate(period, workDate) {
-  const start = normalizeDateString(period?.period_start);
-  const end = normalizeDateString(period?.period_end);
-  const date = normalizeDateString(workDate);
-  if (!start || !end || !date) return false;
-  return date >= start && date <= end;
-}
-
-async function getPeriodById(periodId) {
-  const id = String(periodId || '').trim();
-  if (!id) return null;
-  const cached = getState().payrollPeriods.get(id);
-  if (cached) return cached;
-
-  const { data, error } = await requireSupabaseClient()
-    .from(TABLES.periods)
-    .select('*')
-    .eq('id', id)
-    .maybeSingle();
-  if (error) throw error;
-  if (data) mergeRow('payrollPeriods', data);
-  return data || null;
-}
-
-async function resolvePeriodIdForWorkDate(workDate, preferredPeriodId = null) {
-  const ymd = normalizeDateString(workDate);
-  if (!ymd) throw new Error('Missing work date for DTR row context resolution.');
-
-  if (preferredPeriodId) {
-    const preferred = await getPeriodById(preferredPeriodId);
-    if (preferred && periodIncludesDate(preferred, ymd)) {
-      return String(preferred.id);
-    }
-  }
-
-  const matches = [];
-  getState().payrollPeriods.forEach((period) => {
-    if (periodIncludesDate(period, ymd)) matches.push(period);
-  });
-
-  if (matches.length === 1) return String(matches[0].id);
-  if (matches.length === 0) throw new Error(`No payroll period matches work date ${ymd}. Update denied.`);
-  throw new Error(`Multiple payroll periods match work date ${ymd}. Update denied.`);
-}
-
-function getLegacyPunchWorkDate(rowLike = {}) {
-  return normalizeDateString(rowLike.date) || deriveWorkDateFromPunchAt(rowLike.punch_at);
-}
-
-function getLegacyPunchEmployeeId(rowLike = {}) {
-  return String(rowLike.emp_id ?? rowLike.employee_id ?? '').trim();
-}
-
-function getRowMetaPeriodId(rowLike = {}) {
-  const meta = rowLike?.data?.payroll_period_id;
-  return meta == null ? '' : String(meta).trim();
-}
-
-function rowBelongsToPeriod(row, periodId, period) {
-  const metaPeriodId = getRowMetaPeriodId(row);
-  // Never trust metadata period id blindly; it must match target period and period date window.
-  if (metaPeriodId) {
-    if (metaPeriodId !== String(periodId)) return false;
-    if (!period) return true;
-    return periodIncludesDate(period, getLegacyPunchWorkDate(row));
-  }
-  return periodIncludesDate(period, getLegacyPunchWorkDate(row));
-}
-
-async function getPunchRowContextFromRow(rowLike = {}, periodHint = null) {
-  const employeeId = getLegacyPunchEmployeeId(rowLike);
-  const workDate = getLegacyPunchWorkDate(rowLike);
-  const metaPeriodId = getRowMetaPeriodId(rowLike);
-  const periodId = await resolvePeriodIdForWorkDate(workDate, metaPeriodId || periodHint || null);
-  return assertDtrContext({ periodId, employeeId, workDate });
-}
-
-function normalizePunchPatchForLegacyShape(existing = {}, patch = {}, periodIdHint = null) {
-  const legacyPatch = sanitizeUpdatePatch(patch);
-  if (Object.prototype.hasOwnProperty.call(legacyPatch, 'employee_id')) {
-    legacyPatch.emp_id = legacyPatch.employee_id;
-    delete legacyPatch.employee_id;
-  }
-
-  if (Object.prototype.hasOwnProperty.call(legacyPatch, 'punch_at')) {
-    const parsed = parseLegacyPunchStamp(legacyPatch.punch_at);
-    if (parsed.workDate) legacyPatch.date = parsed.workDate;
-    if (parsed.time) legacyPatch.time = parsed.time;
-    delete legacyPatch.punch_at;
-  }
-
-  if (!legacyPatch.data || typeof legacyPatch.data !== 'object') {
-    legacyPatch.data = { ...(existing?.data || {}) };
-  }
-  legacyPatch.data = { ...legacyPatch.data };
-
-  const chosenPeriodId = String(
-    periodIdHint
-    || legacyPatch.data.payroll_period_id
-    || existing?.data?.payroll_period_id
-    || '',
-  ).trim();
-  if (chosenPeriodId) legacyPatch.data.payroll_period_id = chosenPeriodId;
-
-  return legacyPatch;
+  const match = value.match(/^\d{4}-\d{2}-\d{2}[T\s](\d{2}:\d{2})/);
+  if (match) return match[1];
+  const fallback = String(fallbackTime || '').trim();
+  const fallbackMatch = fallback.match(/^(\d{2}:\d{2})/);
+  return fallbackMatch ? fallbackMatch[1] : '';
 }
 
 function assertDtrContext({ periodId, employeeId, workDate }) {
@@ -566,6 +452,14 @@ async function deleteWithOptimisticLock({ table, id, expectedUpdatedAt, periodId
   return { id, table, stateKey };
 }
 
+function getPunchRowContext({ periodId, employeeId, punchAt }) {
+  return assertDtrContext({
+    periodId,
+    employeeId,
+    workDate: deriveWorkDateFromPunchAt(punchAt),
+  });
+}
+
 export const payrollService = {
   tables: TABLES,
 
@@ -736,30 +630,21 @@ export const payrollService = {
   },
 
   async createPunch({ periodId, employeeId, projectId, punchAt, meta = {}, skipEditableCheck = false }) {
-    const parsed = parseLegacyPunchStamp(punchAt);
-    const context = assertDtrContext({ periodId, employeeId, workDate: parsed.workDate });
-    if (!parsed.time) {
-      throw new Error('Missing punch time. Update denied.');
-    }
     if (!skipEditableCheck) {
-      await this.ensureDtrRowEditableWithRpcOrFallback(context);
+      await this.ensureDtrRowEditableWithRpcOrFallback(getPunchRowContext({ periodId, employeeId, punchAt }));
     }
     const row = {
-      emp_id: context.employeeId,
-      date: context.workDate,
-      time: parsed.time,
-      source: String(meta?.source || 'manual'),
-      data: {
-        ...(meta && typeof meta === 'object' ? meta : {}),
-        payroll_period_id: context.periodId,
-        project_id: projectId ?? null,
-      },
+      payroll_period_id: periodId,
+      employee_id: employeeId,
+      project_id: projectId,
+      punch_at: punchAt,
+      meta,
     };
 
     return createRowWithLock({
       table: TABLES.punches,
       row,
-      periodId: context.periodId,
+      periodId,
       stateKey: 'dtrPunches',
     });
   },
@@ -768,11 +653,18 @@ export const payrollService = {
     const state = getState();
     const existing = state.dtrPunches.get(punchId);
     if (!existing) throw new Error(`Punch ${punchId} not found in state.`);
-    const sourceContext = await getPunchRowContextFromRow(existing, getState().currentPeriodId);
-    const legacyPatch = normalizePunchPatchForLegacyShape(existing, patch, sourceContext.periodId);
-    const destinationContext = await getPunchRowContextFromRow({ ...existing, ...legacyPatch }, sourceContext.periodId);
-
     if (!options.skipEditableCheck) {
+      const sourceContext = getPunchRowContext({
+        periodId: existing.payroll_period_id,
+        employeeId: existing.employee_id,
+        punchAt: existing.punch_at || `${existing.date || ''} ${existing.time || ''}`,
+      });
+      const destinationContext = getPunchRowContext({
+        periodId: patch?.payroll_period_id ?? existing.payroll_period_id,
+        employeeId: patch?.employee_id ?? existing.employee_id,
+        punchAt: patch?.punch_at ?? existing.punch_at ?? `${existing.date || ''} ${existing.time || ''}`,
+      });
+
       await this.ensureDtrRowEditableWithRpcOrFallback(sourceContext);
 
       const destinationDiffers = sourceContext.periodId !== destinationContext.periodId
@@ -786,9 +678,9 @@ export const payrollService = {
     return updateWithOptimisticLock({
       table: TABLES.punches,
       id: punchId,
-      patch: legacyPatch,
+      patch,
       expectedUpdatedAt: existing.updated_at ?? null,
-      periodId: sourceContext.periodId,
+      periodId: existing.payroll_period_id,
       stateKey: 'dtrPunches',
     });
   },
@@ -797,16 +689,19 @@ export const payrollService = {
     const state = getState();
     const existing = state.dtrPunches.get(punchId);
     if (!existing) throw new Error(`Punch ${punchId} not found in state.`);
-    const context = await getPunchRowContextFromRow(existing, getState().currentPeriodId);
     if (!options.skipEditableCheck) {
-      await this.ensureDtrRowEditableWithRpcOrFallback(context);
+      await this.ensureDtrRowEditableWithRpcOrFallback(getPunchRowContext({
+        periodId: existing.payroll_period_id,
+        employeeId: existing.employee_id,
+        punchAt: existing.punch_at || `${existing.date || ''} ${existing.time || ''}`,
+      }));
     }
 
     await deleteWithOptimisticLock({
       table: TABLES.punches,
       id: punchId,
       expectedUpdatedAt: existing.updated_at ?? null,
-      periodId: context.periodId,
+      periodId: existing.payroll_period_id,
       stateKey: 'dtrPunches',
     });
 
@@ -824,15 +719,14 @@ export const payrollService = {
 
     const existingRows = Array.from(getState().dtrPunches.values()).filter((row) => {
       if (!row) return false;
-      const period = getState().payrollPeriods.get(context.periodId);
-      if (!rowBelongsToPeriod(row, context.periodId, period)) return false;
-      if (String(row.emp_id || '') !== context.employeeId) return false;
-      return normalizeDateString(row.date) === context.workDate;
+      if (String(row.payroll_period_id) !== context.periodId) return false;
+      if (String(row.employee_id) !== context.employeeId) return false;
+      return deriveWorkDateFromPunchAt(row.punch_at || `${row.date || ''} ${row.time || ''}`) === context.workDate;
     });
 
     const existingQueue = existingRows.map((row) => ({
       row,
-      time: normalizeTimeString(row.time),
+      time: deriveTimeFromPunchAt(row.punch_at, row.time),
     }));
 
     const toCreate = [];

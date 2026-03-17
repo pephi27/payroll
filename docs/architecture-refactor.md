@@ -111,6 +111,4 @@ src/
 - Step 1 and Step 2 cutovers are still being hardened.
 - Compatibility bridges are used to keep legacy runtime surfaces rendering while modular store/service ownership expands.
 - `att_schedules_default` remains intentionally deferred until a dedicated modular owner is introduced.
-- DTR active edit flows are using legacy `dtr_punches` columns (`emp_id`, `date`, `time`, `data`) while service/rpc paths enforce lock/approval checks.
-- Period scoping for legacy DTR punches is compatibility-safe: prefer `data.payroll_period_id` when present and valid, otherwise resolve by `payroll_periods.period_start/period_end` date range.
-- Database trigger hardening is in progress and designed to fail closed when a punch row cannot be mapped to exactly one payroll period.
+- DTR active edit flows are being moved to row-level punch methods with compatibility paths retained for non-migrated legacy surfaces.
