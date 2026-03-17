@@ -939,6 +939,10 @@ body.upload-overlay-open { overflow: hidden !important; }
 function safePrint(win){
   try { (win || window).print(); } catch(e){ console.warn('print failed', e); }
 }
+function normalizeObjectStore(value){
+  if (value && typeof value === 'object' && !Array.isArray(value)) return value;
+  return {};
+}
 var PRINT_ORIENTATION_KEY = 'payroll_print_orientation';
 function normalizePrintOrientation(value){
   var val = String(value || '').toLowerCase();
@@ -5874,10 +5878,6 @@ divisorEl.addEventListener('change', () => {
   try { saveCurrentPeriodDeductions(); } catch(_){ }
   window.scheduleCalculateAll?.('payroll-divisor-change');
 });
-function normalizeObjectStore(value) {
-  if (value && typeof value === 'object' && !Array.isArray(value)) return value;
-  return {};
-}
 function loadEmployees() {
   const stored = normalizeObjectStore((typeof window !== 'undefined' && window.storedEmployees) ? window.storedEmployees : storedEmployees);
   let list = Object.keys(stored).filter(id => !(stored[id] && stored[id].active === false)).map(id=>({id, name: stored[id]?.name || ''}));
