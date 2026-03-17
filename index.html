@@ -19784,9 +19784,20 @@ function restoreData(file) {
     const ymd = String(date || '').trim();
     const activePeriodId = getActivePayrollPeriodId();
     if (!id || !ymd || !activePeriodId) return [];
+    const state = (typeof window.getPayrollStoreState === 'function') ? window.getPayrollStoreState() : null;
+    const activePeriod = state && state.payrollPeriods instanceof Map ? state.payrollPeriods.get(activePeriodId) : null;
+    const periodStart = String(activePeriod?.period_start || '').slice(0, 10);
+    const periodEnd = String(activePeriod?.period_end || '').slice(0, 10);
+
     return getStorePunchRows().filter((row) => {
-      if (!row || !row.payroll_period_id) return false;
-      if (String(row.payroll_period_id) !== String(activePeriodId)) return false;
+      if (!row) return false;
+      const rowPeriodId = String(row?.data?.payroll_period_id || '').trim();
+      if (rowPeriodId) {
+        if (rowPeriodId !== String(activePeriodId)) return false;
+      } else if (periodStart && periodEnd) {
+        const rowDate = String(row.date || '').slice(0, 10);
+        if (!rowDate || rowDate < periodStart || rowDate > periodEnd) return false;
+      }
       const rec = toRecordFromPunchRow(row);
       return rec && rec.empId === id && rec.date === ymd;
     });
