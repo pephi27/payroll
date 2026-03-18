@@ -22892,34 +22892,6 @@ async function loadDtrFromCloud() {
   try {
     const rows = await __dtrFetchAllPunchRows(supa, punchesTable);
     const recs = rows.map(r => r && r.data).filter(Boolean);
-    const punchIds = new Set(rows.map(r => r && r.id).filter(Boolean));
-
-    // If punches already has data but a prior legacy->punches migration was partial (or failed),
-    // backfill any missing legacy records once per session.
-    if (recs.length && !window.__dtr_punches_backfill_done) {
-      window.__dtr_punches_backfill_done = true;
-      try {
-        const legacy = await loadDtrFromCloudLegacyBlob();
-        const legacyRecs = legacy && Array.isArray(legacy.records) ? legacy.records : [];
-        if (legacyRecs.length) {
-          const missing = [];
-          for (const r of legacyRecs) {
-            const id = __dtrRecId(r);
-            if (id && !punchIds.has(id)) missing.push(r);
-          }
-          if (missing.length) {
-            await migrateLegacyDtrToPunches(missing);
-            const rows2 = await __dtrFetchAllPunchRows(supa, punchesTable);
-            const recs2 = rows2.map(r => r && r.data).filter(Boolean);
-            // Replace arrays in-place so downstream logic sees the refreshed data.
-            rows.splice(0, rows.length, ...rows2);
-            recs.splice(0, recs.length, ...recs2);
-          }
-        }
-      } catch(e) {
-        console.warn('Punches legacy backfill skipped:', e && e.message ? e.message : e);
-      }
-    }
 
     // If punches table exists but empty, try legacy blob (for migration)
     console.info('[dtr:debug] refresh remote punches load count', { rowCount: rows.length, recordCount: recs.length });
@@ -23158,6 +23130,7 @@ document.addEventListener('DOMContentLoaded', async function () {
 
     if (res && res.status === 'ok' && Array.isArray(res.records) && res.records.length) {
       const remoteRecs = res.records;
+      const usingPunchesStorage = !!(res.meta && res.meta.storage === 'punches');
 
       // If we loaded from legacy blob and punches table exists, migrate once (then we'll operate on punches going forward)
       if (res.meta && res.meta.needsMigration) {
@@ -23171,16 +23144,18 @@ document.addEventListener('DOMContentLoaded', async function () {
         }
       }
 
-      // Merge: remote is source of truth, but keep any local-only punches (offline adds) that are not in remote.
-      // IMPORTANT: pull local records *after* the async cloud fetch resolves. If a user creates
-      // a manual DTR while hydration is in flight, we must merge that latest local state so the
-      // new punch is not overwritten by a stale pre-fetch snapshot.
       const localRecs = getCurrentLocalRecords();
-      const remoteKeys = new Set(remoteRecs.map(__dtrRecId).filter(Boolean));
       const merged = remoteRecs.slice();
-      for (const r of (localRecs || [])) {
-        const k = __dtrRecId(r);
-        if (k && !remoteKeys.has(k)) merged.push(r);
+
+      // When authoritative punches rows already exist in Supabase, trust them as the source of truth.
+      // Local storage may still contain stale legacy rows from older builds; auto-merging them back in
+      // causes startup writes and failed legacy backfills against live projects.
+      if (!usingPunchesStorage) {
+        const remoteKeys = new Set(remoteRecs.map(__dtrRecId).filter(Boolean));
+        for (const r of (localRecs || [])) {
+          const k = __dtrRecId(r);
+          if (k && !remoteKeys.has(k)) merged.push(r);
+        }
       }
 
       // Stable ordering for nicer UI
@@ -23206,8 +23181,9 @@ document.addEventListener('DOMContentLoaded', async function () {
       console.info('[dtr:debug] final count shown in UI', { count: merged.length, source: 'hydrated-merge' });
       if (typeof hideRemoteDtrAlert === 'function') hideRemoteDtrAlert();
 
-      // Seed remote with any local-only punches (safe: only inserts new ids)
-      if (localRecs && localRecs.length) {
+      // Seed remote only when we are still on legacy storage. If punches rows already exist remotely,
+      // avoid pushing old local cache rows back into the authoritative table during startup.
+      if (!usingPunchesStorage && localRecs && localRecs.length) {
         // If there are local-only records, save will upsert missing ids; it will not wipe remote.
         window.__dtrHydrationDone = true;
         try { await saveDtrToCloud(merged); } catch(e) {}
