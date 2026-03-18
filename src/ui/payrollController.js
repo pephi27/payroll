@@ -34,23 +34,6 @@ function renderConflictBanner(root) {
   banner.hidden = false;
 }
 
-
-function renderPeriodSwitchErrorBanner(root) {
-  const state = getState();
-  const banner = root.querySelector('[data-payroll-period-switch-error]');
-  if (!banner) return;
-
-  const message = String(state.diagnostics.periodSwitchError || '').trim();
-  if (!message) {
-    banner.hidden = true;
-    return;
-  }
-
-  const messageEl = banner.querySelector('[data-payroll-period-switch-error-message]');
-  if (messageEl) messageEl.textContent = message;
-  banner.hidden = false;
-}
-
 function applyLockedRule(el, isLocked) {
   if (el.dataset.payrollHealthToggle === 'true' || el.closest('[data-payroll-health-panel]')) return;
   if (el.dataset.allowWhenLocked === 'true') return;
@@ -131,17 +114,6 @@ function ensureDiagnosticsPanel(root) {
     <button type="button" class="bp-btn" data-payroll-conflict-dismiss style="margin-left:8px">Dismiss</button>
   `;
 
-  const periodSwitchErrorBanner = document.createElement('div');
-  periodSwitchErrorBanner.dataset.payrollPeriodSwitchError = 'true';
-  periodSwitchErrorBanner.hidden = true;
-  periodSwitchErrorBanner.style.marginBottom = '8px';
-  periodSwitchErrorBanner.style.padding = '8px';
-  periodSwitchErrorBanner.style.border = '1px solid #dc2626';
-  periodSwitchErrorBanner.style.borderRadius = '8px';
-  periodSwitchErrorBanner.style.fontSize = '12px';
-  periodSwitchErrorBanner.style.background = 'rgba(220,38,38,0.12)';
-  periodSwitchErrorBanner.innerHTML = '<span data-payroll-period-switch-error-message></span>';
-
   const toggle = document.createElement('button');
   toggle.type = 'button';
   toggle.className = 'bp-btn';
@@ -174,7 +146,6 @@ function ensureDiagnosticsPanel(root) {
   });
 
   container.appendChild(conflictBanner);
-  container.appendChild(periodSwitchErrorBanner);
   container.appendChild(toggle);
   container.appendChild(panel);
 
@@ -229,7 +200,6 @@ export function mountPayrollController(root) {
     renderPunchCount(root);
     renderDiagnostics(root);
     renderConflictBanner(root);
-    renderPeriodSwitchErrorBanner(root);
 
     if (lockKey !== lastLockKey) {
       renderLockedInputState(root, period);
