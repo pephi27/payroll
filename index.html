@@ -16948,6 +16948,7 @@ const scheduleSelect = document.getElementById('scheduleSelect');
 const scheduleNameInput = document.getElementById('scheduleName');
 
 function renderScheduleSelector(){
+  if(!scheduleSelect) return;
   scheduleSelect.innerHTML = '';
   Object.keys(storedSchedules).forEach(id=>{
     const opt = document.createElement('option');
@@ -16962,6 +16963,7 @@ function renderScheduleSelector(){
 }
 
 function renderScheduleEditor(){
+  if(!scheduleSelect || !scheduleNameInput) return;
   const sel = scheduleSelect.value;
   if(!sel || !storedSchedules[sel]) return;
   const s = storedSchedules[sel];
@@ -16997,12 +16999,12 @@ sch_grace: Number(document.querySelector('[data-key="sch_grace"]').value || DEFA
   };
 }
 
-document.getElementById('addScheduleBtn').addEventListener('click', ()=>{
+document.getElementById('addScheduleBtn')?.addEventListener('click', ()=>{
   const id = 'sched_' + Date.now();
   storedSchedules[id] = Object.assign({}, DEFAULT_SCHEDULE); storedSchedules[id].name = 'New schedule';
   saveSchedulesToLS(); renderScheduleSelector(); scheduleSelect.value = id; renderScheduleEditor();
 });
-document.getElementById('deleteScheduleBtn').addEventListener('click', ()=>{
+document.getElementById('deleteScheduleBtn')?.addEventListener('click', ()=>{
   const sel = scheduleSelect.value; if(!sel) return;
   if(Object.keys(storedSchedules).length === 1){ alert('Cannot delete the only schedule.'); return; }
   if(!confirm('Delete schedule "' + storedSchedules[sel].name + '"?')) return;
@@ -17013,10 +17015,10 @@ document.getElementById('deleteScheduleBtn').addEventListener('click', ()=>{
   });
   saveSchedulesToLS(); saveEmployeesToLS(); renderScheduleSelector(); renderEmployees(); renderResults();
 });
-document.getElementById('setDefaultScheduleBtn').addEventListener('click', ()=>{
+document.getElementById('setDefaultScheduleBtn')?.addEventListener('click', ()=>{
   const sel = scheduleSelect.value; if(!sel) return; defaultScheduleId = sel; saveSchedulesToLS(); renderScheduleSelector();
 });
-document.getElementById('saveScheduleBtn').addEventListener('click', ()=>{
+document.getElementById('saveScheduleBtn')?.addEventListener('click', ()=>{
   const sel = scheduleSelect.value; if(!sel) return;
   const oldRanges = {};
   Object.keys(DEFAULT_RANGES).forEach(k=> oldRanges[k] = (storedSchedules[sel] && storedSchedules[sel][k]) || DEFAULT_RANGES[k]);
@@ -17026,7 +17028,7 @@ document.getElementById('saveScheduleBtn').addEventListener('click', ()=>{
   });
   saveSchedulesToLS(); renderScheduleSelector(); renderEmpScheduleDropdowns(); renderResults();
 });
-scheduleSelect.addEventListener('change', ()=>{ renderScheduleEditor(); });
+scheduleSelect?.addEventListener('change', ()=>{ renderScheduleEditor(); });
 
 function saveRangesFromUI(){
   const sel = scheduleSelect && scheduleSelect.value;
