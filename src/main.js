@@ -149,10 +149,17 @@ function bridgeMigratedMasterDataToLegacyGlobals() {
   });
 }
 
+function getPunchMeta(row = {}) {
+  if (row?.meta && typeof row.meta === 'object' && !Array.isArray(row.meta)) return row.meta;
+  if (row?.data && typeof row.data === 'object' && !Array.isArray(row.data)) return row.data;
+  return {};
+}
+
 function toLegacyDtrRecord(row) {
   if (!row) return null;
-  const employeeId = row.employee_id ?? row.emp_id ?? row.empId;
-  const stamp = row.punch_at || `${row.date || ''} ${row.time || ''}`;
+  const meta = getPunchMeta(row);
+  const employeeId = row.employee_id ?? row.emp_id ?? row.empId ?? meta.empId ?? meta.employee_id;
+  const stamp = row.punch_at || `${row.date || meta.date || ''} ${row.time || meta.time || ''}`;
   const str = String(stamp || '').trim();
   const match = str.match(/^(\d{4}-\d{2}-\d{2})[T\s](\d{2}:\d{2})/);
   if (!employeeId || !match) return null;
@@ -161,8 +168,8 @@ function toLegacyDtrRecord(row) {
     empId: String(employeeId),
     date: match[1],
     time: match[2],
-    source: row.meta?.source || row.source || null,
-    manual: row.meta?.manual === true || row.manual === true,
+    source: meta.source || row.source || null,
+    manual: meta.manual === true || row.manual === true,
   };
 }
 
@@ -232,7 +239,8 @@ function bridgePeriodSwitchReadModels() {
   };
 
   const getPunchWorkDate = (row = {}) => {
-    const fromDate = normalizeDate(row.date);
+    const meta = getPunchMeta(row);
+    const fromDate = normalizeDate(row.date || meta.date);
     if (fromDate) return fromDate;
     const fromStamp = String(row.punch_at || '').trim().match(/^(\d{4}-\d{2}-\d{2})[T\s]/);
     return fromStamp ? fromStamp[1] : '';
@@ -248,7 +256,10 @@ function bridgePeriodSwitchReadModels() {
 
   const isPunchForPeriod = (row, periodId, period) => {
     if (!row || !periodId || !period) return false;
-    const metaPeriodId = row?.data?.payroll_period_id == null ? '' : String(row.data.payroll_period_id).trim();
+    const meta = getPunchMeta(row);
+    const metaPeriodId = row?.payroll_period_id == null
+      ? (meta?.payroll_period_id == null ? '' : String(meta.payroll_period_id).trim())
+      : String(row.payroll_period_id).trim();
     const workDate = getPunchWorkDate(row);
     if (metaPeriodId) {
       if (metaPeriodId !== String(periodId)) return false;
