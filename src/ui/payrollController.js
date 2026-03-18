@@ -51,7 +51,7 @@ function applyLockedRule(el, isLocked) {
 }
 
 function renderLockedInputState(root, period) {
-  const isLocked = !!period?.is_locked || !!getState().diagnostics.periodSwitchInFlight;
+  const isLocked = !!period?.is_locked;
   const wrapper = root.querySelector('#payrollWrapper');
   if (!wrapper) return;
 
@@ -69,9 +69,6 @@ function renderDiagnostics(root) {
 
   const rt = root.querySelector('[data-health-realtime]');
   if (rt) rt.textContent = diag.realtimeStatus || 'idle';
-
-  const periodSwitchEl = root.querySelector('[data-health-period-switch]');
-  if (periodSwitchEl) periodSwitchEl.textContent = diag.periodSwitchInFlight ? 'Loading' : 'Idle';
 
   const periodEl = root.querySelector('[data-health-period]');
   if (periodEl) periodEl.textContent = state.currentPeriodId || 'None';
@@ -132,7 +129,6 @@ function ensureDiagnosticsPanel(root) {
     <div>Supabase: <strong data-health-supabase>Unknown</strong></div>
     <div>Realtime: <strong data-health-realtime>idle</strong></div>
     <div>Active Period: <strong data-health-period>None</strong></div>
-    <div>Period Load: <strong data-health-period-switch>Idle</strong></div>
     <div>Locked: <strong data-health-locked>Unknown</strong></div>
     <div>Last Event: <strong data-health-last-event>None</strong></div>
   `;
@@ -194,8 +190,8 @@ export function mountPayrollController(root) {
     ensureDiagnosticsPanel(root);
     const currentState = getState();
     const period = currentState.currentPeriodId ? currentState.payrollPeriods.get(currentState.currentPeriodId) : null;
-    const isEffectivelyLocked = !!period?.is_locked || !!currentState.diagnostics.periodSwitchInFlight;
-    const lockKey = `${currentState.currentPeriodId || ''}:${isEffectivelyLocked ? '1' : '0'}`;
+    const isLocked = !!period?.is_locked;
+    const lockKey = `${currentState.currentPeriodId || ''}:${isLocked ? '1' : '0'}`;
     renderPeriodLockStatus(root, period);
     renderPunchCount(root);
     renderDiagnostics(root);
@@ -203,7 +199,7 @@ export function mountPayrollController(root) {
 
     if (lockKey !== lastLockKey) {
       renderLockedInputState(root, period);
-      refreshLockObserver(isEffectivelyLocked);
+      refreshLockObserver(isLocked);
       lastLockKey = lockKey;
     }
   };
