@@ -628,6 +628,12 @@
   <link rel="modulepreload" href="https://esm.sh/@supabase/supabase-js@2?bundle" crossorigin>
 
   
+<script>
+function normalizeObjectStore(value){
+  if (value && typeof value === 'object' && !Array.isArray(value)) return value;
+  return {};
+}
+</script>
 <script id="bpSafeDomHelpers" src="./src/legacy/bpSafeDomHelpers.js"></script>
 
 <script type="module" src="./src/legacy/perfTweaks.js"></script>
@@ -3406,6 +3412,11 @@ window.addEventListener('load', dashReports);
      <div class="section note">
       Adjustment hours for correcting previous payroll. REG adjustments appear in payroll, ADJ OT adjustments feed the overtime table.
      </div>
+     <div class="toolbar" id="adjustmentsControls">
+      <div class="toolbar-left">
+       <button type="button" id="printAdjustmentsBtn">Print Report</button>
+      </div>
+     </div>
      <table id="adjustmentHoursTable">
       <thead>
        <tr>
@@ -5870,7 +5881,7 @@ divisorEl.addEventListener('change', () => {
   window.scheduleCalculateAll?.('payroll-divisor-change');
 });
 function loadEmployees() {
-  const stored = (window.cacheGet ? window.cacheGet('att_employees_v2', {}) : JSON.parse(localStorage.getItem('att_employees_v2') || '{}'));
+  const stored = normalizeObjectStore((typeof window !== 'undefined' && window.storedEmployees) ? window.storedEmployees : storedEmployees);
   let list = Object.keys(stored).filter(id => !(stored[id] && stored[id].active === false)).map(id=>({id, name: stored[id]?.name || ''}));
   if (list.length === 0) list = [{id:'001', name:'Sample Employee'}];
   list.sort((a,b)=> (a.name||'').localeCompare(b.name||''));
@@ -9441,6 +9452,71 @@ function updateAdjustmentHoursGrandTotalRow() {
   if (otCell) otCell.textContent = formatZeroDisplay(grandOtTotal);
 }
 
+function printAdjustmentHoursReport(orientation) {
+  const rows = getEmployeeList().map(emp => {
+    const totals = getAdjustmentTotalsForEmployee(emp.id);
+    const resolvedProjectId = resolveProjectIdValue(getAdjustmentProjectType(emp.id));
+    const projectMeta = resolvedProjectId && storedProjects && storedProjects[resolvedProjectId]
+      ? storedProjects[resolvedProjectId]
+      : null;
+    const projectName = String(projectMeta?.name || resolvedProjectId || '').trim();
+    return {
+      id: emp.id || '',
+      name: emp.name || '',
+      type: projectName || '-',
+      reg: Number(totals.reg) || 0,
+      ot: Number(totals.ot) || 0
+    };
+  });
+
+  const formatZeroDisplay = (value) => {
+    const num = Number(value);
+    if (!Number.isFinite(num) || Math.abs(num) < 0.005) return '-';
+    return num.toFixed(2);
+  };
+
+  let grandRegTotal = 0;
+  let grandOtTotal = 0;
+  rows.forEach(row => {
+    grandRegTotal = roundToCents(grandRegTotal + row.reg);
+    grandOtTotal = roundToCents(grandOtTotal + row.ot);
+  });
+
+  const ws = document.getElementById('weekStart');
+  const we = document.getElementById('weekEnd');
+  const startDate = ws && ws.value ? ws.value : '';
+  const endDate = we && we.value ? we.value : '';
+  const title = (startDate && endDate)
+    ? `Adjustments Report (${startDate} to ${endDate})`
+    : 'Adjustments Report';
+
+  let html = '<table><thead><tr><th>ID</th><th>Name</th><th>Type</th><th class="num">REG Adj Hrs</th><th class="num">ADJ OT Hrs</th></tr></thead><tbody>';
+  rows.forEach(row => {
+    html += `<tr><td>${row.id}</td><td>${row.name}</td><td>${row.type}</td><td class="num">${formatZeroDisplay(row.reg)}</td><td class="num">${formatZeroDisplay(row.ot)}</td></tr>`;
+  });
+  html += `</tbody><tfoot><tr><td></td><td><strong>Grand Total</strong></td><td></td><td class="num">${formatZeroDisplay(grandRegTotal)}</td><td class="num">${formatZeroDisplay(grandOtTotal)}</td></tr></tfoot></table>`;
+
+  const doc = '<html><head><meta charset="utf-8"><title>Adjustments Report</title>' +
+    '<style>@page{size:letter portrait;margin:8mm} body{font-family:Arial,Helvetica,sans-serif;margin:0} h2{margin:0 0 6px;font-size:13px} table{border-collapse:collapse;width:100%;table-layout:fixed} th,td{border:1pt solid #000;padding:4px;font-size:10px;white-space:nowrap} th{background:#f1f5f9} td.num, th.num{text-align:right} thead{display:table-header-group} tfoot{display:table-footer-group} tfoot td{font-weight:700;background:#fff7ed;border-top:2pt solid #000} @media print{button,input,select,textarea,nav{display:none !important}} </style>' +
+    '</head><body>' +
+    `<h2>${title}</h2>` +
+    html +
+    '</body></html>';
+
+  printReport(doc, { orientation: orientation, features: 'width=900,height=700' });
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  const printBtn = document.getElementById('printAdjustmentsBtn');
+  if (!printBtn) return;
+  printBtn.addEventListener('click', () => {
+    try { if (typeof window.flushCalculateAll === 'function') window.flushCalculateAll?.('print-adjustments'); } catch (_) {}
+    withPrintOrientation(function(orientation){
+      printAdjustmentHoursReport(orientation);
+    });
+  });
+});
+
 function otherDeductionsBackupPayload(){
   return {
     otherDeductionsDetails: isPlainObject(allOtherDeductionsDetails) ? allOtherDeductionsDetails : {},
@@ -10973,23 +11049,64 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
+  async function syncRemotePeriodLock(start, end, locked, meta = {}) {
+    const periodId = periodIdFromRange(start, end);
+    const getter = window.getPayrollStoreState;
+    const service = window.payrollService;
+    if (!periodId || typeof getter !== 'function' || !service || typeof service.setPeriodLock !== 'function') return null;
+
+    const state = getter();
+    const period = state && state.payrollPeriods && typeof state.payrollPeriods.get === 'function'
+      ? state.payrollPeriods.get(periodId)
+      : null;
+
+    return service.setPeriodLock({
+      periodId,
+      isLocked: !!locked,
+      expectedUpdatedAt: period && period.updated_at ? period.updated_at : null,
+      note: meta.finalizeNote || meta.note || '',
+      reason: meta.reason || (locked ? 'manual lock' : 'manual unlock'),
+      actorId: meta.actorId || null,
+    });
+  }
+
   async function setPeriodLocked(start, end, locked, meta = {}) {
     if (!start || !end) return;
     if (!payrollLocks || typeof payrollLocks !== 'object') payrollLocks = { __meta: {} };
     const key = periodKey(start, end);
     const hadEntry = !!(payrollLocks && payrollLocks[key]);
-    if (locked) {
-      payrollLocks[key] = {
-        locked: true,
-        lockedAt: meta.lockedAt || new Date().toISOString(),
-        finalizedAt: meta.finalizedAt || meta.lockedAt || new Date().toISOString(),
-        finalizedBy: meta.finalizedBy || 'admin',
-        finalizeNote: meta.finalizeNote || '',
-        totals: meta.totals || null
-      };
+    const nextLockEntry = locked ? {
+      locked: true,
+      lockedAt: meta.lockedAt || new Date().toISOString(),
+      finalizedAt: meta.finalizedAt || meta.lockedAt || new Date().toISOString(),
+      finalizedBy: meta.finalizedBy || 'admin',
+      finalizeNote: meta.finalizeNote || '',
+      totals: meta.totals || null
+    } : null;
+
+    try {
+      // Remote-success-first: do not mutate local lock state unless DB lock RPC succeeds.
+      await syncRemotePeriodLock(start, end, locked, meta);
+    } catch (err) {
+      const msg = String((err && err.message) || err || '');
+      if (/changed by another user/i.test(msg)) {
+        throw new Error('Payroll period lock conflict. Reload period and try again.');
+      }
+      if (/RPC is unavailable/i.test(msg) || /set_payroll_period_lock/i.test(msg)) {
+        throw new Error('Payroll period lock RPC is unavailable. Apply latest DB migration.');
+      }
+      if (/is locked\. Update denied/i.test(msg)) {
+        throw new Error('Payroll period is locked. Update denied.');
+      }
+      throw err;
+    }
+
+    if (nextLockEntry) {
+      payrollLocks[key] = nextLockEntry;
     } else {
       delete payrollLocks[key];
     }
+
     const changed = locked ? !hadEntry : hadEntry;
     const lockSaved = await persistLocks(changed);
     syncHistoryLockState(start, end, locked, meta);
@@ -10997,16 +11114,9 @@ document.addEventListener('DOMContentLoaded', () => {
     return lockSaved;
   }
 
-  async function clearPeriodLockEntry(start, end) {
+  async function clearPeriodLockEntry(start, end, reason = '') {
     if (!start || !end) return;
-    if (!payrollLocks || typeof payrollLocks !== 'object') payrollLocks = { __meta: {} };
-    const key = periodKey(start, end);
-    const hadEntry = !!(payrollLocks && payrollLocks[key]);
-    if (!hadEntry) return;
-    delete payrollLocks[key];
-    const lockSaved = await persistLocks(true);
-    try { window.payrollLocks = payrollLocks; } catch (err) {}
-    return lockSaved;
+    return setPeriodLocked(start, end, false, { reason: reason || 'unlock', note: reason || '' });
   }
 
   function updateLockStatusDisplay(entry) {
@@ -11197,13 +11307,15 @@ document.addEventListener('DOMContentLoaded', () => {
       return;
     }
 
+    await clearPeriodLockEntry(snap.startDate, snap.endDate, reason || 'Unlocked for corrections');
+
+    // Apply local snapshot draft/unlocked mutations only after remote unlock succeeds.
     snap.status = 'draft';
     snap.voidedAt = '';
     snap.voidedBy = '';
     snap.voidReason = reason || '';
     snap.locked = false;
     snap.finalized = false;
-    await clearPeriodLockEntry(snap.startDate, snap.endDate);
 
     const snapData = { startDate: snap.startDate, endDate: snap.endDate, rows: snap.rows || [], totals: snap.totals || {}, reason };
     const revision = nextRevision(periodId);
@@ -12078,6 +12190,20 @@ document.addEventListener('DOMContentLoaded', () => {
   // Expose saveHistory globally so it can be called from other scripts
   window.saveHistory = saveHistory;
 
+  function formatLockActionError(err) {
+    const message = String((err && err.message) || err || '');
+    if (/lock conflict/i.test(message) || /changed by another user/i.test(message)) {
+      return 'Lock state conflict detected. Reload the period and try again.';
+    }
+    if (/RPC is unavailable/i.test(message) || /set_payroll_period_lock/i.test(message)) {
+      return 'Lock service is unavailable. Apply the latest DB migration and retry.';
+    }
+    if (/is locked\. Update denied/i.test(message)) {
+      return 'Payroll period is locked. Update denied.';
+    }
+    return message || 'Unable to update payroll lock state.';
+  }
+
   // Handler for Generate button: build and save a snapshot without locking
   dashGenerateBtn && dashGenerateBtn.addEventListener('click', async () => {
     if (isGeneratingSnapshot) return;
@@ -12137,6 +12263,7 @@ document.addEventListener('DOMContentLoaded', () => {
       await Promise.resolve(lockCurrentPeriod());
     } catch (err) {
       console.warn('Lock payroll failed', err);
+      alert(formatLockActionError(err));
     } finally {
       isFinalizingSnapshot = false;
       if (dashLockButton && !isSelectedPeriodLocked()) dashLockButton.disabled = false;
@@ -12167,8 +12294,17 @@ document.addEventListener('DOMContentLoaded', () => {
         closeVoidModal();
         return;
       }
-      await unlockSnapshot(resolved.snap, reason);
-      closeVoidModal();
+      try {
+        await unlockSnapshot(resolved.snap, reason);
+        closeVoidModal();
+      } catch (err) {
+        if (voidReasonError) {
+          voidReasonError.textContent = formatLockActionError(err);
+          voidReasonError.style.display = 'block';
+        } else {
+          alert(formatLockActionError(err));
+        }
+      }
     });
     voidModal.addEventListener('keydown', (ev) => {
       if (ev.key === 'Escape') {
@@ -16171,6 +16307,34 @@ try {
 } catch (e) {
   splits = {};
 }
+const LS_SPLIT_UNSPLIT_TOMBSTONES = 'att_split_unsplit_tombstones_v1';
+let splitUnsplitTombstones = {};
+try {
+  splitUnsplitTombstones = (window.cacheGet ? window.cacheGet(LS_SPLIT_UNSPLIT_TOMBSTONES, {}) : JSON.parse(localStorage.getItem(LS_SPLIT_UNSPLIT_TOMBSTONES) || '{}'));
+} catch (e) {
+  splitUnsplitTombstones = {};
+}
+function saveSplitTombstones() {
+  try {
+    if (window.sharedSet) window.sharedSet(LS_SPLIT_UNSPLIT_TOMBSTONES, splitUnsplitTombstones);
+    else localStorage.setItem(LS_SPLIT_UNSPLIT_TOMBSTONES, JSON.stringify(splitUnsplitTombstones));
+  } catch (e) {
+    console.warn('Saving split tombstones failed', e);
+  }
+}
+function markSplitUnsplitTombstone(key) {
+  splitUnsplitTombstones[key] = Date.now();
+  saveSplitTombstones();
+}
+function clearSplitUnsplitTombstone(key) {
+  if (splitUnsplitTombstones && Object.prototype.hasOwnProperty.call(splitUnsplitTombstones, key)) {
+    delete splitUnsplitTombstones[key];
+    saveSplitTombstones();
+  }
+}
+function isSplitBlockedByTombstone(key) {
+  return !!(splitUnsplitTombstones && Object.prototype.hasOwnProperty.call(splitUnsplitTombstones, key));
+}
 function saveSplits() {
   try {
     if (window.sharedSet) window.sharedSet(LS_SPLITS, splits); else localStorage.setItem(LS_SPLITS, JSON.stringify(splits));
@@ -16179,6 +16343,12 @@ function saveSplits() {
   }
   syncSplitOverrides();
 }
+function hasAnyActiveSplitEntry(entry) {
+  if (entry === true) return true;
+  if (!entry || typeof entry !== 'object') return false;
+  return ['AM','PM','OT'].some(seg => !!entry[seg]);
+}
+
 // Toggle split and unsplit state for a given employee/date key.  These helper
 // functions are used by the DTR table buttons to avoid inline IIFEs.  They set
 // the split flag in the `splits` object, persist it to localStorage via
@@ -16186,75 +16356,51 @@ function saveSplits() {
 function splitRecord(key) {
   // When splitting, mark all three segments (AM, PM, OT) as split.  Use
   // an object so we can track split state per segment.
+  clearSplitUnsplitTombstone(key);
   splits[key] = { AM: true, PM: true, OT: true };
   saveSplits();
   window.scheduleRenderResults?.('dtr-split-toggle');
 }
-function unsplitRecord(key) {
-  // Group AM/PM/OT segments by their resolved project IDs.  Each group with
-  // more than one segment is recombined (segment-level overrides cleared and
-  // marked as unsplit).  Groups with a single segment remain split.
-  const [empId] = key.split('___');
-  const emp = (typeof storedEmployees !== 'undefined' && storedEmployees) ? storedEmployees[empId] : null;
-  const defaultProj = emp && emp.projectId ? emp.projectId : '';
-  let dayProj = overridesProjects && Object.prototype.hasOwnProperty.call(overridesProjects, key)
-    ? overridesProjects[key]
-    : defaultProj;
-
+async function unsplitRecord(key) {
+  // Always collapse the row back to one combined entry. Clearing all half-level
+  // overrides avoids stale split state where one segment remains split and keeps
+  // showing separate rows/segment computations.
   const segments = ['AM', 'PM', 'OT'];
-  const groups = {};
+
   segments.forEach(seg => {
     const segKey = key + '___' + seg;
-    const pid = (overridesProjects && Object.prototype.hasOwnProperty.call(overridesProjects, segKey))
-      ? overridesProjects[segKey]
-      : dayProj;
-    const p = String(pid || '');
-    if (!groups[p]) groups[p] = [];
-    groups[p].push(seg);
-  });
-
-  let splitEntry = splits[key];
-  if (!splitEntry || typeof splitEntry !== 'object') {
-    splitEntry = { AM: true, PM: true, OT: true };
-  }
-
-  Object.keys(groups).forEach(proj => {
-    const segs = groups[proj];
-    if (segs.length > 1) {
-      // Multiple segments share this project → clear per-segment overrides and
-      // mark them unsplit. Also set day-level override if needed.
-      segs.forEach(seg => {
-        const segKey = key + '___' + seg;
-        if (overridesProjects && Object.prototype.hasOwnProperty.call(overridesProjects, segKey)) {
-          delete overridesProjects[segKey];
-        }
-        if (overridesSchedules && Object.prototype.hasOwnProperty.call(overridesSchedules, segKey)) {
-          delete overridesSchedules[segKey];
-        }
-        splitEntry[seg] = false;
-      });
-      const unifiedProj = proj;
-      if (String(unifiedProj || '') !== String(defaultProj || '')) {
-        overridesProjects[key] = unifiedProj;
-      } else {
-        delete overridesProjects[key];
-      }
-    } else {
-      // Single segment → keep its split flag
-      segs.forEach(seg => { splitEntry[seg] = true; });
+    if (overridesProjects && Object.prototype.hasOwnProperty.call(overridesProjects, segKey)) {
+      delete overridesProjects[segKey];
+    }
+    if (overridesSchedules && Object.prototype.hasOwnProperty.call(overridesSchedules, segKey)) {
+      delete overridesSchedules[segKey];
     }
   });
 
-  // Remove split entry if no segments remain split
-  const anySplit = segments.some(seg => splitEntry[seg]);
-  if (anySplit) {
-    splits[key] = splitEntry;
-  } else {
-    delete splits[key];
-  }
+  delete splits[key];
+  markSplitUnsplitTombstone(key);
 
   saveSplits();
   saveOverrides();
+
+  // Best-effort hard delete in remote split_overrides to prevent stale rows
+  // from rehydrating this record as split after refresh.
+  try {
+    if (window.supabase) {
+      const ok = await ensureSplitOverridesAvailable();
+      if (ok) {
+        const parts = String(key || '').split('___');
+        const empId = parts[0] || '';
+        const date = __normalizeYmd(parts[1] || '');
+        if (empId && date) {
+          await window.supabase.from(SPLIT_OVERRIDES_TABLE).delete().eq('emp_id', empId).eq('date', date);
+        }
+      }
+    }
+  } catch (e) {
+    console.warn('unsplit remote delete failed', e);
+  }
+
   window.scheduleRenderResults?.('dtr-split-toggle');
 }
 function saveOverrides(){
@@ -16276,7 +16422,10 @@ function collectOverridesForKey(src, key){
   });
   return Object.keys(obj).length ? obj : null;
 }
-async function syncSplitOverrides(){
+let __splitSyncInFlight = false;
+let __splitSyncQueued = false;
+
+async function __syncSplitOverridesOnce(){
   if (!window.supabase) return;
   if (!(window.ENABLE_SPLIT_OVERRIDES || __splitOverridesAvailable)) {
     const ok = await ensureSplitOverridesAvailable();
@@ -16335,6 +16484,23 @@ async function syncSplitOverrides(){
     console.warn('syncSplitOverrides failed', e);
   }
 }
+async function syncSplitOverrides(){
+  if (__splitSyncInFlight) {
+    __splitSyncQueued = true;
+    return;
+  }
+
+  __splitSyncInFlight = true;
+  try {
+    do {
+      __splitSyncQueued = false;
+      await __syncSplitOverridesOnce();
+    } while (__splitSyncQueued);
+  } finally {
+    __splitSyncInFlight = false;
+  }
+}
+
 async function hydrateSplitOverrides(){
   if (!window.supabase) return;
   if (!(window.ENABLE_SPLIT_OVERRIDES || __splitOverridesAvailable)) {
@@ -16349,7 +16515,7 @@ async function hydrateSplitOverrides(){
     if (error) throw error;
     (data || []).forEach(function(row){
       const key = row.emp_id + '___' + row.date;
-      if (row.splits) splits[key] = row.splits;
+      if (hasAnyActiveSplitEntry(row.splits) && !isSplitBlockedByTombstone(key)) splits[key] = row.splits;
       if (row.overrides_projects) {
         const proj = row.overrides_projects;
         if (proj.base != null) overridesProjects[key] = proj.base;
@@ -16399,7 +16565,7 @@ function applySplitOverrideRow(row, isDelete){
   } catch (_) {}
 
   if (!isDelete) {
-    try { if (row.splits) splits[key] = row.splits; } catch(_) {}
+    try { if (hasAnyActiveSplitEntry(row.splits) && !isSplitBlockedByTombstone(key)) splits[key] = row.splits; } catch(_) {}
     try {
       const proj = row.overrides_projects;
       if (proj && typeof proj === 'object') {
@@ -16526,11 +16692,6 @@ function safeParseStorageJSON(key, fallbackValue) {
   }
 }
 
-function normalizeObjectStore(value) {
-  if (value && typeof value === 'object' && !Array.isArray(value)) return value;
-  return {};
-}
-
 function hasStoreData(value) {
   if (value == null) return false;
   if (Array.isArray(value)) return value.length > 0;
@@ -16625,6 +16786,7 @@ function refreshCoreStoresFromStorage() {
   overridesSchedules = safeParseStorageJSON(LS_OVERRIDES_SCHEDULES, {});
   overridesProjects = safeParseStorageJSON(LS_OVERRIDES_PROJECTS, {});
   splits = safeParseStorageJSON(LS_SPLITS, {});
+  splitUnsplitTombstones = safeParseStorageJSON(LS_SPLIT_UNSPLIT_TOMBSTONES, {});
   dtrOverrides = safeParseStorageJSON(LS_DTR_OVERRIDES, {});
   storedEmployees = normalizeObjectStore(safeParseStorageJSON(LS_EMPLOYEES, {}));
   storedSchedules = normalizeObjectStore(safeParseStorageJSON(LS_SCHEDULES, {}));
@@ -16642,6 +16804,7 @@ function refreshCoreStoresFromStorage() {
     window.overridesSchedules = overridesSchedules;
     window.overridesProjects = overridesProjects;
     window.splits = splits;
+    window.splitUnsplitTombstones = splitUnsplitTombstones;
     window.dtrOverrides = dtrOverrides;
     window.payrollRates = payrollRates;
     window.regHours = regHours;
@@ -16681,6 +16844,37 @@ document.getElementById('downloadEmployeesCSV').addEventListener('click', () => 
 
 let currentProjectFilter = localStorage.getItem(LS_FILTER_PROJECT) || 'all';
 
+
+window.applyMasterDataSnapshotFromStore = function applyMasterDataSnapshotFromStore(snapshot = {}) {
+  const hasEmployees = Object.prototype.hasOwnProperty.call(snapshot, 'employees');
+  const hasProjects = Object.prototype.hasOwnProperty.call(snapshot, 'projects');
+  const hasSchedules = Object.prototype.hasOwnProperty.call(snapshot, 'schedules');
+
+  if (hasEmployees) storedEmployees = normalizeObjectStore(snapshot.employees);
+  if (hasProjects) storedProjects = normalizeObjectStore(snapshot.projects);
+  if (hasSchedules) storedSchedules = normalizeObjectStore(snapshot.schedules);
+
+  try {
+    if (hasEmployees) window.storedEmployees = storedEmployees;
+    if (hasProjects) window.storedProjects = storedProjects;
+    if (hasSchedules) window.storedSchedules = storedSchedules;
+  } catch (_) {}
+
+  if (hasProjects) {
+    try { renderProjects(); } catch (_) {}
+    try { renderProjectDropdowns(); } catch (_) {}
+    try { renderProjectFilterOptions(); } catch (_) {}
+  }
+  if (hasSchedules) {
+    try { renderScheduleSelector(); } catch (_) {}
+    try { renderScheduleEditor(); } catch (_) {}
+    try { renderEmpScheduleDropdowns(); } catch (_) {}
+  }
+  if (hasEmployees || hasProjects || hasSchedules) {
+    try { renderEmployees(); } catch (_) {}
+  }
+};
+
 function ensureSchedules(){
   if(!storedSchedules || typeof storedSchedules !== 'object'){
     const id = 'sched_' + Date.now();
@@ -16688,7 +16882,6 @@ function ensureSchedules(){
     storedSchedules[id] = Object.assign({}, DEFAULT_SCHEDULE);
     storedSchedules[id].name = DEFAULT_SCHEDULE.name;
     defaultScheduleId = id;
-    saveSchedulesToLS();
   } else {
     Object.keys(storedSchedules).forEach(id=>{
       storedSchedules[id] = { ...DEFAULT_RANGES, ...storedSchedules[id] };
@@ -16702,13 +16895,15 @@ function ensureSchedules(){
     if(!defaultScheduleId || !storedSchedules[defaultScheduleId]){
       const keys = Object.keys(storedSchedules);
       if(keys.length) defaultScheduleId = keys[0];
-      saveSchedulesToLS();
     }
   }
 }
-function saveSchedulesToLS(){
-  persistCriticalBusinessKey(LS_SCHEDULES, normalizeObjectStore(storedSchedules));
-  persistCriticalBusinessKeySoon(LS_SCHEDULES_DEFAULT, defaultScheduleId, { delayMs: 0 });
+async function persistDefaultScheduleSelection(nextDefaultScheduleId){
+  // TODO(step-2): att_schedules_default remains in legacy KV/localStorage until default-schedule ownership is modeled in modular state.
+  const ok = await persistCriticalBusinessKey(LS_SCHEDULES_DEFAULT, nextDefaultScheduleId, { delayMs: 0 });
+  if (!ok) throw new Error('Failed to persist the default schedule setting.');
+  defaultScheduleId = nextDefaultScheduleId || null;
+  return true;
 }
 
 const LS_ACTIVE_MAIN_TAB = 'bp_active_main_tab';
@@ -16948,22 +17143,21 @@ const scheduleSelect = document.getElementById('scheduleSelect');
 const scheduleNameInput = document.getElementById('scheduleName');
 
 function renderScheduleSelector(){
-  if(!scheduleSelect) return;
+  if (!scheduleSelect) return;
   scheduleSelect.innerHTML = '';
-  Object.keys(storedSchedules).forEach(id=>{
+  const schedules = (storedSchedules && typeof storedSchedules === 'object') ? storedSchedules : {};
+  Object.keys(schedules).forEach(id=>{
     const opt = document.createElement('option');
     opt.value = id;
-    opt.textContent = (storedSchedules[id].name || id) + (id === defaultScheduleId ? " (Default)" : "");
+    opt.textContent = (schedules[id].name || id) + (id === defaultScheduleId ? " (Default)" : "");
     scheduleSelect.appendChild(opt);
   });
-  if(defaultScheduleId && storedSchedules[defaultScheduleId]) scheduleSelect.value = defaultScheduleId;
+  if(defaultScheduleId && schedules[defaultScheduleId]) scheduleSelect.value = defaultScheduleId;
   else if(scheduleSelect.options.length) scheduleSelect.selectedIndex = 0;
   renderEmpScheduleDropdowns();
-  renderEmpScheduleDropdownsInTable();
 }
 
 function renderScheduleEditor(){
-  if(!scheduleSelect || !scheduleNameInput) return;
   const sel = scheduleSelect.value;
   if(!sel || !storedSchedules[sel]) return;
   const s = storedSchedules[sel];
@@ -16999,76 +17193,147 @@ sch_grace: Number(document.querySelector('[data-key="sch_grace"]').value || DEFA
   };
 }
 
-document.getElementById('addScheduleBtn')?.addEventListener('click', ()=>{
+async function upsertScheduleWithFeedback(scheduleId, patch, failureMessage){
+  const svc = window.payrollService;
+  if (!svc || typeof svc.upsertSchedule !== 'function') {
+    alert('Schedule service is not ready yet. Please try again.');
+    return false;
+  }
+  try {
+    await svc.upsertSchedule(scheduleId, patch || {});
+    return true;
+  } catch (error) {
+    console.error('[schedule] upsert failed', { scheduleId, error });
+    alert(failureMessage || 'Failed to save schedule changes.');
+    return false;
+  }
+}
+
+document.getElementById('addScheduleBtn').addEventListener('click', async ()=>{
   const id = 'sched_' + Date.now();
-  storedSchedules[id] = Object.assign({}, DEFAULT_SCHEDULE); storedSchedules[id].name = 'New schedule';
-  saveSchedulesToLS(); renderScheduleSelector(); scheduleSelect.value = id; renderScheduleEditor();
+  const patch = { ...DEFAULT_SCHEDULE, name: 'New schedule' };
+  const ok = await upsertScheduleWithFeedback(id, patch, 'Failed to add schedule.');
+  if (!ok) return;
+  storedSchedules[id] = patch;
+  renderScheduleSelector();
+  scheduleSelect.value = id;
+  renderScheduleEditor();
 });
-document.getElementById('deleteScheduleBtn')?.addEventListener('click', ()=>{
+document.getElementById('deleteScheduleBtn').addEventListener('click', async ()=>{
   const sel = scheduleSelect.value; if(!sel) return;
   if(Object.keys(storedSchedules).length === 1){ alert('Cannot delete the only schedule.'); return; }
   if(!confirm('Delete schedule "' + storedSchedules[sel].name + '"?')) return;
-  delete storedSchedules[sel];
-  if(!storedSchedules[defaultScheduleId]) defaultScheduleId = Object.keys(storedSchedules)[0];
-  Object.keys(storedEmployees).forEach(eid=>{
-    if(storedEmployees[eid].scheduleId === sel) storedEmployees[eid].scheduleId = defaultScheduleId;
-  });
-  saveSchedulesToLS(); saveEmployeesToLS(); renderScheduleSelector(); renderEmployees(); renderResults();
-});
-document.getElementById('setDefaultScheduleBtn')?.addEventListener('click', ()=>{
-  const sel = scheduleSelect.value; if(!sel) return; defaultScheduleId = sel; saveSchedulesToLS(); renderScheduleSelector();
-});
-document.getElementById('saveScheduleBtn')?.addEventListener('click', ()=>{
-  const sel = scheduleSelect.value; if(!sel) return;
-  const oldRanges = {};
-  Object.keys(DEFAULT_RANGES).forEach(k=> oldRanges[k] = (storedSchedules[sel] && storedSchedules[sel][k]) || DEFAULT_RANGES[k]);
-  storedSchedules[sel] = { ...gatherScheduleFromEditor(), ...oldRanges, name: document.getElementById('scheduleName').value.trim() || storedSchedules[sel].name || 'Schedule' };
-  document.querySelectorAll('#rangesTable input[data-key]').forEach(i=>{
-    storedSchedules[sel][i.dataset.key] = i.value || DEFAULT_RANGES[i.dataset.key] || "";
-  });
-  saveSchedulesToLS(); renderScheduleSelector(); renderEmpScheduleDropdowns(); renderResults();
-});
-scheduleSelect?.addEventListener('change', ()=>{ renderScheduleEditor(); });
 
-function saveRangesFromUI(){
+  const prevDefaultScheduleId = defaultScheduleId;
+  const nextDefaultScheduleId = (!storedSchedules[defaultScheduleId] || defaultScheduleId === sel)
+    ? Object.keys(storedSchedules).find((id) => id !== sel)
+    : defaultScheduleId;
+  const affectedEmployeeIds = Object.keys(storedEmployees).filter((eid) => storedEmployees[eid].scheduleId === sel);
+
+  const svc = window.payrollService;
+  if (!svc || typeof svc.deleteSchedule !== 'function' || typeof svc.upsertEmployee !== 'function') {
+    alert('Payroll service is not ready yet. Please try again.');
+    return;
+  }
+
+  try {
+    await persistDefaultScheduleSelection(nextDefaultScheduleId || null);
+    for (const eid of affectedEmployeeIds) {
+      await svc.upsertEmployee(eid, { ...storedEmployees[eid], scheduleId: nextDefaultScheduleId || null });
+    }
+    await svc.deleteSchedule(sel);
+  } catch (error) {
+    if ((nextDefaultScheduleId || null) !== (prevDefaultScheduleId || null)) {
+      try { await persistDefaultScheduleSelection(prevDefaultScheduleId || null); } catch (_) {}
+    }
+    console.error('[schedule] delete failed', { sel, error });
+    alert(`Failed to delete schedule: ${String(error?.message || error)}`);
+    return;
+  }
+
+  delete storedSchedules[sel];
+  defaultScheduleId = nextDefaultScheduleId || Object.keys(storedSchedules).find((id) => id !== sel) || null;
+  affectedEmployeeIds.forEach((eid) => {
+    storedEmployees[eid].scheduleId = defaultScheduleId || null;
+  });
+
+  renderScheduleSelector(); renderEmployees(); renderResults();
+});
+document.getElementById('setDefaultScheduleBtn').addEventListener('click', async ()=>{
+  const sel = scheduleSelect.value; if(!sel) return;
+  const prevDefaultScheduleId = defaultScheduleId;
+  try {
+    await persistDefaultScheduleSelection(sel);
+    renderScheduleSelector();
+  } catch (error) {
+    defaultScheduleId = prevDefaultScheduleId;
+    alert(`Failed to set the default schedule: ${String(error?.message || error)}`);
+  }
+});
+document.getElementById('saveScheduleBtn').addEventListener('click', async ()=>{
+  const sel = scheduleSelect.value; if(!sel || !storedSchedules[sel]) return;
+  const patch = {
+    ...storedSchedules[sel],
+    ...gatherScheduleFromEditor(),
+    name: document.getElementById('scheduleName').value.trim() || storedSchedules[sel].name || 'Schedule',
+  };
+  const ok = await upsertScheduleWithFeedback(sel, patch, 'Failed to save schedule details.');
+  if (!ok) return;
+
+  storedSchedules[sel] = patch;
+  renderScheduleSelector(); renderEmpScheduleDropdowns(); renderResults();
+});
+scheduleSelect.addEventListener('change', ()=>{ renderScheduleEditor(); });
+
+async function saveRangesFromUI(){
   const sel = scheduleSelect && scheduleSelect.value;
   if(!sel || !storedSchedules[sel]) return;
+  const next = { ...storedSchedules[sel] };
   document.querySelectorAll('#rangesTable input[data-key]').forEach(i=>{
-    storedSchedules[sel][i.dataset.key] = i.value || "";
+    next[i.dataset.key] = i.value || "";
   });
-  saveSchedulesToLS();
+  const ok = await upsertScheduleWithFeedback(sel, next, 'Failed to save schedule ranges.');
+  if (!ok) return;
+
+  storedSchedules[sel] = next;
   window.scheduleRenderResults?.('dtr-split-toggle');
 }
-function resetRanges(){
+async function resetRanges(){
   const sel = scheduleSelect && scheduleSelect.value;
   if(!sel || !storedSchedules[sel]) return;
+  const next = { ...storedSchedules[sel] };
   Object.keys(DEFAULT_RANGES).forEach(k=>{
-    storedSchedules[sel][k] = DEFAULT_RANGES[k];
+    next[k] = DEFAULT_RANGES[k];
   });
-  saveSchedulesToLS();
+  const ok = await upsertScheduleWithFeedback(sel, next, 'Failed to reset schedule ranges.');
+  if (!ok) return;
+
+  storedSchedules[sel] = next;
   renderScheduleEditor();
   window.scheduleRenderResults?.('dtr-split-toggle');
 }
 document.getElementById('saveRangesBtn').addEventListener('click', saveRangesFromUI);
 document.getElementById('resetRangesBtn').addEventListener('click', resetRanges);
 
-function saveEmployeesToLS(){ persistCriticalBusinessKey(LS_EMPLOYEES, normalizeObjectStore(storedEmployees)); }
+function saveEmployeesToLS(){ console.warn('[payroll:migrated] saveEmployeesToLS is legacy-only; use payrollService row-level methods for writes'); }
 function renderEmpScheduleDropdowns(){
   const sel = document.getElementById('empScheduleSelect'); if(!sel) return;
+  const schedules = (storedSchedules && typeof storedSchedules === 'object') ? storedSchedules : {};
   sel.innerHTML = '';
-  Object.keys(storedSchedules).forEach(id=>{
+  Object.keys(schedules).forEach(id=>{
     const o=document.createElement('option'); o.value=id;
-    o.textContent=storedSchedules[id].name + (id===defaultScheduleId?' (Default)':'');
+    o.textContent=schedules[id].name + (id===defaultScheduleId?' (Default)':'');
     sel.appendChild(o);
   });
-  if(defaultScheduleId && storedSchedules[defaultScheduleId]) sel.value = defaultScheduleId;
+  if(defaultScheduleId && schedules[defaultScheduleId]) sel.value = defaultScheduleId;
 }
 function renderEmpScheduleDropdownsInTable(){
+  const schedules = (storedSchedules && typeof storedSchedules === 'object') ? storedSchedules : {};
   document.querySelectorAll('.emp-sel-schedule').forEach(sel=>{
     const id = sel.dataset.id;
     sel.innerHTML = '';
-    Object.keys(storedSchedules).forEach(sid=>{
-      const label = storedSchedules[sid].name + (sid===defaultScheduleId ? ' (Default)' : '');
+    Object.keys(schedules).forEach(sid=>{
+      const label = schedules[sid].name + (sid===defaultScheduleId ? ' (Default)' : '');
       const o = document.createElement('option'); o.value = sid; o.textContent = label;
       if(storedEmployees[id] && storedEmployees[id].scheduleId === sid) o.selected = true;
       sel.appendChild(o);
@@ -17077,69 +17342,102 @@ function renderEmpScheduleDropdownsInTable(){
 }
 
 function syncProjectsKVAfterLocalSave(forceCloudWrite){
-  if (!forceCloudWrite) return;
-  try {
-    const writeLatest = () => {
-      try {
-        if (typeof window.writeKV !== 'function') return;
-        const snapshot = (typeof storedProjects === 'object' && storedProjects) ? storedProjects : {};
-        const p = window.writeKV(LS_PROJECTS, snapshot);
-        if (p && typeof p.catch === 'function') p.catch(err => console.warn('writeKV projects failed', err));
-      } catch (err) {
-        console.warn('writeKV projects threw', err);
-      }
-    };
-
-    if (window && window.__kv_cloud_ready === true) {
-      writeLatest();
-      return;
-    }
-
-    // If the user edited projects before kv hydrate completes, flush once cloud is ready
-    // so boot hydration cannot later revert local edits.
-    window.__projectsKVPending = true;
-    if (!window.__projectsKVPendingHooked) {
-      window.__projectsKVPendingHooked = true;
-      window.addEventListener('kv-cloud-ready', () => {
-        try {
-          if (!window.__projectsKVPending) return;
-          window.__projectsKVPending = false;
-          writeLatest();
-        } catch (_) {}
-      });
-    }
-  } catch (_) {}
+  void forceCloudWrite;
+  // migrated: projects no longer write through KV/localStorage.
 }
 
 function saveProjectsToLS(options = {}){
-  persistCriticalBusinessKey(LS_PROJECTS, normalizeObjectStore(storedProjects));
-  syncProjectsKVAfterLocalSave(!!(options && options.userEdited));
-  if(!(options && options.skipRender)){
-    renderProjects();
-  }
+  void options;
+  console.warn('[payroll:migrated] saveProjectsToLS is legacy-only; use payrollService row-level methods for writes');
+}
+
+
+function rerenderProjectViews(){
+  renderProjects();
   renderProjectDropdowns();
   renderProjectFilterOptions();
   try { if (typeof renderAdditionalIncomeTable === 'function') renderAdditionalIncomeTable(); } catch (_) {}
   try { if (typeof renderAdjustmentHoursTable === 'function') renderAdjustmentHoursTable(); } catch (_) {}
   window.scheduleRenderResults?.('dtr-split-toggle');
 }
+
+async function upsertProjectWithFeedback(projectId, patch, failureMessage){
+  const svc = window.payrollService;
+  if (!svc || typeof svc.upsertProject !== 'function') {
+    alert('Project service is not ready yet. Please try again.');
+    return false;
+  }
+  try {
+    await svc.upsertProject(projectId, patch || {});
+    return true;
+  } catch (error) {
+    console.error('[project] upsert failed', { projectId, error });
+    alert(failureMessage || 'Failed to save project changes.');
+    return false;
+  }
+}
+
+async function deleteProjectWithFeedback(projectId, failureMessage){
+  const svc = window.payrollService;
+  if (!svc || typeof svc.deleteProject !== 'function') {
+    alert('Project service is not ready yet. Please try again.');
+    return false;
+  }
+  try {
+    await svc.deleteProject(projectId);
+    return true;
+  } catch (error) {
+    console.error('[project] delete failed', { projectId, error });
+    alert(failureMessage || 'Failed to delete project.');
+    return false;
+  }
+}
+
+async function upsertEmployeeWithFeedback(employeeId, patch, failureMessage){
+  const svc = window.payrollService;
+  if (!svc || typeof svc.upsertEmployee !== 'function') {
+    alert('Employee service is not ready yet. Please try again.');
+    return false;
+  }
+  try {
+    await svc.upsertEmployee(employeeId, patch || {});
+    return true;
+  } catch (error) {
+    console.error('[employee] upsert failed', { employeeId, error });
+    alert(failureMessage || 'Failed to save employee changes.');
+    return false;
+  }
+}
+
+async function deleteEmployeeWithFeedback(employeeId, failureMessage){
+  const svc = window.payrollService;
+  if (!svc || typeof svc.deleteEmployee !== 'function') {
+    alert('Employee service is not ready yet. Please try again.');
+    return false;
+  }
+  try {
+    await svc.deleteEmployee(employeeId);
+    return true;
+  } catch (error) {
+    console.error('[employee] delete failed', { employeeId, error });
+    alert(failureMessage || 'Failed to delete employee.');
+    return false;
+  }
+}
+
 function renderProjects(){
   const tbody = document.querySelector('#projectsTable tbody'); tbody.innerHTML = '';
   const projectCompanySel = document.getElementById('projectCompanySelect');
   const prevCompany = projectCompanySel ? projectCompanySel.value : '';
   populateCompanySelect(projectCompanySel, prevCompany);
-  let needsSave = false;
   Object.keys(storedProjects).forEach(pid=>{
     const project = storedProjects[pid];
-    // Backward-compatible migration: add active/deactivatedAt if missing
-    if (project && typeof project.active === 'undefined') { project.active = true; project.deactivatedAt = null; needsSave = true; }
     const isProjActive = !(project && project.active === false);
     const projBtnLabel = isProjActive ? 'Deactivate' : 'Reactivate';
     let company = project.company;
     if (!COMPANY_OPTIONS.includes(company)) {
       company = COMPANY_OPTIONS[0] || '';
       project.company = company;
-      needsSave = true;
     }
     const companyOptionsHtml = buildCompanyOptionsHtml(company);
     const tr = document.createElement('tr');
@@ -17150,58 +17448,80 @@ function renderProjects(){
       <td><button class="del-proj" data-id="${pid}">${projBtnLabel}</button></td>`;
     tbody.appendChild(tr);
   });
-  if (needsSave) saveProjectsToLS({ skipRender: true });
 
   document.querySelectorAll('.proj-active').forEach(cb=>{
-    cb.addEventListener('change', e=>{
+    cb.addEventListener('change', async (e)=>{
       const id = e.target.dataset.id;
-      if(!storedProjects[id]) return;
+      const prev = storedProjects[id];
+      if(!prev) return;
       const isActive = !!e.target.checked;
-      storedProjects[id].active = isActive;
-      storedProjects[id].deactivatedAt = isActive ? null : new Date().toISOString();
-      saveProjectsToLS({ userEdited: true });
+      const next = { ...prev, active: isActive, deactivatedAt: isActive ? null : new Date().toISOString() };
+      const ok = await upsertProjectWithFeedback(id, next, 'Failed to update project status.');
+      if (!ok) {
+        e.target.checked = !(prev.active === false);
+        return;
+      }
+      storedProjects[id] = next;
+      rerenderProjectViews();
       renderEmployees();
     });
   });
 
   document.querySelectorAll('.del-proj').forEach(btn=>{
-    btn.addEventListener('click', e=>{
+    btn.addEventListener('click', async (e)=>{
       const id = e.target.dataset.id;
       const proj = storedProjects[id];
       if(!proj) return;
       const isActive = !(proj.active === false);
       const action = isActive ? 'Deactivate' : 'Reactivate';
-      if(confirm(`${action} project "${proj.name}"?`)){
-        proj.active = !isActive;
-        proj.deactivatedAt = proj.active ? null : new Date().toISOString();
-        saveProjectsToLS({ userEdited: true });
-        renderEmployees();
-      }
+      if(!confirm(`${action} project "${proj.name}"?`)) return;
+      const next = { ...proj, active: !isActive, deactivatedAt: isActive ? new Date().toISOString() : null };
+      const ok = await upsertProjectWithFeedback(id, next, `Failed to ${action.toLowerCase()} project.`);
+      if (!ok) return;
+      storedProjects[id] = next;
+      rerenderProjectViews();
+      renderEmployees();
     });
   });
 
   document.querySelectorAll('.proj-name-input').forEach(inp => {
-    inp.addEventListener('change', e => {
+    inp.addEventListener('change', async (e) => {
       const id = e.target.dataset.id;
-      storedProjects[id].name = e.target.value;
-      saveProjectsToLS({ userEdited: true });
+      const prev = storedProjects[id];
+      if (!prev) return;
+      const next = { ...prev, name: e.target.value };
+      const ok = await upsertProjectWithFeedback(id, next, 'Failed to update project name.');
+      if (!ok) {
+        e.target.value = prev.name || '';
+        return;
+      }
+      storedProjects[id] = next;
+      rerenderProjectViews();
     });
   });
 
   document.querySelectorAll('.proj-company-select').forEach(sel => {
-    sel.addEventListener('change', e => {
+    sel.addEventListener('change', async (e) => {
       const id = e.target.dataset.id;
-      if (!storedProjects[id]) return;
+      const prev = storedProjects[id];
+      if (!prev) return;
       let value = e.target.value;
       if (!COMPANY_OPTIONS.includes(value)) {
         value = COMPANY_OPTIONS[0] || '';
         e.target.value = value;
       }
-      storedProjects[id].company = value;
-      saveProjectsToLS({ userEdited: true });
+      const next = { ...prev, company: value };
+      const ok = await upsertProjectWithFeedback(id, next, 'Failed to update project company.');
+      if (!ok) {
+        e.target.value = prev.company || (COMPANY_OPTIONS[0] || '');
+        return;
+      }
+      storedProjects[id] = next;
+      rerenderProjectViews();
     });
   });
 }
+
 
 
 function renderProjectDropdowns(){
@@ -17282,6 +17602,7 @@ function populateCompanySelect(selectEl, selectedValue){
   }
 }
 
+
 function renderEmployees(){
   renderEmpScheduleDropdowns();
   renderProjectDropdowns();
@@ -17294,17 +17615,14 @@ function renderEmployees(){
     if (na && nb) return Number(a) - Number(b);
     return String(a).localeCompare(String(b));
   });
-  let needsSave = false;
   ids.forEach(id => {
     const emp = storedEmployees[id];
-    // Backward-compatible migration: add active/deactivatedAt if missing
-    if (emp && typeof emp.active === 'undefined') { emp.active = true; emp.deactivatedAt = null; needsSave = true; }
+    if (emp && typeof emp.active === 'undefined') { emp.active = true; emp.deactivatedAt = null; }
     let company = emp.company;
     if (!COMPANY_OPTIONS.includes(company)) {
       company = COMPANY_OPTIONS[0] || '';
       if (company !== undefined) {
         emp.company = company;
-        needsSave = true;
       }
     }
     let scheduleOptionsHtml = '';
@@ -17338,10 +17656,9 @@ function renderEmployees(){
       <td><input type="checkbox" class="emp-pagibig" data-id="${id}" ${ (contribFlags[id] && contribFlags[id].pagibig === false) ? '' : 'checked'}></td>
       <td><input type="checkbox" class="emp-philhealth" data-id="${id}" ${ (contribFlags[id] && contribFlags[id].philhealth === false) ? '' : 'checked'}></td>
       <td><input type="checkbox" class="emp-sss" data-id="${id}" ${ (contribFlags[id] && contribFlags[id].sss === false) ? '' : 'checked'}></td>
-      <td><input type=\"checkbox\" class=\"emp-active\" data-id=\"${id}\" ${isEmpActive ? 'checked' : ''}></td>
-      <td><button class=\"del-emp\" data-id=\"${id}\">${empBtnLabel}</button></td>`;
+      <td><input type="checkbox" class="emp-active" data-id="${id}" ${isEmpActive ? 'checked' : ''}></td>
+      <td><button class="del-emp" data-id="${id}">${empBtnLabel}</button></td>`;
     tbody.appendChild(tr);
-    // Attach event listeners for contribution checkboxes for this employee
     const cbPagibig = tr.querySelector('.emp-pagibig');
     const cbPhilhealth = tr.querySelector('.emp-philhealth');
     const cbSss = tr.querySelector('.emp-sss');
@@ -17371,70 +17688,101 @@ function renderEmployees(){
     }
   });
 
-  if (needsSave) saveEmployeesToLS();
-
-  document.querySelectorAll('.emp-name-input').forEach(inp=> inp.addEventListener('change', (e)=>{
-    storedEmployees[e.target.dataset.id].name = e.target.value; saveEmployeesToLS(); window.scheduleRenderResults?.('employee-name-change');
-  }));
-  document.querySelectorAll('.emp-rate-input').forEach(inp=> inp.addEventListener('change', (e)=>{
+  document.querySelectorAll('.emp-name-input').forEach(inp=> inp.addEventListener('change', async (e)=>{
     const id = e.target.dataset.id;
+    const prev = storedEmployees[id];
+    if (!prev) return;
+    const next = { ...prev, name: e.target.value };
+    const ok = await upsertEmployeeWithFeedback(id, next, 'Failed to update employee name.');
+    if (!ok) { e.target.value = prev.name || ''; return; }
+    storedEmployees[id] = next;
+    window.scheduleRenderResults?.('employee-name-change');
+  }));
+  document.querySelectorAll('.emp-rate-input').forEach(inp=> inp.addEventListener('change', async (e)=>{
+    const id = e.target.dataset.id;
+    const prev = storedEmployees[id];
+    if (!prev) return;
     const val = parseFloat(e.target.value) || 0;
-    storedEmployees[id].hourlyRate = val; saveEmployeesToLS();
+    const next = { ...prev, hourlyRate: val };
+    const ok = await upsertEmployeeWithFeedback(id, next, 'Failed to update employee rate.');
+    if (!ok) { e.target.value = String(prev.hourlyRate ?? ''); return; }
+    storedEmployees[id] = next;
     try { payrollRates[id] = val; if (window.sharedSet) window.sharedSet(LS_RATES, payrollRates); else localStorage.setItem(LS_RATES, JSON.stringify(payrollRates)); } catch(err) {}
     try { if (typeof renderTable === 'function') renderTable(); } catch (err) { console.warn('renderTable failed', err); }
     window.scheduleRenderResults?.('employee-rate-change');
     window.scheduleCalculateAll?.('employee-rate-change');
   }));
-document.querySelectorAll('.emp-sel-schedule').forEach(sel=> sel.addEventListener('change', (e)=>{
-    storedEmployees[e.target.dataset.id].scheduleId = e.target.value; saveEmployeesToLS(); window.scheduleRenderResults?.('employee-schedule-change');
+  document.querySelectorAll('.emp-sel-schedule').forEach(sel=> sel.addEventListener('change', async (e)=>{
+    const id = e.target.dataset.id;
+    const prev = storedEmployees[id];
+    if (!prev) return;
+    const next = { ...prev, scheduleId: e.target.value };
+    const ok = await upsertEmployeeWithFeedback(id, next, 'Failed to update employee schedule.');
+    if (!ok) { e.target.value = prev.scheduleId || ''; return; }
+    storedEmployees[id] = next;
+    window.scheduleRenderResults?.('employee-schedule-change');
     window.scheduleCalculateAll?.('employee-schedule-change');
   }));
-  document.querySelectorAll('.emp-sel-project').forEach(sel=> sel.addEventListener('change', (e)=>{
-    storedEmployees[e.target.dataset.id].projectId = e.target.value || null; saveEmployeesToLS(); window.scheduleRenderResults?.('employee-project-change');
+  document.querySelectorAll('.emp-sel-project').forEach(sel=> sel.addEventListener('change', async (e)=>{
+    const id = e.target.dataset.id;
+    const prev = storedEmployees[id];
+    if (!prev) return;
+    const next = { ...prev, projectId: e.target.value || null };
+    const ok = await upsertEmployeeWithFeedback(id, next, 'Failed to update employee project.');
+    if (!ok) { e.target.value = prev.projectId || ''; return; }
+    storedEmployees[id] = next;
+    window.scheduleRenderResults?.('employee-project-change');
     window.scheduleCalculateAll?.('employee-project-change');
   }));
-  document.querySelectorAll('.emp-company-select').forEach(sel=> sel.addEventListener('change', (e)=>{
+  document.querySelectorAll('.emp-company-select').forEach(sel=> sel.addEventListener('change', async (e)=>{
     const id = e.target.dataset.id;
-    if (!storedEmployees[id]) return;
+    const prev = storedEmployees[id];
+    if (!prev) return;
     let value = e.target.value;
     if (!COMPANY_OPTIONS.includes(value)) {
       value = COMPANY_OPTIONS[0] || '';
       e.target.value = value;
     }
-    storedEmployees[id].company = value;
-    saveEmployeesToLS();
+    const next = { ...prev, company: value };
+    const ok = await upsertEmployeeWithFeedback(id, next, 'Failed to update employee company.');
+    if (!ok) { e.target.value = prev.company || (COMPANY_OPTIONS[0] || ''); return; }
+    storedEmployees[id] = next;
     window.scheduleRenderResults?.('employee-company-change');
   }));
-  document.querySelectorAll('.emp-active').forEach(cb=> cb.addEventListener('change', (e)=>{
+  document.querySelectorAll('.emp-active').forEach(cb=> cb.addEventListener('change', async (e)=>{
     const id = e.target.dataset.id;
-    if (!storedEmployees[id]) return;
+    const prev = storedEmployees[id];
+    if (!prev) return;
     const isActive = !!e.target.checked;
-    storedEmployees[id].active = isActive;
-    storedEmployees[id].deactivatedAt = isActive ? null : new Date().toISOString();
-    saveEmployeesToLS();
+    const next = { ...prev, active: isActive, deactivatedAt: isActive ? null : new Date().toISOString() };
+    const ok = await upsertEmployeeWithFeedback(id, next, 'Failed to update employee status.');
+    if (!ok) {
+      e.target.checked = !(prev.active === false);
+      return;
+    }
+    storedEmployees[id] = next;
     renderEmployees();
     window.scheduleRenderResults?.('employee-active-toggle');
   }));
-  document.querySelectorAll('.del-emp').forEach(btn=> btn.addEventListener('click', (e)=>{
+  document.querySelectorAll('.del-emp').forEach(btn=> btn.addEventListener('click', async (e)=>{
     const id=e.target.dataset.id;
-    {
-      const emp = storedEmployees[id];
-      if (!emp) return;
-      const isActive = !(emp.active === false);
-      const action = isActive ? 'Deactivate' : 'Reactivate';
-      const msg = `${action} employee ${id} - ${emp.name}?`;
-      if (confirm(msg)) {
-        emp.active = !isActive;
-        emp.deactivatedAt = emp.active ? null : new Date().toISOString();
-        saveEmployeesToLS();
-        renderEmployees();
-        window.scheduleRenderResults?.('employee-activate-toggle');
-      }
-    }
+    const emp = storedEmployees[id];
+    if (!emp) return;
+    const isActive = !(emp.active === false);
+    const action = isActive ? 'Deactivate' : 'Reactivate';
+    const msg = `${action} employee ${id} - ${emp.name}?`;
+    if (!confirm(msg)) return;
+    const next = { ...emp, active: !isActive, deactivatedAt: isActive ? new Date().toISOString() : null };
+    const ok = await upsertEmployeeWithFeedback(id, next, `Failed to ${action.toLowerCase()} employee.`);
+    if (!ok) return;
+    storedEmployees[id] = next;
+    renderEmployees();
+    window.scheduleRenderResults?.('employee-activate-toggle');
   }));
 }
 
-document.getElementById('addEmployeeBtn').addEventListener('click', ()=>{
+
+document.getElementById('addEmployeeBtn').addEventListener('click', async ()=>{
   const id = document.getElementById('empIdInput').value.trim();
   const name = document.getElementById('empNameInput').value.trim();
   const rate = parseFloat(document.getElementById('empRateInput').value) || 0;
@@ -17445,26 +17793,35 @@ document.getElementById('addEmployeeBtn').addEventListener('click', ()=>{
   if (!COMPANY_OPTIONS.includes(company)) company = COMPANY_OPTIONS[0] || '';
   const bank = document.getElementById('empBankInput').value.trim();
   if(!id){ alert('Enter ID'); return; } if(!name){ alert('Enter Name'); return; }
-  storedEmployees[id] = { name: name, hourlyRate: rate, bankAccount: bank, scheduleId: scheduleId, projectId: projectId, company: company, active: true, deactivatedAt: null };
+  const next = { name: name, hourlyRate: rate, bankAccount: bank, scheduleId: scheduleId, projectId: projectId, company: company, active: true, deactivatedAt: null };
+  const ok = await upsertEmployeeWithFeedback(id, next, 'Failed to add employee.');
+  if (!ok) return;
+  storedEmployees[id] = next;
   // Initialize default contribution deduction flags for new employee if not already set
   if (!contribFlags[id]) {
     contribFlags[id] = { pagibig: true, philhealth: true, sss: true };
     persistContribFlags();
   }
-  saveEmployeesToLS();
   document.getElementById('empIdInput').value=''; document.getElementById('empNameInput').value=''; document.getElementById('empRateInput').value=''; document.getElementById('empBankInput').value='';
   if (companySelect) companySelect.value = COMPANY_OPTIONS[0] || '';
   renderEmployees(); renderResults();
 });
-document.getElementById('clearEmployeesBtn').addEventListener('click', ()=>{
+document.getElementById('clearEmployeesBtn').addEventListener('click', async ()=>{
   if(!confirm('Clear all employees?')) return;
-  storedEmployees = {}; saveEmployeesToLS(); renderEmployees(); renderResults();
+  const ids = Object.keys(storedEmployees);
+  for (const id of ids) {
+    const ok = await deleteEmployeeWithFeedback(id, 'Failed to clear all employees.');
+    if (!ok) return;
+  }
+  storedEmployees = {};
+  renderEmployees();
+  renderResults();
 });
 
 document.getElementById('empFileInput').addEventListener('change', (evt) => {
   const file = evt.target.files && evt.target.files[0]; if (!file) return;
   const reader = new FileReader();
-  reader.onload = function(e) {
+  reader.onload = async function(e) {
     try {
       const data = new Uint8Array(e.target.result);
       const workbook = XLSX.read(data, { type: 'array' });
@@ -17496,6 +17853,7 @@ const scheduleIdxOld = scheduleHeaderIdx !== -1 ? scheduleHeaderIdx : 3;
 const projectIdxOld = projectHeaderIdx !== -1 ? projectHeaderIdx : 4;
 const bankIdxOld = bankHeaderIdx !== -1 ? bankHeaderIdx : 5;
 
+const importedEmployees = [];
 dataRows.forEach(row => {
   if (!row || row.length < 2) return;
   const id = String(row[0] ?? '').trim();
@@ -17543,13 +17901,28 @@ dataRows.forEach(row => {
   projectName = projectName.toLowerCase();
   if (!COMPANY_OPTIONS.includes(company)) company = COMPANY_OPTIONS[0] || '';
 
-  if (!storedEmployees[id]) { added++; } else { updated++; }
+  const existed = !!storedEmployees[id];
   let scheduleId = Object.keys(storedSchedules).find(k => (storedSchedules[k].name || '').toLowerCase() === scheduleName) || defaultScheduleId;
   let projectId = Object.keys(storedProjects).find(k => (storedProjects[k].name || '').toLowerCase() === projectName) || null;
 
-  storedEmployees[id] = { name: name, hourlyRate: rate, bankAccount: bank, scheduleId: scheduleId, projectId: projectId, company: company };
+  importedEmployees.push({
+    id,
+    existed,
+    next: { name: name, hourlyRate: rate, bankAccount: bank, scheduleId: scheduleId, projectId: projectId, company: company }
+  });
 });
-saveEmployeesToLS();
+let succeeded = 0;
+for (const entry of importedEmployees) {
+  const ok = await upsertEmployeeWithFeedback(entry.id, entry.next, `Failed to import employees after ${succeeded} successful write${succeeded === 1 ? '' : 's'}. Import stopped.`);
+  if (!ok) {
+    alert(`Import stopped after ${succeeded} successful write${succeeded === 1 ? '' : 's'}. Refresh to review the authoritative employee state before retrying.`);
+    return;
+  }
+  storedEmployees[entry.id] = entry.next;
+  if (entry.existed) updated++;
+  else added++;
+  succeeded += 1;
+}
 renderEmployees();
 renderResults();
 if (added || updated) alert(`Imported: ${added}, Updated: ${updated}`);
@@ -17618,13 +17991,44 @@ function resolveDtrPersistFn(){
     : null;
 }
 
+async function applyAuthoritativeDtrSnapshot(records){
+  const snapshot = Array.isArray(records) ? records.slice() : [];
+  try { storedRecords = snapshot; } catch (_) {}
+  try { window.storedRecords = snapshot; } catch (_) {}
+  try {
+    if (window.sharedSet) await window.sharedSet(LS_RECORDS, snapshot);
+    else if (window.cacheSet) window.cacheSet(LS_RECORDS, snapshot);
+    else localStorage.setItem(LS_RECORDS, JSON.stringify(snapshot));
+  } catch (_) {}
+  return snapshot;
+}
+
+async function saveDtrSnapshotAuthoritatively(records){
+  const snapshot = Array.isArray(records) ? records.slice() : [];
+  await applyAuthoritativeDtrSnapshot(snapshot);
+  if (typeof saveDtrToCloud !== 'function') {
+    throw new Error('DTR cloud save is unavailable.');
+  }
+  const saveResult = await saveDtrToCloud(snapshot, { requirePunches: true, throwOnError: true });
+  if (!saveResult || saveResult.status !== 'ok' || saveResult.storage !== 'punches') {
+    throw new Error('Authoritative DTR save did not complete in `dtr_punches`.');
+  }
+  if (typeof loadDtrFromCloud !== 'function') {
+    throw new Error('DTR cloud reload is unavailable.');
+  }
+  const remote = await loadDtrFromCloud();
+  if (!remote || remote.status !== 'ok') {
+    throw new Error(`DTR cloud reload failed: ${String(remote && (remote.error || remote.status) ? (remote.error || remote.status) : 'Unknown error')}`);
+  }
+  if (!(remote.meta && remote.meta.storage === 'punches')) {
+    throw new Error('Authoritative DTR storage is not `dtr_punches`.');
+  }
+  return applyAuthoritativeDtrSnapshot(remote.records || []);
+}
+
 async function persistDtrSnapshotFallback(){
   const snapshot = Array.isArray(storedRecords) ? storedRecords.slice() : [];
-  try { window.storedRecords = snapshot; } catch (_) {}
-  try { localStorage.setItem(LS_RECORDS, JSON.stringify(snapshot)); } catch (_) {}
-  if (typeof saveDtrToCloud === 'function') {
-    await saveDtrToCloud(snapshot);
-  }
+  await saveDtrSnapshotAuthoritatively(snapshot);
 }
 
 async function importAndPersistDtrFile(file, options = {}){
@@ -17660,6 +18064,8 @@ async function importAndPersistDtrFile(file, options = {}){
       added++;
     }
   }
+
+  console.info('[dtr:debug] upload parse complete', { fileName: file && file.name ? file.name : '', added, stagedCount: Array.isArray(storedRecords) ? storedRecords.length : 0, shouldPersist });
 
   if (shouldPersist) {
     const persistFn = resolveDtrPersistFn();
@@ -17701,13 +18107,8 @@ document.getElementById('fileInput').addEventListener('change', async (ev)=>{
       setUploadOverlayProgress(i + 1, total, `Parsed ${file.name}`);
     }
 
-    setUploadOverlayProgress(total, total, 'Saving records to Supabase…');
-    const persistFn = resolveDtrPersistFn();
-    if (persistFn) {
-      await persistFn();
-    } else {
-      await persistDtrSnapshotFallback();
-    }
+    setUploadOverlayProgress(total, total, 'Saving records to dtr_punches…');
+    await saveDtrSnapshotAuthoritatively(storedRecords);
 
     window.scheduleRenderResults?.('dtr-hours-restore');
     try {
@@ -17955,7 +18356,7 @@ let empProjId = emp ? (emp.projectId || '') : '';
       (currentProjectFilter === 'none' && !empProjId) ||
       currentProjectFilter === empProjId;
     let _passes = passesProject;
-if(!_passes && typeof splits !== 'undefined' && splits && splits[empId + '___' + date]){
+if(!_passes && typeof splits !== 'undefined' && splits && hasAnyActiveSplitEntry(splits[empId + '___' + date]) && !isSplitBlockedByTombstone(empId + '___' + date)){
   const segs = ['AM','PM','OT'];
   for (let i=0;i<segs.length;i++){
     const hk = empId + '___' + date + '___' + segs[i];
@@ -18188,7 +18589,8 @@ let otMins = 0;
 
     const splitKey = empId + '___' + date;
     let splitEntry = splits && splits[splitKey];
-    if (splitEntry) {
+    const hasActiveSplit = hasAnyActiveSplitEntry(splitEntry) && !isSplitBlockedByTombstone(splitKey);
+    if (hasActiveSplit) {
       if (splitEntry === true) splitEntry = { AM: true, PM: true, OT: true };
       const name = emp ? emp.name : '';
       const merged = { regMins:0, otMins:0, amIn:null, amOut:null, pmIn:null, pmOut:null, otIn:null, otOut:null, count:0 };
@@ -18509,21 +18911,30 @@ let otMins = 0;
 })();
 }
 
-document.getElementById('addProjectBtn').addEventListener('click', ()=>{
+document.getElementById('addProjectBtn').addEventListener('click', async ()=>{
   const name = document.getElementById('projectNameInput').value.trim();
   if(!name) return alert('Enter project name');
   const id = 'proj_' + Date.now();
   const companySelect = document.getElementById('projectCompanySelect');
   let company = companySelect ? companySelect.value : '';
   if (!COMPANY_OPTIONS.includes(company)) company = COMPANY_OPTIONS[0] || '';
-  storedProjects[id] = { name, company, active: true, deactivatedAt: null };
+  const next = { name, company, active: true, deactivatedAt: null };
+  const ok = await upsertProjectWithFeedback(id, next, 'Failed to add project.');
+  if (!ok) return;
+  storedProjects[id] = next;
   document.getElementById('projectNameInput').value='';
   if (companySelect) companySelect.value = COMPANY_OPTIONS[0] || '';
-  saveProjectsToLS({ userEdited: true });
+  rerenderProjectViews();
 });
-document.getElementById('clearProjectsBtn').addEventListener('click', ()=>{
+document.getElementById('clearProjectsBtn').addEventListener('click', async ()=>{
   if(!confirm('Clear all projects?')) return;
-  storedProjects = {}; saveProjectsToLS({ userEdited: true });
+  const ids = Object.keys(storedProjects);
+  for (const id of ids) {
+    const ok = await deleteProjectWithFeedback(id, 'Failed to clear all projects.');
+    if (!ok) return;
+  }
+  storedProjects = {};
+  rerenderProjectViews();
 });
 
 
@@ -19423,6 +19834,138 @@ function restoreData(file) {
     } catch (e) {}
     try { if (typeof window.scheduleCalculateAll === 'function') window.scheduleCalculateAll?.('dtr-override-sync'); } catch (e) {}
   }
+  function normalizeDtrTime(value){
+    const raw = String(value || '').trim();
+    const m = raw.match(/^(\d{2}:\d{2})/);
+    return m ? m[1] : '';
+  }
+  function getPayrollServiceOrThrow(){
+    if (window.payrollService) return window.payrollService;
+    throw new Error('Payroll service is not ready yet.');
+  }
+  function getActivePayrollPeriodId(){
+    try {
+      const state = (typeof window.getPayrollStoreState === 'function') ? window.getPayrollStoreState() : null;
+      return state && state.currentPeriodId ? state.currentPeriodId : null;
+    } catch (_) {
+      return null;
+    }
+  }
+  function getStorePunchRows(){
+    try {
+      const state = (typeof window.getPayrollStoreState === 'function') ? window.getPayrollStoreState() : null;
+      if (!state || !(state.dtrPunches instanceof Map)) return [];
+      const rows = [];
+      state.dtrPunches.forEach((row) => rows.push(row));
+      return rows;
+    } catch (_) {
+      return [];
+    }
+  }
+  function getStoreDtrApprovals(){
+    try {
+      const state = (typeof window.getPayrollStoreState === 'function') ? window.getPayrollStoreState() : null;
+      if (!state || !(state.dtrApprovals instanceof Map)) return [];
+      const rows = [];
+      state.dtrApprovals.forEach((row) => rows.push(row));
+      return rows;
+    } catch (_) {
+      return [];
+    }
+  }
+  function isRowLockedOrApproved(empId, date){
+    const employeeId = String(empId || '').trim();
+    const workDate = String(date || '').trim();
+    const periodId = getActivePayrollPeriodId();
+    const periodLocked = (typeof window.isSelectedPeriodLocked === 'function') ? !!window.isSelectedPeriodLocked() : false;
+    if (periodLocked) return { blocked: true, approved: false, reason: 'Payroll period is locked.' };
+    const approved = getStoreDtrApprovals().some((row) => (
+      row
+      && String(row.payroll_period_id || '') === String(periodId || '')
+      && String(row.employee_id || '') === employeeId
+      && String(row.work_date || '').slice(0, 10) === workDate
+      && row.is_approved === true
+    ));
+    if (approved) return { blocked: true, approved: true, reason: `DTR row for ${employeeId} on ${workDate} is approved.` };
+    return { blocked: false, approved: false, reason: '' };
+  }
+  function toRecordFromPunchRow(row){
+    if (!row) return null;
+    const empId = row.employee_id ?? row.emp_id ?? row.empId;
+    const stamp = String(row.punch_at || `${row.date || ''} ${row.time || ''}`).trim();
+    const m = stamp.match(/^(\d{4}-\d{2}-\d{2})[T\s](\d{2}:\d{2})/);
+    if (!empId || !m) return null;
+    return { id: row.id, empId: String(empId), date: m[1], time: m[2] };
+  }
+  function findPunchRowsForEmpDate(empId, date){
+    const id = String(empId || '').trim();
+    const ymd = String(date || '').trim();
+    const activePeriodId = getActivePayrollPeriodId();
+    if (!id || !ymd || !activePeriodId) return [];
+    const state = (typeof window.getPayrollStoreState === 'function') ? window.getPayrollStoreState() : null;
+    const activePeriod = state && state.payrollPeriods instanceof Map ? state.payrollPeriods.get(activePeriodId) : null;
+    const periodStart = String(activePeriod?.period_start || '').slice(0, 10);
+    const periodEnd = String(activePeriod?.period_end || '').slice(0, 10);
+
+    return getStorePunchRows().filter((row) => {
+      if (!row) return false;
+      const rowPeriodId = String(row?.data?.payroll_period_id || '').trim();
+      const rowDate = String(row.date || '').slice(0, 10);
+      if (rowPeriodId) {
+        // Metadata period id is only trusted when it matches active period and row date still sits
+        // inside that period boundary.
+        if (rowPeriodId !== String(activePeriodId)) return false;
+        if (periodStart && periodEnd && (!rowDate || rowDate < periodStart || rowDate > periodEnd)) return false;
+      } else if (periodStart && periodEnd) {
+        if (!rowDate || rowDate < periodStart || rowDate > periodEnd) return false;
+      }
+      const rec = toRecordFromPunchRow(row);
+      return rec && rec.empId === id && rec.date === ymd;
+    });
+  }
+  async function replaceDtrTimesForEmpDate(empId, date, nextTimes){
+    const svc = getPayrollServiceOrThrow();
+    const periodId = getActivePayrollPeriodId();
+    if (!periodId) throw new Error('No active payroll period selected.');
+
+    const lockOrApproval = isRowLockedOrApproved(empId, date);
+    if (lockOrApproval.blocked) throw new Error(lockOrApproval.reason);
+
+    const requestedTimes = (Array.isArray(nextTimes) ? nextTimes : [])
+      .map((t) => normalizeDtrTime(t))
+      .filter(Boolean);
+    await svc.replacePunchesForEmployeeDate({
+      periodId,
+      employeeId: String(empId),
+      workDate: String(date),
+      requestedTimes,
+      meta: { source: 'manual', manual: true, reconcile: 'replaceDtrTimesForEmpDate' },
+      projectId: null,
+    });
+  }
+  async function deleteDtrRowByContext({ empId, date, times = [] }){
+    const lockOrApproval = isRowLockedOrApproved(empId, date);
+    if (lockOrApproval.blocked) throw new Error(lockOrApproval.reason);
+    const svc = getPayrollServiceOrThrow();
+    const existingRows = findPunchRowsForEmpDate(empId, date);
+    const normalizedTimes = (Array.isArray(times) ? times : []).map((t) => normalizeDtrTime(t)).filter(Boolean);
+
+    if (normalizedTimes.length) {
+      const queue = existingRows.slice();
+      for (const time of normalizedTimes) {
+        // remove one matching occurrence per requested time (supports duplicates)
+        const idx = queue.findIndex((row) => normalizeDtrTime(toRecordFromPunchRow(row)?.time) === time);
+        if (idx < 0) continue;
+        const [row] = queue.splice(idx, 1);
+        await svc.deletePunch(row.id);
+      }
+      return;
+    }
+
+    for (const row of existingRows) {
+      await svc.deletePunch(row.id);
+    }
+  }
   function openManualModal(){
     const modal = document.getElementById('manualDtrModal');
     const empSelect = document.getElementById('manualEmpSelect');
@@ -19471,17 +20014,18 @@ function restoreData(file) {
         return;
       }
       try {
-        const record = { empId: String(empId), date: dateVal, time: timeVal, manual: true };
-        const exists = storedRecords.some(r =>
-          String(r.empId) === record.empId && r.date === record.date && r.time === record.time
-        );
-        if (!exists) storedRecords.push(record);
-        // Persist to Supabase (authoritative) after in-memory update
-        await persistStoredRecords();
-      } catch(e) { console.error('Saving manual DTR failed', e); }
-      closeManualModal();
-      window.scheduleRenderResults?.('manual-dtr-save');
-      setTimeout(function(){ saveBtn.__savingManual = false; }, 150);
+        const normalized = normalizeDtrTime(timeVal);
+        if (!normalized) throw new Error('Invalid time format.');
+        await replaceDtrTimesForEmpDate(String(empId), dateVal, [normalized].concat(
+          findPunchRowsForEmpDate(String(empId), dateVal).map((row) => normalizeDtrTime(toRecordFromPunchRow(row)?.time))
+        ));
+        closeManualModal();
+        window.scheduleRenderResults?.('manual-dtr-save');
+      } catch(e) {
+        alert(`Saving manual DTR failed: ${String(e?.message || e)}`);
+      } finally {
+        setTimeout(function(){ saveBtn.__savingManual = false; }, 150);
+      }
     });
     if (saveBtn) saveBtn.__wiredManualSave = true;
   }
@@ -19495,7 +20039,18 @@ function restoreData(file) {
     const saveBtn = document.getElementById('dtrPunchSave');
 
     if (cancelBtn) cancelBtn.addEventListener('click', closePunchModal);
-    if (clearBtn) clearBtn.addEventListener('click', function(){
+    const getModalTimes = () => {
+      const ids = ['dtrPunchAmIn','dtrPunchAmOut','dtrPunchPmIn','dtrPunchPmOut','dtrPunchOtIn','dtrPunchOtOut'];
+      return ids
+        .map((id) => {
+          const el = document.getElementById(id);
+          return normalizeDtrTime(el && el.value ? el.value : '');
+        })
+        .filter(Boolean)
+        .sort();
+    };
+
+    if (clearBtn) clearBtn.addEventListener('click', async function(){
       const empId = modal.dataset.empId;
       const date = modal.dataset.date;
       const scope = modal.dataset.scope || 'regular';
@@ -19516,10 +20071,16 @@ function restoreData(file) {
         else delete dtrOverrides[key];
         saveDtrOverrides();
       }
-      closePunchModal();
-      syncPayrollAfterOverride();
+      try {
+        const currentTimes = getModalTimes();
+        await replaceDtrTimesForEmpDate(empId, date, currentTimes);
+        closePunchModal();
+        syncPayrollAfterOverride();
+      } catch (error) {
+        alert(`Failed to clear DTR entries: ${String(error?.message || error)}`);
+      }
     });
-    if (saveBtn) saveBtn.addEventListener('click', function(){
+    if (saveBtn) saveBtn.addEventListener('click', async function(){
       const empId = modal.dataset.empId;
       const date = modal.dataset.date;
       const scope = modal.dataset.scope || 'regular';
@@ -19545,8 +20106,14 @@ function restoreData(file) {
         delete dtrOverrides[key];
       }
       saveDtrOverrides();
-      closePunchModal();
-      syncPayrollAfterOverride();
+      try {
+        const nextTimes = getModalTimes();
+        await replaceDtrTimesForEmpDate(empId, date, nextTimes);
+        closePunchModal();
+        syncPayrollAfterOverride();
+      } catch (error) {
+        alert(`Failed to save DTR entries: ${String(error?.message || error)}`);
+      }
     });
 
     modal.addEventListener('click', function(ev){
@@ -19566,6 +20133,22 @@ function restoreData(file) {
       const th = document.createElement('th');
       th.textContent = 'Punches';
       th.classList.add('punches-header');
+      const actionsHeader = theadRow.querySelector('.actions-header');
+      if (actionsHeader) {
+        theadRow.insertBefore(th, actionsHeader);
+      } else {
+        theadRow.appendChild(th);
+      }
+    }
+  }
+  function ensureApprovalHeader(){
+    const table = document.getElementById('resultsTable');
+    if(!table) return;
+    const theadRow = table.querySelector('thead tr');
+    if(theadRow && !theadRow.querySelector('.approval-header')){
+      const th = document.createElement('th');
+      th.textContent = 'Approval';
+      th.classList.add('approval-header');
       const actionsHeader = theadRow.querySelector('.actions-header');
       if (actionsHeader) {
         theadRow.insertBefore(th, actionsHeader);
@@ -19606,33 +20189,46 @@ function restoreData(file) {
         if (isSplitHalf) {
           let timesForHalf = [];
           try { timesForHalf = JSON.parse(tr.dataset.times || '[]'); } catch(e) { timesForHalf = []; }
-          timesForHalf.forEach(t => {
-            for (let i = 0; i < storedRecords.length; i++) {
-              const rec = storedRecords[i];
-              if (String(rec.empId) === String(empIdCell) && rec.date === dateCell && rec.time === t) {
-                storedRecords.splice(i, 1);
-                break;
-              }
-            }
-          });
+          await deleteDtrRowByContext({ empId: empIdCell, date: dateCell, times: timesForHalf });
           const splitKey = `${empIdCell}___${dateCell}`;
           if (splits && splits[splitKey]) {
             delete splits[splitKey];
             if (typeof saveSplits === 'function') saveSplits();
           }
         } else {
-          for(let i = storedRecords.length - 1; i >= 0; i--){
-            const rec = storedRecords[i];
-            if(String(rec.empId) === String(empIdCell) && rec.date === dateCell){
-              storedRecords.splice(i, 1);
-            }
-          }
+          await deleteDtrRowByContext({ empId: empIdCell, date: dateCell });
         }
-        await persistStoredRecords();
         window.scheduleRenderResults?.('dtr-split-toggle');
-      } catch(e){ console.error('DTR delete failed', e); }
+      } catch(e){ alert(`DTR delete failed: ${String(e?.message || e)}`); }
     });
     table.__dtrDelBound = true;
+  }
+  function setupDtrApprovalDelegation(){
+    const table = document.getElementById('resultsTable');
+    if (!table || table.__dtrApprovalBound) return;
+    table.__dtrApprovalBound = true;
+    table.addEventListener('click', async function(ev){
+      const btn = ev.target && ev.target.closest ? ev.target.closest('.dtr-approve-btn') : null;
+      if (!btn) return;
+      const tr = btn.closest('tr');
+      if (!tr) return;
+      const empId = tr.dataset.empId || (tr.cells[0] ? tr.cells[0].textContent.trim() : '');
+      const date = tr.dataset.date || (tr.cells[4] ? tr.cells[4].textContent.trim() : '');
+      const periodId = getActivePayrollPeriodId();
+      if (!periodId || !empId || !date) return;
+
+      try {
+        const svc = getPayrollServiceOrThrow();
+        if (btn.dataset.mode === 'unapprove') {
+          await svc.unapproveDtrRow({ periodId, employeeId: String(empId), workDate: String(date) });
+        } else {
+          await svc.approveDtrRow({ periodId, employeeId: String(empId), workDate: String(date) });
+        }
+        window.scheduleRenderResults?.('dtr-approval-toggle');
+      } catch (error) {
+        alert(`DTR approval update failed: ${String(error?.message || error)}`);
+      }
+    });
   }
   function setupDtrPunchDelegation(){
     const table = document.getElementById('resultsTable');
@@ -19651,15 +20247,30 @@ function restoreData(file) {
       openPunchEditor({ empId, date, name, scope: 'all' });
     });
   }
+  function warnDtrRenderEnhancer(stage, error){
+    console.warn(`[payroll:dtr:render] ${stage} failed`, error);
+  }
+  function getRenderableDtrRowContext(tr){
+    if (!tr || !tr.cells || tr.cells.length < 5) return null;
+    if (tr.closest('tfoot') || tr.classList.contains('totals-row')) return null;
+    const empId = String(tr.dataset.empId || (tr.cells[0] ? tr.cells[0].textContent : '') || '').trim();
+    const workDate = String(tr.dataset.date || (tr.cells[4] ? tr.cells[4].textContent : '') || '').trim();
+    if (!empId || !workDate) return null;
+    return { empId, workDate };
+  }
   function addDtrDeleteButtons(){
     const table = document.getElementById('resultsTable');
     if(!table) return;
     ensurePunchesHeader();
+    ensureApprovalHeader();
     ensureActionsHeader();
     const rows = table.querySelectorAll('tbody tr');
     rows.forEach(tr => {
+      const rowContext = getRenderableDtrRowContext(tr);
+      if (!rowContext) return;
       const hasPunch = !!tr.querySelector('.dtr-punch-btn');
       const hasDelete = !!tr.querySelector('.dtr-del-btn');
+      const hasApproval = !!tr.querySelector('.dtr-approve-btn');
       if (!hasPunch) {
         const punchTd = document.createElement('td');
         punchTd.className = 'punches-cell';
@@ -19674,6 +20285,56 @@ function restoreData(file) {
           tr.appendChild(punchTd);
         }
       }
+      if (!hasApproval) {
+        const approvalTd = document.createElement('td');
+        approvalTd.className = 'approval-cell';
+        const approvalBtn = document.createElement('button');
+        approvalBtn.type = 'button';
+        approvalBtn.className = 'dtr-approve-btn';
+        approvalBtn.textContent = 'Approve';
+        approvalBtn.dataset.mode = 'approve';
+        approvalTd.appendChild(approvalBtn);
+        const actionsCell = tr.querySelector('.actions-cell');
+        if (actionsCell) tr.insertBefore(approvalTd, actionsCell);
+        else tr.appendChild(approvalTd);
+      }
+
+      const approvalBtn = tr.querySelector('.dtr-approve-btn');
+      if (approvalBtn && !approvalBtn.textContent.trim()) approvalBtn.textContent = 'Approve';
+
+      let lockOrApproval = { blocked: false, approved: false, reason: '' };
+      try {
+        lockOrApproval = isRowLockedOrApproved(rowContext.empId, rowContext.workDate);
+      } catch (error) {
+        warnDtrRenderEnhancer('row-lock-resolution', error);
+      }
+
+      try {
+        if (approvalBtn) {
+          approvalBtn.textContent = lockOrApproval.approved ? 'Approved · Unapprove' : 'Approve';
+          approvalBtn.dataset.mode = lockOrApproval.approved ? 'unapprove' : 'approve';
+          const periodLocked = (typeof window.isSelectedPeriodLocked === 'function') ? !!window.isSelectedPeriodLocked() : false;
+          approvalBtn.disabled = periodLocked;
+          approvalBtn.title = periodLocked ? lockOrApproval.reason : '';
+        }
+        const existingEditBtn = tr.querySelector('.dtr-punch-btn');
+        if (existingEditBtn) {
+          existingEditBtn.disabled = !!lockOrApproval.blocked;
+          existingEditBtn.title = lockOrApproval.blocked ? lockOrApproval.reason : '';
+        }
+        const existingDeleteBtn = tr.querySelector('.dtr-del-btn');
+        if (existingDeleteBtn) {
+          existingDeleteBtn.disabled = !!lockOrApproval.blocked;
+          existingDeleteBtn.title = lockOrApproval.blocked ? lockOrApproval.reason : '';
+        }
+        const existingInlineEditBtn = tr.querySelector('.dtr-edit-btn');
+        if (existingInlineEditBtn) {
+          existingInlineEditBtn.disabled = !!lockOrApproval.blocked;
+          existingInlineEditBtn.title = lockOrApproval.blocked ? lockOrApproval.reason : '';
+        }
+      } catch (error) {
+        warnDtrRenderEnhancer('row-action-state-apply', error);
+      }
       if (hasDelete) return;
 
       const actionTd = document.createElement('td');
@@ -19681,6 +20342,8 @@ function restoreData(file) {
       const btn = document.createElement('button');
       btn.textContent = 'Delete';
       btn.className = 'dtr-del-btn';
+      btn.disabled = lockOrApproval.blocked;
+      btn.title = lockOrApproval.blocked ? lockOrApproval.reason : '';
       btn.addEventListener('click', async () => {
         // Get empId and date from row cells (empId at col 0, date at col 4)
         const empIdCell = tr.cells[0] ? tr.cells[0].textContent.trim() : '';
@@ -19708,15 +20371,7 @@ function restoreData(file) {
             // record (empId/date/time). This avoids removing duplicates beyond the
             // count present in timesForHalf (e.g., AM out and OT may share the same
             // time value, so we only remove the intended PM/OT instances).
-            timesForHalf.forEach(t => {
-              for (let i = 0; i < storedRecords.length; i++) {
-                const rec = storedRecords[i];
-                if (String(rec.empId) === String(empIdCell) && rec.date === dateCell && rec.time === t) {
-                  storedRecords.splice(i, 1);
-                  break; // remove only one matching occurrence per time value
-                }
-              }
-            });
+            await deleteDtrRowByContext({ empId: empIdCell, date: dateCell, times: timesForHalf });
             // After removing the half, unset the split flag for this emp/date so
             // the remaining records render as a single row. This mirrors the
             // behavior of the "Unsplit" button.
@@ -19727,17 +20382,10 @@ function restoreData(file) {
             }
           } else {
             // Remove all records for this employee on this date
-            for(let i = storedRecords.length - 1; i >= 0; i--){
-              const rec = storedRecords[i];
-              if(String(rec.empId) === String(empIdCell) && rec.date === dateCell){
-                storedRecords.splice(i, 1);
-              }
-            }
+            await deleteDtrRowByContext({ empId: empIdCell, date: dateCell });
           }
-          // Persist to Supabase so all devices reflect the deletion
-          await persistStoredRecords();
           window.scheduleRenderResults?.('dtr-split-toggle');
-        } catch(e){ console.error('DTR delete failed', e); }
+        } catch(e){ alert(`DTR delete failed: ${String(e?.message || e)}`); }
       });
       actionTd.appendChild(btn);
       tr.appendChild(actionTd);
@@ -19748,10 +20396,11 @@ function restoreData(file) {
     const original = renderResults;
     window.renderResults = function(){
       const res = original.apply(this, arguments);
-      try { addDtrDeleteButtons(); } catch(e){}
-      try { setupDtrDeleteDelegation(); } catch(e){}
-      try { setupDtrPunchDelegation(); } catch(e){}
-      try { wirePunchEditor(); } catch(e){}
+      try { addDtrDeleteButtons(); } catch(e){ warnDtrRenderEnhancer('addDtrDeleteButtons', e); }
+      try { setupDtrDeleteDelegation(); } catch(e){ warnDtrRenderEnhancer('setupDtrDeleteDelegation', e); }
+      try { setupDtrApprovalDelegation(); } catch(e){ warnDtrRenderEnhancer('setupDtrApprovalDelegation', e); }
+      try { setupDtrPunchDelegation(); } catch(e){ warnDtrRenderEnhancer('setupDtrPunchDelegation', e); }
+      try { wirePunchEditor(); } catch(e){ warnDtrRenderEnhancer('wirePunchEditor', e); }
       // After rendering results, always check whether the selected payroll period is
       // locked and toggle editing accordingly. This ensures that dynamic
       // controls inserted by renderResults() respect the current lock state.
@@ -19759,16 +20408,17 @@ function restoreData(file) {
         if (typeof checkAndToggleEditState === 'function') {
           checkAndToggleEditState();
         }
-      } catch(e) {}
+      } catch(e) { warnDtrRenderEnhancer('checkAndToggleEditState', e); }
       return res;
     };
-    try { addDtrDeleteButtons(); } catch(e){}
+    try { addDtrDeleteButtons(); } catch(e){ warnDtrRenderEnhancer('addDtrDeleteButtons-initial', e); }
     return true;
   }
   function init(){
     wireManualDTR();
     wirePunchEditor();
     setupDtrDeleteDelegation();
+    setupDtrApprovalDelegation();
     setupDtrPunchDelegation();
     if(!patchRenderResults()){
       const iv = setInterval(() => {
@@ -22217,6 +22867,59 @@ function __dtrLoadJson(k, fb){
 function __dtrSaveJson(k, v){
   try { localStorage.setItem(k, JSON.stringify(v)); } catch(e) {}
 }
+function __dtrGetErrorMessage(errorLike){
+  return String(errorLike && (errorLike.message || errorLike.details || errorLike.error_description) ? (errorLike.message || errorLike.details || errorLike.error_description) : errorLike || '');
+}
+function __dtrGetErrorCode(errorLike){
+  return String(errorLike && errorLike.code ? errorLike.code : '');
+}
+function __dtrIsMissingPunchesError(errorLike){
+  const msg = __dtrGetErrorMessage(errorLike);
+  const code = __dtrGetErrorCode(errorLike);
+  return /does not exist|relation .*dtr_punches|schema cache|Could not find the table/i.test(msg) || code === '42P01' || code === 'PGRST205';
+}
+function __dtrIsPunchesSchemaMismatchError(errorLike){
+  const msg = __dtrGetErrorMessage(errorLike);
+  const code = __dtrGetErrorCode(errorLike);
+  return code === '42703'
+    || /column .*id.* does not exist/i.test(msg)
+    || /column .*data.* does not exist/i.test(msg)
+    || /column .*source.* does not exist/i.test(msg)
+    || /column .*updated_by.* does not exist/i.test(msg)
+    || /there is no unique or exclusion constraint matching the ON CONFLICT specification/i.test(msg);
+}
+function __dtrNormalizePunchRow(row){
+  if (!row) return null;
+  const payload = row.data && typeof row.data === 'object' ? row.data : null;
+  const source = row.source != null && String(row.source).trim() !== ''
+    ? String(row.source).trim()
+    : (payload && payload.source ? String(payload.source) : (payload && payload.manual ? 'manual' : ''));
+  const empId = row.emp_id != null && String(row.emp_id).trim() !== ''
+    ? String(row.emp_id).trim()
+    : (payload && payload.empId != null ? String(payload.empId).trim() : '');
+  const date = row.date != null && String(row.date).trim() !== ''
+    ? String(row.date).trim()
+    : (payload && payload.date ? String(payload.date) : '');
+  const time = row.time != null && String(row.time).trim() !== ''
+    ? String(row.time).trim()
+    : (payload && payload.time ? String(payload.time) : '');
+  const normalized = payload ? Object.assign({}, payload) : {};
+  if (empId && normalized.empId == null) normalized.empId = empId;
+  if (date && normalized.date == null) normalized.date = date;
+  if (time && normalized.time == null) normalized.time = time;
+  if (source && normalized.source == null) normalized.source = source;
+  if (!normalized.source && normalized.manual) normalized.source = 'manual';
+  const id = row.id != null && String(row.id).trim() !== '' ? String(row.id).trim() : __dtrRecId(normalized);
+  if (!id || !normalized.empId || !normalized.date || !normalized.time) return null;
+  return {
+    id,
+    emp_id: empId,
+    date,
+    time,
+    source: source || null,
+    data: normalized
+  };
+}
 
 async function __dtrFetchAllPunchRows(supa, table){
   const out = [];
@@ -22225,12 +22928,12 @@ async function __dtrFetchAllPunchRows(supa, table){
   while (true){
     const { data, error } = await supa
       .from(table)
-      .select('id,data')
+      .select('id,emp_id,date,time,source,data')
       .range(from, from + pageSize - 1);
     if (error) throw error;
-    const chunk = data || [];
+    const chunk = (data || []).map(__dtrNormalizePunchRow).filter(Boolean);
     out.push(...chunk);
-    if (chunk.length < pageSize) break;
+    if ((data || []).length < pageSize) break;
     from += pageSize;
   }
   return out;
@@ -22238,6 +22941,8 @@ async function __dtrFetchAllPunchRows(supa, table){
 
 async function migrateLegacyDtrToPunches(records){
   try {
+    const sourceCount = Array.isArray(records) ? records.length : 0;
+    console.info('[dtr:debug] legacy->punches migration starting', { sourceCount });
     const supa = window.supabase || (typeof supabase !== 'undefined' ? supabase : null);
     if (!supa) return false;
     const table = 'dtr_punches';
@@ -22270,9 +22975,11 @@ async function migrateLegacyDtrToPunches(records){
       const { error } = await supa.from(table).upsert(batch, { onConflict: 'id' });
       if (error) throw error;
     }
+    console.info('[dtr:debug] legacy->punches migration result', { success: true, sourceCount: localRecs.length, migratedCount: rows.length });
     return true;
   } catch (e) {
     console.warn('Legacy->Punches migration failed:', e && e.message ? e.message : e);
+    console.info('[dtr:debug] legacy->punches migration result', { success: false, error: e && (e.message || e.details) ? String(e.message || e.details) : String(e) });
     return false;
   }
 }
@@ -22286,36 +22993,10 @@ async function loadDtrFromCloud() {
   try {
     const rows = await __dtrFetchAllPunchRows(supa, punchesTable);
     const recs = rows.map(r => r && r.data).filter(Boolean);
-    const punchIds = new Set(rows.map(r => r && r.id).filter(Boolean));
-
-    // If punches already has data but a prior legacy->punches migration was partial (or failed),
-    // backfill any missing legacy records once per session.
-    if (recs.length && !window.__dtr_punches_backfill_done) {
-      window.__dtr_punches_backfill_done = true;
-      try {
-        const legacy = await loadDtrFromCloudLegacyBlob();
-        const legacyRecs = legacy && Array.isArray(legacy.records) ? legacy.records : [];
-        if (legacyRecs.length) {
-          const missing = [];
-          for (const r of legacyRecs) {
-            const id = __dtrRecId(r);
-            if (id && !punchIds.has(id)) missing.push(r);
-          }
-          if (missing.length) {
-            await migrateLegacyDtrToPunches(missing);
-            const rows2 = await __dtrFetchAllPunchRows(supa, punchesTable);
-            const recs2 = rows2.map(r => r && r.data).filter(Boolean);
-            // Replace arrays in-place so downstream logic sees the refreshed data.
-            rows.splice(0, rows.length, ...rows2);
-            recs.splice(0, recs.length, ...recs2);
-          }
-        }
-      } catch(e) {
-        console.warn('Punches legacy backfill skipped:', e && e.message ? e.message : e);
-      }
-    }
 
     // If punches table exists but empty, try legacy blob (for migration)
+    console.info('[dtr:debug] refresh remote punches load count', { rowCount: rows.length, recordCount: recs.length });
+
     if (!recs.length) {
       try {
         const legacy = await loadDtrFromCloudLegacyBlob();
@@ -22326,8 +23007,9 @@ async function loadDtrFromCloud() {
     }
     return { status: 'ok', records: recs, tombstones: {}, meta: { storage: 'punches', rowCount: rows.length } };
   } catch (e) {
-    const msg = (e && (e.message || e.details)) ? String(e.message || e.details) : String(e);
-    const isMissing = /does not exist|relation .*dtr_punches|42P01/i.test(msg);
+    const msg = __dtrGetErrorMessage(e);
+    const isMissing = __dtrIsMissingPunchesError(e);
+    const isSchemaMismatch = __dtrIsPunchesSchemaMismatchError(e);
     if (isMissing) {
       // Fallback to legacy for backwards compatibility
       try {
@@ -22337,30 +23019,40 @@ async function loadDtrFromCloud() {
         return { status: 'error', error: String(e2), records: null, tombstones: null, meta: { storage: 'legacy', reason: 'punches_missing' } };
       }
     }
+    if (isSchemaMismatch) {
+      console.warn('Supabase DTR punches schema mismatch:', msg);
+      return { status: 'error', error: 'Supabase table `dtr_punches` exists but is still using the legacy schema. Run the latest DTR punches migration to add `id`, `source`, `updated_by`, and the primary key.', records: null, tombstones: null, meta: { storage: 'punches', reason: 'punches_schema_mismatch' } };
+    }
     console.warn('Supabase DTR punches fetch error:', msg);
     return { status: 'error', error: msg, records: null, tombstones: null, meta: { storage: 'punches' } };
   }
 }
 
-async function saveDtrToCloud(records) {
+async function saveDtrToCloud(records, options = {}) {
   // Row-per-punch persistence (safe for multi-device editing).
   // - Writes are row-level (insert/update/delete by id).
   // - No localStorage-based diffing for authoritative business data.
+  const requirePunches = !!(options && options.requirePunches);
+  const throwOnError = !!(options && options.throwOnError);
   try {
     const supa = window.supabase || (typeof supabase !== 'undefined' ? supabase : null);
-    if (!supa) return;
+    if (!supa) {
+      if (throwOnError) throw new Error('Supabase client is unavailable.');
+      return { status: 'no_client', storage: 'none' };
+    }
 
     // Queue saves until hydration is done to avoid startup overwrite.
     if (!window.__dtrHydrationDone) {
       window.__queuedDtrRecords = Array.isArray(records) ? records : [];
       window.__pendingDtrSave = true;
-      return;
+      return { status: 'queued', storage: 'pending' };
     }
 
     const punchesTable = 'dtr_punches';
     const deviceId = __dtrGetDeviceId();
 
     const localRecs = Array.isArray(records) ? records : [];
+    console.info('[dtr:debug] before save to Supabase punches', { localCount: localRecs.length, hydrationDone: !!window.__dtrHydrationDone });
     const localMap = new Map();
     for (const r of localRecs){
       const id = __dtrRecId(r);
@@ -22415,15 +23107,31 @@ async function saveDtrToCloud(records) {
       if (error) throw error;
     }
 
+    console.info('[dtr:debug] after Supabase save result', { success: true, upsertedCount: rowsToUpsert.length, deletedCount: idsToDelete.length, remoteCountBefore: remoteRows.length, localCount: localRecs.length });
+    return { status: 'ok', storage: 'punches', upsertedCount: rowsToUpsert.length, deletedCount: idsToDelete.length };
   } catch (e) {
-    const msg = (e && (e.message || e.details)) ? String(e.message || e.details) : String(e);
-    const isMissing = /does not exist|relation .*dtr_punches|42P01/i.test(msg);
+    const msg = __dtrGetErrorMessage(e);
+    const isMissing = __dtrIsMissingPunchesError(e);
+    const isSchemaMismatch = __dtrIsPunchesSchemaMismatchError(e);
     if (isMissing) {
+      if (requirePunches || throwOnError) {
+        throw new Error('Authoritative DTR storage is not `dtr_punches`.');
+      }
       console.warn('DTR punches table missing; falling back to legacy DTR storage until you create `dtr_punches`.');
       try { await saveDtrToCloudLegacyBlob(records); } catch(_) {}
-      return;
+      return { status: 'ok', storage: 'legacy' };
+    }
+    if (isSchemaMismatch) {
+      const schemaMsg = 'Supabase table `dtr_punches` exists but is still using the legacy schema. Run the latest DTR punches migration to add `id`, `source`, `updated_by`, and the primary key.';
+      console.warn('saveDtrToCloud punches schema mismatch:', msg);
+      console.info('[dtr:debug] after Supabase save result', { success: false, error: schemaMsg, fallbackToLegacyBlob: false, schemaMismatch: true });
+      if (throwOnError) throw new Error(schemaMsg);
+      return { status: 'error', storage: 'punches', error: schemaMsg };
     }
     console.warn('saveDtrToCloud punches failed:', msg);
+    console.info('[dtr:debug] after Supabase save result', { success: false, error: msg, fallbackToLegacyBlob: isMissing });
+    if (throwOnError) throw new Error(msg);
+    return { status: 'error', storage: 'punches', error: msg };
   }
 }
 
@@ -22543,9 +23251,11 @@ document.addEventListener('DOMContentLoaded', async function () {
 
   try {
     const res = await loadDtrFromCloud();
+    console.info('[dtr:debug] hydration remote result', { status: res && res.status ? res.status : 'unknown', storage: res && res.meta && res.meta.storage ? res.meta.storage : 'unknown', remoteCount: res && Array.isArray(res.records) ? res.records.length : 0 });
 
     if (res && res.status === 'ok' && Array.isArray(res.records) && res.records.length) {
       const remoteRecs = res.records;
+      const usingPunchesStorage = !!(res.meta && res.meta.storage === 'punches');
 
       // If we loaded from legacy blob and punches table exists, migrate once (then we'll operate on punches going forward)
       if (res.meta && res.meta.needsMigration) {
@@ -22559,16 +23269,18 @@ document.addEventListener('DOMContentLoaded', async function () {
         }
       }
 
-      // Merge: remote is source of truth, but keep any local-only punches (offline adds) that are not in remote.
-      // IMPORTANT: pull local records *after* the async cloud fetch resolves. If a user creates
-      // a manual DTR while hydration is in flight, we must merge that latest local state so the
-      // new punch is not overwritten by a stale pre-fetch snapshot.
       const localRecs = getCurrentLocalRecords();
-      const remoteKeys = new Set(remoteRecs.map(__dtrRecId).filter(Boolean));
       const merged = remoteRecs.slice();
-      for (const r of (localRecs || [])) {
-        const k = __dtrRecId(r);
-        if (k && !remoteKeys.has(k)) merged.push(r);
+
+      // When authoritative punches rows already exist in Supabase, trust them as the source of truth.
+      // Local storage may still contain stale legacy rows from older builds; auto-merging them back in
+      // causes startup writes and failed legacy backfills against live projects.
+      if (!usingPunchesStorage) {
+        const remoteKeys = new Set(remoteRecs.map(__dtrRecId).filter(Boolean));
+        for (const r of (localRecs || [])) {
+          const k = __dtrRecId(r);
+          if (k && !remoteKeys.has(k)) merged.push(r);
+        }
       }
 
       // Stable ordering for nicer UI
@@ -22591,10 +23303,12 @@ document.addEventListener('DOMContentLoaded', async function () {
       } catch(e) {}
 
       try { window.scheduleRenderResults?.('tab-activation-dtr'); } catch (e) {}
+      console.info('[dtr:debug] final count shown in UI', { count: merged.length, source: 'hydrated-merge' });
       if (typeof hideRemoteDtrAlert === 'function') hideRemoteDtrAlert();
 
-      // Seed remote with any local-only punches (safe: only inserts new ids)
-      if (localRecs && localRecs.length) {
+      // Seed remote only when we are still on legacy storage. If punches rows already exist remotely,
+      // avoid pushing old local cache rows back into the authoritative table during startup.
+      if (!usingPunchesStorage && localRecs && localRecs.length) {
         // If there are local-only records, save will upsert missing ids; it will not wipe remote.
         window.__dtrHydrationDone = true;
         try { await saveDtrToCloud(merged); } catch(e) {}
@@ -22608,6 +23322,7 @@ document.addEventListener('DOMContentLoaded', async function () {
         // Seed remote from local
         window.__dtrHydrationDone = true; // allow save
         try { await saveDtrToCloud(localRecs); } catch(e) {}
+        console.info('[dtr:debug] final count shown in UI', { count: localRecs.length, source: 'local-seeded-remote' });
         if (typeof hideRemoteDtrAlert === 'function') hideRemoteDtrAlert();
       } else {
         if (typeof showRemoteDtrAlert === 'function') {
@@ -23256,6 +23971,7 @@ document.addEventListener('DOMContentLoaded', async function () {
     } catch(e){
       console.warn('Failed to persist DTR records locally', e);
     }
+    console.info('[dtr:debug] persistStoredRecords snapshot prepared', { localCount: snapshot.length });
     try {
       if (typeof saveDtrToCloud === 'function') await saveDtrToCloud(snapshot);
     } catch(e){
@@ -23263,6 +23979,15 @@ document.addEventListener('DOMContentLoaded', async function () {
     }
   }
   try { window.persistStoredRecords = persistStoredRecords; } catch (_) {}
+
+  window.applyDtrRecordsSnapshotFromStore = function applyDtrRecordsSnapshotFromStore(records = []) {
+    const next = Array.isArray(records) ? records.slice() : [];
+    next.sort((a, b) => String(a.date || '').localeCompare(String(b.date || '')) || String(a.time || '').localeCompare(String(b.time || '')) || String(a.empId || '').localeCompare(String(b.empId || '')));
+    try { storedRecords = next; } catch (_) {}
+    try { window.storedRecords = next; } catch (_) {}
+    try { window.scheduleRenderResults?.('dtr-store-bridge'); } catch (_) {}
+  };
+
 
   function normalizeEditableTimeValue(value){
     const raw = String(value || '').trim();
@@ -23277,6 +24002,35 @@ document.addEventListener('DOMContentLoaded', async function () {
     const mNum = Number(mm);
     if (!Number.isFinite(hNum) || !Number.isFinite(mNum)) return '';
     return String(hNum).padStart(2, '0') + ':' + String(mNum).padStart(2, '0');
+  }
+
+  function getEditorRowLockOrApproval(tr){
+    if (!tr || !tr.cells || tr.cells.length < 5 || tr.closest('tfoot') || tr.classList.contains('totals-row')) {
+      return { blocked: true, reason: 'Row is not editable.', nonDataRow: true };
+    }
+    const empId = String((tr?.dataset?.empId || (tr?.cells?.[0]?.textContent || '') || '')).trim();
+    const workDate = String((tr?.dataset?.date || (tr?.cells?.[4]?.textContent || '') || '')).trim();
+    if (!empId || !workDate) {
+      return { blocked: true, reason: 'Row is not editable.', nonDataRow: true };
+    }
+    const state = (typeof window.getPayrollStoreState === 'function') ? window.getPayrollStoreState() : null;
+    const periodId = state && state.currentPeriodId ? state.currentPeriodId : null;
+    const periodLocked = (typeof window.isSelectedPeriodLocked === 'function') ? !!window.isSelectedPeriodLocked() : false;
+    if (periodLocked) {
+      return { blocked: true, reason: 'Payroll period is locked.' };
+    }
+    const approvalRows = state && state.dtrApprovals instanceof Map ? Array.from(state.dtrApprovals.values()) : [];
+    const approved = approvalRows.some((row) => (
+      row
+      && String(row.payroll_period_id || '') === String(periodId || '')
+      && String(row.employee_id || '') === empId
+      && String(row.work_date || '').slice(0, 10) === workDate
+      && row.is_approved === true
+    ));
+    if (approved) {
+      return { blocked: true, reason: `DTR row for ${empId} on ${workDate} is approved.` };
+    }
+    return { blocked: false, reason: '' };
   }
 
   function hasTimeInputChanges(tr, fields, idxMap){
@@ -23342,31 +24096,13 @@ document.addEventListener('DOMContentLoaded', async function () {
       revertTimeCellsToDisplay(tr, fields, idxMap);
       return { changed: false };
     }
-    const toRemove = new Set();
-    const toAdd = new Set();
-    fields.forEach(field => {
-      const before = prevValues[field] || '';
-      const after = values[field] || '';
-      if (before && before !== after){
-        toRemove.add(before);
-      }
-      if (!after && before){
-        toRemove.add(before);
-      }
-      if (after && before !== after){
-        toAdd.add(after);
-      }
-    });
-    if (toRemove.size){
-      removeRecordsForTimes(empId, date, Array.from(toRemove));
-    }
-    if (toAdd.size){
-      Array.from(toAdd).forEach(time => {
-        if (!hasStoredRecord(empId, date, time)) {
-          storedRecords.push({ empId: String(empId), date, time, manual: true });
-        }
-      });
-    }
+    const nextTimes = fields
+      .map((field) => values[field] || '')
+      .filter(Boolean)
+      .sort();
+
+    await replaceDtrTimesForEmpDate(empId, date, nextTimes);
+
     fields.forEach(field => {
       const nextVal = values[field] || '';
       tr.dataset[field] = normalizeEditableTimeValue(nextVal);
@@ -23380,7 +24116,6 @@ document.addEventListener('DOMContentLoaded', async function () {
     } catch(_) {
       tr.dataset.times = '[]';
     }
-    await persistStoredRecords();
     return { changed: true };
   }
 
@@ -23392,13 +24127,30 @@ document.addEventListener('DOMContentLoaded', async function () {
     const regIdx = idxMap.regIdx;
     const otIdx = idxMap.otIdx;
     table.querySelectorAll('tbody tr').forEach(tr => {
-      if(tr.querySelector('.dtr-edit-btn')) return;
+      const rowGate = getEditorRowLockOrApproval(tr);
+      const existingBtn = tr.querySelector('.dtr-edit-btn');
+      if(existingBtn){
+        existingBtn.disabled = !!rowGate.blocked;
+        existingBtn.title = rowGate.blocked ? rowGate.reason : '';
+        return;
+      }
+      if (rowGate.nonDataRow) return;
       const td = document.createElement('td');
       td.className = 'editor-cell';
       const btn = document.createElement('button');
+      btn.type = 'button';
       btn.textContent = 'Edit';
       btn.className = 'dtr-edit-btn';
+      btn.disabled = !!rowGate.blocked;
+      btn.title = rowGate.blocked ? rowGate.reason : '';
       btn.addEventListener('click', async () => {
+        const gate = getEditorRowLockOrApproval(tr);
+        if (gate.blocked) {
+          btn.disabled = true;
+          btn.title = gate.reason;
+          alert(gate.reason);
+          return;
+        }
         const regCell = (regIdx >= 0) ? tr.cells[regIdx] : null;
         const otCell  = (otIdx >= 0) ? tr.cells[otIdx] : null;
         const timeFields = getTimeFieldsForRow(tr);
@@ -23437,79 +24189,83 @@ document.addEventListener('DOMContentLoaded', async function () {
           });
           btn.textContent = 'Save';
         } else {
-          const regInput = tr.querySelector('input.edit-reg');
-          const otInput  = tr.querySelector('input.edit-ot');
-          const regVal = regInput ? (parseFloat(regInput.value) || 0) : 0;
-          const otVal  = otInput  ? (parseFloat(otInput.value)  || 0) : 0;
-          const kHalf = keyForRow(tr);
-          const kBase = baseKeyForRow(tr);
-          const usesSplitKey = !!(tr.dataset && tr.dataset.half);
-          const origR = parseFloat(tr.dataset.origReg || 'NaN');
-          const origO = parseFloat(tr.dataset.origOt  || 'NaN');
-          const hadPrevReg = (tr.dataset.hadRegEdited === '1');
-          const hadPrevOt  = (tr.dataset.hadOtEdited  === '1');
-          const changedReg = (regInput && isFinite(origR)) ? Math.abs(regVal - origR) > 1e-9 : false;
-          const changedOt  = (otInput  && isFinite(origO)) ? Math.abs(otVal  - origO) > 1e-9 : false;
-          const regEdited  = changedReg || hadPrevReg;
-          const otEdited   = changedOt  || hadPrevOt;
-          const timeChanged = hasTimeInputChanges(tr, timeFields, idxMap);
-          if (!changedReg && !changedOt && !timeChanged){
-            const ovExisting = overridesHours && (overridesHours[kHalf] || overridesHours[kBase]);
-            restoreHoursDisplay(regCell, otCell, ovExisting, regVal, otVal);
-            revertTimeCellsToDisplay(tr, timeFields, idxMap);
-            btn.textContent = 'Edit';
-            recomputeDtrSummaryFromTable();
-            return;
-          }
-          const timeResult = await applyTimeUpdates(tr, timeFields, idxMap);
-          if (!changedReg && !changedOt && !timeResult.changed){
-            const ovExisting = overridesHours && (overridesHours[kHalf] || overridesHours[kBase]);
-            if (regCell){
-              const displayReg = ovExisting ? (parseFloat(ovExisting.reg) || 0) : regVal;
-              const starReg = ovExisting ? (Object.prototype.hasOwnProperty.call(ovExisting,'regEdited') ? !!ovExisting.regEdited : true) : false;
-              regCell.textContent = displayReg.toFixed(2) + (starReg ? ' *' : '');
+          try {
+            const regInput = tr.querySelector('input.edit-reg');
+            const otInput  = tr.querySelector('input.edit-ot');
+            const regVal = regInput ? (parseFloat(regInput.value) || 0) : 0;
+            const otVal  = otInput  ? (parseFloat(otInput.value)  || 0) : 0;
+            const kHalf = keyForRow(tr);
+            const kBase = baseKeyForRow(tr);
+            const usesSplitKey = !!(tr.dataset && tr.dataset.half);
+            const origR = parseFloat(tr.dataset.origReg || 'NaN');
+            const origO = parseFloat(tr.dataset.origOt  || 'NaN');
+            const hadPrevReg = (tr.dataset.hadRegEdited === '1');
+            const hadPrevOt  = (tr.dataset.hadOtEdited  === '1');
+            const changedReg = (regInput && isFinite(origR)) ? Math.abs(regVal - origR) > 1e-9 : false;
+            const changedOt  = (otInput  && isFinite(origO)) ? Math.abs(otVal  - origO) > 1e-9 : false;
+            const regEdited  = changedReg || hadPrevReg;
+            const otEdited   = changedOt  || hadPrevOt;
+            const timeChanged = hasTimeInputChanges(tr, timeFields, idxMap);
+            if (!changedReg && !changedOt && !timeChanged){
+              const ovExisting = overridesHours && (overridesHours[kHalf] || overridesHours[kBase]);
+              restoreHoursDisplay(regCell, otCell, ovExisting, regVal, otVal);
+              revertTimeCellsToDisplay(tr, timeFields, idxMap);
+              btn.textContent = 'Edit';
+              recomputeDtrSummaryFromTable();
+              return;
             }
-            if (otCell){
-              const displayOt = ovExisting ? (parseFloat(ovExisting.ot) || 0) : otVal;
-              const starOt = ovExisting ? (Object.prototype.hasOwnProperty.call(ovExisting,'otEdited') ? !!ovExisting.otEdited : true) : false;
-              otCell.textContent = displayOt.toFixed(2) + (starOt ? ' *' : '');
+            const timeResult = await applyTimeUpdates(tr, timeFields, idxMap);
+            if (!changedReg && !changedOt && !timeResult.changed){
+              const ovExisting = overridesHours && (overridesHours[kHalf] || overridesHours[kBase]);
+              if (regCell){
+                const displayReg = ovExisting ? (parseFloat(ovExisting.reg) || 0) : regVal;
+                const starReg = ovExisting ? (Object.prototype.hasOwnProperty.call(ovExisting,'regEdited') ? !!ovExisting.regEdited : true) : false;
+                regCell.textContent = displayReg.toFixed(2) + (starReg ? ' *' : '');
+              }
+              if (otCell){
+                const displayOt = ovExisting ? (parseFloat(ovExisting.ot) || 0) : otVal;
+                const starOt = ovExisting ? (Object.prototype.hasOwnProperty.call(ovExisting,'otEdited') ? !!ovExisting.otEdited : true) : false;
+                otCell.textContent = displayOt.toFixed(2) + (starOt ? ' *' : '');
+              }
+              btn.textContent = 'Edit';
+              recomputeDtrSummaryFromTable();
+              return;
             }
-            btn.textContent = 'Edit';
-            recomputeDtrSummaryFromTable();
-            return;
-          }
-          let overridesTouched = false;
-          if (timeResult.changed && !changedReg && !changedOt){
-            try { if (overridesHours && Object.prototype.hasOwnProperty.call(overridesHours, kHalf)) { delete overridesHours[kHalf]; overridesTouched = true; } } catch(_){ }
-            if (!usesSplitKey){
-              try { if (overridesHours && Object.prototype.hasOwnProperty.call(overridesHours, kBase)) { delete overridesHours[kBase]; overridesTouched = true; } } catch(_){ }
+            let overridesTouched = false;
+            if (timeResult.changed && !changedReg && !changedOt){
+              try { if (overridesHours && Object.prototype.hasOwnProperty.call(overridesHours, kHalf)) { delete overridesHours[kHalf]; overridesTouched = true; } } catch(_){ }
+              if (!usesSplitKey){
+                try { if (overridesHours && Object.prototype.hasOwnProperty.call(overridesHours, kBase)) { delete overridesHours[kBase]; overridesTouched = true; } } catch(_){ }
+              }
+            } else if (regEdited || otEdited){
+              const payload = { reg: regVal, ot: otVal, regEdited: !!regEdited, otEdited: !!otEdited };
+              overridesHours[kHalf] = payload;
+              if (!usesSplitKey){
+                overridesHours[kBase] = payload;
+              }
+              overridesTouched = true;
+            } else {
+              try { if (overridesHours && Object.prototype.hasOwnProperty.call(overridesHours, kHalf)) { delete overridesHours[kHalf]; overridesTouched = true; } } catch(_){ }
+              if (!usesSplitKey){
+                try { if (overridesHours && Object.prototype.hasOwnProperty.call(overridesHours, kBase)) { delete overridesHours[kBase]; overridesTouched = true; } } catch(_){ }
+              }
             }
-          } else if (regEdited || otEdited){
-            const payload = { reg: regVal, ot: otVal, regEdited: !!regEdited, otEdited: !!otEdited };
-            overridesHours[kHalf] = payload;
-            if (!usesSplitKey){
-              overridesHours[kBase] = payload;
-            }
-            overridesTouched = true;
-          } else {
-            try { if (overridesHours && Object.prototype.hasOwnProperty.call(overridesHours, kHalf)) { delete overridesHours[kHalf]; overridesTouched = true; } } catch(_){ }
-            if (!usesSplitKey){
-              try { if (overridesHours && Object.prototype.hasOwnProperty.call(overridesHours, kBase)) { delete overridesHours[kBase]; overridesTouched = true; } } catch(_){ }
-            }
-          }
-          if (overridesTouched){
-            await saveOverridesHours();
+            if (overridesTouched){
+              await saveOverridesHours();
 
-          }
-          if (timeResult.changed){
+            }
+            if (timeResult.changed){
+              btn.textContent = 'Edit';
+              try { window.scheduleRenderResults?.('dtr-inline-edit-save'); } catch(e){}
+              return;
+            }
+            const ovNow = overridesHours && (overridesHours[kHalf] || overridesHours[kBase]);
+            restoreHoursDisplay(regCell, otCell, ovNow, regVal, otVal);
             btn.textContent = 'Edit';
-            try { window.scheduleRenderResults?.('dtr-inline-edit-save'); } catch(e){}
-            return;
+            recomputeDtrSummaryFromTable();
+          } catch (error) {
+            alert(`DTR edit failed: ${String(error?.message || error)}`);
           }
-          const ovNow = overridesHours && (overridesHours[kHalf] || overridesHours[kBase]);
-          restoreHoursDisplay(regCell, otCell, ovNow, regVal, otVal);
-          btn.textContent = 'Edit';
-          recomputeDtrSummaryFromTable();
         }
       });
       td.appendChild(btn);
