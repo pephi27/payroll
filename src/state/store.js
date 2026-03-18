@@ -18,6 +18,7 @@ const initialState = {
     currentPeriodLocked: null,
     lastRealtimeEvent: null,
     lastConflict: null,
+    dtrStateVersion: 0,
   },
 };
 
@@ -57,6 +58,11 @@ export function batch(fn) {
   }
 }
 
+function bumpDtrStateVersion(tableKey) {
+  if (tableKey !== 'dtrPunches' && tableKey !== 'dtrApprovals') return;
+  state.diagnostics.dtrStateVersion = (Number(state.diagnostics.dtrStateVersion) || 0) + 1;
+}
+
 export function setCurrentPeriod(periodId) {
   state.currentPeriodId = periodId;
   const period = periodId ? state.payrollPeriods.get(periodId) : null;
@@ -72,6 +78,7 @@ export function mergeRow(tableKey, row, primaryKey = 'id') {
   }
   const prev = collection.get(row[primaryKey]) || {};
   collection.set(row[primaryKey], { ...prev, ...row });
+  bumpDtrStateVersion(tableKey);
   if (tableKey === 'payrollPeriods' && row.id === state.currentPeriodId) {
     state.diagnostics.currentPeriodLocked = !!row.is_locked;
   }
@@ -82,6 +89,7 @@ export function removeRow(tableKey, id) {
   const collection = state[tableKey];
   if (!(collection instanceof Map) || !id) return;
   collection.delete(id);
+  bumpDtrStateVersion(tableKey);
   notify({ type: 'remove_row', tableKey, id });
 }
 
@@ -89,6 +97,7 @@ export function resetTable(tableKey) {
   const collection = state[tableKey];
   if (!(collection instanceof Map)) return;
   collection.clear();
+  bumpDtrStateVersion(tableKey);
   notify({ type: 'reset_table', tableKey });
 }
 

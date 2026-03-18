@@ -20129,6 +20129,17 @@ function restoreData(file) {
       openPunchEditor({ empId, date, name, scope: 'all' });
     });
   }
+  function warnDtrRenderEnhancer(stage, error){
+    console.warn(`[payroll:dtr:render] ${stage} failed`, error);
+  }
+  function getRenderableDtrRowContext(tr){
+    if (!tr || !tr.cells || tr.cells.length < 5) return null;
+    if (tr.closest('tfoot') || tr.classList.contains('totals-row')) return null;
+    const empId = String(tr.dataset.empId || (tr.cells[0] ? tr.cells[0].textContent : '') || '').trim();
+    const workDate = String(tr.dataset.date || (tr.cells[4] ? tr.cells[4].textContent : '') || '').trim();
+    if (!empId || !workDate) return null;
+    return { empId, workDate };
+  }
   function addDtrDeleteButtons(){
     const table = document.getElementById('resultsTable');
     if(!table) return;
@@ -20137,6 +20148,8 @@ function restoreData(file) {
     ensureActionsHeader();
     const rows = table.querySelectorAll('tbody tr');
     rows.forEach(tr => {
+      const rowContext = getRenderableDtrRowContext(tr);
+      if (!rowContext) return;
       const hasPunch = !!tr.querySelector('.dtr-punch-btn');
       const hasDelete = !!tr.querySelector('.dtr-del-btn');
       const hasApproval = !!tr.querySelector('.dtr-approve-btn');
@@ -20158,31 +20171,51 @@ function restoreData(file) {
         const approvalTd = document.createElement('td');
         approvalTd.className = 'approval-cell';
         const approvalBtn = document.createElement('button');
+        approvalBtn.type = 'button';
         approvalBtn.className = 'dtr-approve-btn';
+        approvalBtn.textContent = 'Approve';
+        approvalBtn.dataset.mode = 'approve';
         approvalTd.appendChild(approvalBtn);
         const actionsCell = tr.querySelector('.actions-cell');
         if (actionsCell) tr.insertBefore(approvalTd, actionsCell);
         else tr.appendChild(approvalTd);
       }
 
-      const empIdCell = tr.cells[0] ? tr.cells[0].textContent.trim() : '';
-      const dateCell = tr.cells[4] ? tr.cells[4].textContent.trim() : '';
-      const lockOrApproval = isRowLockedOrApproved(empIdCell, dateCell);
       const approvalBtn = tr.querySelector('.dtr-approve-btn');
-      if (approvalBtn) {
-        approvalBtn.textContent = lockOrApproval.approved ? 'Approved · Unapprove' : 'Approve';
-        approvalBtn.dataset.mode = lockOrApproval.approved ? 'unapprove' : 'approve';
-        approvalBtn.disabled = (typeof window.isSelectedPeriodLocked === 'function') ? !!window.isSelectedPeriodLocked() : false;
+      if (approvalBtn && !approvalBtn.textContent.trim()) approvalBtn.textContent = 'Approve';
+
+      let lockOrApproval = { blocked: false, approved: false, reason: '' };
+      try {
+        lockOrApproval = isRowLockedOrApproved(rowContext.empId, rowContext.workDate);
+      } catch (error) {
+        warnDtrRenderEnhancer('row-lock-resolution', error);
       }
-      const existingEditBtn = tr.querySelector('.dtr-punch-btn');
-      if (existingEditBtn) {
-        existingEditBtn.disabled = lockOrApproval.blocked;
-        existingEditBtn.title = lockOrApproval.blocked ? lockOrApproval.reason : '';
-      }
-      const existingDeleteBtn = tr.querySelector('.dtr-del-btn');
-      if (existingDeleteBtn) {
-        existingDeleteBtn.disabled = lockOrApproval.blocked;
-        existingDeleteBtn.title = lockOrApproval.blocked ? lockOrApproval.reason : '';
+
+      try {
+        if (approvalBtn) {
+          approvalBtn.textContent = lockOrApproval.approved ? 'Approved · Unapprove' : 'Approve';
+          approvalBtn.dataset.mode = lockOrApproval.approved ? 'unapprove' : 'approve';
+          const periodLocked = (typeof window.isSelectedPeriodLocked === 'function') ? !!window.isSelectedPeriodLocked() : false;
+          approvalBtn.disabled = periodLocked;
+          approvalBtn.title = periodLocked ? lockOrApproval.reason : '';
+        }
+        const existingEditBtn = tr.querySelector('.dtr-punch-btn');
+        if (existingEditBtn) {
+          existingEditBtn.disabled = !!lockOrApproval.blocked;
+          existingEditBtn.title = lockOrApproval.blocked ? lockOrApproval.reason : '';
+        }
+        const existingDeleteBtn = tr.querySelector('.dtr-del-btn');
+        if (existingDeleteBtn) {
+          existingDeleteBtn.disabled = !!lockOrApproval.blocked;
+          existingDeleteBtn.title = lockOrApproval.blocked ? lockOrApproval.reason : '';
+        }
+        const existingInlineEditBtn = tr.querySelector('.dtr-edit-btn');
+        if (existingInlineEditBtn) {
+          existingInlineEditBtn.disabled = !!lockOrApproval.blocked;
+          existingInlineEditBtn.title = lockOrApproval.blocked ? lockOrApproval.reason : '';
+        }
+      } catch (error) {
+        warnDtrRenderEnhancer('row-action-state-apply', error);
       }
       if (hasDelete) return;
 
@@ -20245,11 +20278,11 @@ function restoreData(file) {
     const original = renderResults;
     window.renderResults = function(){
       const res = original.apply(this, arguments);
-      try { addDtrDeleteButtons(); } catch(e){}
-      try { setupDtrDeleteDelegation(); } catch(e){}
-      try { setupDtrApprovalDelegation(); } catch(e){}
-      try { setupDtrPunchDelegation(); } catch(e){}
-      try { wirePunchEditor(); } catch(e){}
+      try { addDtrDeleteButtons(); } catch(e){ warnDtrRenderEnhancer('addDtrDeleteButtons', e); }
+      try { setupDtrDeleteDelegation(); } catch(e){ warnDtrRenderEnhancer('setupDtrDeleteDelegation', e); }
+      try { setupDtrApprovalDelegation(); } catch(e){ warnDtrRenderEnhancer('setupDtrApprovalDelegation', e); }
+      try { setupDtrPunchDelegation(); } catch(e){ warnDtrRenderEnhancer('setupDtrPunchDelegation', e); }
+      try { wirePunchEditor(); } catch(e){ warnDtrRenderEnhancer('wirePunchEditor', e); }
       // After rendering results, always check whether the selected payroll period is
       // locked and toggle editing accordingly. This ensures that dynamic
       // controls inserted by renderResults() respect the current lock state.
@@ -20257,10 +20290,10 @@ function restoreData(file) {
         if (typeof checkAndToggleEditState === 'function') {
           checkAndToggleEditState();
         }
-      } catch(e) {}
+      } catch(e) { warnDtrRenderEnhancer('checkAndToggleEditState', e); }
       return res;
     };
-    try { addDtrDeleteButtons(); } catch(e){}
+    try { addDtrDeleteButtons(); } catch(e){ warnDtrRenderEnhancer('addDtrDeleteButtons-initial', e); }
     return true;
   }
   function init(){
@@ -23788,8 +23821,14 @@ document.addEventListener('DOMContentLoaded', async function () {
   }
 
   function getEditorRowLockOrApproval(tr){
+    if (!tr || !tr.cells || tr.cells.length < 5 || tr.closest('tfoot') || tr.classList.contains('totals-row')) {
+      return { blocked: true, reason: 'Row is not editable.', nonDataRow: true };
+    }
     const empId = String((tr?.dataset?.empId || (tr?.cells?.[0]?.textContent || '') || '')).trim();
     const workDate = String((tr?.dataset?.date || (tr?.cells?.[4]?.textContent || '') || '')).trim();
+    if (!empId || !workDate) {
+      return { blocked: true, reason: 'Row is not editable.', nonDataRow: true };
+    }
     const state = (typeof window.getPayrollStoreState === 'function') ? window.getPayrollStoreState() : null;
     const periodId = state && state.currentPeriodId ? state.currentPeriodId : null;
     const periodLocked = (typeof window.isSelectedPeriodLocked === 'function') ? !!window.isSelectedPeriodLocked() : false;
@@ -23904,15 +23943,22 @@ document.addEventListener('DOMContentLoaded', async function () {
     const regIdx = idxMap.regIdx;
     const otIdx = idxMap.otIdx;
     table.querySelectorAll('tbody tr').forEach(tr => {
-      if(tr.querySelector('.dtr-edit-btn')) return;
+      const rowGate = getEditorRowLockOrApproval(tr);
+      const existingBtn = tr.querySelector('.dtr-edit-btn');
+      if(existingBtn){
+        existingBtn.disabled = !!rowGate.blocked;
+        existingBtn.title = rowGate.blocked ? rowGate.reason : '';
+        return;
+      }
+      if (rowGate.nonDataRow) return;
       const td = document.createElement('td');
       td.className = 'editor-cell';
       const btn = document.createElement('button');
+      btn.type = 'button';
       btn.textContent = 'Edit';
       btn.className = 'dtr-edit-btn';
-      const lockOrApproval = getEditorRowLockOrApproval(tr);
-      btn.disabled = !!lockOrApproval.blocked;
-      btn.title = lockOrApproval.blocked ? lockOrApproval.reason : '';
+      btn.disabled = !!rowGate.blocked;
+      btn.title = rowGate.blocked ? rowGate.reason : '';
       btn.addEventListener('click', async () => {
         const gate = getEditorRowLockOrApproval(tr);
         if (gate.blocked) {
