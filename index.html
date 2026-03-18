@@ -10424,7 +10424,12 @@ document.addEventListener('DOMContentLoaded', () => {
   };
   try { window.appState = appState; } catch(_) {}
 
-  function periodIdFromRange(start, end){ return (start && end) ? `${start}|${end}` : ''; }
+  function periodIdFromRange(start, end) {
+    const s = String(start || '').trim();
+    const e = String(end || '').trim();
+    if (!s || !e) return '';
+    return `${s}|${e}`;
+  }
   function periodIdIfInRange(start, end){ return periodIdFromRange(start, end); }
   function getPeriodMeta(periodId){
     const all = (window.store && window.store.getJSON(PERIOD_META_KEY, {})) || {};
@@ -22262,8 +22267,9 @@ function updateWeekInputs(snap) {
       selectEl.innerHTML = '';
       items.forEach(item => {
         const opt = document.createElement('option');
-        opt.value = periodIdFromRange(item.startDate, item.endDate) || String(item.i);
+        opt.value = String(item.i);
         opt.dataset.historyIndex = String(item.i);
+        opt.dataset.periodId = periodIdFromRange(item.startDate, item.endDate);
         const rangeText = typeof window.formatDateRange === 'function'
           ? window.formatDateRange(item.startDate, item.endDate)
           : [item.startDate || '', item.endDate || ''].filter(Boolean).join(' - ');
@@ -22316,7 +22322,6 @@ function updateWeekInputs(snap) {
   function onSelectChange(e) {
     if (e && e.target && e.target.id === 'activePayrollSelect') return;
     syncPayrollHistorySelectionUi(e && e.target ? e.target : null);
-    scheduleFullReload();
   }
 
   async function createNewPeriodSnapshot(start, end){
@@ -24878,7 +24883,7 @@ document.addEventListener('DOMContentLoaded', async function () {
 
   function cloneOptions(){
     if (!origSel || !bpSel) return;
-    const sig = Array.from(origSel.options).map(o=>o.value+'|'+o.textContent).join('@@');
+    const sig = Array.from(origSel.options).map(o=>o.value+'|'+(o.dataset?.periodId||'')+'|'+o.textContent).join('@@');
     if (bpSel.__sig !== sig){
       bpSel.innerHTML = '';
       Array.from(origSel.options).forEach(o=>{
@@ -24886,6 +24891,7 @@ document.addEventListener('DOMContentLoaded', async function () {
         opt.value = o.value;
         opt.textContent = o.textContent;
         if (o.dataset && o.dataset.historyIndex) opt.dataset.historyIndex = o.dataset.historyIndex;
+        if (o.dataset && o.dataset.periodId) opt.dataset.periodId = o.dataset.periodId;
         bpSel.appendChild(opt);
       });
       bpSel.__sig = sig;

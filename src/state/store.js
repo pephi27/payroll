@@ -17,6 +17,7 @@ const initialState = {
     realtimeStatus: 'idle',
     currentPeriodLocked: null,
     periodSwitchInFlight: false,
+    periodSwitchError: '',
     lastRealtimeEvent: null,
     lastConflict: null,
     dtrStateVersion: 0,
@@ -106,6 +107,16 @@ export function resetTable(tableKey) {
 export function setPeriodSwitchInFlight(inFlight) {
   state.diagnostics.periodSwitchInFlight = !!inFlight;
   notify({ type: 'diagnostics_period_switch', inFlight: !!inFlight });
+}
+
+export function clearPeriodSwitchError() {
+  state.diagnostics.periodSwitchError = '';
+  notify({ type: 'diagnostics_period_switch_error_clear' });
+}
+
+export function setPeriodSwitchError(message) {
+  state.diagnostics.periodSwitchError = String(message || '').trim();
+  notify({ type: 'diagnostics_period_switch_error', message: state.diagnostics.periodSwitchError });
 }
 
 export function setSupabaseConnected(connected) {
