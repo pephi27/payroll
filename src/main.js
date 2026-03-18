@@ -201,22 +201,18 @@ function bridgeDtrApprovalsToLegacyRuntime() {
   if (window.__payrollDtrApprovalsBridgeReady) return;
   window.__payrollDtrApprovalsBridgeReady = true;
 
-  // Lock/approval gates for legacy row actions still render from index.html. Force a render
-  // whenever approvals (row-level) or payroll periods (period lock state) change so buttons stay accurate.
+  // Approval toggles only live in modular store state; legacy row actions still render from
+  // index.html. Force a render whenever approvals change so lock/approval button states stay accurate.
   const scheduleRefresh = () => {
     try { window.scheduleRenderResults?.('dtr-approvals-store-bridge'); } catch (_) {}
   };
 
-  const hasTableChange = (change, tableKey) => (
-    change?.tableKey === tableKey
-    || (change?.type === 'batch'
-      && Array.isArray(change?.changes)
-      && change.changes.some((entry) => entry?.tableKey === tableKey))
-  );
-
   subscribe((_state, change) => {
-    const isApprovalOrLockChange = hasTableChange(change, 'dtrApprovals') || hasTableChange(change, 'payrollPeriods');
-    if (!isApprovalOrLockChange) return;
+    const isApprovalChange = change?.tableKey === 'dtrApprovals'
+      || (change?.type === 'batch'
+        && Array.isArray(change?.changes)
+        && change.changes.some((entry) => entry?.tableKey === 'dtrApprovals'));
+    if (!isApprovalChange) return;
     scheduleRefresh();
   });
 }
