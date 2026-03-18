@@ -18031,25 +18031,6 @@ async function persistDtrSnapshotFallback(){
   await saveDtrSnapshotAuthoritatively(snapshot);
 }
 
-function isRecoverableDtrUploadIssue(err){
-  const msg = (err && (err.message || err.details)) ? String(err.message || err.details) : String(err || '');
-  return /Authoritative DTR storage is not `dtr_punches`|DTR cloud save is unavailable|DTR cloud reload failed|Supabase client is unavailable|does not exist|relation .*dtr_punches|schema cache|Could not find the table/i.test(msg);
-}
-
-function getRecoverableDtrUploadMessage(err){
-  const msg = (err && err.message) ? String(err.message) : '';
-  if (/Authoritative DTR storage is not `dtr_punches`|does not exist|relation .*dtr_punches|schema cache|Could not find the table/i.test(msg)) {
-    return 'Imported locally, but cloud sync is unavailable until the `dtr_punches` table is set up.';
-  }
-  if (/DTR cloud save is unavailable|Supabase client is unavailable/i.test(msg)) {
-    return 'Imported locally, but cloud sync is unavailable right now.';
-  }
-  if (/DTR cloud reload failed/i.test(msg)) {
-    return 'Imported locally, but the cloud copy could not be verified right now.';
-  }
-  return 'Imported locally, but cloud sync could not be completed.';
-}
-
 async function importAndPersistDtrFile(file, options = {}){
   const shouldPersist = options.persist !== false;
   const shouldRender = options.render !== false;
@@ -18126,29 +18107,15 @@ document.getElementById('fileInput').addEventListener('change', async (ev)=>{
       setUploadOverlayProgress(i + 1, total, `Parsed ${file.name}`);
     }
 
-    let uploadNotice = '';
     setUploadOverlayProgress(total, total, 'Saving records to dtr_punches…');
-    try {
-      await saveDtrSnapshotAuthoritatively(storedRecords);
-    } catch (err) {
-      if (!isRecoverableDtrUploadIssue(err)) throw err;
-      uploadNotice = getRecoverableDtrUploadMessage(err);
-      console.warn('DTR upload completed with local-only persistence', err);
-      await applyAuthoritativeDtrSnapshot(storedRecords);
-      try {
-        if (typeof showRemoteDtrAlert === 'function') showRemoteDtrAlert(uploadNotice);
-      } catch (_) {}
-    }
+    await saveDtrSnapshotAuthoritatively(storedRecords);
 
     window.scheduleRenderResults?.('dtr-hours-restore');
     try {
-      if (!uploadNotice && typeof hideRemoteDtrAlert === 'function') hideRemoteDtrAlert();
+      if (typeof hideRemoteDtrAlert === 'function') hideRemoteDtrAlert();
     } catch (e) {}
 
-    const successMsg = `Upload successful: imported ${totalAdded} record${totalAdded!==1?'s':''} from ${total} file${total>1?'s':''}.`;
-    alert(uploadNotice ? `${successMsg}
-
-${uploadNotice}` : successMsg);
+    alert(`Upload successful: imported ${totalAdded} record${totalAdded!==1?'s':''} from ${total} file${total>1?'s':''}.`);
   } catch(err){
     console.error('DTR upload failed', err);
     alert(`Upload failed: ${err && err.message ? err.message : 'Unknown error'}`);
