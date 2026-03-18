@@ -618,32 +618,23 @@ export const payrollService = {
     return data;
   },
 
-  async fetchPunchesByPeriod(periodId) {
+  async loadPunchesByPeriod(periodId) {
     const { data, error } = await fetchPunchRowsByKnownShapes(periodId);
     if (error) throw error;
-    return Array.isArray(data) ? data : [];
+
+    data.forEach((row) => mergeRow('dtrPunches', row));
+    return data;
   },
 
-  async loadPunchesByPeriod(periodId) {
-    const rows = await this.fetchPunchesByPeriod(periodId);
-    rows.forEach((row) => mergeRow('dtrPunches', row));
-    return rows;
-  },
-
-  async fetchDtrApprovalsByPeriod(periodId) {
+  async loadDtrApprovalsByPeriod(periodId) {
     if (!periodId) return [];
     const { data, error } = await requireSupabaseClient()
       .from(TABLES.dtrApprovals)
       .select('*')
       .eq('payroll_period_id', periodId);
     if (error) throw error;
-    return Array.isArray(data) ? data : [];
-  },
-
-  async loadDtrApprovalsByPeriod(periodId) {
-    const rows = await this.fetchDtrApprovalsByPeriod(periodId);
-    rows.forEach((row) => mergeRow('dtrApprovals', row));
-    return rows;
+    data.forEach((row) => mergeRow('dtrApprovals', row));
+    return data;
   },
 
   getDtrApprovalKey({ periodId, employeeId, workDate }) {
