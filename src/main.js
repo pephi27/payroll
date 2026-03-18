@@ -431,6 +431,7 @@ async function bootstrapPayrollApp() {
     console.error('Payroll core read models load failed', error);
   }
 
+  bridgePeriodSwitchReadModels();
   wirePeriodSwitchUi(switchPayrollPeriod);
 
   window.payrollDebugVerify = async (periodId = currentPeriodId) => {
