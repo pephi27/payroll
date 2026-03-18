@@ -229,6 +229,19 @@ async function fetchPunchRowsByKnownShapes(periodId) {
     return { data: null, error: new Error(`Payroll period ${periodId} has invalid date boundaries.`) };
   }
 
+  try {
+    await ensureTableAvailable(TABLES.punches, { context: 'load DTR punches' });
+  } catch (error) {
+    if (isMissingTableError(error, TABLES.punches) || /Supabase table "dtr_punches" is not available/i.test(String(error?.message || ''))) {
+      console.warn('[payroll:dtr] punches table unavailable; loading zero punch rows until the migration is applied', {
+        periodId,
+        message: error?.message || String(error),
+      });
+      return { data: [], error: null };
+    }
+    return { data: null, error };
+  }
+
   const rows = [];
   let page = 0;
   for (;;) {
@@ -263,6 +276,48 @@ function requireSupabaseClient() {
 
 let hasRpcLockGuard = null;
 let hasRpcDtrEditableGuard = null;
+const tableAvailability = new Map();
+
+function isMissingTableError(error, tableName = '') {
+  const message = String(error?.message || error?.details || error?.error_description || '');
+  const code = String(error?.code || '');
+  const escapedTableName = String(tableName || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return code === 'PGRST205'
+    || code === '42P01'
+    || /schema cache|Could not find the table|does not exist/i.test(message)
+    || (escapedTableName ? new RegExp(`relation .*${escapedTableName}`, 'i').test(message) : false);
+}
+
+function createMissingTableError(tableName, context = 'use this feature') {
+  return new Error(
+    `Supabase table "${tableName}" is not available, so the app cannot ${context}. ` +
+    'Run the DTR punch migrations and refresh the Supabase schema cache before retrying.',
+  );
+}
+
+async function ensureTableAvailable(tableName, { context = 'use this feature' } = {}) {
+  if (tableAvailability.get(tableName) === true) return;
+  if (tableAvailability.get(tableName) === false) {
+    throw createMissingTableError(tableName, context);
+  }
+
+  const { error } = await requireSupabaseClient()
+    .from(tableName)
+    .select('id', { head: true, count: 'exact' })
+    .limit(1);
+
+  if (!error) {
+    tableAvailability.set(tableName, true);
+    return;
+  }
+
+  if (isMissingTableError(error, tableName)) {
+    tableAvailability.set(tableName, false);
+    throw createMissingTableError(tableName, context);
+  }
+
+  throw error;
+}
 
 function normalizeWorkDate(workDate) {
   const raw = String(workDate || '').trim();
@@ -532,6 +587,7 @@ function applyExpectedUpdatedAt(query, expectedUpdatedAt) {
 
 async function updateWithOptimisticLock({ table, id, patch, expectedUpdatedAt, periodId, stateKey }) {
   await ensurePeriodUnlockedWithRpc(periodId);
+  await ensureTableAvailable(table, { context: `update records in ${table}` });
   logWrite('update', table, { id, ...patch, expected_updated_at: expectedUpdatedAt });
 
   let query = requireSupabaseClient()
@@ -556,6 +612,7 @@ async function updateWithOptimisticLock({ table, id, patch, expectedUpdatedAt, p
 
 async function createRowWithLock({ table, row, periodId, stateKey }) {
   await ensurePeriodUnlockedWithRpc(periodId);
+  await ensureTableAvailable(table, { context: `create records in ${table}` });
   logWrite('insert', table, row);
   const payload = { ...sanitizeInsertPayload(row), updated_at: new Date().toISOString() };
 
@@ -573,6 +630,7 @@ async function createRowWithLock({ table, row, periodId, stateKey }) {
 
 async function deleteWithOptimisticLock({ table, id, expectedUpdatedAt, periodId, stateKey }) {
   await ensurePeriodUnlockedWithRpc(periodId);
+  await ensureTableAvailable(table, { context: `delete records from ${table}` });
   logWrite('delete', table, { id, expected_updated_at: expectedUpdatedAt });
 
   let query = requireSupabaseClient().from(table).delete().eq('id', id);
