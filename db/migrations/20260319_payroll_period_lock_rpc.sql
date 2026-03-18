@@ -40,7 +40,7 @@ begin
   select *
     into v_row
   from public.payroll_periods
-  where id::text = p_period_id
+  where id = p_period_id
   for update;
 
   if not found then
@@ -64,7 +64,7 @@ begin
   set
     is_locked = coalesce(p_is_locked, false),
     updated_at = v_now
-  where id::text = p_period_id
+  where id = p_period_id
   returning * into v_row;
 
   v_action := case when coalesce(p_is_locked, false) then 'lock' else 'unlock' end;
