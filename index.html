@@ -22261,8 +22261,7 @@ function updateWeekInputs(snap) {
       selectEl.innerHTML = '';
       items.forEach(item => {
         const opt = document.createElement('option');
-        opt.value = periodIdFromRange(item.startDate, item.endDate) || String(item.i);
-        opt.dataset.historyIndex = String(item.i);
+        opt.value = String(item.i);
         const rangeText = typeof window.formatDateRange === 'function'
           ? window.formatDateRange(item.startDate, item.endDate)
           : [item.startDate || '', item.endDate || ''].filter(Boolean).join(' - ');
@@ -22278,9 +22277,8 @@ function updateWeekInputs(snap) {
       });
       // Always set the selected value to the saved active index so all selectors stay in sync
       const saved = String(getActiveIndex());
-      const savedOption = [...selectEl.options].find((o) => String(o.dataset.historyIndex || '') === saved);
-      if (savedOption) {
-        selectEl.value = savedOption.value;
+      if ([...selectEl.options].some(o => o.value === saved)) {
+        selectEl.value = saved;
       } else if (selectEl.options.length) {
         selectEl.selectedIndex = 0;
       }
@@ -22290,8 +22288,7 @@ function updateWeekInputs(snap) {
       if (sel !== globalSelect) fill(sel);
     });
     // after filling, apply active
-    const selectedOption = globalSelect && globalSelect.selectedOptions ? globalSelect.selectedOptions[0] : null;
-    const idxVal = parseInt((selectedOption && selectedOption.dataset && selectedOption.dataset.historyIndex) || getActiveIndex(), 10);
+    const idxVal = parseInt((globalSelect && globalSelect.value) || getActiveIndex(), 10);
     const snap = Number.isFinite(idxVal) ? history[idxVal] : null;
     if (snap) {
       saveActiveIndex(idxVal);
@@ -22300,21 +22297,15 @@ function updateWeekInputs(snap) {
   }
   try { window.populatePayrollDropdowns = populateDropdowns; } catch (e) {}
 
-  function syncPayrollHistorySelectionUi(selectEl) {
-    const selectedOption = selectEl && selectEl.selectedOptions ? selectEl.selectedOptions[0] : null;
-    const idx = parseInt((selectedOption && selectedOption.dataset && selectedOption.dataset.historyIndex) || '', 10);
+  function onSelectChange(e) {
+    const idx = parseInt(e.target.value, 10);
     if (!Number.isFinite(idx)) return;
     const history = loadHistory();
     if (!history[idx]) return;
     saveActiveIndex(idx);
     updateWeekInputs(history[idx]);
+    // Keep all selects in sync
     populateDropdowns();
-  }
-  try { window.syncPayrollHistorySelectionUi = syncPayrollHistorySelectionUi; } catch (e) {}
-
-  function onSelectChange(e) {
-    if (e && e.target && e.target.id === 'activePayrollSelect') return;
-    syncPayrollHistorySelectionUi(e && e.target ? e.target : null);
     scheduleFullReload();
   }
 
@@ -22461,14 +22452,14 @@ function updateWeekInputs(snap) {
     if (!wrap) return;
     const sel = wrap.querySelector('.activeWeekSelect');
     if (!sel) return;
-    try {
-      sel.dispatchEvent(new Event('change', { bubbles: true }));
-    } catch (_) {
-      onSelectChange({ target: sel });
-    }
+    onSelectChange({ target: sel });
   }
 
   document.addEventListener('DOMContentLoaded', () => {
+    const globalSelect = document.getElementById('activePayrollSelect');
+    if (globalSelect) {
+      globalSelect.addEventListener('change', onSelectChange);
+    }
     const newBtn = document.getElementById('newPayrollPeriod');
     if (newBtn) {
       newBtn.addEventListener('click', onNewPeriod);
@@ -24884,7 +24875,6 @@ document.addEventListener('DOMContentLoaded', async function () {
         const opt = document.createElement('option');
         opt.value = o.value;
         opt.textContent = o.textContent;
-        if (o.dataset && o.dataset.historyIndex) opt.dataset.historyIndex = o.dataset.historyIndex;
         bpSel.appendChild(opt);
       });
       bpSel.__sig = sig;
@@ -24903,8 +24893,8 @@ document.addEventListener('DOMContentLoaded', async function () {
     if (!bpSel.__wired){
       bpSel.addEventListener('change', () => {
         try{
-          // Keep mirrored selector UI state in sync; main.js owns the actual period switch.
           origSel.value = bpSel.value;
+          origSel.dispatchEvent(new Event('change', { bubbles:true }));
         }catch(e){}
       });
       origSel.addEventListener('change', () => {
