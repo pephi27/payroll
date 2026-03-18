@@ -1,5 +1,5 @@
 import { payrollService } from './services/payrollService.js';
-import { getState, setCurrentPeriod, setSupabaseConnected, subscribe } from './state/store.js';
+import { getState, setCurrentPeriod, setPeriodSwitchInFlight, setSupabaseConnected, subscribe } from './state/store.js';
 import { startRealtimeSubscriptions } from './realtime/subscriptions.js';
 import { mountPayrollController } from './ui/payrollController.js';
 import { waitForSupabaseClient } from './config/supabaseClient.js';
@@ -222,6 +222,9 @@ function bridgeDtrApprovalsToLegacyRuntime() {
 }
 
 
+  bind('activePayrollSelect');
+  bind('bpActivePayrollSelect');
+}
 
 
 async function bootstrapPayrollApp() {
@@ -234,6 +237,9 @@ async function bootstrapPayrollApp() {
   bridgeDtrApprovalsToLegacyRuntime();
   window.payrollService = payrollService;
   window.getPayrollStoreState = getState;
+
+  const switchPayrollPeriod = createPeriodSwitcher();
+  window.switchPayrollPeriod = switchPayrollPeriod;
 
   const root = document.getElementById('panelPayroll') || document.body;
   cleanupUi = mountPayrollController(root);
@@ -260,17 +266,20 @@ async function bootstrapPayrollApp() {
     const periods = await payrollService.loadPeriods();
     if (periods.length) {
       currentPeriodId = periods[0].id;
-      setCurrentPeriod(currentPeriodId);
     }
   } catch (error) {
     console.error('Payroll periods load failed', error);
   }
 
   try {
-    await payrollService.loadCoreReadModels({ periodId: currentPeriodId });
+    if (currentPeriodId) {
+      await switchPayrollPeriod(currentPeriodId);
+    }
   } catch (error) {
     console.error('Payroll core read models load failed', error);
   }
+
+  wirePeriodSwitchUi(switchPayrollPeriod);
 
   window.payrollDebugVerify = async (periodId = currentPeriodId) => {
     if (!periodId) {

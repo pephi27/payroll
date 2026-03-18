@@ -16,6 +16,7 @@ const initialState = {
     supabaseConnected: null,
     realtimeStatus: 'idle',
     currentPeriodLocked: null,
+    periodSwitchInFlight: false,
     lastRealtimeEvent: null,
     lastConflict: null,
   },
@@ -90,6 +91,12 @@ export function resetTable(tableKey) {
   if (!(collection instanceof Map)) return;
   collection.clear();
   notify({ type: 'reset_table', tableKey });
+}
+
+
+export function setPeriodSwitchInFlight(inFlight) {
+  state.diagnostics.periodSwitchInFlight = !!inFlight;
+  notify({ type: 'diagnostics_period_switch', inFlight: !!inFlight });
 }
 
 export function setSupabaseConnected(connected) {
