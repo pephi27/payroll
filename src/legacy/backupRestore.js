@@ -28,35 +28,23 @@
         return { rows: data||[], error: error? error.message : null };
       }catch(e){ return { rows:[], error: String(e) } }
     }
-    function canonicalizeBundlePunchRow(row){
-      if(!row || typeof row !== 'object') return null;
-      const meta = row.meta && typeof row.meta === 'object' ? { ...row.meta } : (row.data && typeof row.data === 'object' ? { ...row.data } : {});
-      const employeeId = String(row.employee_id ?? row.emp_id ?? meta.employee_id ?? meta.empId ?? '').trim();
-      const punchAt = String(row.punch_at || `${row.date || meta.date || ''}T${row.time || meta.time || ''}:00`).trim();
-      const periodId = String(row.payroll_period_id ?? meta.payroll_period_id ?? '').trim();
-      if(!employeeId || !punchAt) return null;
-      return {
-        id: row.id || null,
-        payroll_period_id: periodId || null,
-        employee_id: employeeId,
-        project_id: row.project_id ?? meta.project_id ?? meta.projectId ?? null,
-        punch_at: punchAt,
-        meta: { ...meta, ...(periodId ? { payroll_period_id: periodId } : {}), empId: employeeId },
-        updated_by: row.updated_by || null,
-        updated_at: row.updated_at || null,
-        created_at: row.created_at || null,
-      };
-    }
-
     async function fetchDTR(){
       const supa = getSupa();
       if(!supa) return { rows:[], error:'No Supabase client' };
-      // Prefer authoritative row-per-punch table, fallback to legacy single-row blob only for reading old backups.
+      // Prefer best-practice row-per-punch table, fallback to legacy single-row blob.
       async function fetchPunches(){
-        const { data, error } = await supa.from(DTR_TABLE).select('id,payroll_period_id,employee_id,project_id,punch_at,meta,updated_by,updated_at,created_at').range(0, 9999);
+        const { data, error } = await supa.from(DTR_TABLE).select('id,data').range(0, 9999);
         if(error) throw error;
         if(Array.isArray(data) && data.length){
-          return data.map(canonicalizeBundlePunchRow).filter(Boolean);
+          // If this is the legacy single-row shape mistakenly stored here:
+          if(data.length === 1 && data[0] && data[0].id === 'records'){
+            const payload = data[0].data;
+            if(Array.isArray(payload)) return payload;
+            if(payload && typeof payload === 'object' && Array.isArray(payload.records)) return payload.records;
+          }
+          // Row-per-punch: each row's `data` is the punch object
+          const recs = data.map(r=>r && r.data).filter(Boolean);
+          return recs;
         }
         return [];
       }
@@ -146,23 +134,8 @@
       const supa = getSupa();
       if(!supa) return;
       try{
-        const payload = Array.isArray(rows) ? rows : [];
-        if(typeof window.saveDtrToCloud !== 'function') throw new Error('Authoritative DTR save helper is unavailable.');
-        const result = await window.saveDtrToCloud(payload, { requirePunches: true, throwOnError: true });
-        if(!result || result.status !== 'ok' || result.storage !== 'punches') throw new Error('Authoritative DTR restore did not complete in dtr_punches.');
-        if(typeof window.loadDtrFromCloud === 'function') {
-          const refreshed = await window.loadDtrFromCloud();
-          if(refreshed && refreshed.status === 'ok' && Array.isArray(refreshed.records)) {
-            window.storedRecords = refreshed.records;
-          }
-        } else {
-          window.storedRecords = payload.filter(r => r && !r.employee_id).length ? payload : (payload.map(r => ({
-            id: r.id || null,
-            empId: String(r.employee_id || r.emp_id || r.meta?.empId || ''),
-            date: String((r.punch_at || '').slice(0,10) || r.date || r.meta?.date || ''),
-            time: String((r.punch_at || '').slice(11,16) || r.time || r.meta?.time || ''),
-          })).filter(r => r.empId && r.date && r.time));
-        }
+        await supa.from(DTR_TABLE).upsert({ id:'records', data: Array.isArray(rows)?rows:[] }, { onConflict:'id' });
+        window.storedRecords = Array.isArray(rows)?rows:[];
         try{ if (window.sharedSet) window.sharedSet('att_records_v2', window.storedRecords); else localStorage.setItem('att_records_v2', JSON.stringify(window.storedRecords)); }catch(_){ }
       }catch(e){ log('DTR upsert error: ' + String(e)); }
     }
