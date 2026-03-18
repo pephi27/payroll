@@ -1,6 +1,6 @@
 import { getSupabaseClient } from '../config/supabaseClient.js';
 import { getFeatureFlag } from '../config/featureFlags.js';
-import { getState, mergeRow, removeRow, reportConflict } from '../state/store.js';
+import { getState, mergeRow, removeRow, reportConflict, resetTable } from '../state/store.js';
 
 export class StaleWriteError extends Error {
   constructor(message, context = {}) {
@@ -51,6 +51,31 @@ const TABLE_LOADERS = {
 };
 
 
+
+const PERIOD_SCOPED_STATE_KEYS = [
+  'dtrRecords',
+  'dtrPunches',
+  'employees',
+  'projects',
+  'schedules',
+  'loans',
+  'loanDeductions',
+  'contribFlags',
+  'dtrApprovals',
+];
+
+function resetPeriodScopedState() {
+  PERIOD_SCOPED_STATE_KEYS.forEach((tableKey) => resetTable(tableKey));
+}
+
+function isMissingFunctionError(error, fnName) {
+  const message = String(error?.message || '');
+  return error?.code === 'PGRST202' || new RegExp(`function .*${fnName}`, 'i').test(message);
+}
+
+function isStalePeriodLockError(error) {
+  return error?.code === 'P0001' && /stale payroll period lock write/i.test(String(error?.message || ''));
+}
 const OPTIMIZED_LOAD_FLAG = 'USE_OPTIMIZED_LOAD';
 const PAGE_SIZE = 1000;
 const PERIOD_COLUMN = 'payroll_period_id';
@@ -417,8 +442,7 @@ async function ensurePeriodUnlockedWithRpc(periodId) {
       return;
     }
 
-    const message = String(error?.message || '');
-    const missingRpc = error.code === 'PGRST202' || /function .*assert_payroll_period_unlocked/i.test(message);
+    const missingRpc = isMissingFunctionError(error, 'assert_payroll_period_unlocked');
     if (!missingRpc) throw error;
     hasRpcLockGuard = false;
     console.warn('[payroll:lock-guard] RPC assert_payroll_period_unlocked is unavailable; using client-side lock fallback');
@@ -642,8 +666,7 @@ export const payrollService = {
         return;
       }
 
-      const message = String(error?.message || '');
-      const missingRpc = error.code === 'PGRST202' || /function .*assert_dtr_row_editable/i.test(message);
+      const missingRpc = isMissingFunctionError(error, 'assert_dtr_row_editable');
       if (!missingRpc) throw error;
       hasRpcDtrEditableGuard = false;
       console.warn('[payroll:dtr-guard] RPC assert_dtr_row_editable is unavailable; using fallback checks');
@@ -715,7 +738,11 @@ export const payrollService = {
     });
   },
 
-  async loadCoreReadModels({ periodId } = {}) {
+  async loadCoreReadModels({ periodId, resetPeriodTables = true } = {}) {
+    if (resetPeriodTables) {
+      resetPeriodScopedState();
+    }
+
     const loaders = Object.values(TABLE_LOADERS).map(async ({ table, stateKey }) => {
       const result = await loadRowsWithOptionalOptimizedFilter(table, periodId);
       if (result.error) throw result.error;
@@ -1143,21 +1170,44 @@ export const payrollService = {
     return { id: scheduleId };
   },
 
-  async setPeriodLock(periodId, isLocked) {
-    const patch = { is_locked: !!isLocked, updated_at: new Date().toISOString() };
-    logWrite('update', TABLES.periods, { id: periodId, ...patch });
+  async setPeriodLock({ periodId, isLocked, expectedUpdatedAt = null, note = '', reason = '', actorId = null } = {}) {
+    const payload = {
+      p_period_id: periodId,
+      p_is_locked: !!isLocked,
+      p_expected_updated_at: expectedUpdatedAt,
+      p_note: note || '',
+      p_reason: reason || '',
+      p_actor_id: actorId,
+    };
+
+    logWrite('rpc', 'set_payroll_period_lock', { id: periodId, is_locked: !!isLocked, expectedUpdatedAt });
 
     const { data, error } = await requireSupabaseClient()
-      .from(TABLES.periods)
-      .update(patch)
-      .eq('id', periodId)
-      .select('*')
+      .rpc('set_payroll_period_lock', payload)
       .single();
 
-    if (error) throw error;
+    if (error) {
+      if (isMissingFunctionError(error, 'set_payroll_period_lock')) {
+        throw new Error('Payroll period lock RPC is unavailable. Run the latest DB migrations before locking/unlocking.');
+      }
+      if (isStalePeriodLockError(error)) {
+        const conflict = { table: TABLES.periods, id: periodId, expectedUpdatedAt, at: new Date().toISOString() };
+        reportConflict(conflict);
+        try {
+          await this.loadPeriods();
+        } catch (reloadError) {
+          console.warn('[payroll:lock] failed to refresh periods after stale lock conflict', reloadError);
+        }
+        throw new StaleWriteError('This payroll period lock was changed by another user. Latest period state was refreshed.', conflict);
+      }
+      throw error;
+    }
+
     mergeRow('payrollPeriods', data);
     return data;
   },
+
+  resetPeriodScopedState,
 
   async saveSnapshot(snapshot) {
     const { payroll_period_id: periodId } = snapshot;

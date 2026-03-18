@@ -11049,23 +11049,64 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
+  async function syncRemotePeriodLock(start, end, locked, meta = {}) {
+    const periodId = periodIdFromRange(start, end);
+    const getter = window.getPayrollStoreState;
+    const service = window.payrollService;
+    if (!periodId || typeof getter !== 'function' || !service || typeof service.setPeriodLock !== 'function') return null;
+
+    const state = getter();
+    const period = state && state.payrollPeriods && typeof state.payrollPeriods.get === 'function'
+      ? state.payrollPeriods.get(periodId)
+      : null;
+
+    return service.setPeriodLock({
+      periodId,
+      isLocked: !!locked,
+      expectedUpdatedAt: period && period.updated_at ? period.updated_at : null,
+      note: meta.finalizeNote || meta.note || '',
+      reason: meta.reason || (locked ? 'manual lock' : 'manual unlock'),
+      actorId: meta.actorId || null,
+    });
+  }
+
   async function setPeriodLocked(start, end, locked, meta = {}) {
     if (!start || !end) return;
     if (!payrollLocks || typeof payrollLocks !== 'object') payrollLocks = { __meta: {} };
     const key = periodKey(start, end);
     const hadEntry = !!(payrollLocks && payrollLocks[key]);
-    if (locked) {
-      payrollLocks[key] = {
-        locked: true,
-        lockedAt: meta.lockedAt || new Date().toISOString(),
-        finalizedAt: meta.finalizedAt || meta.lockedAt || new Date().toISOString(),
-        finalizedBy: meta.finalizedBy || 'admin',
-        finalizeNote: meta.finalizeNote || '',
-        totals: meta.totals || null
-      };
+    const nextLockEntry = locked ? {
+      locked: true,
+      lockedAt: meta.lockedAt || new Date().toISOString(),
+      finalizedAt: meta.finalizedAt || meta.lockedAt || new Date().toISOString(),
+      finalizedBy: meta.finalizedBy || 'admin',
+      finalizeNote: meta.finalizeNote || '',
+      totals: meta.totals || null
+    } : null;
+
+    try {
+      // Remote-success-first: do not mutate local lock state unless DB lock RPC succeeds.
+      await syncRemotePeriodLock(start, end, locked, meta);
+    } catch (err) {
+      const msg = String((err && err.message) || err || '');
+      if (/changed by another user/i.test(msg)) {
+        throw new Error('Payroll period lock conflict. Reload period and try again.');
+      }
+      if (/RPC is unavailable/i.test(msg) || /set_payroll_period_lock/i.test(msg)) {
+        throw new Error('Payroll period lock RPC is unavailable. Apply latest DB migration.');
+      }
+      if (/is locked\. Update denied/i.test(msg)) {
+        throw new Error('Payroll period is locked. Update denied.');
+      }
+      throw err;
+    }
+
+    if (nextLockEntry) {
+      payrollLocks[key] = nextLockEntry;
     } else {
       delete payrollLocks[key];
     }
+
     const changed = locked ? !hadEntry : hadEntry;
     const lockSaved = await persistLocks(changed);
     syncHistoryLockState(start, end, locked, meta);
@@ -11073,16 +11114,9 @@ document.addEventListener('DOMContentLoaded', () => {
     return lockSaved;
   }
 
-  async function clearPeriodLockEntry(start, end) {
+  async function clearPeriodLockEntry(start, end, reason = '') {
     if (!start || !end) return;
-    if (!payrollLocks || typeof payrollLocks !== 'object') payrollLocks = { __meta: {} };
-    const key = periodKey(start, end);
-    const hadEntry = !!(payrollLocks && payrollLocks[key]);
-    if (!hadEntry) return;
-    delete payrollLocks[key];
-    const lockSaved = await persistLocks(true);
-    try { window.payrollLocks = payrollLocks; } catch (err) {}
-    return lockSaved;
+    return setPeriodLocked(start, end, false, { reason: reason || 'unlock', note: reason || '' });
   }
 
   function updateLockStatusDisplay(entry) {
@@ -11273,13 +11307,15 @@ document.addEventListener('DOMContentLoaded', () => {
       return;
     }
 
+    await clearPeriodLockEntry(snap.startDate, snap.endDate, reason || 'Unlocked for corrections');
+
+    // Apply local snapshot draft/unlocked mutations only after remote unlock succeeds.
     snap.status = 'draft';
     snap.voidedAt = '';
     snap.voidedBy = '';
     snap.voidReason = reason || '';
     snap.locked = false;
     snap.finalized = false;
-    await clearPeriodLockEntry(snap.startDate, snap.endDate);
 
     const snapData = { startDate: snap.startDate, endDate: snap.endDate, rows: snap.rows || [], totals: snap.totals || {}, reason };
     const revision = nextRevision(periodId);
@@ -12154,6 +12190,20 @@ document.addEventListener('DOMContentLoaded', () => {
   // Expose saveHistory globally so it can be called from other scripts
   window.saveHistory = saveHistory;
 
+  function formatLockActionError(err) {
+    const message = String((err && err.message) || err || '');
+    if (/lock conflict/i.test(message) || /changed by another user/i.test(message)) {
+      return 'Lock state conflict detected. Reload the period and try again.';
+    }
+    if (/RPC is unavailable/i.test(message) || /set_payroll_period_lock/i.test(message)) {
+      return 'Lock service is unavailable. Apply the latest DB migration and retry.';
+    }
+    if (/is locked\. Update denied/i.test(message)) {
+      return 'Payroll period is locked. Update denied.';
+    }
+    return message || 'Unable to update payroll lock state.';
+  }
+
   // Handler for Generate button: build and save a snapshot without locking
   dashGenerateBtn && dashGenerateBtn.addEventListener('click', async () => {
     if (isGeneratingSnapshot) return;
@@ -12213,6 +12263,7 @@ document.addEventListener('DOMContentLoaded', () => {
       await Promise.resolve(lockCurrentPeriod());
     } catch (err) {
       console.warn('Lock payroll failed', err);
+      alert(formatLockActionError(err));
     } finally {
       isFinalizingSnapshot = false;
       if (dashLockButton && !isSelectedPeriodLocked()) dashLockButton.disabled = false;
@@ -12243,8 +12294,17 @@ document.addEventListener('DOMContentLoaded', () => {
         closeVoidModal();
         return;
       }
-      await unlockSnapshot(resolved.snap, reason);
-      closeVoidModal();
+      try {
+        await unlockSnapshot(resolved.snap, reason);
+        closeVoidModal();
+      } catch (err) {
+        if (voidReasonError) {
+          voidReasonError.textContent = formatLockActionError(err);
+          voidReasonError.style.display = 'block';
+        } else {
+          alert(formatLockActionError(err));
+        }
+      }
     });
     voidModal.addEventListener('keydown', (ev) => {
       if (ev.key === 'Escape') {
