@@ -18996,8 +18996,22 @@ function __setDtrRecordsAndRender(records, reason='dtr-load'){
   try { if (window.sharedSet) window.sharedSet(LS_RECORDS, next); else localStorage.setItem(LS_RECORDS, JSON.stringify(next)); } catch(_) {}
   try { if (typeof window.scheduleRenderResults === 'function') window.scheduleRenderResults(reason); else if (typeof window.renderResults === 'function') window.renderResults(); } catch(_) {}
 }
+const __legacyDtrSkipLogged = new Set();
+function __isAuthoritativeDtrLoaderEnabled(){
+  return window.__PAYROLL_DTR_SOURCE === 'dtr_punches' || window.__PAYROLL_DTR_LEGACY_BOOT_DISABLED === true;
+}
+function __logLegacyDtrSkip(path, extra = {}){
+  if (__legacyDtrSkipLogged.has(path)) return;
+  __legacyDtrSkipLogged.add(path);
+  console.info('[dtr:boot] skipping legacy DTR path', { path, authoritative: window.__PAYROLL_DTR_SOURCE || 'dtr_punches', ...extra });
+}
+
 
 async function loadDtrFromSupabase(){
+  if (__isAuthoritativeDtrLoaderEnabled()) {
+    __logLegacyDtrSkip('loadDtrFromSupabase');
+    return { source:'authoritative-skip', count: Array.isArray(window.storedRecords) ? window.storedRecords.length : 0 };
+  }
   const supa = window.supabase;
   if (!supa || typeof supa.from !== 'function') {
     const local = (()=>{ try { return window.cacheGet ? window.cacheGet(LS_RECORDS, []) : JSON.parse(localStorage.getItem(LS_RECORDS) || '[]'); } catch(_) { return []; } })();
@@ -19039,6 +19053,10 @@ async function loadDtrFromSupabase(){
 }
 
 function subscribeDtrSupabaseRealtime(){
+  if (__isAuthoritativeDtrLoaderEnabled()) {
+    __logLegacyDtrSkip('subscribeDtrSupabaseRealtime');
+    return;
+  }
   try {
     const supa = window.supabase;
     if (!supa || !supa.channel) return;
@@ -19090,7 +19108,7 @@ async function initApp(){
 }
 
 async function bootAfterKvHydrate() {
-  console.warn('[boot] start');
+  console.warn('[boot:legacy] start');
   try {
     if (!window.supabase) {
       await new Promise((resolve) => {
@@ -19100,12 +19118,12 @@ async function bootAfterKvHydrate() {
         setTimeout(finish, 1500);
       });
     }
-    if (window.supabase) console.warn('[boot] supabase ready');
+    if (window.supabase) console.info('[boot:legacy] shared-only bootstrap continuing');
   } catch (_) {}
   try {
     if (typeof window.sharedHydrateAll === 'function') {
       await window.sharedHydrateAll();
-      console.warn('[boot] sharedHydrateAll done');
+      console.warn('[boot:legacy] sharedHydrateAll done');
     }
   } catch (_) {}
   try {
@@ -19144,25 +19162,29 @@ async function bootAfterKvHydrate() {
   safeHydrateRender('renderActivePayrolls', (typeof renderActivePayrolls === 'function') ? renderActivePayrolls : null);
   safeHydrateRender('applyLockUI', (typeof applyLockUI === 'function') ? applyLockUI : null);
   try {
-    let dtrLoaded = false;
-    if (typeof window.loadDtrFromCloud === 'function') {
-      const res = await window.loadDtrFromCloud();
-      const recs = (res && Array.isArray(res.records)) ? res.records.map(__normalizeDtrRecord).filter(Boolean) : [];
-      if (recs.length) {
-        __setDtrRecordsAndRender(recs, 'dtr-cloud-bootstrap');
-        dtrLoaded = true;
+    if (__isAuthoritativeDtrLoaderEnabled()) {
+      __logLegacyDtrSkip('bootAfterKvHydrate:dtr-bootstrap', { reason: 'src/main.js authoritative loader owns DTR hydration and realtime' });
+    } else {
+      let dtrLoaded = false;
+      if (typeof window.loadDtrFromCloud === 'function') {
+        const res = await window.loadDtrFromCloud();
+        const recs = (res && Array.isArray(res.records)) ? res.records.map(__normalizeDtrRecord).filter(Boolean) : [];
+        if (recs.length) {
+          __setDtrRecordsAndRender(recs, 'dtr-cloud-bootstrap');
+          dtrLoaded = true;
+        }
       }
+      if (!dtrLoaded) await loadDtrFromSupabase();
+      if (!Array.isArray(window.storedRecords) || !window.storedRecords.length) {
+        const local = (()=>{ try { return window.cacheGet ? window.cacheGet(LS_RECORDS, []) : JSON.parse(localStorage.getItem(LS_RECORDS) || '[]'); } catch(_) { return []; } })();
+        if (local.length) __setDtrRecordsAndRender(local, 'dtr-local-bootstrap');
+      }
+      console.warn('[boot:legacy] DTR loaded');
     }
-    if (!dtrLoaded) await loadDtrFromSupabase();
-    if (!Array.isArray(window.storedRecords) || !window.storedRecords.length) {
-      const local = (()=>{ try { return window.cacheGet ? window.cacheGet(LS_RECORDS, []) : JSON.parse(localStorage.getItem(LS_RECORDS) || '[]'); } catch(_) { return []; } })();
-      if (local.length) __setDtrRecordsAndRender(local, 'dtr-local-bootstrap');
-    }
-    console.warn('[boot] DTR loaded');
   } catch (_) {}
   try { subscribeDtrSupabaseRealtime(); } catch (_) {}
   await initApp();
-  console.warn('[boot] initApp run');
+  console.warn('[boot:legacy] initApp run');
 }
 bootAfterKvHydrate();
   </script>
@@ -22915,45 +22937,156 @@ function __dtrIsPunchesSchemaMismatchError(errorLike){
   const msg = __dtrGetErrorMessage(errorLike);
   const code = __dtrGetErrorCode(errorLike);
   return code === '42703'
-    || /column .*id.* does not exist/i.test(msg)
-    || /column .*data.* does not exist/i.test(msg)
-    || /column .*source.* does not exist/i.test(msg)
-    || /column .*updated_by.* does not exist/i.test(msg)
+    || /column .*payroll_period_id.* does not exist/i.test(msg)
+    || /column .*employee_id.* does not exist/i.test(msg)
+    || /column .*project_id.* does not exist/i.test(msg)
+    || /column .*punch_at.* does not exist/i.test(msg)
+    || /column .*meta.* does not exist/i.test(msg)
     || /there is no unique or exclusion constraint matching the ON CONFLICT specification/i.test(msg);
+}
+function __dtrNormalizeLegacyTime(value){
+  const m = String(value || '').trim().match(/^(\d{2}:\d{2})/);
+  return m ? m[1] : '';
+}
+function __dtrNormalizeLegacyDate(value){
+  const m = String(value || '').trim().match(/^(\d{4}-\d{2}-\d{2})/);
+  return m ? m[1] : '';
+}
+function __dtrLegacyRecordFromCanonical(row){
+  if (!row) return null;
+  const meta = row.meta && typeof row.meta === 'object' ? row.meta : {};
+  const empId = row.employee_id != null ? String(row.employee_id).trim() : String(meta.empId || '').trim();
+  const punchAt = String(row.punch_at || '').trim();
+  const m = punchAt.match(/^(\d{4}-\d{2}-\d{2})[T\s](\d{2}:\d{2})/);
+  if (!empId || !m) return null;
+  return {
+    id: row.id != null ? String(row.id) : __dtrRecId({ empId, date: m[1], time: m[2], source: meta.source, manual: meta.manual === true }),
+    empId,
+    date: m[1],
+    time: m[2],
+    source: meta.source || null,
+    manual: meta.manual === true,
+    payroll_period_id: row.payroll_period_id || meta.payroll_period_id || null,
+    project_id: row.project_id || meta.project_id || meta.projectId || null,
+  };
 }
 function __dtrNormalizePunchRow(row){
   if (!row) return null;
-  const payload = row.data && typeof row.data === 'object' ? row.data : null;
-  const source = row.source != null && String(row.source).trim() !== ''
-    ? String(row.source).trim()
-    : (payload && payload.source ? String(payload.source) : (payload && payload.manual ? 'manual' : ''));
-  const empId = row.emp_id != null && String(row.emp_id).trim() !== ''
-    ? String(row.emp_id).trim()
-    : (payload && payload.empId != null ? String(payload.empId).trim() : '');
-  const date = row.date != null && String(row.date).trim() !== ''
-    ? String(row.date).trim()
-    : (payload && payload.date ? String(payload.date) : '');
-  const time = row.time != null && String(row.time).trim() !== ''
-    ? String(row.time).trim()
-    : (payload && payload.time ? String(payload.time) : '');
-  const normalized = payload ? Object.assign({}, payload) : {};
-  if (empId && normalized.empId == null) normalized.empId = empId;
-  if (date && normalized.date == null) normalized.date = date;
-  if (time && normalized.time == null) normalized.time = time;
-  if (source && normalized.source == null) normalized.source = source;
-  if (!normalized.source && normalized.manual) normalized.source = 'manual';
-  const id = row.id != null && String(row.id).trim() !== '' ? String(row.id).trim() : __dtrRecId(normalized);
-  if (!id || !normalized.empId || !normalized.date || !normalized.time) return null;
+  const meta = row.meta && typeof row.meta === 'object' ? { ...row.meta } : (row.data && typeof row.data === 'object' ? { ...row.data } : {});
+  const canonical = {
+    id: row.id != null && String(row.id).trim() !== '' ? String(row.id).trim() : null,
+    payroll_period_id: row.payroll_period_id != null && String(row.payroll_period_id).trim() !== ''
+      ? String(row.payroll_period_id).trim()
+      : (meta.payroll_period_id != null && String(meta.payroll_period_id).trim() !== '' ? String(meta.payroll_period_id).trim() : null),
+    employee_id: row.employee_id != null && String(row.employee_id).trim() !== ''
+      ? String(row.employee_id).trim()
+      : (row.emp_id != null && String(row.emp_id).trim() !== '' ? String(row.emp_id).trim() : (meta.empId != null ? String(meta.empId).trim() : '')),
+    project_id: row.project_id ?? meta.project_id ?? meta.projectId ?? null,
+    punch_at: String(row.punch_at || '').trim(),
+    meta,
+    updated_by: row.updated_by || null,
+    updated_at: row.updated_at || null,
+    created_at: row.created_at || null,
+  };
+  if (!canonical.punch_at) {
+    const date = __dtrNormalizeLegacyDate(row.date || meta.date);
+    const time = __dtrNormalizeLegacyTime(row.time || meta.time);
+    if (date && time) canonical.punch_at = `${date}T${time}:00`;
+  }
+  if (canonical.employee_id && canonical.meta.empId == null) canonical.meta.empId = canonical.employee_id;
+  if (canonical.project_id != null && canonical.meta.project_id == null) canonical.meta.project_id = canonical.project_id;
+  if (canonical.payroll_period_id && canonical.meta.payroll_period_id == null) canonical.meta.payroll_period_id = canonical.payroll_period_id;
+  const legacy = __dtrLegacyRecordFromCanonical(canonical);
+  if (!canonical.id && legacy) canonical.id = legacy.id;
+  if (!canonical.id || !canonical.employee_id || !canonical.punch_at) return null;
+  return { canonical, legacy };
+}
+let __dtrPeriodsCache = null;
+async function __dtrGetPayrollPeriods(supa){
+  if (Array.isArray(__dtrPeriodsCache) && __dtrPeriodsCache.length) return __dtrPeriodsCache;
+  try {
+    const state = (typeof window.getPayrollStoreState === 'function') ? window.getPayrollStoreState() : null;
+    if (state && state.payrollPeriods instanceof Map && state.payrollPeriods.size) {
+      __dtrPeriodsCache = Array.from(state.payrollPeriods.values());
+      if (__dtrPeriodsCache.length) return __dtrPeriodsCache;
+    }
+  } catch(_) {}
+  const { data, error } = await supa.from('payroll_periods').select('id,period_start,period_end').order('period_start', { ascending: true });
+  if (error) throw error;
+  __dtrPeriodsCache = Array.isArray(data) ? data : [];
+  return __dtrPeriodsCache;
+}
+async function __dtrResolvePeriodIdForDate(supa, workDate, preferredPeriodId = null){
+  const ymd = __dtrNormalizeLegacyDate(workDate);
+  if (!ymd) throw new Error('Missing work date while resolving DTR restore row period.');
+  const periods = await __dtrGetPayrollPeriods(supa);
+  const matches = (periods || []).filter((period) => {
+    const start = __dtrNormalizeLegacyDate(period && period.period_start);
+    const end = __dtrNormalizeLegacyDate(period && period.period_end);
+    return start && end && ymd >= start && ymd <= end;
+  });
+  if (preferredPeriodId) {
+    const preferred = matches.find((period) => String(period.id) === String(preferredPeriodId));
+    if (preferred) return String(preferred.id);
+  }
+  if (matches.length === 1) return String(matches[0].id);
+  if (matches.length === 0) throw new Error(`No payroll period covers DTR date ${ymd}. Restore denied.`);
+  throw new Error(`Multiple payroll periods cover DTR date ${ymd}. Restore denied.`);
+}
+async function __dtrCanonicalizeInputRow(supa, row){
+  if (!row) return null;
+  const normalized = __dtrNormalizePunchRow(row);
+  if (normalized && normalized.canonical && normalized.canonical.payroll_period_id) return normalized.canonical;
+
+  const legacy = row.empId != null || row.date != null || row.time != null || row.manual != null || row.source != null
+    ? {
+        id: row.id || '',
+        empId: row.empId != null ? String(row.empId).trim() : String(row.employee_id || row.emp_id || '').trim(),
+        date: __dtrNormalizeLegacyDate(row.date || row.meta?.date || String(row.punch_at || '').slice(0, 10)),
+        time: __dtrNormalizeLegacyTime(row.time || row.meta?.time || String(row.punch_at || '').slice(11, 16)),
+        source: row.source || row.meta?.source || null,
+        manual: row.manual === true || row.meta?.manual === true,
+        project_id: row.project_id || row.meta?.project_id || row.meta?.projectId || null,
+        payroll_period_id: row.payroll_period_id || row.meta?.payroll_period_id || null,
+      }
+    : (normalized ? normalized.legacy : null);
+
+  if (!legacy || !legacy.empId || !legacy.date || !legacy.time) return null;
+  const periodId = await __dtrResolvePeriodIdForDate(supa, legacy.date, legacy.payroll_period_id || null);
+  const source = legacy.source || (legacy.manual ? 'manual' : null);
   return {
-    id,
-    emp_id: empId,
-    date,
-    time,
-    source: source || null,
-    data: normalized
+    id: row.id || legacy.id || __dtrRecId(legacy),
+    payroll_period_id: periodId,
+    employee_id: legacy.empId,
+    project_id: legacy.project_id || null,
+    punch_at: `${legacy.date}T${legacy.time}:00`,
+    meta: {
+      ...(row.meta && typeof row.meta === 'object' ? row.meta : {}),
+      ...(row.data && typeof row.data === 'object' ? row.data : {}),
+      empId: legacy.empId,
+      date: legacy.date,
+      time: legacy.time,
+      payroll_period_id: periodId,
+      ...(legacy.project_id ? { project_id: legacy.project_id } : {}),
+      ...(source ? { source } : {}),
+      ...(legacy.manual ? { manual: true } : {}),
+    },
+    updated_by: row.updated_by || null,
+    updated_at: row.updated_at || null,
+    created_at: row.created_at || null,
   };
 }
-
+async function __dtrCanonicalizeInputRows(supa, rows){
+  const out = [];
+  const seen = new Set();
+  for (const row of (Array.isArray(rows) ? rows : [])) {
+    const canonical = await __dtrCanonicalizeInputRow(supa, row);
+    if (!canonical || !canonical.id || seen.has(canonical.id)) continue;
+    seen.add(canonical.id);
+    out.push(canonical);
+  }
+  return out;
+}
 async function __dtrFetchAllPunchRows(supa, table){
   const out = [];
   const pageSize = 1000;
@@ -22961,10 +23094,10 @@ async function __dtrFetchAllPunchRows(supa, table){
   while (true){
     const { data, error } = await supa
       .from(table)
-      .select('id,emp_id,date,time,source,data')
+      .select('id,payroll_period_id,employee_id,project_id,punch_at,meta,updated_by,updated_at,created_at')
       .range(from, from + pageSize - 1);
     if (error) throw error;
-    const chunk = (data || []).map(__dtrNormalizePunchRow).filter(Boolean);
+    const chunk = (data || []).map(__dtrNormalizePunchRow).filter(Boolean).map((entry) => entry.canonical);
     out.push(...chunk);
     if ((data || []).length < pageSize) break;
     from += pageSize;
@@ -22980,35 +23113,16 @@ async function migrateLegacyDtrToPunches(records){
     if (!supa) return false;
     const table = 'dtr_punches';
     const deviceId = __dtrGetDeviceId();
-    const localRecs = Array.isArray(records) ? records : [];
-    const rowsRaw = localRecs.map(r => {
-      const id = __dtrRecId(r);
-      if (!id) return null;
-      return {
-        id,
-        emp_id: (r.empId != null ? String(r.empId) : '').trim(),
-        date: r.date,
-        time: r.time,
-        source: r.source || (r.manual ? 'manual' : null),
-        data: r,
-        updated_by: deviceId
-      };
-    }).filter(Boolean);
+    const rows = await __dtrCanonicalizeInputRows(supa, records);
+    const payload = rows.map((row) => ({ ...row, updated_by: row.updated_by || deviceId }));
 
-    // Deduplicate by id to avoid "ON CONFLICT DO UPDATE cannot affect row a second time"
-    // (happens when payload contains duplicate ids).
-    const __rowMap = new Map();
-    for (const row of rowsRaw) __rowMap.set(row.id, row); // last one wins
-    const rows = Array.from(__rowMap.values());
-
-    // Batch upserts to avoid payload limits
     const batchSize = 500;
-    for (let i=0;i<rows.length;i+=batchSize){
-      const batch = rows.slice(i, i+batchSize);
+    for (let i=0;i<payload.length;i+=batchSize){
+      const batch = payload.slice(i, i+batchSize);
       const { error } = await supa.from(table).upsert(batch, { onConflict: 'id' });
       if (error) throw error;
     }
-    console.info('[dtr:debug] legacy->punches migration result', { success: true, sourceCount: localRecs.length, migratedCount: rows.length });
+    console.info('[dtr:debug] legacy->punches migration result', { success: true, sourceCount, migratedCount: payload.length });
     return true;
   } catch (e) {
     console.warn('Legacy->Punches migration failed:', e && e.message ? e.message : e);
@@ -23018,16 +23132,13 @@ async function migrateLegacyDtrToPunches(records){
 }
 
 async function loadDtrFromCloud() {
-  // Returns { status, records, tombstones, meta?, error? }
   const supa = window.supabase || (typeof supabase !== 'undefined' ? supabase : null);
   if (!supa) return { status: 'no_client', records: null, tombstones: null, meta: { storage: 'none' } };
 
   const punchesTable = 'dtr_punches';
   try {
     const rows = await __dtrFetchAllPunchRows(supa, punchesTable);
-    const recs = rows.map(r => r && r.data).filter(Boolean);
-
-    // If punches table exists but empty, try legacy blob (for migration)
+    const recs = rows.map(__dtrLegacyRecordFromCanonical).filter(Boolean);
     console.info('[dtr:debug] refresh remote punches load count', { rowCount: rows.length, recordCount: recs.length });
 
     if (!recs.length) {
@@ -23038,13 +23149,12 @@ async function loadDtrFromCloud() {
         }
       } catch(_) {}
     }
-    return { status: 'ok', records: recs, tombstones: {}, meta: { storage: 'punches', rowCount: rows.length } };
+    return { status: 'ok', records: recs, tombstones: {}, meta: { storage: 'punches', rowCount: rows.length, canonicalRows: rows } };
   } catch (e) {
     const msg = __dtrGetErrorMessage(e);
     const isMissing = __dtrIsMissingPunchesError(e);
     const isSchemaMismatch = __dtrIsPunchesSchemaMismatchError(e);
     if (isMissing) {
-      // Fallback to legacy for backwards compatibility
       try {
         const legacy = await loadDtrFromCloudLegacyBlob();
         return Object.assign({}, legacy, { meta: { storage: 'legacy', reason: 'punches_missing' } });
@@ -23054,7 +23164,7 @@ async function loadDtrFromCloud() {
     }
     if (isSchemaMismatch) {
       console.warn('Supabase DTR punches schema mismatch:', msg);
-      return { status: 'error', error: 'Supabase table `dtr_punches` exists but is still using the legacy schema. Run the latest DTR punches migration to add `id`, `source`, `updated_by`, and the primary key.', records: null, tombstones: null, meta: { storage: 'punches', reason: 'punches_schema_mismatch' } };
+      return { status: 'error', error: 'Supabase table `dtr_punches` exists but is still using the legacy schema. Run the latest DTR punches migration to install the canonical columns: payroll_period_id, employee_id, project_id, punch_at, and meta.', records: null, tombstones: null, meta: { storage: 'punches', reason: 'punches_schema_mismatch' } };
     }
     console.warn('Supabase DTR punches fetch error:', msg);
     return { status: 'error', error: msg, records: null, tombstones: null, meta: { storage: 'punches' } };
@@ -23062,9 +23172,6 @@ async function loadDtrFromCloud() {
 }
 
 async function saveDtrToCloud(records, options = {}) {
-  // Row-per-punch persistence (safe for multi-device editing).
-  // - Writes are row-level (insert/update/delete by id).
-  // - No localStorage-based diffing for authoritative business data.
   const requirePunches = !!(options && options.requirePunches);
   const throwOnError = !!(options && options.throwOnError);
   try {
@@ -23074,7 +23181,6 @@ async function saveDtrToCloud(records, options = {}) {
       return { status: 'no_client', storage: 'none' };
     }
 
-    // Queue saves until hydration is done to avoid startup overwrite.
     if (!window.__dtrHydrationDone) {
       window.__queuedDtrRecords = Array.isArray(records) ? records : [];
       window.__pendingDtrSave = true;
@@ -23083,25 +23189,42 @@ async function saveDtrToCloud(records, options = {}) {
 
     const punchesTable = 'dtr_punches';
     const deviceId = __dtrGetDeviceId();
+    const localRows = await __dtrCanonicalizeInputRows(supa, records);
+    const touchedPeriodIds = new Set(localRows.map((row) => String(row.payroll_period_id || '').trim()).filter(Boolean));
+    try {
+      const state = (typeof window.getPayrollStoreState === 'function') ? window.getPayrollStoreState() : null;
+      const currentPeriodId = state && state.currentPeriodId ? String(state.currentPeriodId).trim() : '';
+      if (currentPeriodId) touchedPeriodIds.add(currentPeriodId);
+    } catch(_) {}
+    console.info('[dtr:debug] before save to Supabase punches', { localCount: localRows.length, touchedPeriods: Array.from(touchedPeriodIds), hydrationDone: !!window.__dtrHydrationDone });
 
-    const localRecs = Array.isArray(records) ? records : [];
-    console.info('[dtr:debug] before save to Supabase punches', { localCount: localRecs.length, hydrationDone: !!window.__dtrHydrationDone });
     const localMap = new Map();
-    for (const r of localRecs){
-      const id = __dtrRecId(r);
-      if (!id) continue;
-      localMap.set(id, {
-        id,
-        emp_id: (r.empId != null ? String(r.empId) : '').trim(),
-        date: r.date,
-        time: r.time,
-        source: r.source || (r.manual ? 'manual' : null),
-        data: r,
-        updated_by: deviceId
-      });
+    for (const row of localRows){
+      if (touchedPeriodIds.size && !touchedPeriodIds.has(String(row.payroll_period_id || '').trim())) continue;
+      localMap.set(row.id, { ...row, updated_by: deviceId });
     }
 
-    const remoteRows = await __dtrFetchAllPunchRows(supa, punchesTable);
+    let remoteRows = [];
+    if (touchedPeriodIds.size) {
+      for (const periodId of touchedPeriodIds) {
+        let from = 0;
+        const pageSize = 1000;
+        while (true) {
+          const { data, error } = await supa
+            .from(punchesTable)
+            .select('id,payroll_period_id,employee_id,project_id,punch_at,meta,updated_by,updated_at,created_at')
+            .eq('payroll_period_id', periodId)
+            .range(from, from + pageSize - 1);
+          if (error) throw error;
+          const chunk = (data || []).map(__dtrNormalizePunchRow).filter(Boolean).map((entry) => entry.canonical);
+          remoteRows.push(...chunk);
+          if ((data || []).length < pageSize) break;
+          from += pageSize;
+        }
+      }
+    } else {
+      remoteRows = await __dtrFetchAllPunchRows(supa, punchesTable);
+    }
     const remoteMap = new Map();
     for (const row of (remoteRows || [])) {
       if (row && row.id) remoteMap.set(row.id, row);
@@ -23114,12 +23237,23 @@ async function saveDtrToCloud(records, options = {}) {
         rowsToUpsert.push(row);
         continue;
       }
-      const oldPayload = existing && existing.data ? JSON.stringify(existing.data) : '';
-      const newPayload = row && row.data ? JSON.stringify(row.data) : '';
+      const oldPayload = JSON.stringify({
+        payroll_period_id: existing.payroll_period_id || null,
+        employee_id: existing.employee_id || null,
+        project_id: existing.project_id || null,
+        punch_at: existing.punch_at || null,
+        meta: existing.meta || {},
+      });
+      const newPayload = JSON.stringify({
+        payroll_period_id: row.payroll_period_id || null,
+        employee_id: row.employee_id || null,
+        project_id: row.project_id || null,
+        punch_at: row.punch_at || null,
+        meta: row.meta || {},
+      });
       if (oldPayload !== newPayload) rowsToUpsert.push(row);
     }
 
-    // Batch upserts to reduce round trips for large imports.
     const upsertBatchSize = 500;
     for (let i = 0; i < rowsToUpsert.length; i += upsertBatchSize) {
       const batch = rowsToUpsert.slice(i, i + upsertBatchSize);
@@ -23132,7 +23266,6 @@ async function saveDtrToCloud(records, options = {}) {
       if (!localMap.has(id)) idsToDelete.push(id);
     }
 
-    // Batch deletes as well; still preserves local-as-source behavior.
     const deleteBatchSize = 500;
     for (let i = 0; i < idsToDelete.length; i += deleteBatchSize) {
       const batch = idsToDelete.slice(i, i + deleteBatchSize);
@@ -23140,7 +23273,7 @@ async function saveDtrToCloud(records, options = {}) {
       if (error) throw error;
     }
 
-    console.info('[dtr:debug] after Supabase save result', { success: true, upsertedCount: rowsToUpsert.length, deletedCount: idsToDelete.length, remoteCountBefore: remoteRows.length, localCount: localRecs.length });
+    console.info('[dtr:debug] after Supabase save result', { success: true, upsertedCount: rowsToUpsert.length, deletedCount: idsToDelete.length, remoteCountBefore: remoteRows.length, localCount: localRows.length });
     return { status: 'ok', storage: 'punches', upsertedCount: rowsToUpsert.length, deletedCount: idsToDelete.length };
   } catch (e) {
     const msg = __dtrGetErrorMessage(e);
@@ -23155,7 +23288,7 @@ async function saveDtrToCloud(records, options = {}) {
       return { status: 'ok', storage: 'legacy' };
     }
     if (isSchemaMismatch) {
-      const schemaMsg = 'Supabase table `dtr_punches` exists but is still using the legacy schema. Run the latest DTR punches migration to add `id`, `source`, `updated_by`, and the primary key.';
+      const schemaMsg = 'Supabase table `dtr_punches` exists but is still using the legacy schema. Run the latest DTR punches migration to install payroll_period_id, employee_id, project_id, punch_at, and meta.';
       console.warn('saveDtrToCloud punches schema mismatch:', msg);
       console.info('[dtr:debug] after Supabase save result', { success: false, error: schemaMsg, fallbackToLegacyBlob: false, schemaMismatch: true });
       if (throwOnError) throw new Error(schemaMsg);
@@ -23167,6 +23300,9 @@ async function saveDtrToCloud(records, options = {}) {
     return { status: 'error', storage: 'punches', error: msg };
   }
 }
+
+try { window.loadDtrFromCloud = loadDtrFromCloud; } catch(_) {}
+try { window.saveDtrToCloud = saveDtrToCloud; } catch(_) {}
 
 function setupDtrPunchesRealtime(){
   try {
@@ -23215,7 +23351,8 @@ function setupDtrPunchesRealtime(){
           return;
         }
 
-        const rec = newRow && newRow.data ? newRow.data : null;
+        const normalized = __dtrNormalizePunchRow(newRow || oldRow);
+        const rec = normalized && normalized.legacy ? normalized.legacy : null;
         if (!rec) return;
 
         if (idx >= 0) {

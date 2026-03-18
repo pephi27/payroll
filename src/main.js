@@ -8,6 +8,7 @@ let cleanupUi = null;
 let cleanupRealtime = null;
 let cleanupPeriodSync = null;
 let bootstrapped = false;
+let suppressNextPeriodBridgeFor = null;
 
 const CRITICAL_LOCAL_KEYS = new Set([
   'att_employees_v2',
@@ -149,10 +150,17 @@ function bridgeMigratedMasterDataToLegacyGlobals() {
   });
 }
 
+function getPunchMeta(row = {}) {
+  if (row?.meta && typeof row.meta === 'object' && !Array.isArray(row.meta)) return row.meta;
+  if (row?.data && typeof row.data === 'object' && !Array.isArray(row.data)) return row.data;
+  return {};
+}
+
 function toLegacyDtrRecord(row) {
   if (!row) return null;
-  const employeeId = row.employee_id ?? row.emp_id ?? row.empId;
-  const stamp = row.punch_at || `${row.date || ''} ${row.time || ''}`;
+  const meta = getPunchMeta(row);
+  const employeeId = row.employee_id ?? row.emp_id ?? row.empId ?? meta.empId ?? meta.employee_id;
+  const stamp = row.punch_at || `${row.date || meta.date || ''} ${row.time || meta.time || ''}`;
   const str = String(stamp || '').trim();
   const match = str.match(/^(\d{4}-\d{2}-\d{2})[T\s](\d{2}:\d{2})/);
   if (!employeeId || !match) return null;
@@ -161,8 +169,8 @@ function toLegacyDtrRecord(row) {
     empId: String(employeeId),
     date: match[1],
     time: match[2],
-    source: row.meta?.source || row.source || null,
-    manual: row.meta?.manual === true || row.manual === true,
+    source: meta.source || row.source || null,
+    manual: meta.manual === true || row.manual === true,
   };
 }
 
@@ -232,7 +240,8 @@ function bridgePeriodSwitchReadModels() {
   };
 
   const getPunchWorkDate = (row = {}) => {
-    const fromDate = normalizeDate(row.date);
+    const meta = getPunchMeta(row);
+    const fromDate = normalizeDate(row.date || meta.date);
     if (fromDate) return fromDate;
     const fromStamp = String(row.punch_at || '').trim().match(/^(\d{4}-\d{2}-\d{2})[T\s]/);
     return fromStamp ? fromStamp[1] : '';
@@ -248,7 +257,10 @@ function bridgePeriodSwitchReadModels() {
 
   const isPunchForPeriod = (row, periodId, period) => {
     if (!row || !periodId || !period) return false;
-    const metaPeriodId = row?.data?.payroll_period_id == null ? '' : String(row.data.payroll_period_id).trim();
+    const meta = getPunchMeta(row);
+    const metaPeriodId = row?.payroll_period_id == null
+      ? (meta?.payroll_period_id == null ? '' : String(meta.payroll_period_id).trim())
+      : String(row.payroll_period_id).trim();
     const workDate = getPunchWorkDate(row);
     if (metaPeriodId) {
       if (metaPeriodId !== String(periodId)) return false;
@@ -265,6 +277,12 @@ function bridgePeriodSwitchReadModels() {
   cleanupPeriodSync = subscribe(async (_state, change) => {
     if (change?.type !== 'set_current_period') return;
     const periodId = getState().currentPeriodId;
+    if (suppressNextPeriodBridgeFor && String(suppressNextPeriodBridgeFor) === String(periodId || '')) {
+      console.info('[payroll:dtr] skipping duplicate period-switch bridge fetch; authoritative loader already populated state', { periodId });
+      suppressNextPeriodBridgeFor = null;
+      return;
+    }
+    suppressNextPeriodBridgeFor = null;
     if (!periodId) return;
     const token = ++inflightToken;
     const stateVersionAtStart = Number(getState().diagnostics?.dtrStateVersion) || 0;
@@ -333,6 +351,7 @@ function createPeriodSwitcher() {
     try {
       console.info('[payroll:dtr-debug] switching payroll period', { periodId });
       await payrollService.loadCoreReadModels({ periodId, resetPeriodTables: true });
+      suppressNextPeriodBridgeFor = periodId;
       setCurrentPeriod(periodId);
       const punchCount = getState().dtrPunches.size;
       console.info('[payroll:dtr-debug] remote punches loaded for active period', { periodId, punchCount });
@@ -381,6 +400,10 @@ function wirePeriodSwitchUi(switchPayrollPeriod) {
 async function bootstrapPayrollApp() {
   if (bootstrapped) return;
   bootstrapped = true;
+
+  window.__PAYROLL_DTR_SOURCE = 'dtr_punches';
+  window.__PAYROLL_DTR_LEGACY_BOOT_DISABLED = true;
+  console.info('[payroll:dtr] authoritative bootstrap selected: dtr_punches');
 
   deprecateCriticalLocalAuthority();
   bridgeMigratedMasterDataToLegacyGlobals();

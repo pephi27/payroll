@@ -36,7 +36,7 @@ begin
   select is_locked
     into v_locked
   from public.payroll_periods
-  where id = p_period_id
+  where id::text = p_period_id
   limit 1;
 
   if not found then
@@ -113,7 +113,7 @@ begin
   if v_meta_period_id is not null then
     perform 1
     from public.payroll_periods
-    where id = v_meta_period_id
+    where id::text = v_meta_period_id
       and p_work_date between period_start and period_end
     limit 1;
 
@@ -130,7 +130,7 @@ begin
   where p_work_date between period_start and period_end;
 
   if v_match_count = 1 then
-    select id
+    select id::text
       into v_period_id
     from public.payroll_periods
     where p_work_date between period_start and period_end

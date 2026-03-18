@@ -39,7 +39,6 @@ const TABLES = {
 };
 
 const TABLE_LOADERS = {
-  dtrRecords: { table: TABLES.dtr, stateKey: 'dtrRecords' },
   employees: { table: TABLES.employees, stateKey: 'employees' },
   projects: { table: TABLES.projects, stateKey: 'projects' },
   schedules: { table: TABLES.schedules, stateKey: 'schedules' },
@@ -53,7 +52,6 @@ const TABLE_LOADERS = {
 
 
 const PERIOD_SCOPED_STATE_KEYS = [
-  'dtrRecords',
   'dtrPunches',
   'employees',
   'projects',
@@ -79,6 +77,10 @@ function isStalePeriodLockError(error) {
 const OPTIMIZED_LOAD_FLAG = 'USE_OPTIMIZED_LOAD';
 const PAGE_SIZE = 1000;
 const PERIOD_COLUMN = 'payroll_period_id';
+const DTR_PUNCH_LEGACY_COLUMNS = 'id,emp_id,date,time,source,data,updated_by,updated_at,created_at';
+const DTR_PUNCH_CANONICAL_COLUMNS = 'id,payroll_period_id,employee_id,project_id,punch_at,meta,updated_by,updated_at,created_at';
+let hasCanonicalPunchColumns = null;
+let mixedSchemaWarningCount = 0;
 
 function hasOwn(row, key) {
   return Object.prototype.hasOwnProperty.call(row || {}, key);
@@ -87,11 +89,17 @@ function hasOwn(row, key) {
 function sortRowsByKnownTimestamp(table, rows) {
   if (table !== TABLES.punches) return rows;
   rows.sort((a, b) => {
-    const aStamp = a?.punch_at || `${a?.date || ''} ${a?.time || ''}`;
-    const bStamp = b?.punch_at || `${b?.date || ''} ${b?.time || ''}`;
+    const aStamp = normalizePunchAt(a) || `${a?.date || ''} ${a?.time || ''}`;
+    const bStamp = normalizePunchAt(b) || `${b?.date || ''} ${b?.time || ''}`;
     return String(aStamp).localeCompare(String(bStamp));
   });
   return rows;
+}
+
+function warnMixedSchema(message, details = {}) {
+  mixedSchemaWarningCount += 1;
+  if (mixedSchemaWarningCount > 25) return;
+  console.warn('[payroll:dtr:mixed-schema]', { message, ...details });
 }
 
 async function fetchTablePage({ table, from, to, periodId, optimized }) {
@@ -242,26 +250,72 @@ async function fetchPunchRowsByKnownShapes(periodId) {
     return { data: null, error };
   }
 
-  const rows = [];
+  const client = requireSupabaseClient();
+  const canonicalRows = [];
+  const legacyRows = [];
+  const seenIds = new Set();
+
+  if (hasCanonicalPunchColumns !== false) {
+    let page = 0;
+    for (;;) {
+      const from = page * PAGE_SIZE;
+      const to = from + PAGE_SIZE - 1;
+      const { data, error } = await client
+        .from(TABLES.punches)
+        .select(DTR_PUNCH_CANONICAL_COLUMNS)
+        .eq('payroll_period_id', periodId)
+        .range(from, to);
+      if (error) {
+        const msg = String(error?.message || '');
+        if (error?.code === '42703' || /column .*payroll_period_id|column .*employee_id|column .*punch_at|column .*meta/i.test(msg)) {
+          hasCanonicalPunchColumns = false;
+          break;
+        }
+        return { data: null, error };
+      }
+
+      hasCanonicalPunchColumns = true;
+      const pageRows = Array.isArray(data) ? data : [];
+      canonicalRows.push(...pageRows);
+      if (pageRows.length < PAGE_SIZE) break;
+      page += 1;
+    }
+  }
+
   let page = 0;
   for (;;) {
     const from = page * PAGE_SIZE;
     const to = from + PAGE_SIZE - 1;
-    const { data, error } = await requireSupabaseClient()
+    const { data, error } = await client
       .from(TABLES.punches)
-      .select('*')
+      .select(DTR_PUNCH_LEGACY_COLUMNS)
       .gte('date', periodStart)
       .lte('date', periodEnd)
       .range(from, to);
-    if (error) return { data: null, error };
+
+    if (error) {
+      const msg = String(error?.message || '');
+      if (error?.code === '42703' || /column .*emp_id|column .*date|column .*time|column .*data/i.test(msg)) {
+        break;
+      }
+      return { data: null, error };
+    }
 
     const pageRows = Array.isArray(data) ? data : [];
-    rows.push(...pageRows);
+    legacyRows.push(...pageRows);
     if (pageRows.length < PAGE_SIZE) break;
     page += 1;
   }
 
-  const filtered = rows.filter((row) => rowBelongsToPeriod(row, periodId, period));
+  const filtered = [];
+  [...canonicalRows, ...legacyRows].forEach((row) => {
+    const normalized = normalizePunchRow(row);
+    if (!normalized?.id || seenIds.has(normalized.id)) return;
+    if (!rowBelongsToPeriod(normalized, periodId, period)) return;
+    seenIds.add(normalized.id);
+    filtered.push(normalized);
+  });
+
   sortRowsByKnownTimestamp(TABLES.punches, filtered);
   return { data: filtered, error: null };
 }
@@ -350,6 +404,90 @@ function parseLegacyPunchStamp(punchAt) {
   return { workDate: match[1], time: match[2] };
 }
 
+function buildPunchAt(workDate, time) {
+  const date = normalizeDateString(workDate);
+  const hhmm = normalizeTimeString(time);
+  if (!date || !hhmm) return '';
+  return `${date}T${hhmm}:00`;
+}
+
+function normalizePunchAt(rowLike = {}) {
+  const canonical = String(rowLike?.punch_at || '').trim();
+  if (canonical) {
+    const match = canonical.match(/^(\d{4}-\d{2}-\d{2})[T\s](\d{2}:\d{2})(?::\d{2})?/);
+    if (match) return `${match[1]}T${match[2]}:00`;
+  }
+  return buildPunchAt(rowLike?.date, rowLike?.time);
+}
+
+function getPunchMeta(rowLike = {}) {
+  if (rowLike?.meta && typeof rowLike.meta === 'object' && !Array.isArray(rowLike.meta)) {
+    return { ...rowLike.meta };
+  }
+  if (rowLike?.data && typeof rowLike.data === 'object' && !Array.isArray(rowLike.data)) {
+    return { ...rowLike.data };
+  }
+  return {};
+}
+
+function normalizePunchRow(rowLike = {}) {
+  if (!rowLike) return null;
+  const meta = getPunchMeta(rowLike);
+  const employeeId = String(
+    rowLike.employee_id
+    ?? rowLike.emp_id
+    ?? meta.employee_id
+    ?? meta.empId
+    ?? ''
+  ).trim();
+  const periodId = String(
+    rowLike.payroll_period_id
+    ?? meta.payroll_period_id
+    ?? ''
+  ).trim();
+  const punchAt = normalizePunchAt(rowLike);
+  const projectId = rowLike.project_id ?? meta.project_id ?? meta.projectId ?? null;
+  const source = String(rowLike.source ?? meta.source ?? (meta.manual === true ? 'manual' : '')).trim() || null;
+
+  if ((!rowLike.payroll_period_id || !rowLike.employee_id || !rowLike.punch_at || !Object.prototype.hasOwnProperty.call(rowLike, 'meta'))
+      && (rowLike.emp_id || rowLike.date || rowLike.time || rowLike.data)) {
+    warnMixedSchema('normalized legacy DTR punch row during read', {
+      id: rowLike.id ?? null,
+      employee_id: employeeId || null,
+      payroll_period_id: periodId || null,
+    });
+  }
+
+  if (!rowLike.id || !employeeId || !punchAt) return null;
+
+  const workDate = deriveWorkDateFromPunchAt(punchAt);
+  const workTime = parseLegacyPunchStamp(punchAt).time;
+
+  return {
+    ...rowLike,
+    id: String(rowLike.id),
+    payroll_period_id: periodId || null,
+    employee_id: employeeId,
+    project_id: projectId == null || projectId === '' ? null : String(projectId),
+    punch_at: punchAt,
+    meta: {
+      ...meta,
+      ...(source ? { source } : {}),
+      ...(periodId ? { payroll_period_id: periodId } : {}),
+      ...(projectId != null && projectId !== '' ? { project_id: String(projectId) } : {}),
+      ...(employeeId ? { empId: employeeId } : {}),
+      ...(workDate ? { date: workDate } : {}),
+      ...(workTime ? { time: workTime } : {}),
+    },
+    source,
+  };
+}
+
+function createPunchId() {
+  if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
+  return `dtr_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
+}
+
 function periodIncludesDate(period, workDate) {
   const start = normalizeDateString(period?.period_start);
   const end = normalizeDateString(period?.period_end);
@@ -396,16 +534,18 @@ async function resolvePeriodIdForWorkDate(workDate, preferredPeriodId = null) {
 }
 
 function getLegacyPunchWorkDate(rowLike = {}) {
-  return normalizeDateString(rowLike.date) || deriveWorkDateFromPunchAt(rowLike.punch_at);
+  const normalized = normalizePunchRow(rowLike);
+  return normalizeDateString(normalized?.meta?.date) || deriveWorkDateFromPunchAt(normalized?.punch_at);
 }
 
 function getLegacyPunchEmployeeId(rowLike = {}) {
-  return String(rowLike.emp_id ?? rowLike.employee_id ?? '').trim();
+  const normalized = normalizePunchRow(rowLike);
+  return String(normalized?.employee_id ?? '').trim();
 }
 
 function getRowMetaPeriodId(rowLike = {}) {
-  const meta = rowLike?.data?.payroll_period_id;
-  return meta == null ? '' : String(meta).trim();
+  const normalized = normalizePunchRow(rowLike);
+  return normalized?.payroll_period_id == null ? '' : String(normalized.payroll_period_id).trim();
 }
 
 function rowBelongsToPeriod(row, periodId, period) {
@@ -427,34 +567,71 @@ async function getPunchRowContextFromRow(rowLike = {}, periodHint = null) {
   return assertDtrContext({ periodId, employeeId, workDate });
 }
 
-function normalizePunchPatchForLegacyShape(existing = {}, patch = {}, periodIdHint = null) {
-  const legacyPatch = sanitizeUpdatePatch(patch);
-  if (Object.prototype.hasOwnProperty.call(legacyPatch, 'employee_id')) {
-    legacyPatch.emp_id = legacyPatch.employee_id;
-    delete legacyPatch.employee_id;
-  }
+function normalizePunchPatchForCanonicalShape(existing = {}, patch = {}, periodIdHint = null) {
+  const current = normalizePunchRow(existing) || {};
+  const cleanPatch = sanitizeUpdatePatch(patch);
+  const metaPatch = cleanPatch.meta && typeof cleanPatch.meta === 'object' && !Array.isArray(cleanPatch.meta)
+    ? { ...cleanPatch.meta }
+    : {};
 
-  if (Object.prototype.hasOwnProperty.call(legacyPatch, 'punch_at')) {
-    const parsed = parseLegacyPunchStamp(legacyPatch.punch_at);
-    if (parsed.workDate) legacyPatch.date = parsed.workDate;
-    if (parsed.time) legacyPatch.time = parsed.time;
-    delete legacyPatch.punch_at;
-  }
-
-  if (!legacyPatch.data || typeof legacyPatch.data !== 'object') {
-    legacyPatch.data = { ...(existing?.data || {}) };
-  }
-  legacyPatch.data = { ...legacyPatch.data };
-
-  const chosenPeriodId = String(
-    periodIdHint
-    || legacyPatch.data.payroll_period_id
-    || existing?.data?.payroll_period_id
-    || '',
+  const employeeId = String(
+    cleanPatch.employee_id
+    ?? cleanPatch.emp_id
+    ?? current.employee_id
+    ?? ''
   ).trim();
-  if (chosenPeriodId) legacyPatch.data.payroll_period_id = chosenPeriodId;
 
-  return legacyPatch;
+  const projectIdRaw = Object.prototype.hasOwnProperty.call(cleanPatch, 'project_id')
+    ? cleanPatch.project_id
+    : (Object.prototype.hasOwnProperty.call(metaPatch, 'project_id') ? metaPatch.project_id : current.project_id);
+  const projectId = projectIdRaw == null || projectIdRaw === '' ? null : String(projectIdRaw);
+
+  let punchAt = cleanPatch.punch_at ?? current.punch_at ?? '';
+  const patchDate = cleanPatch.date ?? metaPatch.date ?? '';
+  const patchTime = cleanPatch.time ?? metaPatch.time ?? '';
+  if (patchDate || patchTime) {
+    const resolvedDate = normalizeDateString(patchDate) || deriveWorkDateFromPunchAt(punchAt);
+    const resolvedTime = normalizeTimeString(patchTime) || parseLegacyPunchStamp(punchAt).time;
+    const rebuiltPunchAt = buildPunchAt(resolvedDate, resolvedTime);
+    if (rebuiltPunchAt) punchAt = rebuiltPunchAt;
+  } else {
+    punchAt = normalizePunchAt({ punch_at: punchAt });
+  }
+
+  const periodId = String(
+    cleanPatch.payroll_period_id
+    ?? metaPatch.payroll_period_id
+    ?? periodIdHint
+    ?? current.payroll_period_id
+    ?? ''
+  ).trim();
+
+  const source = String(
+    cleanPatch.source
+    ?? metaPatch.source
+    ?? current.source
+    ?? (metaPatch.manual === true ? 'manual' : '')
+    ?? ''
+  ).trim() || null;
+
+  const nextMeta = {
+    ...(current.meta || {}),
+    ...metaPatch,
+    ...(employeeId ? { empId: employeeId } : {}),
+    ...(periodId ? { payroll_period_id: periodId } : {}),
+    ...(projectId != null ? { project_id: projectId } : { project_id: null }),
+    ...(deriveWorkDateFromPunchAt(punchAt) ? { date: deriveWorkDateFromPunchAt(punchAt) } : {}),
+    ...(parseLegacyPunchStamp(punchAt).time ? { time: parseLegacyPunchStamp(punchAt).time } : {}),
+    ...(source ? { source } : {}),
+  };
+
+  return {
+    payroll_period_id: periodId || null,
+    employee_id: employeeId,
+    project_id: projectId,
+    punch_at: punchAt,
+    meta: nextMeta,
+  };
 }
 
 function assertDtrContext({ periodId, employeeId, workDate }) {
@@ -653,7 +830,6 @@ export const payrollService = {
 
   async debugVerifyOptimizedLoad(periodId) {
     const tables = [
-      TABLES.dtr,
       TABLES.loans,
       TABLES.loanDeductions,
       TABLES.contribFlags,
@@ -801,6 +977,8 @@ export const payrollService = {
       resetPeriodScopedState();
     }
 
+    console.info('[payroll:dtr] authoritative DTR loader active; skipping legacy pp_dtr_records bootstrap');
+
     const loaders = Object.values(TABLE_LOADERS).map(async ({ table, stateKey }) => {
       const result = await loadRowsWithOptionalOptimizedFilter(table, periodId);
       if (result.error) throw result.error;
@@ -838,16 +1016,23 @@ export const payrollService = {
     if (!skipEditableCheck) {
       await this.ensureDtrRowEditableWithRpcOrFallback(context);
     }
+    const source = String(meta?.source || 'manual').trim() || 'manual';
     const row = {
-      emp_id: context.employeeId,
-      date: context.workDate,
-      time: parsed.time,
-      source: String(meta?.source || 'manual'),
-      data: {
+      id: createPunchId(),
+      payroll_period_id: context.periodId,
+      employee_id: context.employeeId,
+      project_id: projectId ?? null,
+      punch_at: buildPunchAt(context.workDate, parsed.time),
+      meta: {
         ...(meta && typeof meta === 'object' ? meta : {}),
         payroll_period_id: context.periodId,
         project_id: projectId ?? null,
+        empId: context.employeeId,
+        date: context.workDate,
+        time: parsed.time,
+        source,
       },
+      updated_by: meta?.updated_by ?? null,
     };
 
     return createRowWithLock({
@@ -863,8 +1048,8 @@ export const payrollService = {
     const existing = state.dtrPunches.get(punchId);
     if (!existing) throw new Error(`Punch ${punchId} not found in state.`);
     const sourceContext = await getPunchRowContextFromRow(existing, getState().currentPeriodId);
-    const legacyPatch = normalizePunchPatchForLegacyShape(existing, patch, sourceContext.periodId);
-    const destinationContext = await getPunchRowContextFromRow({ ...existing, ...legacyPatch }, sourceContext.periodId);
+    const canonicalPatch = normalizePunchPatchForCanonicalShape(existing, patch, sourceContext.periodId);
+    const destinationContext = await getPunchRowContextFromRow({ ...existing, ...canonicalPatch }, sourceContext.periodId);
 
     if (!options.skipEditableCheck) {
       await this.ensureDtrRowEditableWithRpcOrFallback(sourceContext);
@@ -880,7 +1065,7 @@ export const payrollService = {
     return updateWithOptimisticLock({
       table: TABLES.punches,
       id: punchId,
-      patch: legacyPatch,
+      patch: canonicalPatch,
       expectedUpdatedAt: existing.updated_at ?? null,
       periodId: sourceContext.periodId,
       stateKey: 'dtrPunches',
@@ -920,13 +1105,14 @@ export const payrollService = {
       if (!row) return false;
       const period = getState().payrollPeriods.get(context.periodId);
       if (!rowBelongsToPeriod(row, context.periodId, period)) return false;
-      if (String(row.emp_id || '') !== context.employeeId) return false;
-      return normalizeDateString(row.date) === context.workDate;
+      const normalized = normalizePunchRow(row);
+      if (String(normalized?.employee_id || '') !== context.employeeId) return false;
+      return deriveWorkDateFromPunchAt(normalized?.punch_at) === context.workDate;
     });
 
     const existingQueue = existingRows.map((row) => ({
       row,
-      time: normalizeTimeString(row.time),
+      time: parseLegacyPunchStamp(normalizePunchAt(row)).time,
     }));
 
     const toCreate = [];
