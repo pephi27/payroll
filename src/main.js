@@ -221,6 +221,54 @@ function bridgeDtrApprovalsToLegacyRuntime() {
   });
 }
 
+function createPeriodSwitcher() {
+  return async (nextPeriodId) => {
+    const periodId = String(nextPeriodId || '').trim();
+    if (!periodId) return;
+
+    setPeriodSwitchInFlight(true);
+    try {
+      console.info('[payroll:dtr-debug] switching payroll period', { periodId });
+      await payrollService.loadCoreReadModels({ periodId, resetPeriodTables: true });
+      setCurrentPeriod(periodId);
+      const punchCount = getState().dtrPunches.size;
+      console.info('[payroll:dtr-debug] remote punches loaded for active period', { periodId, punchCount });
+      try { window.scheduleRenderResults?.('payroll-period-switch'); } catch (_) {}
+    } finally {
+      setPeriodSwitchInFlight(false);
+    }
+  };
+}
+
+function wirePeriodSwitchUi(switchPayrollPeriod) {
+  const syncValue = (el, value) => {
+    if (!el) return;
+    const normalized = value == null ? '' : String(value);
+    if (el.value !== normalized) el.value = normalized;
+  };
+
+  const bind = (id) => {
+    const el = document.getElementById(id);
+    if (!el || el.dataset.payrollPeriodBound === 'true') return;
+    el.dataset.payrollPeriodBound = 'true';
+    syncValue(el, getState().currentPeriodId);
+    el.addEventListener('change', async (event) => {
+      const nextPeriodId = String(event?.target?.value || '').trim();
+      if (!nextPeriodId || nextPeriodId === getState().currentPeriodId) return;
+      try {
+        await switchPayrollPeriod(nextPeriodId);
+      } catch (error) {
+        console.error('Payroll period switch failed', error);
+        syncValue(el, getState().currentPeriodId);
+      }
+    });
+  };
+
+  subscribe((state, change) => {
+    if (change?.type !== 'set_current_period' && change?.tableKey !== 'payrollPeriods') return;
+    syncValue(document.getElementById('activePayrollSelect'), state.currentPeriodId);
+    syncValue(document.getElementById('bpActivePayrollSelect'), state.currentPeriodId);
+  });
 
   bind('activePayrollSelect');
   bind('bpActivePayrollSelect');
