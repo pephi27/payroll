@@ -402,6 +402,45 @@ function resolvePeriodIdFromUiSelection(element) {
   const selected = element?.value ? String(element.value) : '';
   if (selected.includes('|')) return selected;
 
+  const selectedOption = element?.selectedOptions?.[0] ?? null;
+  const periodIdFromOption = String(selectedOption?.dataset?.periodId || selectedOption?.value || '').trim();
+  if (periodIdFromOption.includes('|')) return periodIdFromOption;
+
+  const historyIndex = Number.parseInt(String(selectedOption?.dataset?.historyIndex || selected), 10);
+  if (Number.isFinite(historyIndex)) {
+    const history = Array.isArray(window.payrollHistory) ? window.payrollHistory : [];
+    const snap = history[historyIndex];
+    if (snap?.startDate && snap?.endDate) return `${snap.startDate}|${snap.endDate}`;
+  }
+
+  const weekStart = String(document.getElementById('weekStart')?.value || '').trim();
+  const weekEnd = String(document.getElementById('weekEnd')?.value || '').trim();
+  if (weekStart && weekEnd) return `${weekStart}|${weekEnd}`;
+
+  const state = getState();
+  if (selected && state.payrollPeriods.has(selected)) return selected;
+  return '';
+}
+
+function wirePeriodSwitchUi(switchPeriod) {
+  const bind = (elementId) => {
+    const el = document.getElementById(elementId);
+    if (!el || el.__payrollPeriodSwitchBound) return;
+    el.addEventListener('change', () => {
+      const periodId = resolvePeriodIdFromUiSelection(el);
+      if (!periodId) return;
+      if (typeof window.syncPayrollHistorySelectionUi === 'function') {
+        try { window.syncPayrollHistorySelectionUi(el); } catch (error) {
+          console.warn('[payroll:period-switch] failed to sync payroll history UI selection', error);
+        }
+      }
+      void switchPeriod(periodId).catch((error) => {
+        console.warn('[payroll:period-switch] failed to load selected period', error);
+      });
+    });
+    el.__payrollPeriodSwitchBound = true;
+  };
+
   bind('activePayrollSelect');
   bind('bpActivePayrollSelect');
 }
