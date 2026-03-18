@@ -43,47 +43,10 @@ function logRealtimeDebug(message, details = undefined) {
   console.info(`[payroll:realtime:debug] ${message}`, details);
 }
 
-function normalizeDate(value) {
-  const match = String(value || '').trim().match(/^(\d{4}-\d{2}-\d{2})/);
-  return match ? match[1] : '';
-}
-
-function getPunchMeta(row = {}) {
-  if (row?.meta && typeof row.meta === 'object' && !Array.isArray(row.meta)) return row.meta;
-  if (row?.data && typeof row.data === 'object' && !Array.isArray(row.data)) return row.data;
-  return {};
-}
-
-function extractRowPeriodId(table, row, currentPeriodId) {
-  if (!row || typeof row !== 'object') return null;
-  if (row.payroll_period_id != null && String(row.payroll_period_id).trim() !== '') {
-    return String(row.payroll_period_id).trim();
-  }
-
-  if (table === 'dtr_punches') {
-    const meta = getPunchMeta(row);
-    if (meta?.payroll_period_id != null && String(meta.payroll_period_id).trim() !== '') {
-      console.warn('[payroll:realtime:mixed-schema]', { table, id: row.id ?? null, reason: 'period id sourced from punch metadata' });
-      return String(meta.payroll_period_id).trim();
-    }
-
-    const currentPeriod = currentPeriodId ? getState().payrollPeriods.get(currentPeriodId) : null;
-    const rowDate = normalizeDate(row.date || meta.date || row.punch_at);
-    const start = normalizeDate(currentPeriod?.period_start);
-    const end = normalizeDate(currentPeriod?.period_end);
-    if (currentPeriodId && rowDate && start && end && rowDate >= start && rowDate <= end) {
-      console.warn('[payroll:realtime:mixed-schema]', { table, id: row.id ?? null, reason: 'period id inferred from legacy punch date' });
-      return String(currentPeriodId);
-    }
-  }
-
-  return null;
-}
-
-function getEventPeriodInfo(payload, table = null) {
+function getEventPeriodInfo(payload) {
   const currentPeriodId = getState().currentPeriodId;
-  const newPeriodId = extractRowPeriodId(table, payload?.new, currentPeriodId);
-  const oldPeriodId = extractRowPeriodId(table, payload?.old, currentPeriodId);
+  const newPeriodId = payload?.new?.payroll_period_id ?? null;
+  const oldPeriodId = payload?.old?.payroll_period_id ?? null;
   const hasPeriodId = newPeriodId != null || oldPeriodId != null;
   return { currentPeriodId, newPeriodId, oldPeriodId, hasPeriodId };
 }
@@ -91,7 +54,7 @@ function getEventPeriodInfo(payload, table = null) {
 function isEventForCurrentPeriod(table, payload) {
   if (!PERIOD_SCOPED_TABLES.has(table)) return true;
 
-  const info = getEventPeriodInfo(payload, table);
+  const info = getEventPeriodInfo(payload);
   if (!info.currentPeriodId) return true;
 
   if (!info.hasPeriodId) {
@@ -194,7 +157,7 @@ function handleChange(table, payload) {
   if (!stateKey) return;
 
   if (!isEventForCurrentPeriod(table, payload)) {
-    const periodInfo = getEventPeriodInfo(payload, table);
+    const periodInfo = getEventPeriodInfo(payload);
     logRealtimeDebug('ignored event for non-active period', {
       table,
       eventType: payload?.eventType,
@@ -207,7 +170,7 @@ function handleChange(table, payload) {
 
   latestActiveEvent = event;
 
-  const periodInfo = getEventPeriodInfo(payload, table);
+  const periodInfo = getEventPeriodInfo(payload);
   logRealtimeDebug('queued event for active period', {
     table,
     eventType: payload?.eventType,
