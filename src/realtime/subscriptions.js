@@ -5,7 +5,6 @@ import { batch, getState, mergeRow, removeRow, setLastRealtimeEvent, setRealtime
 const TABLE_TO_STATE_KEY = {
   payroll_periods: 'payrollPeriods',
   payroll_period_snapshots: 'payrollSnapshots',
-  pp_dtr_records: 'dtrRecords',
   dtr_punches: 'dtrPunches',
   pp_dtr_approvals: 'dtrApprovals',
   pp_employees: 'employees',
@@ -19,7 +18,6 @@ const TABLE_TO_STATE_KEY = {
 
 const PERIOD_SCOPED_TABLES = new Set([
   'payroll_period_snapshots',
-  'pp_dtr_records',
   'dtr_punches',
   'pp_dtr_approvals',
   'employee_loans',
@@ -43,10 +41,47 @@ function logRealtimeDebug(message, details = undefined) {
   console.info(`[payroll:realtime:debug] ${message}`, details);
 }
 
-function getEventPeriodInfo(payload) {
+function normalizeDate(value) {
+  const match = String(value || '').trim().match(/^(\d{4}-\d{2}-\d{2})/);
+  return match ? match[1] : '';
+}
+
+function getPunchMeta(row = {}) {
+  if (row?.meta && typeof row.meta === 'object' && !Array.isArray(row.meta)) return row.meta;
+  if (row?.data && typeof row.data === 'object' && !Array.isArray(row.data)) return row.data;
+  return {};
+}
+
+function extractRowPeriodId(table, row, currentPeriodId) {
+  if (!row || typeof row !== 'object') return null;
+  if (row.payroll_period_id != null && String(row.payroll_period_id).trim() !== '') {
+    return String(row.payroll_period_id).trim();
+  }
+
+  if (table === 'dtr_punches') {
+    const meta = getPunchMeta(row);
+    if (meta?.payroll_period_id != null && String(meta.payroll_period_id).trim() !== '') {
+      console.warn('[payroll:realtime:mixed-schema]', { table, id: row.id ?? null, reason: 'period id sourced from punch metadata' });
+      return String(meta.payroll_period_id).trim();
+    }
+
+    const currentPeriod = currentPeriodId ? getState().payrollPeriods.get(currentPeriodId) : null;
+    const rowDate = normalizeDate(row.date || meta.date || row.punch_at);
+    const start = normalizeDate(currentPeriod?.period_start);
+    const end = normalizeDate(currentPeriod?.period_end);
+    if (currentPeriodId && rowDate && start && end && rowDate >= start && rowDate <= end) {
+      console.warn('[payroll:realtime:mixed-schema]', { table, id: row.id ?? null, reason: 'period id inferred from legacy punch date' });
+      return String(currentPeriodId);
+    }
+  }
+
+  return null;
+}
+
+function getEventPeriodInfo(payload, table = null) {
   const currentPeriodId = getState().currentPeriodId;
-  const newPeriodId = payload?.new?.payroll_period_id ?? null;
-  const oldPeriodId = payload?.old?.payroll_period_id ?? null;
+  const newPeriodId = extractRowPeriodId(table, payload?.new, currentPeriodId);
+  const oldPeriodId = extractRowPeriodId(table, payload?.old, currentPeriodId);
   const hasPeriodId = newPeriodId != null || oldPeriodId != null;
   return { currentPeriodId, newPeriodId, oldPeriodId, hasPeriodId };
 }
@@ -54,7 +89,7 @@ function getEventPeriodInfo(payload) {
 function isEventForCurrentPeriod(table, payload) {
   if (!PERIOD_SCOPED_TABLES.has(table)) return true;
 
-  const info = getEventPeriodInfo(payload);
+  const info = getEventPeriodInfo(payload, table);
   if (!info.currentPeriodId) return true;
 
   if (!info.hasPeriodId) {
@@ -157,7 +192,7 @@ function handleChange(table, payload) {
   if (!stateKey) return;
 
   if (!isEventForCurrentPeriod(table, payload)) {
-    const periodInfo = getEventPeriodInfo(payload);
+    const periodInfo = getEventPeriodInfo(payload, table);
     logRealtimeDebug('ignored event for non-active period', {
       table,
       eventType: payload?.eventType,
@@ -170,7 +205,7 @@ function handleChange(table, payload) {
 
   latestActiveEvent = event;
 
-  const periodInfo = getEventPeriodInfo(payload);
+  const periodInfo = getEventPeriodInfo(payload, table);
   logRealtimeDebug('queued event for active period', {
     table,
     eventType: payload?.eventType,
@@ -202,6 +237,8 @@ export function startRealtimeSubscriptions() {
   }
 
   setRealtimeStatus('connecting');
+
+  console.info('[payroll:dtr] authoritative realtime active; skipping legacy pp_dtr_records subscription');
 
   const channels = Object.keys(TABLE_TO_STATE_KEY).map((table) => {
     return supabase
