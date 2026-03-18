@@ -16,6 +16,7 @@ const initialState = {
     supabaseConnected: null,
     realtimeStatus: 'idle',
     currentPeriodLocked: null,
+    periodSwitchInFlight: false,
     lastRealtimeEvent: null,
     lastConflict: null,
     dtrStateVersion: 0,
@@ -99,6 +100,12 @@ export function resetTable(tableKey) {
   collection.clear();
   bumpDtrStateVersion(tableKey);
   notify({ type: 'reset_table', tableKey });
+}
+
+
+export function setPeriodSwitchInFlight(inFlight) {
+  state.diagnostics.periodSwitchInFlight = !!inFlight;
+  notify({ type: 'diagnostics_period_switch', inFlight: !!inFlight });
 }
 
 export function setSupabaseConnected(connected) {
