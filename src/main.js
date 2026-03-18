@@ -1,5 +1,5 @@
 import { payrollService } from './services/payrollService.js';
-import { clearPeriodSwitchError, getState, setCurrentPeriod, setPeriodSwitchError, setPeriodSwitchInFlight, setSupabaseConnected, subscribe } from './state/store.js';
+import { getState, setCurrentPeriod, setPeriodSwitchInFlight, setSupabaseConnected, subscribe } from './state/store.js';
 import { startRealtimeSubscriptions } from './realtime/subscriptions.js';
 import { mountPayrollController } from './ui/payrollController.js';
 import { waitForSupabaseClient } from './config/supabaseClient.js';
@@ -255,11 +255,94 @@ function createPeriodSwitcher() {
     setPeriodEditabilityDisabled(true);
     clearPeriodSwitchError();
 
+  const normalizeDate = (value) => {
+    const match = String(value || '').trim().match(/^(\d{4}-\d{2}-\d{2})/);
+    return match ? match[1] : '';
+  };
+
+  const getPunchWorkDate = (row = {}) => {
+    const fromDate = normalizeDate(row.date);
+    if (fromDate) return fromDate;
+    const fromStamp = String(row.punch_at || '').trim().match(/^(\d{4}-\d{2}-\d{2})[T\s]/);
+    return fromStamp ? fromStamp[1] : '';
+  };
+
+  const isDateInsidePeriod = (period, date) => {
+    const start = normalizeDate(period?.period_start);
+    const end = normalizeDate(period?.period_end);
+    const ymd = normalizeDate(date);
+    if (!start || !end || !ymd) return false;
+    return ymd >= start && ymd <= end;
+  };
+
+  const isPunchForPeriod = (row, periodId, period) => {
+    if (!row || !periodId || !period) return false;
+    const metaPeriodId = row?.data?.payroll_period_id == null ? '' : String(row.data.payroll_period_id).trim();
+    const workDate = getPunchWorkDate(row);
+    if (metaPeriodId) {
+      if (metaPeriodId !== String(periodId)) return false;
+      return isDateInsidePeriod(period, workDate);
+    }
+    return isDateInsidePeriod(period, workDate);
+  };
+
+  const isApprovalForPeriod = (row, periodId) => (
+    !!row && String(row.payroll_period_id || '') === String(periodId || '')
+  );
+
+  let inflightToken = 0;
+  cleanupPeriodSync = subscribe(async (_state, change) => {
+    if (change?.type !== 'set_current_period') return;
+    const periodId = getState().currentPeriodId;
+    if (!periodId) return;
+    const token = ++inflightToken;
+    const stateVersionAtStart = Number(getState().diagnostics?.dtrStateVersion) || 0;
     try {
-      payrollService.resetPeriodScopedState();
-      setCurrentPeriod(normalizedPeriodId);
-      await payrollService.loadCoreReadModels({ periodId: normalizedPeriodId, resetPeriodTables: false });
-      clearPeriodSwitchError();
+      let [punchRows, approvalRows] = await Promise.all([
+        payrollService.fetchPunchesByPeriod(periodId),
+        payrollService.fetchDtrApprovalsByPeriod(periodId),
+      ]);
+      if (token !== inflightToken) return;
+      if (String(getState().currentPeriodId || '') !== String(periodId)) return;
+
+      const stateVersionAfterFetch = Number(getState().diagnostics?.dtrStateVersion) || 0;
+      if (stateVersionAfterFetch !== stateVersionAtStart) {
+        [punchRows, approvalRows] = await Promise.all([
+          payrollService.fetchPunchesByPeriod(periodId),
+          payrollService.fetchDtrApprovalsByPeriod(periodId),
+        ]);
+        if (token !== inflightToken) return;
+        if (String(getState().currentPeriodId || '') !== String(periodId)) return;
+      }
+
+      const state = getState();
+      const activePeriod = state.payrollPeriods.get(periodId);
+      if (!activePeriod) {
+        console.warn('[payroll:bridge] active payroll period missing during period switch apply', { periodId });
+        return;
+      }
+
+      const punchById = new Map();
+      (Array.isArray(punchRows) ? punchRows : []).forEach((row) => {
+        if (!row?.id) return;
+        if (!isPunchForPeriod(row, periodId, activePeriod)) return;
+        punchById.set(row.id, row);
+      });
+
+      const approvalsById = new Map();
+      (Array.isArray(approvalRows) ? approvalRows : []).forEach((row) => {
+        if (!row?.id) return;
+        if (!isApprovalForPeriod(row, periodId)) return;
+        approvalsById.set(row.id, row);
+      });
+
+      batch(() => {
+        resetTable('dtrPunches');
+        punchById.forEach((row) => mergeRow('dtrPunches', row));
+        resetTable('dtrApprovals');
+        approvalsById.forEach((row) => mergeRow('dtrApprovals', row));
+      });
+
       try { window.scheduleRenderResults?.('dtr-period-switch'); } catch (error) {
         console.warn('[payroll:bridge] failed to schedule DTR render after period switch', error);
       }
@@ -318,43 +401,6 @@ function createPeriodSwitcher() {
 function resolvePeriodIdFromUiSelection(element) {
   const selected = element?.value ? String(element.value) : '';
   if (selected.includes('|')) return selected;
-
-  const selectedOption = element?.selectedOptions?.[0] ?? null;
-  const periodIdFromOption = String(selectedOption?.dataset?.periodId || selectedOption?.value || '').trim();
-  if (periodIdFromOption.includes('|')) return periodIdFromOption;
-
-  const historyIndex = Number.parseInt(String(selectedOption?.dataset?.historyIndex || selected), 10);
-  if (Number.isFinite(historyIndex)) {
-    const history = Array.isArray(window.payrollHistory) ? window.payrollHistory : [];
-    const snap = history[historyIndex];
-    if (snap?.startDate && snap?.endDate) return `${snap.startDate}|${snap.endDate}`;
-  }
-
-  const weekStart = String(document.getElementById('weekStart')?.value || '').trim();
-  const weekEnd = String(document.getElementById('weekEnd')?.value || '').trim();
-  if (weekStart && weekEnd) return `${weekStart}|${weekEnd}`;
-
-  const state = getState();
-  if (selected && state.payrollPeriods.has(selected)) return selected;
-  return '';
-}
-
-function wirePeriodSwitchUi(switchPeriod) {
-  const bind = (elementId) => {
-    const el = document.getElementById(elementId);
-    if (!el || el.__payrollPeriodSwitchBound) return;
-    el.addEventListener('change', () => {
-      try { window.syncPayrollHistorySelectionUi?.(el); } catch (error) {
-        console.warn('[payroll:period-switch] failed to sync legacy selection UI before switch', error);
-      }
-      const periodId = resolvePeriodIdFromUiSelection(el);
-      if (!periodId) return;
-      void switchPeriod(periodId).catch((error) => {
-        console.warn('[payroll:period-switch] failed to load selected period', error);
-      });
-    });
-    el.__payrollPeriodSwitchBound = true;
-  };
 
   bind('activePayrollSelect');
   bind('bpActivePayrollSelect');

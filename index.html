@@ -17140,17 +17140,18 @@ const scheduleSelect = document.getElementById('scheduleSelect');
 const scheduleNameInput = document.getElementById('scheduleName');
 
 function renderScheduleSelector(){
+  if (!scheduleSelect) return;
   scheduleSelect.innerHTML = '';
-  Object.keys(storedSchedules).forEach(id=>{
+  const schedules = (storedSchedules && typeof storedSchedules === 'object') ? storedSchedules : {};
+  Object.keys(schedules).forEach(id=>{
     const opt = document.createElement('option');
     opt.value = id;
-    opt.textContent = (storedSchedules[id].name || id) + (id === defaultScheduleId ? " (Default)" : "");
+    opt.textContent = (schedules[id].name || id) + (id === defaultScheduleId ? " (Default)" : "");
     scheduleSelect.appendChild(opt);
   });
-  if(defaultScheduleId && storedSchedules[defaultScheduleId]) scheduleSelect.value = defaultScheduleId;
+  if(defaultScheduleId && schedules[defaultScheduleId]) scheduleSelect.value = defaultScheduleId;
   else if(scheduleSelect.options.length) scheduleSelect.selectedIndex = 0;
   renderEmpScheduleDropdowns();
-  renderEmpScheduleDropdownsInTable();
 }
 
 function renderScheduleEditor(){
@@ -17302,20 +17303,22 @@ document.getElementById('resetRangesBtn').addEventListener('click', resetRanges)
 function saveEmployeesToLS(){ console.warn('[payroll:migrated] saveEmployeesToLS is legacy-only; use payrollService row-level methods for writes'); }
 function renderEmpScheduleDropdowns(){
   const sel = document.getElementById('empScheduleSelect'); if(!sel) return;
+  const schedules = (storedSchedules && typeof storedSchedules === 'object') ? storedSchedules : {};
   sel.innerHTML = '';
-  Object.keys(storedSchedules).forEach(id=>{
+  Object.keys(schedules).forEach(id=>{
     const o=document.createElement('option'); o.value=id;
-    o.textContent=storedSchedules[id].name + (id===defaultScheduleId?' (Default)':'');
+    o.textContent=schedules[id].name + (id===defaultScheduleId?' (Default)':'');
     sel.appendChild(o);
   });
-  if(defaultScheduleId && storedSchedules[defaultScheduleId]) sel.value = defaultScheduleId;
+  if(defaultScheduleId && schedules[defaultScheduleId]) sel.value = defaultScheduleId;
 }
 function renderEmpScheduleDropdownsInTable(){
+  const schedules = (storedSchedules && typeof storedSchedules === 'object') ? storedSchedules : {};
   document.querySelectorAll('.emp-sel-schedule').forEach(sel=>{
     const id = sel.dataset.id;
     sel.innerHTML = '';
-    Object.keys(storedSchedules).forEach(sid=>{
-      const label = storedSchedules[sid].name + (sid===defaultScheduleId ? ' (Default)' : '');
+    Object.keys(schedules).forEach(sid=>{
+      const label = schedules[sid].name + (sid===defaultScheduleId ? ' (Default)' : '');
       const o = document.createElement('option'); o.value = sid; o.textContent = label;
       if(storedEmployees[id] && storedEmployees[id].scheduleId === sid) o.selected = true;
       sel.appendChild(o);
@@ -23891,12 +23894,12 @@ document.addEventListener('DOMContentLoaded', async function () {
 
   function getEditorRowLockOrApproval(tr){
     if (!tr || !tr.cells || tr.cells.length < 5 || tr.closest('tfoot') || tr.classList.contains('totals-row')) {
-      return { blocked: true, reason: 'Row is not editable.' };
+      return { blocked: true, reason: 'Row is not editable.', nonDataRow: true };
     }
     const empId = String((tr?.dataset?.empId || (tr?.cells?.[0]?.textContent || '') || '')).trim();
     const workDate = String((tr?.dataset?.date || (tr?.cells?.[4]?.textContent || '') || '')).trim();
     if (!empId || !workDate) {
-      return { blocked: true, reason: 'Row is not editable.' };
+      return { blocked: true, reason: 'Row is not editable.', nonDataRow: true };
     }
     const state = (typeof window.getPayrollStoreState === 'function') ? window.getPayrollStoreState() : null;
     const periodId = state && state.currentPeriodId ? state.currentPeriodId : null;
@@ -24019,7 +24022,7 @@ document.addEventListener('DOMContentLoaded', async function () {
         existingBtn.title = rowGate.blocked ? rowGate.reason : '';
         return;
       }
-      if (rowGate.reason === 'Row is not editable.') return;
+      if (rowGate.nonDataRow) return;
       const td = document.createElement('td');
       td.className = 'editor-cell';
       const btn = document.createElement('button');
