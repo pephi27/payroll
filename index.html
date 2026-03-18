@@ -18004,6 +18004,8 @@ async function importAndPersistDtrFile(file, options = {}){
     }
   }
 
+  console.info('[dtr:debug] upload parse complete', { fileName: file && file.name ? file.name : '', added, stagedCount: Array.isArray(storedRecords) ? storedRecords.length : 0, shouldPersist });
+
   if (shouldPersist) {
     const persistFn = resolveDtrPersistFn();
     if (persistFn) {
@@ -22776,6 +22778,11 @@ function __dtrLoadJson(k, fb){
 function __dtrSaveJson(k, v){
   try { localStorage.setItem(k, JSON.stringify(v)); } catch(e) {}
 }
+function __dtrIsMissingPunchesError(errorLike){
+  const msg = String(errorLike && (errorLike.message || errorLike.details || errorLike.error_description) ? (errorLike.message || errorLike.details || errorLike.error_description) : errorLike || '');
+  const code = String(errorLike && errorLike.code ? errorLike.code : '');
+  return /does not exist|relation .*dtr_punches|schema cache|Could not find the table/i.test(msg) || code === '42P01' || code === 'PGRST205';
+}
 
 async function __dtrFetchAllPunchRows(supa, table){
   const out = [];
@@ -22797,6 +22804,8 @@ async function __dtrFetchAllPunchRows(supa, table){
 
 async function migrateLegacyDtrToPunches(records){
   try {
+    const sourceCount = Array.isArray(records) ? records.length : 0;
+    console.info('[dtr:debug] legacy->punches migration starting', { sourceCount });
     const supa = window.supabase || (typeof supabase !== 'undefined' ? supabase : null);
     if (!supa) return false;
     const table = 'dtr_punches';
@@ -22829,9 +22838,11 @@ async function migrateLegacyDtrToPunches(records){
       const { error } = await supa.from(table).upsert(batch, { onConflict: 'id' });
       if (error) throw error;
     }
+    console.info('[dtr:debug] legacy->punches migration result', { success: true, sourceCount: localRecs.length, migratedCount: rows.length });
     return true;
   } catch (e) {
     console.warn('Legacy->Punches migration failed:', e && e.message ? e.message : e);
+    console.info('[dtr:debug] legacy->punches migration result', { success: false, error: e && (e.message || e.details) ? String(e.message || e.details) : String(e) });
     return false;
   }
 }
@@ -22875,6 +22886,8 @@ async function loadDtrFromCloud() {
     }
 
     // If punches table exists but empty, try legacy blob (for migration)
+    console.info('[dtr:debug] refresh remote punches load count', { rowCount: rows.length, recordCount: recs.length });
+
     if (!recs.length) {
       try {
         const legacy = await loadDtrFromCloudLegacyBlob();
@@ -22886,7 +22899,7 @@ async function loadDtrFromCloud() {
     return { status: 'ok', records: recs, tombstones: {}, meta: { storage: 'punches', rowCount: rows.length } };
   } catch (e) {
     const msg = (e && (e.message || e.details)) ? String(e.message || e.details) : String(e);
-    const isMissing = /does not exist|relation .*dtr_punches|42P01/i.test(msg);
+    const isMissing = __dtrIsMissingPunchesError(e);
     if (isMissing) {
       // Fallback to legacy for backwards compatibility
       try {
@@ -22920,6 +22933,7 @@ async function saveDtrToCloud(records) {
     const deviceId = __dtrGetDeviceId();
 
     const localRecs = Array.isArray(records) ? records : [];
+    console.info('[dtr:debug] before save to Supabase punches', { localCount: localRecs.length, hydrationDone: !!window.__dtrHydrationDone });
     const localMap = new Map();
     for (const r of localRecs){
       const id = __dtrRecId(r);
@@ -22974,15 +22988,17 @@ async function saveDtrToCloud(records) {
       if (error) throw error;
     }
 
+    console.info('[dtr:debug] after Supabase save result', { success: true, upsertedCount: rowsToUpsert.length, deletedCount: idsToDelete.length, remoteCountBefore: remoteRows.length, localCount: localRecs.length });
   } catch (e) {
     const msg = (e && (e.message || e.details)) ? String(e.message || e.details) : String(e);
-    const isMissing = /does not exist|relation .*dtr_punches|42P01/i.test(msg);
+    const isMissing = __dtrIsMissingPunchesError(e);
     if (isMissing) {
       console.warn('DTR punches table missing; falling back to legacy DTR storage until you create `dtr_punches`.');
       try { await saveDtrToCloudLegacyBlob(records); } catch(_) {}
       return;
     }
     console.warn('saveDtrToCloud punches failed:', msg);
+    console.info('[dtr:debug] after Supabase save result', { success: false, error: msg, fallbackToLegacyBlob: isMissing });
   }
 }
 
@@ -23102,6 +23118,7 @@ document.addEventListener('DOMContentLoaded', async function () {
 
   try {
     const res = await loadDtrFromCloud();
+    console.info('[dtr:debug] hydration remote result', { status: res && res.status ? res.status : 'unknown', storage: res && res.meta && res.meta.storage ? res.meta.storage : 'unknown', remoteCount: res && Array.isArray(res.records) ? res.records.length : 0 });
 
     if (res && res.status === 'ok' && Array.isArray(res.records) && res.records.length) {
       const remoteRecs = res.records;
@@ -23150,6 +23167,7 @@ document.addEventListener('DOMContentLoaded', async function () {
       } catch(e) {}
 
       try { window.scheduleRenderResults?.('tab-activation-dtr'); } catch (e) {}
+      console.info('[dtr:debug] final count shown in UI', { count: merged.length, source: 'hydrated-merge' });
       if (typeof hideRemoteDtrAlert === 'function') hideRemoteDtrAlert();
 
       // Seed remote with any local-only punches (safe: only inserts new ids)
@@ -23167,6 +23185,7 @@ document.addEventListener('DOMContentLoaded', async function () {
         // Seed remote from local
         window.__dtrHydrationDone = true; // allow save
         try { await saveDtrToCloud(localRecs); } catch(e) {}
+        console.info('[dtr:debug] final count shown in UI', { count: localRecs.length, source: 'local-seeded-remote' });
         if (typeof hideRemoteDtrAlert === 'function') hideRemoteDtrAlert();
       } else {
         if (typeof showRemoteDtrAlert === 'function') {
@@ -23815,6 +23834,7 @@ document.addEventListener('DOMContentLoaded', async function () {
     } catch(e){
       console.warn('Failed to persist DTR records locally', e);
     }
+    console.info('[dtr:debug] persistStoredRecords snapshot prepared', { localCount: snapshot.length });
     try {
       if (typeof saveDtrToCloud === 'function') await saveDtrToCloud(snapshot);
     } catch(e){

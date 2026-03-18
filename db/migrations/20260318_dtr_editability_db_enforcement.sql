@@ -124,12 +124,19 @@ begin
     raise exception 'DTR punch metadata period % does not match work date %. Update denied.', v_meta_period_id, p_work_date;
   end if;
 
-  select count(*), min(id)
-    into v_match_count, v_period_id
+  select count(*)
+    into v_match_count
   from public.payroll_periods
   where p_work_date between period_start and period_end;
 
   if v_match_count = 1 then
+    select id
+      into v_period_id
+    from public.payroll_periods
+    where p_work_date between period_start and period_end
+    order by period_start asc, id::text asc
+    limit 1;
+
     return v_period_id;
   end if;
 
