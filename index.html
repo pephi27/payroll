@@ -1344,10 +1344,6 @@ function printReport(html, options){
           ${otherDeductionBlock}
         </div>
       </div>
-      <div class="payslip-footer">
-        <div>If you have questions about this payslip, contact HR/Accounting.</div>
-        <div>Computer-generated payslip.</div>
-      </div>
     </div>`;
   }
   var styles = `@page { size: letter portrait; margin: 0.25in; }
@@ -1374,8 +1370,7 @@ body{font-family:Arial,Helvetica,sans-serif;margin:0;padding:0 0.1in;}
 .detail-row{display:flex;justify-content:space-between;gap:4px;font-size:8px;line-height:1.2;padding:1px 0;}
 .detail-row span:last-child{font-variant-numeric:tabular-nums;}
 .item-line{font-size:7.3px;color:#475569;padding:0;}
-.detail-more{font-style:italic;}
-.payslip-footer{margin-top:3px;font-size:7px;line-height:1.2;color:#475569;}`;
+.detail-more{font-style:italic;}`;
 
   window.collectPayslipRowData = collectRowData;
   window.buildCompactPayslip = buildPayslip;
@@ -1421,8 +1416,7 @@ body{font-family:Arial,Helvetica,sans-serif;margin:0;padding:0 0.1in;}
 .detail-row{display:flex;justify-content:space-between;gap:4px;font-size:8px;line-height:1.2;padding:1px 0;}
 .detail-row span:last-child{font-variant-numeric:tabular-nums;}
 .item-line{font-size:7.3px;color:#475569;padding:0;}
-.detail-more{font-style:italic;}
-.payslip-footer{margin-top:3px;font-size:7px;line-height:1.2;color:#475569;}`;
+.detail-more{font-style:italic;}`;
     }
     var html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>All Payslips</title>
 <style>${styles}</style></head><body><div class="payslip-grid">`;
@@ -21041,8 +21035,7 @@ body{font-family:Arial,Helvetica,sans-serif;margin:0;padding:0 0.1in;}
 .detail-row{display:flex;justify-content:space-between;gap:4px;font-size:8px;line-height:1.2;padding:1px 0;}
 .detail-row span:last-child{font-variant-numeric:tabular-nums;}
 .item-line{font-size:7.3px;color:#475569;padding:0;}
-.detail-more{font-style:italic;}
-.payslip-footer{margin-top:3px;font-size:7px;line-height:1.2;color:#475569;}`;
+.detail-more{font-style:italic;}`;
       }
       html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Payslip - ${name}</title><style>${stylesSingle}</style></head><body><div class="payslip-grid single">${slip}</div></body></html>`;
     }
