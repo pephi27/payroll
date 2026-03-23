@@ -1241,13 +1241,9 @@ function printReport(html, options){
   }
   function buildPayslip(data, periodText){
     if (!data) return '';
-    var period = (periodText || '').trim();
-    var periodParts = period.split(/\s+to\s+|\s+–\s+|\s+-\s+/);
-    var periodStart = (periodParts[0] || '').trim();
-    var periodEnd = (periodParts[1] || '').trim();
-    var generatedOn = new Date();
-    var generatedText = generatedOn.toLocaleDateString();
-    var payDateText = (data.payDate || periodEnd || generatedText || '').toString();
+    function roundToDisplayCents(value){
+      return roundToCents(value);
+    }
     var additionalIncomeItems = Array.isArray(data.additionalIncomeDetails) ? data.additionalIncomeDetails : [];
     var additionalIncomeTotal = toNum(data.additionalIncomeTotal);
     if (!(additionalIncomeTotal > 0)) {
@@ -1256,11 +1252,34 @@ function printReport(html, options){
       }, 0);
     }
     var otherDeductionsItems = Array.isArray(data.otherDeductionsDetails) ? data.otherDeductionsDetails : [];
+    var deductionAmounts = [];
+    var otherDeductionsFromItems = 0;
+
+    otherDeductionsItems.forEach(function(item){
+      var amount = toNum(item && item.amount);
+      if (amount > 0) {
+        deductionAmounts.push(amount);
+        otherDeductionsFromItems += amount;
+      }
+    });
+
     var otherDeductionsTotal = toNum(data.otherDeductionsTotal);
+    var otherDeductionsRemainder = roundToDisplayCents(otherDeductionsTotal - otherDeductionsFromItems);
+    if (otherDeductionsRemainder > 0.004) {
+      deductionAmounts.push(otherDeductionsRemainder);
+    }
     if (!(otherDeductionsTotal > 0)) {
-      otherDeductionsTotal = otherDeductionsItems.reduce(function(sum, item){
-        return sum + toNum(item && item.amount);
+      otherDeductionsTotal = deductionAmounts.reduce(function(sum, amount){
+        return sum + toNum(amount);
       }, 0);
+    }
+    var otherDeductionsDisplayItems = otherDeductionsItems.slice();
+    if (otherDeductionsRemainder > 0.004) {
+      otherDeductionsDisplayItems.push({
+        type: CUSTOM_DEDUCTION_TYPE_VALUE,
+        label: 'Other Deductions',
+        amount: otherDeductionsRemainder
+      });
     }
     function formatMoney(value){
       var raw = (value == null ? '' : String(value)).trim();
@@ -1287,7 +1306,7 @@ function printReport(html, options){
       return lines.join('');
     }
     var additionalItemsHtml = buildItemLines(additionalIncomeItems, getAdditionalIncomeLabel, 3);
-    var otherDeductionsItemsHtml = buildItemLines(otherDeductionsItems, getOtherDeductionLabel, 3);
+    var otherDeductionsItemsHtml = buildItemLines(otherDeductionsDisplayItems, getOtherDeductionLabel, 3);
     var nightDiff = toNum(data.bantay);
     var adjPay = toNum(data.adjPay);
     var sssLoan = toNum(data.sssLoan);
@@ -1309,9 +1328,7 @@ function printReport(html, options){
     return `<div class="payslip">
       <div class="payslip-header">
         <div class="header-lines">
-          <div class="meta-line"><span class="meta-label">EMPLOYEE:</span> ${data.name || ''} <span class="meta-muted">(ID: ${data.id || ''})</span></div>
-          <div class="meta-line"><span class="meta-label">PAY PERIOD:</span> ${periodStart || '-'} – ${periodEnd || '-'}</div>
-          <div class="meta-line"><span class="meta-label">PAY DATE:</span> ${payDateText || '-'}</div>
+          <div class="meta-line meta-name">${data.name || ''}</div>
         </div>
       </div>
       <div class="summary-row">
@@ -1353,10 +1370,6 @@ function printReport(html, options){
           ${otherDeductionBlock}
         </div>
       </div>
-      <div class="payslip-footer">
-        <div>If you have questions about this payslip, contact HR/Accounting.</div>
-        <div>Computer-generated payslip.</div>
-      </div>
     </div>`;
   }
   var styles = `@page { size: letter portrait; margin: 0.25in; }
@@ -1370,6 +1383,7 @@ body{font-family:Arial,Helvetica,sans-serif;margin:0;padding:0 0.1in;}
 .company-name{font-size:10px;font-weight:700;}
 .header-lines{font-size:7.8px;line-height:1.2;}
 .meta-line{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.meta-name{font-size:9px;font-weight:700;color:#0f172a;}
 .meta-label{font-weight:700;}
 .meta-muted{color:#475569;}
 .summary-row{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:3px;margin:2px 0 4px;}
@@ -1382,8 +1396,7 @@ body{font-family:Arial,Helvetica,sans-serif;margin:0;padding:0 0.1in;}
 .detail-row{display:flex;justify-content:space-between;gap:4px;font-size:8px;line-height:1.2;padding:1px 0;}
 .detail-row span:last-child{font-variant-numeric:tabular-nums;}
 .item-line{font-size:7.3px;color:#475569;padding:0;}
-.detail-more{font-style:italic;}
-.payslip-footer{margin-top:3px;font-size:7px;line-height:1.2;color:#475569;}`;
+.detail-more{font-style:italic;}`;
 
   window.collectPayslipRowData = collectRowData;
   window.buildCompactPayslip = buildPayslip;
@@ -1416,6 +1429,7 @@ body{font-family:Arial,Helvetica,sans-serif;margin:0;padding:0 0.1in;}
 .company-name{font-size:10px;font-weight:700;}
 .header-lines{font-size:7.8px;line-height:1.2;}
 .meta-line{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.meta-name{font-size:9px;font-weight:700;color:#0f172a;}
 .meta-label{font-weight:700;}
 .meta-muted{color:#475569;}
 .summary-row{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:3px;margin:2px 0 4px;}
@@ -1428,8 +1442,7 @@ body{font-family:Arial,Helvetica,sans-serif;margin:0;padding:0 0.1in;}
 .detail-row{display:flex;justify-content:space-between;gap:4px;font-size:8px;line-height:1.2;padding:1px 0;}
 .detail-row span:last-child{font-variant-numeric:tabular-nums;}
 .item-line{font-size:7.3px;color:#475569;padding:0;}
-.detail-more{font-style:italic;}
-.payslip-footer{margin-top:3px;font-size:7px;line-height:1.2;color:#475569;}`;
+.detail-more{font-style:italic;}`;
     }
     var html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>All Payslips</title>
 <style>${styles}</style></head><body><div class="payslip-grid">`;
@@ -21048,15 +21061,13 @@ body{font-family:Arial,Helvetica,sans-serif;margin:0;padding:0 0.1in;}
 .detail-row{display:flex;justify-content:space-between;gap:4px;font-size:8px;line-height:1.2;padding:1px 0;}
 .detail-row span:last-child{font-variant-numeric:tabular-nums;}
 .item-line{font-size:7.3px;color:#475569;padding:0;}
-.detail-more{font-style:italic;}
-.payslip-footer{margin-top:3px;font-size:7px;line-height:1.2;color:#475569;}`;
+.detail-more{font-style:italic;}`;
       }
       html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Payslip - ${name}</title><style>${stylesSingle}</style></head><body><div class="payslip-grid single">${slip}</div></body></html>`;
     }
   }
 
   if (!html){
-    var legacyPeriod = (ws && we) ? `Period: ${ws} - ${we}` : '';
     html = `<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>Payslip - ${name}</title>
 <style>
@@ -21071,10 +21082,9 @@ body{font-family:Arial,Helvetica,sans-serif;margin:0;padding:0 0.1in;}
 </style>
 </head><body>
   <h2>Payslip</h2>
-  <div class="meta">${legacyPeriod}</div>
+  <div class="meta">${name}</div>
 
   <table>
-    <tr><th>Employee ID</th><td>${id}</td><th>Name</th><td>${name}</td></tr>
     <tr><th>Rate</th><td class="right">${rate}</td><th>Reg Hrs</th><td class="right">${regHrs}</td></tr>
     <tr><th>OT Hrs</th><td class="right">${otHrs}</td><th>Adj Hrs</th><td class="right">${adjHrs}</td></tr>
     <tr><th>Total Hrs</th><td class="right">${totalHrs}</td><th>Gross Pay</th><td class="right">${gross}</td></tr>
