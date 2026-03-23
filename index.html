@@ -1171,9 +1171,26 @@ function printReport(html, options){
     };
     if (data.id) {
       const otTotal = getOvertimeHoursTotal(data.id);
-      const adj = getOvertimeAdjustmentHours(data.id);
+      const adjOtHours = getOvertimeAdjustmentHours(data.id);
+      const regAdjHours = getRegularAdjustmentHours(data.id);
+      const rateNum = toNum(data.rate);
+      const effectiveOtRate = getEffectiveOvertimeRateForEmployee(data.id, rateNum);
+      const combinedOtHours = otTotal + adjOtHours;
+      const baseOtPay = roundToCents(combinedOtHours * effectiveOtRate);
+      const nightDiffPay = roundToCents(getNightDifferentialPayForEmployee(data.id));
       data.otHours = otTotal.toFixed(2);
-      data.adjustmentHours = adj.toFixed(2);
+      data.adjustmentHours = adjOtHours.toFixed(2);
+      data.regularAdjustmentHours = regAdjHours.toFixed(2);
+      data.combinedOtHours = combinedOtHours.toFixed(2);
+      data.otRate = effectiveOtRate.toFixed(2);
+      data.baseOtPay = baseOtPay.toFixed(2);
+      data.nightDiffPay = nightDiffPay.toFixed(2);
+      data.extraEarningsOutsideGross = [
+        { source: 'additionalIncomeTotal', amount: toNum(data.additionalIncomeTotal) },
+        { source: 'nightDiffPay', amount: nightDiffPay }
+      ].filter(function(item){
+        return toNum(item && item.amount) > 0;
+      });
     }
     const datasetEffective = key => readRowDeductionDataset(row, key, 'effective');
     const applyDatasetValue = (prop, key) => {
@@ -1217,12 +1234,21 @@ function printReport(html, options){
     data.additionalIncomeTotal = additionalFromDataset > 0
       ? additionalFromDataset.toFixed(2)
       : (data.additionalIncomeTotal || '');
+    data.extraEarningsOutsideGross = [
+      { source: 'additionalIncomeTotal', amount: toNum(data.additionalIncomeTotal) },
+      { source: 'nightDiffPay', amount: toNum(data.nightDiffPay) }
+    ].filter(function(item){
+      return toNum(item && item.amount) > 0;
+    });
     data.additionalIncomeDetails = (typeof getAdditionalIncomeDetailsForEmployee === 'function' && data.id)
       ? getAdditionalIncomeDetailsForEmployee(data.id)
       : [];
     data.otherDeductionsDetails = (typeof getOtherDeductionsDetailsForEmployee === 'function' && data.id)
       ? getOtherDeductionsDetailsForEmployee(data.id)
       : [];
+    if (!Array.isArray(data.extraEarningsOutsideGross)) {
+      data.extraEarningsOutsideGross = [];
+    }
     if (!data.totalHours){
       var r = toNum(data.regHours);
       var o = toNum(data.otHours);
@@ -1241,136 +1267,96 @@ function printReport(html, options){
   }
   function buildPayslip(data, periodText){
     if (!data) return '';
-    var additionalIncomeItems = Array.isArray(data.additionalIncomeDetails) ? data.additionalIncomeDetails : [];
-    var additionalIncomeTotal = toNum(data.additionalIncomeTotal);
-    if (!(additionalIncomeTotal > 0)) {
-      additionalIncomeTotal = additionalIncomeItems.reduce(function(sum, item){
-        return sum + toNum(item && item.amount);
-      }, 0);
-    }
-    var otherDeductionsItems = Array.isArray(data.otherDeductionsDetails) ? data.otherDeductionsDetails : [];
-    var otherDeductionsTotal = toNum(data.otherDeductionsTotal);
-    if (!(otherDeductionsTotal > 0)) {
-      otherDeductionsTotal = otherDeductionsItems.reduce(function(sum, item){
-        return sum + toNum(item && item.amount);
-      }, 0);
-    }
     function formatMoney(value){
-      var raw = (value == null ? '' : String(value)).trim();
-      var num = toNum(value);
-      if (!num) return raw ? fmt(raw) : '-';
-      return fmt(num);
+      return '₱' + fmt(toNum(value));
     }
-    function buildItemLines(items, getLabel, maxItems){
-      var sanitizedItems = (Array.isArray(items) ? items : []).map(function(item){
-        var label = getLabel(item);
-        var amount = toNum(item && item.amount);
-        return { label: label, amount: amount };
-      }).filter(function(item){
-        return item.amount > 0;
-      });
-      var visibleItems = sanitizedItems.slice(0, maxItems);
-      var overflowCount = sanitizedItems.length - visibleItems.length;
-      var lines = visibleItems.map(function(item){
-        return `<div class="detail-row item-line"><span>${item.label}</span><span>${fmt(item.amount)}</span></div>`;
-      });
-      if (overflowCount > 0) {
-        lines.push(`<div class="detail-row item-line detail-more"><span>+${overflowCount} more</span><span></span></div>`);
-      }
-      return lines.join('');
+    function formatHours(value){
+      return toNum(value).toFixed(2);
     }
-    var additionalItemsHtml = buildItemLines(additionalIncomeItems, getAdditionalIncomeLabel, 3);
-    var otherDeductionsItemsHtml = buildItemLines(otherDeductionsItems, getOtherDeductionLabel, 3);
-    var nightDiff = toNum(data.bantay);
+    function buildAmountLine(sign, amount){
+      return `<div class="payslip-line payslip-line-${sign === '+' ? 'plus' : 'minus'}"><span class="sign">${sign}</span><span class="amount">${formatMoney(amount)}</span></div>`;
+    }
+    function isClose(a, b){
+      return Math.abs(toNum(a) - toNum(b)) < 0.01;
+    }
+    var net = toNum(data.net);
+    var regHours = toNum(data.regHours);
+    var regAdjHours = toNum(data.regularAdjustmentHours);
+    var regDisplayHours = regHours + regAdjHours;
+    var rate = toNum(data.rate);
+    var regPay = toNum(data.regPay);
     var adjPay = toNum(data.adjPay);
-    var sssLoan = toNum(data.sssLoan);
-    var piLoan = toNum(data.piLoan);
-    var vale = toNum(data.vale);
-    var valeWed = toNum(data.valeWed);
-    var additionalBlock = '';
-    if (additionalIncomeItems.length || additionalIncomeTotal > 0) {
-      additionalBlock = `
-        <div class="detail-row"><span>Additional Income</span><span>${formatMoney(additionalIncomeTotal)}</span></div>
-        ${additionalItemsHtml}`;
+    var totalRegPay = regPay + adjPay;
+    var otHours = toNum(data.combinedOtHours || (toNum(data.otHours) + toNum(data.adjustmentHours)));
+    var otRate = toNum(data.otRate);
+    var otBasePay = toNum(data.baseOtPay);
+    var extraEarnings = Array.isArray(data.extraEarningsOutsideGross) ? data.extraEarningsOutsideGross.map(function(item){
+      return toNum(item && item.amount != null ? item.amount : item);
+    }).filter(function(amount){
+      return amount > 0;
+    }) : [];
+    var deductions = [
+      toNum(data.sss),
+      toNum(data.philhealth),
+      toNum(data.pagibig),
+      toNum(data.sssLoan),
+      toNum(data.piLoan),
+      toNum(data.vale),
+      toNum(data.valeWed)
+    ];
+    var otherDeductionsItems = Array.isArray(data.otherDeductionsDetails) ? data.otherDeductionsDetails : [];
+    var otherDeductionsFromItems = 0;
+
+    otherDeductionsItems.forEach(function(item){
+      var amount = toNum(item && item.amount);
+      if (amount > 0) {
+        deductions.push(amount);
+        otherDeductionsFromItems += amount;
+      }
+    });
+
+    var otherDeductionsTotal = toNum(data.otherDeductionsTotal);
+    var otherDeductionsRemainder = otherDeductionsTotal - otherDeductionsFromItems;
+    if (otherDeductionsRemainder > 0.004) {
+      deductions.push(otherDeductionsRemainder);
     }
-    var otherDeductionBlock = '';
-    if (otherDeductionsItems.length || otherDeductionsTotal > 0) {
-      otherDeductionBlock = `
-        <div class="detail-row"><span>Other Deductions</span><span>${formatMoney(otherDeductionsTotal)}</span></div>
-        ${otherDeductionsItemsHtml}`;
-    }
+    deductions = deductions.filter(function(amount){
+      return amount > 0;
+    });
+    var regularLineHtml = `<div class="payslip-formula">${formatHours(regDisplayHours)} x ${formatMoney(rate)} = ${formatMoney(totalRegPay)}</div>`;
+    var otLineHtml = `<div class="payslip-formula">${formatHours(otHours)} x ${formatMoney(otRate)} = ${formatMoney(otBasePay)}</div>`;
+    var baseEarnings = totalRegPay + otBasePay;
+    var plusLinesHtml = extraEarnings.map(function(amount){
+      return buildAmountLine('+', amount);
+    }).join('');
+    var deductionLinesHtml = deductions.map(function(amount){
+      return buildAmountLine('-', amount);
+    }).join('');
+    var hasSignedLines = !!(plusLinesHtml || deductionLinesHtml);
     return `<div class="payslip">
-      <div class="payslip-header">
-        <div class="header-lines">
-          <div class="meta-line meta-name">${data.name || ''}</div>
-        </div>
-      </div>
-      <div class="summary-row">
-        <div class="summary-box">
-          <div class="summary-label">GROSS PAY</div>
-          <div class="summary-value">${formatMoney(data.gross)}</div>
-        </div>
-        <div class="summary-box">
-          <div class="summary-label">TOTAL DEDUCTIONS</div>
-          <div class="summary-value">${formatMoney(data.totalDeductions)}</div>
-        </div>
-        <div class="summary-box summary-net">
-          <div class="summary-label">NET PAY</div>
-          <div class="summary-value">${formatMoney(data.net)}</div>
-        </div>
-      </div>
-      <div class="details-grid">
-        <div class="details-col">
-          <div class="details-title">EARNINGS</div>
-          <div class="detail-row"><span>Regular Hours</span><span>${dash(data.regHours) || '-'}</span></div>
-          <div class="detail-row"><span>OT Hours</span><span>${dash(data.otHours) || '-'}</span></div>
-          <div class="detail-row"><span>Adj Hours</span><span>${dash(data.adjHours) || '-'}</span></div>
-          <div class="detail-row"><span>Total Hours Worked</span><span>${dash(data.totalHours) || '-'}</span></div>
-          <div class="detail-row"><span>Basic Pay</span><span>${formatMoney(data.regPay)}</span></div>
-          ${adjPay > 0 ? `<div class="detail-row"><span>Adjustment Pay</span><span>${formatMoney(adjPay)}</span></div>` : ''}
-          <div class="detail-row"><span>Overtime Pay</span><span>${formatMoney(data.otPay)}</span></div>
-          ${nightDiff > 0 ? `<div class="detail-row"><span>Night Differential</span><span>${formatMoney(nightDiff)}</span></div>` : ''}
-          ${additionalBlock}
-        </div>
-        <div class="details-col">
-          <div class="details-title">DEDUCTIONS</div>
-          <div class="detail-row"><span>SSS</span><span>${formatMoney(data.sss)}</span></div>
-          <div class="detail-row"><span>PhilHealth</span><span>${formatMoney(data.philhealth)}</span></div>
-          <div class="detail-row"><span>Pag-IBIG</span><span>${formatMoney(data.pagibig)}</span></div>
-          ${sssLoan > 0 ? `<div class="detail-row"><span>SSS Loan</span><span>${formatMoney(sssLoan)}</span></div>` : ''}
-          ${piLoan > 0 ? `<div class="detail-row"><span>Pag-IBIG Loan</span><span>${formatMoney(piLoan)}</span></div>` : ''}
-          ${vale > 0 ? `<div class="detail-row"><span>Cash Advance</span><span>${formatMoney(vale)}</span></div>` : ''}
-          ${valeWed > 0 ? `<div class="detail-row"><span>Vale (Wed)</span><span>${formatMoney(valeWed)}</span></div>` : ''}
-          ${otherDeductionBlock}
-        </div>
-      </div>
+      <div class="payslip-name">${data.name || ''}</div>
+      ${regularLineHtml}
+      ${otLineHtml}
+      <div class="payslip-total">${formatMoney(baseEarnings)}</div>
+      ${hasSignedLines ? `<div class="payslip-lines">${plusLinesHtml}${deductionLinesHtml}</div>` : ''}
+      <div class="payslip-net">${formatMoney(net)}</div>
     </div>`;
   }
   var styles = `@page { size: letter portrait; margin: 0.25in; }
 html, body { width: 8.5in; height: 11in; margin: 0; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-body{font-family:Arial,Helvetica,sans-serif;margin:0;padding:0 0.1in;}
-.payslip-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:0.03in;}
-.payslip-grid.single{grid-template-columns:repeat(1,1fr);max-width:3in;margin:0 auto;}
-.payslip{box-sizing:border-box;padding:0.06in;border:1px solid #475569;height:2.6in;overflow:hidden;border-radius:3px;background:#fff;box-shadow:0 0 0 1px rgba(15,23,42,0.2);}
+body{font-family:Arial,Helvetica,sans-serif;margin:0;padding:0.12in;background:#fff;color:#0f172a;}
+.payslip-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:0.08in;align-items:start;}
+.payslip-grid.single{grid-template-columns:repeat(1,1fr);max-width:3.2in;margin:0 auto;}
+.payslip{box-sizing:border-box;min-height:2.6in;padding:0.14in;border:1px solid #0f172a;background:#fff;display:flex;flex-direction:column;gap:0.08in;}
 .page-break{page-break-after:always;break-after:page;}
-.payslip-header{display:flex;flex-direction:column;gap:2px;margin-bottom:4px;}
-.company-name{font-size:10px;font-weight:700;}
-.header-lines{font-size:7.8px;line-height:1.2;}
-.meta-line{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
-.meta-name{font-size:9px;font-weight:700;color:#0f172a;}
-.meta-label{font-weight:700;}
-.meta-muted{color:#475569;}
-.summary-row{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:3px;margin:2px 0 4px;}
-.summary-box{border:1px solid #e2e8f0;border-radius:2px;padding:3px 2px;text-align:center;background:#f8fafc;}
-.summary-label{font-size:7px;font-weight:700;letter-spacing:0.02em;color:#475569;}
-.summary-value{font-size:10px;font-weight:700;line-height:1.1;}
-.summary-net .summary-value{font-size:11px;font-weight:800;color:#0f172a;}
-.details-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:4px;}
-.details-title{font-size:7.5px;font-weight:700;margin:0 0 2px;}
-.detail-row{display:flex;justify-content:space-between;gap:4px;font-size:8px;line-height:1.2;padding:1px 0;}
-.detail-row span:last-child{font-variant-numeric:tabular-nums;}
-.item-line{font-size:7.3px;color:#475569;padding:0;}
-.detail-more{font-style:italic;}`;
+.payslip-name{font-size:13px;font-weight:700;line-height:1.2;text-transform:uppercase;word-break:break-word;}
+.payslip-formula,.payslip-total,.payslip-value-line{font-size:10px;line-height:1.35;font-variant-numeric:tabular-nums;}
+.payslip-total{font-weight:700;}
+.payslip-lines{display:flex;flex-direction:column;gap:0.05in;flex:1;min-height:0.52in;padding-top:0.02in;}
+.payslip-line{display:flex;align-items:baseline;gap:0.08in;font-size:10px;line-height:1.25;font-variant-numeric:tabular-nums;}
+.payslip-line .sign{font-weight:700;flex:0 0 auto;}
+.payslip-line .amount{flex:1 1 auto;}
+.payslip-net{margin-top:auto;padding-top:0.04in;font-size:12px;font-weight:800;line-height:1.3;font-variant-numeric:tabular-nums;}`;
 
   window.collectPayslipRowData = collectRowData;
   window.buildCompactPayslip = buildPayslip;
@@ -1394,29 +1380,19 @@ document.addEventListener('DOMContentLoaded', function() {
     if (!styles){
       styles = `@page { size: letter portrait; margin: 0.25in; }
 html, body { width: 8.5in; height: 11in; margin: 0; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-body{font-family:Arial,Helvetica,sans-serif;margin:0;padding:0 0.1in;}
-.payslip-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:0.03in;}
-.payslip-grid.single{grid-template-columns:repeat(1,1fr);max-width:3in;margin:0 auto;}
-.payslip{box-sizing:border-box;padding:0.06in;border:1px solid #475569;height:2.6in;overflow:hidden;border-radius:3px;background:#fff;box-shadow:0 0 0 1px rgba(15,23,42,0.2);}
+body{font-family:Arial,Helvetica,sans-serif;margin:0;padding:0.12in;background:#fff;color:#0f172a;}
+.payslip-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:0.08in;align-items:start;}
+.payslip-grid.single{grid-template-columns:repeat(1,1fr);max-width:3.2in;margin:0 auto;}
+.payslip{box-sizing:border-box;min-height:2.6in;padding:0.14in;border:1px solid #0f172a;background:#fff;display:flex;flex-direction:column;gap:0.08in;}
 .page-break{page-break-after:always;break-after:page;}
-.payslip-header{display:flex;flex-direction:column;gap:2px;margin-bottom:4px;}
-.company-name{font-size:10px;font-weight:700;}
-.header-lines{font-size:7.8px;line-height:1.2;}
-.meta-line{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
-.meta-name{font-size:9px;font-weight:700;color:#0f172a;}
-.meta-label{font-weight:700;}
-.meta-muted{color:#475569;}
-.summary-row{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:3px;margin:2px 0 4px;}
-.summary-box{border:1px solid #e2e8f0;border-radius:2px;padding:3px 2px;text-align:center;background:#f8fafc;}
-.summary-label{font-size:7px;font-weight:700;letter-spacing:0.02em;color:#475569;}
-.summary-value{font-size:10px;font-weight:700;line-height:1.1;}
-.summary-net .summary-value{font-size:11px;font-weight:800;color:#0f172a;}
-.details-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:4px;}
-.details-title{font-size:7.5px;font-weight:700;margin:0 0 2px;}
-.detail-row{display:flex;justify-content:space-between;gap:4px;font-size:8px;line-height:1.2;padding:1px 0;}
-.detail-row span:last-child{font-variant-numeric:tabular-nums;}
-.item-line{font-size:7.3px;color:#475569;padding:0;}
-.detail-more{font-style:italic;}`;
+.payslip-name{font-size:13px;font-weight:700;line-height:1.2;text-transform:uppercase;word-break:break-word;}
+.payslip-formula,.payslip-total,.payslip-value-line{font-size:10px;line-height:1.35;font-variant-numeric:tabular-nums;}
+.payslip-total{font-weight:700;}
+.payslip-lines{display:flex;flex-direction:column;gap:0.05in;flex:1;min-height:0.52in;padding-top:0.02in;}
+.payslip-line{display:flex;align-items:baseline;gap:0.08in;font-size:10px;line-height:1.25;font-variant-numeric:tabular-nums;}
+.payslip-line .sign{font-weight:700;flex:0 0 auto;}
+.payslip-line .amount{flex:1 1 auto;}
+.payslip-net{margin-top:auto;padding-top:0.04in;font-size:12px;font-weight:800;line-height:1.3;font-variant-numeric:tabular-nums;}`;
     }
     var html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>All Payslips</title>
 <style>${styles}</style></head><body><div class="payslip-grid">`;
@@ -21006,98 +20982,75 @@ document.addEventListener('click', function(e) {
   var we = (document.getElementById('weekEnd')   || {}).value || '';
   var periodText = (typeof window.formatPayslipPeriod === 'function') ? window.formatPayslipPeriod(ws, we) : ((ws && we) ? (ws + ' to ' + we) : (ws || we || ''));
   var html = '';
+  var fallbackRateNum = parseAmount(rate);
+  var fallbackOtHoursNum = parseAmount(otHrs);
+  var fallbackOtRateNum = (id && typeof getEffectiveOvertimeRateForEmployee === 'function')
+    ? Number(getEffectiveOvertimeRateForEmployee(id, fallbackRateNum) || 0)
+    : 0;
+  var fallbackBaseOtPayNum = roundToCents(fallbackOtHoursNum * fallbackOtRateNum);
+  var fallbackOtPayNum = parseAmount(otPay);
+  var fallbackNightDiffPayNum = roundToCents(Math.max(0, fallbackOtPayNum - fallbackBaseOtPayNum));
+  var fallbackData = rowData || {
+    id: id,
+    name: name,
+    rate: rate,
+    regHours: regHrs,
+    regPay: regPay,
+    adjHours: adjHours,
+    adjPay: adjPay,
+    regularAdjustmentHours: adjHours,
+    additionalIncomeTotal: additionalIncomeTotal.toFixed(2),
+    otHours: otHrs,
+    adjustmentHours: '0.00',
+    combinedOtHours: fallbackOtHoursNum.toFixed(2),
+    otRate: fallbackOtRateNum.toFixed(2),
+    baseOtPay: fallbackBaseOtPayNum.toFixed(2),
+    otPay: fallbackOtPayNum.toFixed(2),
+    nightDiffPay: fallbackNightDiffPayNum.toFixed(2),
+    extraEarningsOutsideGross: [
+      { source: 'additionalIncomeTotal', amount: additionalIncomeTotal },
+      { source: 'nightDiffPay', amount: fallbackNightDiffPayNum }
+    ].filter(function(item){
+      return parseAmount(item && item.amount) > 0;
+    }),
+    totalHours: regHrs,
+    gross: gross,
+    net: net,
+    sss: sss,
+    philhealth: philhealth,
+    pagibig: pagibig,
+    sssLoan: sssLoan,
+    piLoan: piLoan,
+    vale: valeAmt,
+    valeWed: wedValeAmt,
+    otherDeductionsTotal: otherDeductionsTotal,
+    additionalIncomeDetails: additionalIncomeItems,
+    otherDeductionsDetails: otherDeductionsItems
+  };
 
-  if (rowData && typeof window.buildCompactPayslip === 'function'){
-    var slip = window.buildCompactPayslip(rowData, periodText);
+  if (typeof window.buildCompactPayslip === 'function'){
+    var slip = window.buildCompactPayslip(fallbackData, periodText);
     if (slip){
       var stylesSingle = window.PAYSLIP_PRINT_STYLES || '';
       if (!stylesSingle){
         stylesSingle = `@page { size: letter portrait; margin: 0.25in; }
 html, body { width: 8.5in; height: 11in; margin: 0; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-body{font-family:Arial,Helvetica,sans-serif;margin:0;padding:0 0.1in;}
-.payslip-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:0.03in;}
-.payslip-grid.single{grid-template-columns:repeat(1,1fr);max-width:3in;margin:0 auto;}
-.payslip{box-sizing:border-box;padding:0.06in;border:1px solid #475569;height:2.6in;overflow:hidden;border-radius:3px;background:#fff;box-shadow:0 0 0 1px rgba(15,23,42,0.2);}
+body{font-family:Arial,Helvetica,sans-serif;margin:0;padding:0.12in;background:#fff;color:#0f172a;}
+.payslip-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:0.08in;align-items:start;}
+.payslip-grid.single{grid-template-columns:repeat(1,1fr);max-width:3.2in;margin:0 auto;}
+.payslip{box-sizing:border-box;min-height:2.6in;padding:0.14in;border:1px solid #0f172a;background:#fff;display:flex;flex-direction:column;gap:0.08in;}
 .page-break{page-break-after:always;break-after:page;}
-.payslip-header{display:flex;flex-direction:column;gap:2px;margin-bottom:4px;}
-.company-name{font-size:10px;font-weight:700;}
-.header-lines{font-size:7.8px;line-height:1.2;}
-.meta-line{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
-.meta-label{font-weight:700;}
-.meta-muted{color:#475569;}
-.summary-row{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:3px;margin:2px 0 4px;}
-.summary-box{border:1px solid #e2e8f0;border-radius:2px;padding:3px 2px;text-align:center;background:#f8fafc;}
-.summary-label{font-size:7px;font-weight:700;letter-spacing:0.02em;color:#475569;}
-.summary-value{font-size:10px;font-weight:700;line-height:1.1;}
-.summary-net .summary-value{font-size:11px;font-weight:800;color:#0f172a;}
-.details-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:4px;}
-.details-title{font-size:7.5px;font-weight:700;margin:0 0 2px;}
-.detail-row{display:flex;justify-content:space-between;gap:4px;font-size:8px;line-height:1.2;padding:1px 0;}
-.detail-row span:last-child{font-variant-numeric:tabular-nums;}
-.item-line{font-size:7.3px;color:#475569;padding:0;}
-.detail-more{font-style:italic;}`;
+.payslip-name{font-size:13px;font-weight:700;line-height:1.2;text-transform:uppercase;word-break:break-word;}
+.payslip-formula,.payslip-total,.payslip-value-line{font-size:10px;line-height:1.35;font-variant-numeric:tabular-nums;}
+.payslip-total{font-weight:700;}
+.payslip-lines{display:flex;flex-direction:column;gap:0.05in;flex:1;min-height:0.52in;padding-top:0.02in;}
+.payslip-line{display:flex;align-items:baseline;gap:0.08in;font-size:10px;line-height:1.25;font-variant-numeric:tabular-nums;}
+.payslip-line .sign{font-weight:700;flex:0 0 auto;}
+.payslip-line .amount{flex:1 1 auto;}
+.payslip-net{margin-top:auto;padding-top:0.04in;font-size:12px;font-weight:800;line-height:1.3;font-variant-numeric:tabular-nums;}`;
       }
       html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Payslip - ${name}</title><style>${stylesSingle}</style></head><body><div class="payslip-grid single">${slip}</div></body></html>`;
     }
-  }
-
-  if (!html){
-    html = `<!DOCTYPE html>
-<html><head><meta charset="utf-8"><title>Payslip - ${name}</title>
-<style>
-  body{font-family:Arial,Helvetica,sans-serif;padding:20px;line-height:1.4;}
-  h2{margin:0 0 12px 0;text-align:center;}
-  .meta{margin:0 0 16px 0;text-align:center;color:#475569;}
-  table{border-collapse:collapse;width:100%;font-size:14px;}
-  th,td{border:1px solid #e2e8f0;padding:8px;text-align:left;}
-  th{background:#f1f5f9;}
-  .right{text-align:right;}
-  .section{margin-top:16px;}
-</style>
-</head><body>
-  <h2>Payslip</h2>
-  <div class="meta">${name}</div>
-
-  <table>
-    <tr><th>Rate</th><td class="right">${rate}</td><th>Reg Hrs</th><td class="right">${regHrs}</td></tr>
-    <tr><th>OT Hrs</th><td class="right">${otHrs}</td><th>Adj Hrs</th><td class="right">${adjHrs}</td></tr>
-    <tr><th>Total Hrs</th><td class="right">${totalHrs}</td><th>Gross Pay</th><td class="right">${gross}</td></tr>
-  </table>
-
-  <div class="section">
-    <table>
-      <tr><th colspan="2">Earnings</th></tr>
-      <tr><td>Regular Pay</td><td class="right">${regPay}</td></tr>
-      ${adjPayRowLegacy}
-      <tr><td>OT Pay</td><td class="right">${otPay}</td></tr>
-      ${bantayRowLegacy}
-    </table>
-  </div>
-
-  ${additionalIncomeRows ? `<div class="section"><table>${additionalIncomeRows}</table></div>` : ''}
-
-  <div class="section">
-    <table>
-      <tr><th colspan="2">Deductions</th></tr>
-      <tr><td>Pag-IBIG</td><td class="right">${pagibig}</td></tr>
-      <tr><td>PhilHealth</td><td class="right">${philhealth}</td></tr>
-      <tr><td>SSS</td><td class="right">${sss}</td></tr>
-      <tr><td>SSS Loan</td><td class="right">${sssLoan}</td></tr>
-      <tr><td>Pag-IBIG Loan</td><td class="right">${piLoan}</td></tr>
-      <tr><td>Cash Advance</td><td class="right">${valeAmt}</td></tr>
-      <tr><td>Wednesday Vale</td><td class="right">${wedValeAmt}</td></tr>
-      <tr><th>Total Deductions</th><th class="right">${totalDed}</th></tr>
-    </table>
-  </div>
-
-  ${otherDeductionsRows ? `<div class="section"><table>${otherDeductionsRows}</table></div>` : ''}
-
-  <div class="section">
-    <table>
-      <tr><th>Net Pay</th><th class="right">${net}</th></tr>
-    </table>
-  </div>
-</body></html>`;
   }
 
   withPrintOrientation(function(orientation){
