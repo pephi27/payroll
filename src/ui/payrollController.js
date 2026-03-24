@@ -6,7 +6,16 @@ function renderPeriodLockStatus(root, period) {
   const lockEl = root.querySelector('[data-payroll-lock-state]');
   if (!lockEl) return;
 
-  lockEl.textContent = period?.is_locked ? 'Locked' : 'Open';
+  const diagnostics = getState().diagnostics || {};
+  const pending = diagnostics.periodBootstrapPending || diagnostics.periodSwitchInFlight;
+  const lockKnown = !!period && typeof period.is_locked === 'boolean';
+  if (pending || !lockKnown) {
+    lockEl.textContent = 'Resolving…';
+    lockEl.dataset.locked = 'pending';
+    return;
+  }
+
+  lockEl.textContent = period.is_locked ? 'Locked' : 'Open';
   lockEl.dataset.locked = period?.is_locked ? 'true' : 'false';
 }
 
@@ -51,7 +60,10 @@ function applyLockedRule(el, isLocked) {
 }
 
 function renderLockedInputState(root, period) {
-  const isLocked = !!period?.is_locked;
+  const diagnostics = getState().diagnostics || {};
+  const lockKnown = !!period && typeof period.is_locked === 'boolean';
+  const forceLocked = diagnostics.periodBootstrapPending || diagnostics.periodSwitchInFlight || !lockKnown;
+  const isLocked = forceLocked ? true : !!period.is_locked;
   const wrapper = root.querySelector('#payrollWrapper');
   if (!wrapper) return;
 
@@ -190,8 +202,12 @@ export function mountPayrollController(root) {
     ensureDiagnosticsPanel(root);
     const currentState = getState();
     const period = currentState.currentPeriodId ? currentState.payrollPeriods.get(currentState.currentPeriodId) : null;
-    const isLocked = !!period?.is_locked;
-    const lockKey = `${currentState.currentPeriodId || ''}:${isLocked ? '1' : '0'}`;
+    const diagnostics = currentState.diagnostics || {};
+    const lockKnown = !!period && typeof period.is_locked === 'boolean';
+    const forceLocked = diagnostics.periodBootstrapPending || diagnostics.periodSwitchInFlight || !lockKnown;
+    const isLocked = forceLocked ? true : !!period.is_locked;
+    const phaseKey = diagnostics.periodBootstrapPending ? 'bootstrap' : diagnostics.periodSwitchInFlight ? 'switch' : 'steady';
+    const lockKey = `${currentState.currentPeriodId || ''}:${phaseKey}:${lockKnown ? (isLocked ? '1' : '0') : 'u'}`;
     renderPeriodLockStatus(root, period);
     renderPunchCount(root);
     renderDiagnostics(root);
@@ -199,7 +215,7 @@ export function mountPayrollController(root) {
 
     if (lockKey !== lastLockKey) {
       renderLockedInputState(root, period);
-      refreshLockObserver(isLocked);
+      refreshLockObserver(lockKnown && isLocked);
       lastLockKey = lockKey;
     }
   };

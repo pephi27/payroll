@@ -15,6 +15,9 @@ const initialState = {
     supabaseConnected: null,
     realtimeStatus: 'idle',
     currentPeriodLocked: null,
+    periodBootstrapPending: true,
+    periodSwitchInFlight: false,
+    periodSwitchError: null,
     lastRealtimeEvent: null,
     lastConflict: null,
     activeChannelCount: 0,
@@ -66,6 +69,26 @@ export function setCurrentPeriod(periodId) {
   const period = periodId ? state.payrollPeriods.get(periodId) : null;
   state.diagnostics.currentPeriodLocked = period ? !!period.is_locked : null;
   notify({ type: 'set_current_period', periodId });
+}
+
+export function setPeriodBootstrapPending(pending) {
+  state.diagnostics.periodBootstrapPending = !!pending;
+  notify({ type: 'diagnostics_period_bootstrap_pending', pending: !!pending });
+}
+
+export function setPeriodSwitchInFlight(inFlight) {
+  state.diagnostics.periodSwitchInFlight = !!inFlight;
+  notify({ type: 'diagnostics_period_switch_in_flight', inFlight: !!inFlight });
+}
+
+export function clearPeriodSwitchError() {
+  state.diagnostics.periodSwitchError = null;
+  notify({ type: 'diagnostics_period_switch_error_clear' });
+}
+
+export function setPeriodSwitchError(message) {
+  state.diagnostics.periodSwitchError = message ? String(message) : 'Unknown period switch error';
+  notify({ type: 'diagnostics_period_switch_error', message: state.diagnostics.periodSwitchError });
 }
 
 export function mergeRow(tableKey, row, primaryKey = 'id') {
