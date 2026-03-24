@@ -1,11 +1,21 @@
 import { payrollService } from './services/payrollService.js';
 import { setCurrentPeriod, setSupabaseConnected } from './state/store.js';
-import { startRealtimeSubscriptions } from './realtime/subscriptions.js';
+import {
+  destroyRealtimeManager,
+  initRealtimeManager,
+  isDtrLiveActive,
+  resumeDtrLive,
+  subscribeDtrLive,
+  subscribeOptionalModule,
+  subscribePayrollCore,
+  suspendDtrLive,
+  unsubscribeDtrLive,
+  unsubscribeOptionalModule,
+} from './realtime/subscriptions.js';
 import { mountPayrollController } from './ui/payrollController.js';
 import { waitForSupabaseClient } from './config/supabaseClient.js';
 
 let cleanupUi = null;
-let cleanupRealtime = null;
 let bootstrapped = false;
 
 const CRITICAL_LOCAL_KEYS = new Set([
@@ -151,14 +161,27 @@ async function bootstrapPayrollApp() {
   };
 
   try {
-    cleanupRealtime = startRealtimeSubscriptions();
+    initRealtimeManager();
+    window.__DISABLE_LEGACY_DTR_SUBSCRIPTIONS = true;
+    if (window.__ENABLE_DTR_LIVE_REALTIME == null) window.__ENABLE_DTR_LIVE_REALTIME = false;
+    subscribePayrollCore({ periodId: currentPeriodId });
+    window.payrollRealtimeManager = {
+      subscribePayrollCore,
+      subscribeDtrLive,
+      unsubscribeDtrLive,
+      suspendDtrLive,
+      resumeDtrLive,
+      subscribeOptionalModule,
+      unsubscribeOptionalModule,
+      isDtrLiveActive,
+    };
   } catch (error) {
     console.error('Realtime bootstrap failed', error);
   }
 
   window.addEventListener('beforeunload', () => {
     if (typeof cleanupUi === 'function') cleanupUi();
-    if (typeof cleanupRealtime === 'function') cleanupRealtime();
+    destroyRealtimeManager();
   });
 }
 

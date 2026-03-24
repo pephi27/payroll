@@ -11,7 +11,7 @@ src/
   services/
     payrollService.js        # row-level data access with lock checks
   realtime/
-    subscriptions.js         # postgres_changes subscriptions per table
+    subscriptions.js         # centralized realtime manager (lazy group subscriptions)
   domain/
     payrollCalculations.js   # pure business calculations
   ui/
@@ -45,9 +45,15 @@ src/
 2. **Row-level writes only**
    - Service methods perform `insert/update/delete` by row id.
    - No full table replacement in core payroll mutation paths.
-3. **Realtime through `postgres_changes`**
-   - One channel per table.
+3. **Realtime through a central manager (`postgres_changes`)**
+   - Realtime is grouped by capability (`payroll_core`, `dtr_live`, `optional_modules`).
+   - App bootstrap only starts a minimal `payroll_core` group.
+   - `dtr_live` is lazy (starts only while DTR/payroll editing is active) and can be suspended during bulk writes.
+   - Optional modules (loans/contrib/profiles) are opt-in instead of always-on.
    - Incoming payloads are merged/deleted in a central state map.
+4. **Legacy KV realtime is gated**
+   - `kv_store_realtime` is no longer always-on by default.
+   - Legacy KV sync keeps `readKV`/`writeKV` compatibility while allowing explicit opt-in realtime.
 4. **Centralized lock guard**
    - Mutating payroll methods call `ensurePeriodUnlocked(periodId)` before writing.
 5. **Immutable snapshots**
@@ -57,12 +63,17 @@ src/
 
 ## Critical section rewrites
 
-### Realtime subscription (row-level merge)
+### Realtime manager (row-level merge)
 
 - Implemented in `src/realtime/subscriptions.js`
+- Uses lazy group subscription APIs:
+  - `initRealtimeManager()`
+  - `subscribePayrollCore() / unsubscribePayrollCore()`
+  - `subscribeDtrLive() / unsubscribeDtrLive() / suspendDtrLive() / resumeDtrLive()`
+  - `destroyRealtimeManager()`
 - Uses:
   - `event='*'`
-  - table-scoped channels
+  - group-owned channels (single owner per subscribed table)
   - merge for insert/update
   - remove for delete
 

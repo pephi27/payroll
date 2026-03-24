@@ -4993,6 +4993,12 @@ async function loadLoanTrackerFromSupabaseTables(){
 
 
 function setupLoanTablesRealtime(){
+  if (window.payrollRealtimeManager && typeof window.payrollRealtimeManager.subscribeOptionalModule === 'function') {
+    if (window.__ENABLE_LOAN_TABLES_REALTIME !== true) return;
+    try { window.payrollRealtimeManager.subscribeOptionalModule('loans'); } catch (_) {}
+    return;
+  }
+  if (window.__ENABLE_LOAN_TABLES_REALTIME !== true) return;
   if (!__hasSupabase()) return;
   if (window.__loanTablesSubscribed) return;
   window.__loanTablesSubscribed = true;
@@ -16698,6 +16704,34 @@ const tabs = {
   panelSettings: document.getElementById('panelSettings')
 };
 function showTab(name){
+  const syncDtrLiveForTab = (tabName) => {
+    const shouldEnable = tabName === 'main' || tabName === 'payroll';
+    if (shouldEnable) {
+      if (window.payrollRealtimeManager && typeof window.payrollRealtimeManager.subscribeDtrLive === 'function') {
+        try {
+          window.__ENABLE_DTR_LIVE_REALTIME = true;
+          window.payrollRealtimeManager.subscribeDtrLive({ periodId: window.currentPeriodId || null });
+        } catch (_) {}
+        return;
+      }
+      if (typeof window.enableDtrLiveRealtime === 'function') {
+        try { window.enableDtrLiveRealtime(); } catch (_) {}
+      }
+      return;
+    }
+    if (window.payrollRealtimeManager && typeof window.payrollRealtimeManager.unsubscribeDtrLive === 'function') {
+      try {
+        window.__ENABLE_DTR_LIVE_REALTIME = false;
+        window.payrollRealtimeManager.unsubscribeDtrLive();
+      } catch (_) {}
+      return;
+    }
+    if (typeof window.disableDtrLiveRealtime === 'function') {
+      try { window.disableDtrLiveRealtime(); } catch (_) {}
+    }
+  };
+
+  syncDtrLiveForTab(name);
   Object.values(tabs).forEach(el => el && el.classList && el.classList.remove('active'));
 
   // Manage date range controls: disable on non-dashboard tabs, enable on dashboard unless forced
@@ -18558,6 +18592,13 @@ async function loadDtrFromSupabase(){
 }
 
 function subscribeDtrSupabaseRealtime(){
+  if (window.payrollRealtimeManager && typeof window.payrollRealtimeManager.subscribeDtrLive === 'function') {
+    if (window.__ENABLE_DTR_LIVE_REALTIME !== true) return;
+    try { window.payrollRealtimeManager.subscribeDtrLive({ periodId: window.currentPeriodId || null }); } catch (_) {}
+    return;
+  }
+  if (window.__ENABLE_DTR_LIVE_REALTIME !== true) return;
+  if (window.__DISABLE_LEGACY_DTR_SUBSCRIPTIONS !== false) return;
   try {
     const supa = window.supabase;
     if (!supa || !supa.channel) return;
@@ -22283,6 +22324,23 @@ async function saveDtrToCloud(records) {
   // Row-per-punch persistence (safe for multi-device editing).
   // - Writes are row-level (insert/update/delete by id).
   // - No localStorage-based diffing for authoritative business data.
+  const rtManager = window.payrollRealtimeManager || null;
+  const hadDtrLive = !!(rtManager && typeof rtManager.isDtrLiveActive === 'function' && rtManager.isDtrLiveActive());
+  const isDtrLiveScreenActive = () => {
+    const main = document.getElementById('panelMain');
+    const payroll = document.getElementById('panelPayroll');
+
+    const isVisible = (el) => {
+      if (!el) return false;
+      if (el.hidden) return false;
+      const style = window.getComputedStyle ? window.getComputedStyle(el) : null;
+      return !style || (style.display !== 'none' && style.visibility !== 'hidden');
+    };
+
+    return isVisible(main) || isVisible(payroll);
+  };
+  let suspended = false;
+  let saveSucceeded = false;
   try {
     const supa = window.supabase || (typeof supabase !== 'undefined' ? supabase : null);
     if (!supa) return;
@@ -22292,6 +22350,13 @@ async function saveDtrToCloud(records) {
       window.__queuedDtrRecords = Array.isArray(records) ? records : [];
       window.__pendingDtrSave = true;
       return;
+    }
+
+    if (hadDtrLive && typeof rtManager?.suspendDtrLive === 'function') {
+      try {
+        rtManager.suspendDtrLive();
+        suspended = true;
+      } catch (_) {}
     }
 
     const punchesTable = 'dtr_punches';
@@ -22352,6 +22417,8 @@ async function saveDtrToCloud(records) {
       if (error) throw error;
     }
 
+    saveSucceeded = true;
+
   } catch (e) {
     const msg = (e && (e.message || e.details)) ? String(e.message || e.details) : String(e);
     const isMissing = /does not exist|relation .*dtr_punches|42P01/i.test(msg);
@@ -22361,10 +22428,30 @@ async function saveDtrToCloud(records) {
       return;
     }
     console.warn('saveDtrToCloud punches failed:', msg);
+  } finally {
+    if (saveSucceeded) {
+      try {
+        const refreshed = await loadDtrFromCloud();
+        if (refreshed && refreshed.status === 'ok' && Array.isArray(refreshed.records)) {
+          __setDtrRecordsAndRender(refreshed.records, 'dtr-post-bulk-refetch');
+        }
+      } catch (_) {}
+    }
+
+    if (suspended && isDtrLiveScreenActive() && typeof rtManager?.resumeDtrLive === 'function') {
+      try { rtManager.resumeDtrLive({ periodId: window.currentPeriodId || null }); } catch (_) {}
+    }
   }
 }
 
 function setupDtrPunchesRealtime(){
+  if (window.__ENABLE_DTR_LIVE_REALTIME !== true) return;
+  if (window.__DISABLE_LEGACY_DTR_SUBSCRIPTIONS !== false) {
+    if (window.payrollRealtimeManager && typeof window.payrollRealtimeManager.subscribeDtrLive === 'function') {
+      try { window.payrollRealtimeManager.subscribeDtrLive({ periodId: window.currentPeriodId || null }); } catch (_) {}
+    }
+    return;
+  }
   try {
     const supa = window.supabase || (typeof supabase !== 'undefined' ? supabase : null);
     if (!supa || !supa.channel) return;
@@ -22437,6 +22524,23 @@ function setupDtrPunchesRealtime(){
     console.warn('setupDtrPunchesRealtime failed', e);
   }
 }
+
+window.enableDtrLiveRealtime = function enableDtrLiveRealtime() {
+  window.__ENABLE_DTR_LIVE_REALTIME = true;
+  try { setupDtrPunchesRealtime(); } catch (_) {}
+};
+
+window.disableDtrLiveRealtime = function disableDtrLiveRealtime() {
+  window.__ENABLE_DTR_LIVE_REALTIME = false;
+  if (window.payrollRealtimeManager && typeof window.payrollRealtimeManager.unsubscribeDtrLive === 'function') {
+    try { window.payrollRealtimeManager.unsubscribeDtrLive(); } catch (_) {}
+  }
+  if (window.__dtrPunchesChannel && window.supabase && typeof window.supabase.removeChannel === 'function') {
+    try { window.supabase.removeChannel(window.__dtrPunchesChannel); } catch (_) {}
+  }
+  window.__dtrPunchesChannel = null;
+  window.__dtrPunchesSubscribed = false;
+};
 
 
 

@@ -306,43 +306,60 @@ async function sharedHydrateAll() {
 }
 window.sharedHydrateAll = sharedHydrateAll;
 
-const kvChannel = supabase.channel('kv_store_realtime')
-  .on('postgres_changes', { event:'*', schema:'public', table: TABLE }, (payload) => {
-    try {
-      const eventType = payload?.eventType;
-      const row = (eventType === 'DELETE') ? payload?.old : payload?.new;
-      const key = row?.key;
-      if (!key || !SHARED_KEY_SET.has(key)) return;
+function startLegacyKvRealtime() {
+  if (window.__PAYROLL_ENABLE_KV_REALTIME !== true) return null;
+  if (window.__sharedKvChannel) return window.__sharedKvChannel;
 
-      if (eventType === 'DELETE') {
-        cacheSet(key, undefined);
-        delete metaMap[key];
-        saveMetaMap();
+  const kvChannel = supabase.channel('kv_store_realtime')
+    .on('postgres_changes', { event:'*', schema:'public', table: TABLE }, (payload) => {
+      try {
+        const eventType = payload?.eventType;
+        const row = (eventType === 'DELETE') ? payload?.old : payload?.new;
+        const key = row?.key;
+        if (!key || !SHARED_KEY_SET.has(key)) return;
+
+        if (eventType === 'DELETE') {
+          cacheSet(key, undefined);
+          delete metaMap[key];
+          saveMetaMap();
+          queueSharedRerender();
+          return;
+        }
+
+        const incomingMeta = metaFromStore(row?.value);
+        const localMeta = metaMap[key] || { updatedAt:0, deviceId:'' };
+        if (Number(incomingMeta.updatedAt || 0) < Number(localMeta.updatedAt || 0)) return;
+
+        const nextVal = unwrapFromStore(row.value);
+        if (nextVal === undefined) {
+          cacheSet(key, undefined);
+          delete metaMap[key];
+          saveMetaMap();
+        } else {
+          cacheSet(key, nextVal);
+          setMetaForKey(key, incomingMeta);
+        }
+        window.__sharedSyncState.lastSyncAt = Date.now();
         queueSharedRerender();
-        return;
+      } catch (e) {
+        console.warn('shared realtime apply failed', e);
       }
+    });
 
-      const incomingMeta = metaFromStore(row?.value);
-      const localMeta = metaMap[key] || { updatedAt:0, deviceId:'' };
-      if (Number(incomingMeta.updatedAt || 0) < Number(localMeta.updatedAt || 0)) return;
+  kvChannel.subscribe();
+  window.__sharedKvChannel = kvChannel;
+  return kvChannel;
+}
 
-      const nextVal = unwrapFromStore(row.value);
-      if (nextVal === undefined) {
-        cacheSet(key, undefined);
-        delete metaMap[key];
-        saveMetaMap();
-      } else {
-        cacheSet(key, nextVal);
-        setMetaForKey(key, incomingMeta);
-      }
-      window.__sharedSyncState.lastSyncAt = Date.now();
-      queueSharedRerender();
-    } catch (e) {
-      console.warn('shared realtime apply failed', e);
-    }
-  });
-kvChannel.subscribe();
-window.__sharedKvChannel = kvChannel;
+function stopLegacyKvRealtime() {
+  if (!window.__sharedKvChannel) return;
+  try { supabase.removeChannel(window.__sharedKvChannel); } catch (_) {}
+  window.__sharedKvChannel = null;
+}
+
+window.startLegacyKvRealtime = startLegacyKvRealtime;
+window.stopLegacyKvRealtime = stopLegacyKvRealtime;
+startLegacyKvRealtime();
 
 window.addEventListener('online', () => { flushPending().catch(() => {}); });
 

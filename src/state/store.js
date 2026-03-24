@@ -17,6 +17,11 @@ const initialState = {
     currentPeriodLocked: null,
     lastRealtimeEvent: null,
     lastConflict: null,
+    activeChannelCount: 0,
+    activeRealtimeGroups: [],
+    activeRealtimeTables: [],
+    eventsByTable: {},
+    degradedModeEnabled: false,
   },
 };
 
@@ -114,4 +119,17 @@ export function reportConflict(conflict) {
 export function clearConflict() {
   state.diagnostics.lastConflict = null;
   notify({ type: 'diagnostics_conflict_clear' });
+}
+
+export function setRealtimeDiagnostics(patch = {}) {
+  state.diagnostics = { ...state.diagnostics, ...patch };
+  notify({ type: 'diagnostics_realtime_details', patch });
+}
+
+export function incrementRealtimeTableEvent(table) {
+  if (!table) return;
+  const next = { ...(state.diagnostics.eventsByTable || {}) };
+  next[table] = (next[table] || 0) + 1;
+  state.diagnostics.eventsByTable = next;
+  notify({ type: 'diagnostics_realtime_table_event', table, count: next[table] });
 }
