@@ -1,6 +1,15 @@
 import { getFeatureFlag } from '../config/featureFlags.js';
 import { getSupabaseClient } from '../config/supabaseClient.js';
-import { batch, getState, mergeRow, removeRow, setLastRealtimeEvent, setRealtimeStatus } from '../state/store.js';
+import {
+  batch,
+  getState,
+  incrementRealtimeTableEvent,
+  mergeRow,
+  removeRow,
+  setLastRealtimeEvent,
+  setRealtimeDiagnostics,
+  setRealtimeStatus,
+} from '../state/store.js';
 
 const TABLE_TO_STATE_KEY = {
   payroll_periods: 'payrollPeriods',
@@ -16,6 +25,18 @@ const TABLE_TO_STATE_KEY = {
   profiles: 'profiles',
 };
 
+const GROUP_TABLES = {
+  payroll_core: ['payroll_periods', 'payroll_period_snapshots', 'pp_employees', 'pp_projects', 'pp_schedules'],
+  dtr_live: ['dtr_punches', 'pp_dtr_records'],
+};
+
+const OPTIONAL_MODULE_TABLES = {
+  loans: ['employee_loans', 'loan_deductions'],
+  contrib_flags: ['pp_contrib_flags'],
+  profiles: ['profiles'],
+  dtr_records_legacy: ['pp_dtr_records'],
+};
+
 const PERIOD_SCOPED_TABLES = new Set([
   'payroll_period_snapshots',
   'pp_dtr_records',
@@ -25,12 +46,15 @@ const PERIOD_SCOPED_TABLES = new Set([
   'pp_contrib_flags',
 ]);
 
+const DTR_LIVE_TABLES = new Set(GROUP_TABLES.dtr_live);
 const DEBUG_REALTIME_FLAG = 'DEBUG_REALTIME';
 const REALTIME_FLUSH_MS = 120;
 
 const mutationQueue = [];
 let flushTimer = null;
 let latestActiveEvent = null;
+
+let manager = null;
 
 function logRealtimeDebug(message, details = undefined) {
   if (!getFeatureFlag(DEBUG_REALTIME_FLAG, false)) return;
@@ -76,6 +100,16 @@ function isQueuedEntryStillRelevant(entry) {
 function getEntryDedupeKey(entry) {
   const id = entry.id ?? entry.row?.id;
   return id == null ? null : `${entry.stateKey}:${id}`;
+}
+
+function refreshDiagnostics() {
+  if (!manager) return;
+  setRealtimeDiagnostics({
+    activeChannelCount: manager.channelsByTable.size,
+    activeRealtimeGroups: [...manager.activeGroups],
+    activeRealtimeTables: [...manager.channelsByTable.keys()],
+    degradedModeEnabled: !!manager.degradedModeEnabled,
+  });
 }
 
 function flushMutations() {
@@ -154,6 +188,8 @@ function handleChange(table, payload) {
   const stateKey = TABLE_TO_STATE_KEY[table];
   if (!stateKey) return;
 
+  if (manager?.dtrLiveSuspended && DTR_LIVE_TABLES.has(table)) return;
+
   if (!isEventForCurrentPeriod(table, payload)) {
     const periodInfo = getEventPeriodInfo(payload);
     logRealtimeDebug('ignored event for non-active period', {
@@ -167,6 +203,7 @@ function handleChange(table, payload) {
   }
 
   latestActiveEvent = event;
+  incrementRealtimeTableEvent(table);
 
   const periodInfo = getEventPeriodInfo(payload);
   logRealtimeDebug('queued event for active period', {
@@ -193,34 +230,160 @@ function handleChange(table, payload) {
   enqueueMutation({ ...queueEntry, kind: 'merge', row: payload.new, id: payload.new?.id });
 }
 
-export function startRealtimeSubscriptions() {
-  const supabase = getSupabaseClient();
-  if (!supabase) {
-    throw new Error('Supabase client is not ready for realtime subscriptions.');
-  }
+function subscribeTables(tables, groupName) {
+  if (!manager?.supabase) return;
 
-  setRealtimeStatus('connecting');
+  for (const table of tables) {
+    if (manager.channelsByTable.has(table)) continue;
 
-  const channels = Object.keys(TABLE_TO_STATE_KEY).map((table) => {
-    return supabase
-      .channel(`rt:${table}`)
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table },
-        (payload) => handleChange(table, payload),
-      )
+    const channel = manager.supabase
+      .channel(`rt:${groupName}:${table}`)
+      .on('postgres_changes', { event: '*', schema: 'public', table }, (payload) => handleChange(table, payload))
       .subscribe((status) => {
         setRealtimeStatus(status);
       });
+
+    manager.channelsByTable.set(table, channel);
+    manager.groupTables.set(groupName, new Set([...(manager.groupTables.get(groupName) || new Set()), table]));
+  }
+
+  manager.activeGroups.add(groupName);
+  refreshDiagnostics();
+}
+
+function unsubscribeGroup(groupName) {
+  if (!manager?.supabase) return;
+  const tables = manager.groupTables.get(groupName);
+  if (!tables?.size) {
+    manager.activeGroups.delete(groupName);
+    refreshDiagnostics();
+    return;
+  }
+
+  for (const table of tables) {
+    const channel = manager.channelsByTable.get(table);
+    if (channel) manager.supabase.removeChannel(channel);
+    manager.channelsByTable.delete(table);
+  }
+
+  manager.groupTables.delete(groupName);
+  manager.activeGroups.delete(groupName);
+  if (!manager.channelsByTable.size) setRealtimeStatus('idle');
+  refreshDiagnostics();
+}
+
+export function initRealtimeManager() {
+  if (manager) return manager;
+
+  const supabase = getSupabaseClient();
+  if (!supabase) {
+    setRealtimeStatus('degraded');
+    setRealtimeDiagnostics({ degradedModeEnabled: true });
+    manager = {
+      supabase: null,
+      channelsByTable: new Map(),
+      groupTables: new Map(),
+      activeGroups: new Set(),
+      dtrLiveSuspended: false,
+      dtrWasActiveBeforeSuspend: false,
+      degradedModeEnabled: true,
+    };
+    return manager;
+  }
+
+  setRealtimeStatus('ready');
+  manager = {
+    supabase,
+    channelsByTable: new Map(),
+    groupTables: new Map(),
+    activeGroups: new Set(),
+    dtrLiveSuspended: false,
+    dtrWasActiveBeforeSuspend: false,
+    degradedModeEnabled: false,
+  };
+  refreshDiagnostics();
+  return manager;
+}
+
+export function subscribePayrollCore({ periodId } = {}) {
+  void periodId;
+  if (!manager) initRealtimeManager();
+  subscribeTables(GROUP_TABLES.payroll_core, 'payroll_core');
+}
+
+export function unsubscribePayrollCore() {
+  if (!manager) return;
+  unsubscribeGroup('payroll_core');
+}
+
+export function subscribeDtrLive({ periodId } = {}) {
+  void periodId;
+  if (!manager) initRealtimeManager();
+  manager.dtrLiveSuspended = false;
+  subscribeTables(GROUP_TABLES.dtr_live, 'dtr_live');
+}
+
+export function unsubscribeDtrLive() {
+  if (!manager) return;
+  manager.dtrWasActiveBeforeSuspend = false;
+  manager.dtrLiveSuspended = false;
+  unsubscribeGroup('dtr_live');
+}
+
+export function suspendDtrLive() {
+  if (!manager) return;
+  manager.dtrWasActiveBeforeSuspend = manager.activeGroups.has('dtr_live');
+  manager.dtrLiveSuspended = true;
+  if (manager.dtrWasActiveBeforeSuspend) {
+    unsubscribeGroup('dtr_live');
+  }
+}
+
+export function resumeDtrLive({ periodId } = {}) {
+  void periodId;
+  if (!manager) initRealtimeManager();
+  if (!manager) return;
+  const shouldResume = manager.dtrLiveSuspended && manager.dtrWasActiveBeforeSuspend;
+  manager.dtrLiveSuspended = false;
+  if (shouldResume) {
+    subscribeTables(GROUP_TABLES.dtr_live, 'dtr_live');
+  }
+}
+
+export function subscribeOptionalModule(moduleName) {
+  if (!manager) initRealtimeManager();
+  const tables = OPTIONAL_MODULE_TABLES[moduleName];
+  if (!tables?.length) return;
+  subscribeTables(tables, `optional:${moduleName}`);
+}
+
+export function unsubscribeOptionalModule(moduleName) {
+  if (!manager) return;
+  unsubscribeGroup(`optional:${moduleName}`);
+}
+
+export function isDtrLiveActive() {
+  return !!manager?.activeGroups?.has('dtr_live');
+}
+
+export function destroyRealtimeManager() {
+  if (!manager) return;
+  if (flushTimer) {
+    window.clearTimeout(flushTimer);
+    flushTimer = null;
+  }
+  mutationQueue.splice(0, mutationQueue.length);
+
+  for (const groupName of [...manager.groupTables.keys()]) {
+    unsubscribeGroup(groupName);
+  }
+
+  setRealtimeStatus('closed');
+  setRealtimeDiagnostics({
+    activeChannelCount: 0,
+    activeRealtimeGroups: [],
+    activeRealtimeTables: [],
   });
 
-  return () => {
-    setRealtimeStatus('closed');
-    if (flushTimer) {
-      window.clearTimeout(flushTimer);
-      flushTimer = null;
-    }
-    mutationQueue.splice(0, mutationQueue.length);
-    channels.forEach((channel) => supabase.removeChannel(channel));
-  };
+  manager = null;
 }
