@@ -10944,6 +10944,15 @@ document.addEventListener('DOMContentLoaded', () => {
 
   async function setPeriodLocked(start, end, locked, meta = {}) {
     if (!start || !end) return;
+    const periodId = meta.periodId || (typeof periodIdFromRange === 'function' ? periodIdFromRange(start, end) : '');
+    if (periodId && window.payrollService && typeof window.payrollService.setPeriodLock === 'function') {
+      try {
+        await window.payrollService.setPeriodLock(periodId, !!locked);
+      } catch (err) {
+        console.warn('setPeriodLocked remote update failed', err);
+        return false;
+      }
+    }
     if (!payrollLocks || typeof payrollLocks !== 'object') payrollLocks = { __meta: {} };
     const key = periodKey(start, end);
     const hadEntry = !!(payrollLocks && payrollLocks[key]);
@@ -10968,6 +10977,15 @@ document.addEventListener('DOMContentLoaded', () => {
 
   async function clearPeriodLockEntry(start, end) {
     if (!start || !end) return;
+    const periodId = (typeof periodIdFromRange === 'function' ? periodIdFromRange(start, end) : '');
+    if (periodId && window.payrollService && typeof window.payrollService.setPeriodLock === 'function') {
+      try {
+        await window.payrollService.setPeriodLock(periodId, false);
+      } catch (err) {
+        console.warn('clearPeriodLockEntry remote update failed', err);
+        return false;
+      }
+    }
     if (!payrollLocks || typeof payrollLocks !== 'object') payrollLocks = { __meta: {} };
     const key = periodKey(start, end);
     const hadEntry = !!(payrollLocks && payrollLocks[key]);
@@ -11342,6 +11360,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!historySaved) showSyncFailedBanner('Sync failed');
     logFinalizeDiagnostics('lockCurrentPeriod:historySaved', { revision });
     const lockSaved = await setPeriodLocked(start, end, true, {
+      periodId,
       periodKey: existing.periodKey,
       lockedAt,
       finalized: true,
@@ -11354,7 +11373,9 @@ document.addEventListener('DOMContentLoaded', () => {
       snapshot: { rows: snapshot.rows, totals: snapshot.totals, divisor: snapshot.divisor, settings: snapshot.settings || {}, hash: hashHex }
     });
     if (!lockSaved) showSyncFailedBanner('Sync failed');
-    applyLockUI();
+    if (!window.__PAYROLL_MODULAR_LOCK_ACTIVE) {
+      applyLockUI();
+    }
     logFinalizeDiagnostics('lockCurrentPeriod:complete');
   }
 
@@ -21645,6 +21666,8 @@ function updateWeekInputs(snap) {
       items.forEach(item => {
         const opt = document.createElement('option');
         opt.value = String(item.i);
+        const periodId = item.period_id || item.periodId || (typeof periodIdFromRange === 'function' ? periodIdFromRange(item.startDate, item.endDate) : '');
+        if (periodId) opt.dataset.periodId = periodId;
         const rangeText = typeof window.formatDateRange === 'function'
           ? window.formatDateRange(item.startDate, item.endDate)
           : [item.startDate || '', item.endDate || ''].filter(Boolean).join(' - ');
@@ -24285,6 +24308,7 @@ document.addEventListener('DOMContentLoaded', async function () {
         const opt = document.createElement('option');
         opt.value = o.value;
         opt.textContent = o.textContent;
+        if (o.dataset && o.dataset.periodId) opt.dataset.periodId = o.dataset.periodId;
         bpSel.appendChild(opt);
       });
       bpSel.__sig = sig;
@@ -24467,6 +24491,12 @@ document.addEventListener('DOMContentLoaded', async function () {
     };
   }
   function isLocked(){
+    try {
+      if (typeof window.getPayrollPeriodLockState === 'function') {
+        const lock = window.getPayrollPeriodLockState();
+        if (typeof lock === 'boolean') return lock;
+      }
+    } catch (err) {}
     try { if (typeof isSelectedPeriodLocked === 'function') return !!isSelectedPeriodLocked(); }
     catch (err) {}
     return false;
@@ -24511,8 +24541,6 @@ document.addEventListener('DOMContentLoaded', async function () {
     try {
       if (isLocked()) {
         if (typeof window.checkAndToggleEditState === 'function') window.checkAndToggleEditState();
-      } else if (typeof window.applyPayrollLockUI === 'function') {
-        window.applyPayrollLockUI(false);
       }
     } catch (err) {}
 
@@ -24528,13 +24556,7 @@ document.addEventListener('DOMContentLoaded', async function () {
       if (tp && !tp.__lockBind){ tp.addEventListener('click', onOpenPayroll); tp.__lockBind = true; }
     } catch (e) {}
 
-    var __lockStableAt = 0;
-    function markPeriodChanged(){ try { __lockStableAt = Date.now() + 250; } catch(e){} }
-    function isStable(){ try { return Date.now() >= __lockStableAt; } catch(e){ return true; } }
-    try {
-      var _isLocked = isLocked;
-      isLocked = function(){ if (!isStable()) return false; return _isLocked(); };
-    } catch (e) {}
+    function markPeriodChanged(){ /* compatibility hook */ }
     function scheduleUiReeval(){
       setTimeout(function(){
         try {
