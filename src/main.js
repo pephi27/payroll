@@ -274,7 +274,11 @@ async function bootstrapPayrollApp() {
 
     try {
       initRealtimeManager();
-      window.__DISABLE_LEGACY_DTR_SUBSCRIPTIONS = true;
+      // Keep legacy DTR subscriptions enabled for now because the current DTR
+      // UI still renders from `window.storedRecords`. Disabling legacy
+      // subscriptions prevents manual DTR updates from propagating across
+      // devices in real time.
+      window.__DISABLE_LEGACY_DTR_SUBSCRIPTIONS = false;
       if (window.__ENABLE_DTR_LIVE_REALTIME == null) window.__ENABLE_DTR_LIVE_REALTIME = false;
       subscribePayrollCore({ periodId: currentPeriodId });
       window.payrollRealtimeManager = {
