@@ -16155,11 +16155,60 @@ function openPunchEditor(rowContext) {
 // single combined row. The split state is persisted in localStorage under
 // LS_SPLITS. Keys are formatted as empId + '___' + date.
 const LS_SPLITS = 'att_splits_v1';
+const LS_SPLITS_META = 'att_splits_meta_v1';
 let splits = {};
+let splitSyncMeta = { clocks: {}, tombstones: {} };
 try {
   splits = (window.cacheGet ? window.cacheGet(LS_SPLITS, {}) : JSON.parse(localStorage.getItem(LS_SPLITS) || '{}'));
 } catch (e) {
   splits = {};
+}
+try {
+  const raw = (window.cacheGet ? window.cacheGet(LS_SPLITS_META, {}) : JSON.parse(localStorage.getItem(LS_SPLITS_META) || '{}'));
+  if (raw && typeof raw === 'object') {
+    splitSyncMeta = {
+      clocks: (raw.clocks && typeof raw.clocks === 'object') ? raw.clocks : {},
+      tombstones: (raw.tombstones && typeof raw.tombstones === 'object') ? raw.tombstones : {}
+    };
+  }
+} catch (e) {
+  splitSyncMeta = { clocks: {}, tombstones: {} };
+}
+function readSplitTs(entry) {
+  if (!entry || typeof entry !== 'object') return 0;
+  const ts = Number(entry.__updatedAt || 0);
+  return Number.isFinite(ts) ? ts : 0;
+}
+function writeSplitTs(entry, ts) {
+  const base = (entry && typeof entry === 'object') ? entry : {};
+  base.__updatedAt = Number(ts || Date.now());
+  return base;
+}
+function setSplitClock(key, ts) {
+  if (!key) return;
+  const safeTs = Number(ts || Date.now());
+  splitSyncMeta.clocks[key] = safeTs;
+  delete splitSyncMeta.tombstones[key];
+}
+function setSplitTombstone(key, ts) {
+  if (!key) return;
+  const safeTs = Number(ts || Date.now());
+  splitSyncMeta.tombstones[key] = safeTs;
+  delete splitSyncMeta.clocks[key];
+}
+function getLocalSplitClock(key) {
+  const keyed = Number(splitSyncMeta?.clocks?.[key] || 0);
+  const fromEntry = readSplitTs(splits?.[key]);
+  return Math.max(keyed, fromEntry);
+}
+function getLocalSplitTombstone(key) {
+  return Number(splitSyncMeta?.tombstones?.[key] || 0);
+}
+function saveSplitSyncMeta() {
+  try {
+    if (window.sharedSet) window.sharedSet(LS_SPLITS_META, splitSyncMeta);
+    else localStorage.setItem(LS_SPLITS_META, JSON.stringify(splitSyncMeta));
+  } catch (_) {}
 }
 function saveSplits() {
   try {
@@ -16167,6 +16216,7 @@ function saveSplits() {
   } catch (e) {
     console.warn('Saving splits failed', e);
   }
+  saveSplitSyncMeta();
   syncSplitOverrides();
 }
 // Toggle split and unsplit state for a given employee/date key.  These helper
@@ -16176,72 +16226,59 @@ function saveSplits() {
 function splitRecord(key) {
   // When splitting, mark all three segments (AM, PM, OT) as split.  Use
   // an object so we can track split state per segment.
-  splits[key] = { AM: true, PM: true, OT: true };
+  const ts = Date.now();
+  splits[key] = writeSplitTs({ AM: true, PM: true, OT: true }, ts);
+  setSplitClock(key, ts);
   saveSplits();
   window.scheduleRenderResults?.('dtr-split-toggle');
 }
 function unsplitRecord(key) {
-  // Group AM/PM/OT segments by their resolved project IDs.  Each group with
-  // more than one segment is recombined (segment-level overrides cleared and
-  // marked as unsplit).  Groups with a single segment remain split.
+  // Fully collapse AM/PM/OT back to one row.
+  // Previous behavior kept single-segment groups split when projects differed,
+  // which made "Unsplit" appear temporary and split again after refresh.
   const [empId] = key.split('___');
   const emp = (typeof storedEmployees !== 'undefined' && storedEmployees) ? storedEmployees[empId] : null;
   const defaultProj = emp && emp.projectId ? emp.projectId : '';
-  let dayProj = overridesProjects && Object.prototype.hasOwnProperty.call(overridesProjects, key)
+  const defaultSchedule = emp && emp.scheduleId ? emp.scheduleId : '';
+  const dayProj = overridesProjects && Object.prototype.hasOwnProperty.call(overridesProjects, key)
     ? overridesProjects[key]
     : defaultProj;
+  const daySched = overridesSchedules && Object.prototype.hasOwnProperty.call(overridesSchedules, key)
+    ? overridesSchedules[key]
+    : defaultSchedule;
 
   const segments = ['AM', 'PM', 'OT'];
-  const groups = {};
+  // Resolve a single day-level project/schedule before clearing segment values.
+  let unifiedProj = dayProj;
+  let unifiedSched = daySched;
   segments.forEach(seg => {
     const segKey = key + '___' + seg;
-    const pid = (overridesProjects && Object.prototype.hasOwnProperty.call(overridesProjects, segKey))
-      ? overridesProjects[segKey]
-      : dayProj;
-    const p = String(pid || '');
-    if (!groups[p]) groups[p] = [];
-    groups[p].push(seg);
-  });
-
-  let splitEntry = splits[key];
-  if (!splitEntry || typeof splitEntry !== 'object') {
-    splitEntry = { AM: true, PM: true, OT: true };
-  }
-
-  Object.keys(groups).forEach(proj => {
-    const segs = groups[proj];
-    if (segs.length > 1) {
-      // Multiple segments share this project → clear per-segment overrides and
-      // mark them unsplit. Also set day-level override if needed.
-      segs.forEach(seg => {
-        const segKey = key + '___' + seg;
-        if (overridesProjects && Object.prototype.hasOwnProperty.call(overridesProjects, segKey)) {
-          delete overridesProjects[segKey];
-        }
-        if (overridesSchedules && Object.prototype.hasOwnProperty.call(overridesSchedules, segKey)) {
-          delete overridesSchedules[segKey];
-        }
-        splitEntry[seg] = false;
-      });
-      const unifiedProj = proj;
-      if (String(unifiedProj || '') !== String(defaultProj || '')) {
-        overridesProjects[key] = unifiedProj;
-      } else {
-        delete overridesProjects[key];
-      }
-    } else {
-      // Single segment → keep its split flag
-      segs.forEach(seg => { splitEntry[seg] = true; });
+    if ((!unifiedProj || String(unifiedProj) === String(defaultProj || '')) &&
+        overridesProjects && Object.prototype.hasOwnProperty.call(overridesProjects, segKey)) {
+      unifiedProj = overridesProjects[segKey];
+    }
+    if ((!unifiedSched || String(unifiedSched) === String(defaultSchedule || '')) &&
+        overridesSchedules && Object.prototype.hasOwnProperty.call(overridesSchedules, segKey)) {
+      unifiedSched = overridesSchedules[segKey];
     }
   });
 
-  // Remove split entry if no segments remain split
-  const anySplit = segments.some(seg => splitEntry[seg]);
-  if (anySplit) {
-    splits[key] = splitEntry;
-  } else {
-    delete splits[key];
-  }
+  // Clear all segment-level overrides so the row truly stays unsplit.
+  segments.forEach(seg => {
+    const segKey = key + '___' + seg;
+    if (overridesProjects && Object.prototype.hasOwnProperty.call(overridesProjects, segKey)) delete overridesProjects[segKey];
+    if (overridesSchedules && Object.prototype.hasOwnProperty.call(overridesSchedules, segKey)) delete overridesSchedules[segKey];
+  });
+
+  if (String(unifiedProj || '') !== String(defaultProj || '')) overridesProjects[key] = unifiedProj;
+  else delete overridesProjects[key];
+
+  if (String(unifiedSched || '') !== String(defaultSchedule || '')) overridesSchedules[key] = unifiedSched;
+  else delete overridesSchedules[key];
+
+  const ts = Date.now();
+  delete splits[key];
+  setSplitTombstone(key, ts);
 
   saveSplits();
   saveOverrides();
@@ -16283,8 +16320,17 @@ async function syncSplitOverrides(){
     // removed locally can reappear after hydrate/realtime refresh.
     const { data: existingRows, error: existingErr } = await window.supabase
       .from(SPLIT_OVERRIDES_TABLE)
-      .select('emp_id,date');
+      .select('emp_id,date,splits');
     if (existingErr) throw existingErr;
+    const remoteRowsByKey = {};
+    (existingRows || []).forEach(function(row){
+      const key = String(row.emp_id || '') + '___' + __normalizeYmd(row.date);
+      if (key) remoteRowsByKey[key] = row;
+    });
+    const remoteTsForKey = function(key){
+      const row = remoteRowsByKey[key];
+      return row ? readSplitTs(row.splits) : 0;
+    };
 
     const staleRows = (existingRows || []).filter(function(row){
       const key = String(row.emp_id || '') + '___' + __normalizeYmd(row.date);
@@ -16295,6 +16341,10 @@ async function syncSplitOverrides(){
       for (const row of staleRows) {
         const date = __normalizeYmd(row.date);
         if (!row.emp_id || !date) continue;
+        const key = String(row.emp_id || '') + '___' + date;
+        const tombTs = getLocalSplitTombstone(key);
+        const remoteTs = readSplitTs(row.splits);
+        if (!(tombTs > 0 && tombTs >= remoteTs)) continue;
         const { error: delErr } = await window.supabase
           .from(SPLIT_OVERRIDES_TABLE)
           .delete()
@@ -16308,7 +16358,11 @@ async function syncSplitOverrides(){
 
     const rows = [];
     keySet.forEach(function(k){
+      const localTs = getLocalSplitClock(k);
+      const remoteTs = remoteTsForKey(k);
+      if (remoteTs > 0 && remoteTs > localTs) return;
       const parts = k.split('___');
+      if (splits[k] && typeof splits[k] === 'object') writeSplitTs(splits[k], localTs || Date.now());
       rows.push({
         emp_id: parts[0],
         date: parts[1],
@@ -16339,7 +16393,13 @@ async function hydrateSplitOverrides(){
     if (error) throw error;
     (data || []).forEach(function(row){
       const key = row.emp_id + '___' + row.date;
+      const remoteTs = readSplitTs(row.splits);
+      if (remoteTs > 0) {
+        const localTs = getLocalSplitClock(key);
+        if (localTs > remoteTs) return;
+      }
       if (row.splits) splits[key] = row.splits;
+      if (remoteTs > 0) setSplitClock(key, remoteTs);
       if (row.overrides_projects) {
         const proj = row.overrides_projects;
         if (proj.base != null) overridesProjects[key] = proj.base;
@@ -16356,6 +16416,7 @@ async function hydrateSplitOverrides(){
       }
     });
     try { if (window.sharedSet) window.sharedSet(LS_SPLITS, splits); else localStorage.setItem(LS_SPLITS, JSON.stringify(splits)); } catch(e){}
+    saveSplitSyncMeta();
     try { if (window.sharedSet) window.sharedSet(LS_OVERRIDES_PROJECTS, overridesProjects); else localStorage.setItem(LS_OVERRIDES_PROJECTS, JSON.stringify(overridesProjects)); } catch(e){}
     try { if (window.sharedSet) window.sharedSet(LS_OVERRIDES_SCHEDULES, overridesSchedules); else localStorage.setItem(LS_OVERRIDES_SCHEDULES, JSON.stringify(overridesSchedules)); } catch(e){}
   } catch (e) {
@@ -16390,6 +16451,8 @@ function applySplitOverrideRow(row, isDelete){
 
   if (!isDelete) {
     try { if (row.splits) splits[key] = row.splits; } catch(_) {}
+    const remoteTs = readSplitTs(row.splits);
+    if (remoteTs > 0) setSplitClock(key, remoteTs);
     try {
       const proj = row.overrides_projects;
       if (proj && typeof proj === 'object') {
@@ -16405,9 +16468,11 @@ function applySplitOverrideRow(row, isDelete){
       }
     } catch(_) {}
   }
+  if (isDelete) setSplitTombstone(key, Date.now());
 
   // Persist to localStorage so reload keeps the newest state
   try { if (window.sharedSet) window.sharedSet(LS_SPLITS, splits); else localStorage.setItem(LS_SPLITS, JSON.stringify(splits)); } catch(e){}
+  saveSplitSyncMeta();
   try { if (window.sharedSet) window.sharedSet(LS_OVERRIDES_PROJECTS, overridesProjects); else localStorage.setItem(LS_OVERRIDES_PROJECTS, JSON.stringify(overridesProjects)); } catch(e){}
   try { if (window.sharedSet) window.sharedSet(LS_OVERRIDES_SCHEDULES, overridesSchedules); else localStorage.setItem(LS_OVERRIDES_SCHEDULES, JSON.stringify(overridesSchedules)); } catch(e){}
 }
