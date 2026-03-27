@@ -18273,10 +18273,10 @@ let otMins = 0;
         if (splitEntry[segment]) {
           const trSeg = document.createElement('tr');
           let htmlSeg='';
-          htmlSeg += '<td>' + __fmt12Clock(empId) + '</td>';
+          htmlSeg += '<td>' + empId + '</td>';
           htmlSeg += '<td>' + (name || '') + '</td>';
           htmlSeg += '<td></td><td></td>';
-          htmlSeg += '<td>' + __fmt12Clock(date) + '</td>';
+          htmlSeg += '<td>' + date + '</td>';
           if(segment==='AM'){
             htmlSeg += (amInActual ? '<td>' + __fmt12Clock(amInActual) + '</td>' : '<td class="missing">-</td>');
             htmlSeg += (hasBridge || !amOutActual) ? '<td class="missing">-</td>' : '<td>' + __fmt12Clock(amOutActual) + '</td>';
