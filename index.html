@@ -16155,11 +16155,60 @@ function openPunchEditor(rowContext) {
 // single combined row. The split state is persisted in localStorage under
 // LS_SPLITS. Keys are formatted as empId + '___' + date.
 const LS_SPLITS = 'att_splits_v1';
+const LS_SPLITS_META = 'att_splits_meta_v1';
 let splits = {};
+let splitSyncMeta = { clocks: {}, tombstones: {} };
 try {
   splits = (window.cacheGet ? window.cacheGet(LS_SPLITS, {}) : JSON.parse(localStorage.getItem(LS_SPLITS) || '{}'));
 } catch (e) {
   splits = {};
+}
+try {
+  const raw = (window.cacheGet ? window.cacheGet(LS_SPLITS_META, {}) : JSON.parse(localStorage.getItem(LS_SPLITS_META) || '{}'));
+  if (raw && typeof raw === 'object') {
+    splitSyncMeta = {
+      clocks: (raw.clocks && typeof raw.clocks === 'object') ? raw.clocks : {},
+      tombstones: (raw.tombstones && typeof raw.tombstones === 'object') ? raw.tombstones : {}
+    };
+  }
+} catch (e) {
+  splitSyncMeta = { clocks: {}, tombstones: {} };
+}
+function readSplitTs(entry) {
+  if (!entry || typeof entry !== 'object') return 0;
+  const ts = Number(entry.__updatedAt || 0);
+  return Number.isFinite(ts) ? ts : 0;
+}
+function writeSplitTs(entry, ts) {
+  const base = (entry && typeof entry === 'object') ? entry : {};
+  base.__updatedAt = Number(ts || Date.now());
+  return base;
+}
+function setSplitClock(key, ts) {
+  if (!key) return;
+  const safeTs = Number(ts || Date.now());
+  splitSyncMeta.clocks[key] = safeTs;
+  delete splitSyncMeta.tombstones[key];
+}
+function setSplitTombstone(key, ts) {
+  if (!key) return;
+  const safeTs = Number(ts || Date.now());
+  splitSyncMeta.tombstones[key] = safeTs;
+  delete splitSyncMeta.clocks[key];
+}
+function getLocalSplitClock(key) {
+  const keyed = Number(splitSyncMeta?.clocks?.[key] || 0);
+  const fromEntry = readSplitTs(splits?.[key]);
+  return Math.max(keyed, fromEntry);
+}
+function getLocalSplitTombstone(key) {
+  return Number(splitSyncMeta?.tombstones?.[key] || 0);
+}
+function saveSplitSyncMeta() {
+  try {
+    if (window.sharedSet) window.sharedSet(LS_SPLITS_META, splitSyncMeta);
+    else localStorage.setItem(LS_SPLITS_META, JSON.stringify(splitSyncMeta));
+  } catch (_) {}
 }
 function saveSplits() {
   try {
@@ -16167,6 +16216,7 @@ function saveSplits() {
   } catch (e) {
     console.warn('Saving splits failed', e);
   }
+  saveSplitSyncMeta();
   syncSplitOverrides();
 }
 // Toggle split and unsplit state for a given employee/date key.  These helper
@@ -16176,7 +16226,9 @@ function saveSplits() {
 function splitRecord(key) {
   // When splitting, mark all three segments (AM, PM, OT) as split.  Use
   // an object so we can track split state per segment.
-  splits[key] = { AM: true, PM: true, OT: true };
+  const ts = Date.now();
+  splits[key] = writeSplitTs({ AM: true, PM: true, OT: true }, ts);
+  setSplitClock(key, ts);
   saveSplits();
   window.scheduleRenderResults?.('dtr-split-toggle');
 }
@@ -16238,9 +16290,14 @@ function unsplitRecord(key) {
   // Remove split entry if no segments remain split
   const anySplit = segments.some(seg => splitEntry[seg]);
   if (anySplit) {
+    const ts = Date.now();
+    writeSplitTs(splitEntry, ts);
     splits[key] = splitEntry;
+    setSplitClock(key, ts);
   } else {
+    const ts = Date.now();
     delete splits[key];
+    setSplitTombstone(key, ts);
   }
 
   saveSplits();
@@ -16283,8 +16340,17 @@ async function syncSplitOverrides(){
     // removed locally can reappear after hydrate/realtime refresh.
     const { data: existingRows, error: existingErr } = await window.supabase
       .from(SPLIT_OVERRIDES_TABLE)
-      .select('emp_id,date');
+      .select('emp_id,date,splits');
     if (existingErr) throw existingErr;
+    const remoteRowsByKey = {};
+    (existingRows || []).forEach(function(row){
+      const key = String(row.emp_id || '') + '___' + __normalizeYmd(row.date);
+      if (key) remoteRowsByKey[key] = row;
+    });
+    const remoteTsForKey = function(key){
+      const row = remoteRowsByKey[key];
+      return row ? readSplitTs(row.splits) : 0;
+    };
 
     const staleRows = (existingRows || []).filter(function(row){
       const key = String(row.emp_id || '') + '___' + __normalizeYmd(row.date);
@@ -16295,6 +16361,10 @@ async function syncSplitOverrides(){
       for (const row of staleRows) {
         const date = __normalizeYmd(row.date);
         if (!row.emp_id || !date) continue;
+        const key = String(row.emp_id || '') + '___' + date;
+        const tombTs = getLocalSplitTombstone(key);
+        const remoteTs = readSplitTs(row.splits);
+        if (!(tombTs > 0 && tombTs >= remoteTs)) continue;
         const { error: delErr } = await window.supabase
           .from(SPLIT_OVERRIDES_TABLE)
           .delete()
@@ -16308,7 +16378,11 @@ async function syncSplitOverrides(){
 
     const rows = [];
     keySet.forEach(function(k){
+      const localTs = getLocalSplitClock(k);
+      const remoteTs = remoteTsForKey(k);
+      if (remoteTs > 0 && remoteTs > localTs) return;
       const parts = k.split('___');
+      if (splits[k] && typeof splits[k] === 'object') writeSplitTs(splits[k], localTs || Date.now());
       rows.push({
         emp_id: parts[0],
         date: parts[1],
@@ -16339,7 +16413,13 @@ async function hydrateSplitOverrides(){
     if (error) throw error;
     (data || []).forEach(function(row){
       const key = row.emp_id + '___' + row.date;
+      const remoteTs = readSplitTs(row.splits);
+      if (remoteTs > 0) {
+        const localTs = getLocalSplitClock(key);
+        if (localTs > remoteTs) return;
+      }
       if (row.splits) splits[key] = row.splits;
+      if (remoteTs > 0) setSplitClock(key, remoteTs);
       if (row.overrides_projects) {
         const proj = row.overrides_projects;
         if (proj.base != null) overridesProjects[key] = proj.base;
@@ -16356,6 +16436,7 @@ async function hydrateSplitOverrides(){
       }
     });
     try { if (window.sharedSet) window.sharedSet(LS_SPLITS, splits); else localStorage.setItem(LS_SPLITS, JSON.stringify(splits)); } catch(e){}
+    saveSplitSyncMeta();
     try { if (window.sharedSet) window.sharedSet(LS_OVERRIDES_PROJECTS, overridesProjects); else localStorage.setItem(LS_OVERRIDES_PROJECTS, JSON.stringify(overridesProjects)); } catch(e){}
     try { if (window.sharedSet) window.sharedSet(LS_OVERRIDES_SCHEDULES, overridesSchedules); else localStorage.setItem(LS_OVERRIDES_SCHEDULES, JSON.stringify(overridesSchedules)); } catch(e){}
   } catch (e) {
@@ -16390,6 +16471,8 @@ function applySplitOverrideRow(row, isDelete){
 
   if (!isDelete) {
     try { if (row.splits) splits[key] = row.splits; } catch(_) {}
+    const remoteTs = readSplitTs(row.splits);
+    if (remoteTs > 0) setSplitClock(key, remoteTs);
     try {
       const proj = row.overrides_projects;
       if (proj && typeof proj === 'object') {
@@ -16405,9 +16488,11 @@ function applySplitOverrideRow(row, isDelete){
       }
     } catch(_) {}
   }
+  if (isDelete) setSplitTombstone(key, Date.now());
 
   // Persist to localStorage so reload keeps the newest state
   try { if (window.sharedSet) window.sharedSet(LS_SPLITS, splits); else localStorage.setItem(LS_SPLITS, JSON.stringify(splits)); } catch(e){}
+  saveSplitSyncMeta();
   try { if (window.sharedSet) window.sharedSet(LS_OVERRIDES_PROJECTS, overridesProjects); else localStorage.setItem(LS_OVERRIDES_PROJECTS, JSON.stringify(overridesProjects)); } catch(e){}
   try { if (window.sharedSet) window.sharedSet(LS_OVERRIDES_SCHEDULES, overridesSchedules); else localStorage.setItem(LS_OVERRIDES_SCHEDULES, JSON.stringify(overridesSchedules)); } catch(e){}
 }
