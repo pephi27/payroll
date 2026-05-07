@@ -838,6 +838,7 @@ body.upload-overlay-open { overflow: hidden !important; }
   background: rgba(24, 28, 35, 0.88);
 }
 #loanTrackerTable td.balance-cell { font-weight: 600; }
+#loanTrackerTable td.balance-cell.balance-actionable { cursor: pointer; text-decoration: underline dotted; }
 #loanTrackerTable input[type="number"] { width: 110px; }
 #loanTrackerTable input[type="checkbox"] { transform: scale(1.15); }
 #loanTrackerControls { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 8px; }
@@ -6505,6 +6506,42 @@ function formatLoanTrackerNumInput(value){
   if (!Number.isFinite(n) || n <= 0) return '';
   return roundToCents(n).toFixed(2);
 }
+function getLoanTrackerTypeHistory(empId, type){
+  ensureLoanTrackerShape(loanTracker);
+  const rows = [];
+  const keys = Object.keys((loanTracker && loanTracker.applied) || {}).sort(comparePeriodKeys);
+  keys.forEach(pk => {
+    const amount = getLoanTrackerApplied(pk, empId, type);
+    if (amount == null) return;
+    rows.push({ periodKey: pk, amount: roundToCents(Number(amount) || 0) });
+  });
+  return rows;
+}
+function renewLoanTrackerType(empId, type){
+  const entry = getLoanTrackerEntry(empId, type);
+  if (!entry || isLoanTypePagibig(type)) return false;
+  const paidToDate = sumLoanTrackerAppliedUpTo(currentPeriodKey || periodKey(), empId, type);
+  entry.paidBaseline = roundToCents(paidToDate);
+  entry.active = true;
+  return true;
+}
+function deleteLoanTrackerType(empId, type){
+  ensureLoanTrackerShape(loanTracker);
+  if (!empId || !type) return false;
+  if (loanTracker.byEmp && loanTracker.byEmp[empId] && Object.prototype.hasOwnProperty.call(loanTracker.byEmp[empId], type)) {
+    delete loanTracker.byEmp[empId][type];
+    if (!Object.keys(loanTracker.byEmp[empId]).length) delete loanTracker.byEmp[empId];
+  }
+  Object.keys(loanTracker.applied || {}).forEach(pk => clearLoanTrackerApplied(pk, empId, type));
+  Object.keys(loanTracker.paymentsByPeriod || {}).forEach(pk => {
+    const per = loanTracker.paymentsByPeriod[pk];
+    if (!isPlainObject(per) || !isPlainObject(per[empId])) return;
+    if (Object.prototype.hasOwnProperty.call(per[empId], type)) delete per[empId][type];
+    if (!Object.keys(per[empId]).length) delete per[empId];
+    if (!Object.keys(per).length) delete loanTracker.paymentsByPeriod[pk];
+  });
+  return true;
+}
 function renderLoanTrackerTable(){
   const table = document.getElementById('loanTrackerTable');
   if (!table) return;
@@ -6581,8 +6618,12 @@ function renderLoanTrackerTable(){
       tr.appendChild(tdPer);
 
       const tdBal = document.createElement('td');
-      tdBal.classList.add('num','balance-cell');
+      tdBal.classList.add('num','balance-cell','balance-actionable');
       tdBal.textContent = formatDeductionDisplay(bal);
+      tdBal.title = 'Click to view deduction history, renew, or delete this cash loan';
+      tdBal.dataset.empId = empId;
+      tdBal.dataset.loanType = type;
+      tdBal.dataset.balanceAction = 'history';
       tr.appendChild(tdBal);
 
       const tdActive = document.createElement('td');
@@ -6789,6 +6830,45 @@ document.addEventListener('input', function(ev){
   if (!el.closest || !el.closest('#loanTrackerTable')) return;
   if (el.dataset && (el.dataset.field === 'principal' || el.dataset.field === 'weekly' || el.dataset.field === 'monthly')) {
     applyLoanTrackerFieldChange(el);
+  }
+});
+document.addEventListener('click', function(ev){
+  const target = ev && ev.target;
+  if (!target || !target.closest) return;
+  const cell = target.closest('#loanTrackerTable td[data-balance-action="history"]');
+  if (!cell) return;
+  const empId = cell.dataset.empId;
+  const type = cell.dataset.loanType;
+  if (!empId || !type) return;
+  const emp = (getEmployeeList() || []).find(e => String(e.id) === String(empId));
+  const empLabel = `${empId} - ${emp ? emp.name : ''}`.trim();
+  const history = getLoanTrackerTypeHistory(empId, type);
+  const total = roundToCents(history.reduce((s, row) => s + (Number(row.amount) || 0), 0));
+  const lines = history.length
+    ? history.map((row, idx) => `${idx + 1}. ${row.periodKey}: ${formatDeductionDisplay(row.amount)}`).join('\n')
+    : 'No tracked deductions yet.';
+  const action = window.prompt(
+    `Cash Advance History\nEmployee: ${empLabel}\nType: ${type}\nTotal tracked: ${formatDeductionDisplay(total)}\n\n${lines}\n\nType action: renew | delete`,
+    ''
+  );
+  const cmd = String(action || '').trim().toLowerCase();
+  if (!cmd) return;
+  if (cmd === 'renew') {
+    if (renewLoanTrackerType(empId, type)) {
+      loanTrackerRefresh.flush({ createEntries: true });
+      try { persistLoanTracker(); } catch(_){}
+      alert('Loan renewed. Baseline was reset to current paid total.');
+    }
+    return;
+  }
+  if (cmd === 'delete') {
+    const ok = window.confirm(`Delete ${type} loan and all its tracked history for ${empLabel}?`);
+    if (!ok) return;
+    if (deleteLoanTrackerType(empId, type)) {
+      loanTrackerRefresh.flush({ createEntries: true });
+      try { persistLoanTracker(); } catch(_){}
+      alert('Loan and tracked history deleted.');
+    }
   }
 });
 
