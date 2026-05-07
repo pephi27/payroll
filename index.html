@@ -6543,7 +6543,9 @@ function renderLoanTrackerTable(){
 
       const basePer = (entry.active && monthly > 0) ? roundToCents((div || 1) > 0 ? (monthly / (div || 1)) : monthly) : 0;
       const paidBefore = sumLoanTrackerAppliedBefore(pk, empId, type);
-      const remainingBefore = roundToCents(principal - paidBefore);
+      const baseline = loanTrackerPaidBaseline(entry, type);
+      const effectivePaidBefore = Math.max(0, roundToCents(paidBefore - baseline));
+      const remainingBefore = roundToCents(principal - effectivePaidBefore);
       const desired = (entry.active && basePer > 0 && remainingBefore > 0) ? roundToCents(Math.min(basePer, remainingBefore)) : 0;
 
       const scheduled = getLoanTrackerApplied(pk, empId, type);
@@ -6599,13 +6601,16 @@ function renderLoanTrackerTable(){
       const principal = roundToCents(entry.principal || 0);
       const weekly = roundToCents(entry.weekly || 0);
       const paidBefore = sumLoanTrackerAppliedBefore(pk, empId, type);
-      const remainingBefore = roundToCents(principal - paidBefore);
+      const baseline = loanTrackerPaidBaseline(entry, type);
+      const effectivePaidBefore = Math.max(0, roundToCents(paidBefore - baseline));
+      const remainingBefore = roundToCents(principal - effectivePaidBefore);
       const scheduled = getLoanTrackerApplied(pk, empId, type);
-      const currentDeduction = (scheduled != null)
+      const unclampedCurrentDeduction = (scheduled != null)
         ? roundToCents(Number(scheduled) || 0)
         : ((entry.active && weekly > 0 && remainingBefore > 0)
           ? roundToCents(Math.min(weekly, remainingBefore))
           : 0);
+      const currentDeduction = roundToCents(Math.max(0, Math.min(unclampedCurrentDeduction, remainingBefore)));
       const bal = roundToCents(Math.max(0, remainingBefore - currentDeduction));
 
       const tdPrincipal = document.createElement('td');
