@@ -3377,7 +3377,6 @@ window.addEventListener('load', dashReports);
         <th>Type</th>
         <th>REG Adj Hrs</th>
         <th>ADJ OT Hrs</th>
-        <th>Print</th>
        </tr>
       </thead>
       <tbody></tbody>
@@ -9248,15 +9247,7 @@ function renderAdjustmentHoursTable(){
       <td class="adjTypeCell"></td>
       <td><input type="text" inputmode="decimal" step="0.01" class="adjHrsInput" data-id="${id}" data-type="reg" value="${regValue}" /></td>
       <td><input type="text" inputmode="decimal" step="0.01" class="adjHrsInput" data-id="${id}" data-type="ot" value="${otValue}" /></td>
-      <td class="adjPrintCell"></td>
     `;
-    const printCell = tr.querySelector('.adjPrintCell');
-    if (printCell) {
-      const hasAdjustmentValue = Math.abs(Number(totals.reg) || 0) > 0.004 || Math.abs(Number(totals.ot) || 0) > 0.004;
-      printCell.innerHTML = hasAdjustmentValue
-        ? `<button type="button" class="adjustmentPayslipBtn" data-id="${id}">Print</button>`
-        : '-';
-    }
     const typeCell = tr.querySelector('.adjTypeCell');
     if (typeCell) {
       const select = document.createElement('select');
@@ -9296,7 +9287,6 @@ function renderAdjustmentHoursTable(){
     <td></td>
     <td class="num" data-col="regHours">${formatZeroDisplay(grandRegTotal)}</td>
     <td class="num" data-col="otHours">${formatZeroDisplay(grandOtTotal)}</td>
-    <td></td>
   `;
   tbody.appendChild(totalRow);
   const formatAdjustmentHoursInput = (input) => {
@@ -20915,25 +20905,6 @@ document.addEventListener('DOMContentLoaded', function(){
 
 <!-- Payslip Button functionality -->
 <script>
-// Add click listener for adjustment tab print buttons (only for rows with values)
-document.addEventListener('click', function(e) {
-  var target = e.target;
-  if (!target || !target.classList || !target.classList.contains('adjustmentPayslipBtn')) return;
-  var empId = (target.getAttribute('data-id') || '').trim();
-  if (!empId) return;
-  var payrollRow = document.querySelector('#payrollTable tbody tr[data-id="' + empId.replace(/"/g, '\"') + '"]');
-  if (!payrollRow) {
-    var rows = document.querySelectorAll('#payrollTable tbody tr');
-    for (var i = 0; i < rows.length; i++) {
-      var rowId = (rows[i].cells && rows[i].cells[0] ? rows[i].cells[0].textContent : '').toString().trim();
-      if (rowId === empId) { payrollRow = rows[i]; break; }
-    }
-  }
-  if (!payrollRow) return;
-  var payslipBtn = payrollRow.querySelector('.payslipBtn');
-  if (payslipBtn) payslipBtn.click();
-});
-
 // Add click listener for payslip buttons on payroll table
 document.addEventListener('click', function(e) {
   var target = e.target;
