@@ -3369,6 +3369,9 @@ window.addEventListener('load', dashReports);
      <div class="section note">
       Adjustment hours for correcting previous payroll. REG adjustments appear in payroll, ADJ OT adjustments feed the overtime table.
      </div>
+     <div class="section actions" style="padding-top:0">
+      <button type="button" id="printAdjustmentsBtn">Print</button>
+     </div>
      <table id="adjustmentHoursTable">
       <thead>
        <tr>
@@ -10015,6 +10018,55 @@ document.addEventListener('DOMContentLoaded', function(){
       '</body></html>';
     withPrintOrientation(function(orientation){
       printReport(doc, { orientation: orientation, features: 'width=1100,height=700' });
+    });
+  });
+});
+
+function getAdjustmentsReportCompanyName() {
+  if (typeof COMPANY_OPTIONS !== 'undefined' && Array.isArray(COMPANY_OPTIONS) && COMPANY_OPTIONS[0]) {
+    return normalizePrintCompanyName(COMPANY_OPTIONS[0]);
+  }
+  return normalizePrintCompanyName('PayrollPro');
+}
+
+document.addEventListener('DOMContentLoaded', function(){
+  const btn = document.getElementById('printAdjustmentsBtn');
+  if (!btn) return;
+  btn.addEventListener('click', function(){
+    try { if (typeof window.flushCalculateAll === 'function') window.flushCalculateAll?.('print-adjustments'); } catch (_) {}
+    const table = document.getElementById('adjustmentHoursTable');
+    const tbody = table && table.tBodies && table.tBodies[0];
+    if (!tbody || !tbody.rows.length) {
+      alert('No adjustment data to print for this period.');
+      return;
+    }
+    const clone = table.cloneNode(true);
+    clone.querySelectorAll('input').forEach(function(input){
+      var cell = input.closest('td');
+      if (!cell) return;
+      const value = Number(input.value);
+      cell.textContent = (Number.isFinite(value) && Math.abs(value) >= 0.005) ? value.toFixed(2) : '-';
+    });
+
+    const ws = document.getElementById('weekStart');
+    const we = document.getElementById('weekEnd');
+    const startDate = ws && ws.value ? ws.value : '';
+    const endDate = we && we.value ? we.value : '';
+    const periodText = (startDate && endDate) ? `${startDate} to ${endDate}` : (startDate || endDate || '');
+    const companyName = getAdjustmentsReportCompanyName();
+
+    const doc = '<html><head><meta charset="utf-8"><title>Adjustments Report</title>' +
+      '<style>@page{size:letter landscape;margin:10mm} body{font-family:Arial,Helvetica,sans-serif;margin:0} .report-header{margin:0 0 8px} .company-name{font-size:14px;font-weight:700} .report-title{font-size:12px;font-weight:600;margin-top:2px} .report-period{font-size:10px;margin-top:2px} table{border-collapse:collapse;width:100%;table-layout:fixed} th,td{border:1pt solid #000;padding:4px;font-size:10px} th{background:#f1f5f9} td.num, th.num{text-align:right} thead{display:table-header-group}</style>' +
+      '</head><body>' +
+      '<div class="report-header">' +
+      `<div class="company-name">${companyName}</div>` +
+      '<div class="report-title">Adjustments Report</div>' +
+      (periodText ? `<div class="report-period">Period: ${periodText}</div>` : '') +
+      '</div>' +
+      clone.outerHTML +
+      '</body></html>';
+    withPrintOrientation(function(orientation){
+      printReport(doc, { orientation: orientation, features: 'width=1000,height=700' });
     });
   });
 });
