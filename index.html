@@ -13131,11 +13131,12 @@ return { rootHash, manifestHash, segmentCount: Object.keys(segments).length, ver
         const hours = Number.isFinite(hoursRaw) ? roundToCents(hoursRaw) : 0;
         const explicitAmount = Number(entry.amount ?? entry.adjPay ?? entry.pay ?? entry.total ?? NaN);
         const rate = getReportEmployeeRate(normalizedEmployeeId, entry.name);
-        const amount = Number.isFinite(explicitAmount)
-          ? roundToCents(explicitAmount)
-          : roundToCents(hours * rate);
         const kind = normalizeAdjustmentType(entry.type ?? entry.kind ?? entry.label ?? entry.name ?? entry.category ?? entry.adjustmentType ?? entry.entryType);
         const effectiveOtRate = getEffectiveOvertimeRateForEmployee(normalizedEmployeeId, rate);
+        const derivedRate = (kind === 'ADJ OT') ? effectiveOtRate : rate;
+        const amount = Number.isFinite(explicitAmount)
+          ? roundToCents(explicitAmount)
+          : roundToCents(hours * derivedRate);
 
         if (!buckets[bucket]) buckets[bucket] = {};
         if (!buckets[bucket][normalizedEmployeeId]) {
