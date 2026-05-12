@@ -3269,7 +3269,7 @@ window.addEventListener('load', dashReports);
        Track loan deductions per employee:
        <b>SSS Salary Loan</b> and <b>SSS Calamity Loan</b> use <b>Total</b> + <b>Monthly</b> (per-payroll is computed using the selected divisor; balance is tracked and auto-stops when fully paid).
        <b>Pag-IBIG Salary Loan</b> and <b>Pag-IBIG Calamity Loan</b> use <b>Monthly deduction</b> only (per-payroll is computed using the selected divisor).
-       <b>Cash Advance</b> uses <b>Total</b> + <b>Weekly</b> (balance tracked).
+       <b>Cash Advance</b> uses <b>Weekly deduction</b> only.
       </div>
       <div class="toolbar" id="loanTrackerControls">
        <input type="search" id="loanTrackerSearch" class="loan-tracker-filter" placeholder="Search ID or name" autocomplete="off" />
@@ -3300,9 +3300,7 @@ window.addEventListener('load', dashReports);
           <th>Pag-IBIG Calamity Monthly</th>
           <th>Per Period</th>
           <th>Active</th>
-          <th>Cash Advance Total</th>
-          <th>Cash Weekly</th>
-          <th>Cash Balance</th>
+          <th>Cash Weekly Deduction</th>
           <th>Active</th>
          </tr>
         </thead>
@@ -6598,31 +6596,7 @@ function renderLoanTrackerTable(){
 
     const addPrincipalWeeklyCells = (type) => {
       const entry = getLoanTrackerEntry(empId, type) || { principal: 0, weekly: 0, active: false };
-      const principal = roundToCents(entry.principal || 0);
       const weekly = roundToCents(entry.weekly || 0);
-      const paidBefore = sumLoanTrackerAppliedBefore(pk, empId, type);
-      const baseline = loanTrackerPaidBaseline(entry, type);
-      const effectivePaidBefore = Math.max(0, roundToCents(paidBefore - baseline));
-      const remainingBefore = roundToCents(principal - effectivePaidBefore);
-      const scheduled = getLoanTrackerApplied(pk, empId, type);
-      const unclampedCurrentDeduction = (scheduled != null)
-        ? roundToCents(Number(scheduled) || 0)
-        : ((entry.active && weekly > 0 && remainingBefore > 0)
-          ? roundToCents(Math.min(weekly, remainingBefore))
-          : 0);
-      const currentDeduction = roundToCents(Math.max(0, Math.min(unclampedCurrentDeduction, remainingBefore)));
-      const bal = roundToCents(Math.max(0, remainingBefore - currentDeduction));
-
-      const tdPrincipal = document.createElement('td');
-      const inPrincipal = document.createElement('input');
-      inPrincipal.type = 'number'; inPrincipal.step = '0.01'; inPrincipal.min = '0';
-      inPrincipal.value = formatLoanTrackerNumInput(principal);
-      inPrincipal.dataset.empId = empId;
-      inPrincipal.dataset.loanType = type;
-      inPrincipal.dataset.field = 'principal';
-      inPrincipal.setAttribute('inputmode', 'decimal');
-      tdPrincipal.appendChild(inPrincipal);
-      tr.appendChild(tdPrincipal);
 
       const tdWeekly = document.createElement('td');
       const inWeekly = document.createElement('input');
@@ -6634,11 +6608,6 @@ function renderLoanTrackerTable(){
       inWeekly.setAttribute('inputmode', 'decimal');
       tdWeekly.appendChild(inWeekly);
       tr.appendChild(tdWeekly);
-
-      const tdBal = document.createElement('td');
-      tdBal.classList.add('num','balance-cell');
-      tdBal.textContent = formatDeductionDisplay(bal);
-      tr.appendChild(tdBal);
 
       const tdActive = document.createElement('td');
       const chk = document.createElement('input');
