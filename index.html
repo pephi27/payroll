@@ -10015,17 +10015,6 @@ document.addEventListener('DOMContentLoaded', function(){
       return;
     }
     const clone = table.cloneNode(true);
-    clone.querySelectorAll('select').forEach(function(select){
-      var cell = select.closest('td');
-      if (!cell) return;
-      var selectedText = '';
-      try {
-        selectedText = select.options && select.selectedIndex >= 0
-          ? String(select.options[select.selectedIndex].textContent || '').trim()
-          : '';
-      } catch (_) {}
-      cell.textContent = selectedText || '(none)';
-    });
     clone.querySelectorAll('input').forEach(function(input){
       var cell = input.closest('td');
       if (!cell) return;
