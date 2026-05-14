@@ -10015,6 +10015,21 @@ document.addEventListener('DOMContentLoaded', function(){
       return;
     }
     const clone = table.cloneNode(true);
+    const sourceProjectSelects = table.querySelectorAll('select.adjTypeSelect');
+    const clonedProjectSelects = clone.querySelectorAll('select.adjTypeSelect');
+    clonedProjectSelects.forEach(function(select, idx){
+      var sourceSelect = sourceProjectSelects[idx];
+      var cell = select.closest('td');
+      if (!cell) return;
+      var selectedText = '';
+      try {
+        const resolvedSelect = sourceSelect || select;
+        selectedText = resolvedSelect.options && resolvedSelect.selectedIndex >= 0
+          ? String(resolvedSelect.options[resolvedSelect.selectedIndex].textContent || '').trim()
+          : '';
+      } catch (_) {}
+      cell.textContent = selectedText || '(none)';
+    });
     clone.querySelectorAll('input').forEach(function(input){
       var cell = input.closest('td');
       if (!cell) return;
